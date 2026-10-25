@@ -1,6 +1,8 @@
-# TranslateIT — compatible dependency baseline refresh
+# TranslateIT — natural audio fixtures and integrated acceptance
 
 ## Current Status
+
+**Active work — natural synthetic audio acceptance (2026-10-26).** Physical microphone failure prevents device acceptance, but does not block file-based tests. The owner approved separate local neural tooling. Ten public Indonesian M1/F1 samples now exist with original 44.1-kHz and anti-aliased 16-kHz WAVs, verified pinned Supertonic 3 assets, isolated developer dependencies and an offline listening page. Numeric integrity checks and 13 relevant source tests passed; human naturalness/faithful-pronunciation review is PENDING. These samples are not an approved 48-case fixture set. The canonical VAD replay and direct worker runner remain separate; passing both reports cannot certify VAD output actually entered ASR. Current Validation owns executed proof.
 
 **Dependency source goal completed — 2026-10-26.** All three dependency graphs are refreshed within the retained runtime boundaries. Frontend uses Vite 8.3.5, Svelte 5.57.2 and TypeScript 6.0.3 (the newest major accepted by svelte-check). Rust uses Tauri 2.12.5, CPAL 0.18.2, rubato 5.0.1, SHA-2 0.11.1 and sysinfo 0.39.6 with Rust 1.99.1. Worker uses Torch 2.14.1/cu126 and CTranslate2 4.8.3. Node 24 LTS/npm 12.2.1, uv 0.13.5, rustup 1.29.2, MinGit 2.56.0.windows.3 and the pinned FFmpeg 9.0 LGPL input are prepared; prior local portable bundles are preserved privately. Model/checkpoint and GPT-SoVITS source identities are unchanged.
 
@@ -46,7 +48,7 @@ The user resumed integrated developer acceptance on 2026-10-26. On clean `25eb19
 
 ## Next Step
 
-Resume the same integrated audio acceptance lane when a physical microphone is available: verify native discovery and saved selection, then selected built-in voice, controlled capture and actual Meeting receiver delivery on a clean pinned candidate. Retain the completed Text/source proof at its tested SHA; do not repeat unchanged checks or bypass device readiness. Remaining UI/voice/Meeting scenarios stay unexecuted until observed. Package/install acceptance is conditional on genuine release inputs; no CI dispatch, signing/publication or main promotion is implied.
+Obtain listening acceptance of the ten local neural samples, then integrate the accepted voice source into the existing hashed fixture path for one connected VAD→ASR→translation→selected-voice baseline. Do not expand the scenario count before this baseline produces honest stage evidence. Physical microphone/receiver acceptance remains a separate later gate; no cloud inference, CI dispatch, release or main promotion is authorized.
 
 **Acceptance incomplete:** The current session stopped at physical-microphone admission, not a reproduced application defect. **Branch:** `Local`. Current bounded Text/runtime proof is pinned to `25eb19defc727d728810da3c326b180c36c24df5`; the prior `a2614711` session remains historical. Later documentation-only commits do not create new runtime proof. Earlier source notes below are background, not additional next actions.
 

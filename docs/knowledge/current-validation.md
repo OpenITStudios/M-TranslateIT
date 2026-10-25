@@ -27,6 +27,16 @@ Do not preserve mutable “latest PASS” snapshots here. Historic GitHub Action
 
 The Batch 2B.1/2B.2 PCM handoff and canonical-VAD replay adapter retain a **test-only/no production cutover** boundary. The manual full Windows source CI can compile and execute the Rust unit suite, but targeted push CI does not; neither proves that the experimental consumer is wired into live capture or reduces callback latency; real-device performance remains TARGET_WINDOWS-only.
 
+## Local neural fixture preview — 2026-10-26
+
+After confirming the physical microphone issue, the owner authorized a separate local neural generator for public test WAVs. Supertonic 3 archive revision `aafc6e32416a594460b32413efc49d7fe4ce6d46` and both M1/F1 preset assets were downloaded locally; ten pinned model/config/voice/license files passed size and SHA-256 checks. The separate SDK 1.3.1 wheel passed its published SHA-256 check. Developer packages were installed in an isolated workspace environment; application lockfiles, models, selected Meeting voice and personal data were unchanged. Generation used CPU, offline Hub flags and disabled automatic model downloads.
+
+**Executed fixture evidence:** ten Indonesian public utterances (A01/A03/A04/A06/A08 × M1/F1) were synthesized with 16 steps, speed 1.0 and seed 42. Each has a preserved 44.1-kHz PCM16 original and an anti-aliased 16-kHz PCM16 copy. Generation rejected silence/nonfinite/clipping; the completed preview passed these numeric guards. Three admission/download regression tests and ten existing fixture/generator tests passed; changed Python Ruff checks passed. These are source/fixture results, not ASR, translation, selected-voice or Meeting acceptance.
+
+**Listening review: PENDING.** No human naturalness or pronunciation approval is recorded. The generated `comparison.json` records exact generator/pin-file hashes, model revision, package versions, synthesis settings, text and WAV hashes. This separate preview is not the canonical 48-case fixture set. Its success does not prove the missing VAD-segment→ASR connection, semantic translation correctness, receiver delivery or physical microphone behavior. Upstream Supertonic is archived; it is developer-only, not a product dependency.
+
+Private local outputs: `.workspace/reports/neural-preview-id-v2/` (`listen.html`, `comparison.json`, original and converted WAVs, model license), its ZIP, and matching generation/environment/download logs. No audio/model bytes are uploaded to GitHub. The next decision is listening acceptance of these samples before fixture integration.
+
 ## Integrated developer acceptance — 2026-10-26
 
 Fixed tested revision: `25eb19defc727d728810da3c326b180c36c24df5` on `Local`, with a clean tracked checkout and unchanged npm/Cargo/uv lockfiles. The user authorized comprehensive functional acceptance after the dependency refresh. This is partial developer-mode evidence, not installed-product or full functional acceptance.
