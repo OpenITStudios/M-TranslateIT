@@ -27,6 +27,25 @@ Do not preserve mutable “latest PASS” snapshots here. Historic GitHub Action
 
 The Batch 2B.1/2B.2 PCM handoff and canonical-VAD replay adapter retain a **test-only/no production cutover** boundary. The manual full Windows source CI can compile and execute the Rust unit suite, but targeted push CI does not; neither proves that the experimental consumer is wired into live capture or reduces callback latency; real-device performance remains TARGET_WINDOWS-only.
 
+## Integrated developer acceptance — 2026-10-26
+
+Fixed tested revision: `25eb19defc727d728810da3c326b180c36c24df5` on `Local`, with a clean tracked checkout and unchanged npm/Cargo/uv lockfiles. The user authorized comprehensive functional acceptance after the dependency refresh. This is partial developer-mode evidence, not installed-product or full functional acceptance.
+
+| Check / scenario | Observed result | Proof and limit |
+|---|---|---|
+| Source admission and canonical build | PASS | Matching dependency-candidate source contracts, strict Svelte check, 421 frontend tests, production bundle, locked Cargo check and 337 Rust tests; one Rust audio replay remains ignored. The canonical exact-SHA compile gate passed before application launch. |
+| Worker pytest | PASS, platform limited | A separate UAC-approved elevated child first passed both symlink-security cases, then the full suite: 316 passed, 2 POSIX-only cases skipped. No test or Windows security policy was weakened. |
+| Translation / ASR / TTS evaluator self-tests | PASS | Translation: 180 regression + 40 held-out cases; ASR: 60; TTS: 30. These test evaluators, not model or listening quality. |
+| Developer launch and navigation | PASS, bounded | Canonical `manage.ps1 run` built and opened the native app. Meeting, Text and Settings rendered and navigation responded. This is one launch, not cold-start reliability or complete UI acceptance. |
+| Live Text EN→ID / ID→EN and Swap | PASS, bounded | A public three-sentence prompt translated through the local worker in both directions; native command durations were 5,147 ms and 448 ms respectively. Swap changed direction and exchanged both pane contents; Copy stayed disabled until a new current result. Copy, Clear, keyboard shortcuts, pending-edit races and full quality acceptance remain untested. |
+| Physical microphone / Meeting admission | ENVIRONMENT FAILURE | Settings listed only the virtual CABLE Output input and correctly blocked spoken-microphone readiness. Windows present-only audio endpoints contained no physical microphone; the historical Triton USB microphone was non-present (`Unknown`). This does not establish a CPAL regression or authorize selecting VB-CABLE as a physical microphone. No microphone capture or Meeting session was started. |
+| GPU and assets | Inventory only | RTX 3070 / driver 610.62 detected, and local Text inference succeeded. Five asset markers were present, but complete model/voice hash integrity, ASR/TTS execution, listening quality and coexistence/latency were not revalidated. |
+| Remaining functional and distribution acceptance | NOT EXECUTED | Built-in/My Voice, physical capture/VAD, real receiver delivery, incoming isolation, repeated Start/Stop, captions/transcript/export, fault injection, packaging/install and clean-machine acceptance remain outstanding. CI stayed paused. |
+
+The session stopped at the first confirmed device-admission blocker under the existing Windows runbook. The idle application and port-1420 frontend server were closed. No archived personal data was restored, no recording/training occurred, and no runtime source, model identity or deadline was changed. Resuming the audio lane requires an available physical microphone and the same bounded integrated acceptance gate; software changes require reproduced software evidence first.
+
+Private local evidence: `.workspace/reports/acceptance-25eb19d-worker-elevated-result.json`, matching worker targeted/suite XML and stdout/stderr logs, `acceptance-25eb19d-tauri-dev.log`, and the matching dependency source/build logs. These files are not uploaded. Later documentation-only commits do not rerun or upgrade this fixed-revision evidence.
+
 ## Post-acceptance targeted source repair — 2026-10-19
 
 Repository-level repairs occurred after the user paused the native session. Selected hosted CI source checks succeeded on fixed commits `0c99a4bb61e480d9508550fab7540b6dca968180` and `d24fa26b509279f918344ac26ff22ade7077c1bb`; consult those run/job identities for the exact tests performed. The native Tauri commands for ApplicationRuntime, standalone Text, worker status, model inventory, and built-in/saved/versioned voice selection now offload potentially blocking work. A manual worker recovery intent is restricted to a blocked helper without active audio/Meeting/build owners and uses the canonical native session check. Its emitted event forces refreshed worker and voice observations.
