@@ -49,14 +49,30 @@ try {
     [IO.File]::WriteAllBytes($cached,$bytes)
     $pins=[pscustomobject]@{
         node=[pscustomobject]@{url=$url;sha256=$digest}
+        npm=[pscustomobject]@{version='12.2.1';url=$url;sha256=$digest}
         git=[pscustomobject]@{url=$url;sha256=$digest}
         uv=[pscustomobject]@{url=$url;sha256=$digest}
         rustup=[pscustomobject]@{url=$url;sha256=$digest}
     }
     $toolsRoot=Join-Path $root '.workspace\tools'
     $preflight=Get-TranslateITPortableDownloadPlan -Pins $pins -ToolsRoot $toolsRoot -CacheRoot $cache
-    if ($preflight.Count -ne 4 -or (Test-Path -LiteralPath $toolsRoot)) {
+    if ($preflight.Count -ne 5 -or (Test-Path -LiteralPath $toolsRoot)) {
         throw 'Archive preflight published tools before validation.'
+    }
+    $npmToolsRoot=Join-Path $root 'npm-tools'
+    $npmRoot=Join-Path $npmToolsRoot 'node/node_modules/npm'
+    New-Item -ItemType Directory -Path $npmRoot -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $npmRoot 'package.json') -Value '{"version":"12.2.1"}'
+    $matching=Get-TranslateITPortableDownloadPlan -Pins $pins -ToolsRoot $npmToolsRoot -CacheRoot $cache
+    if ($matching.ContainsKey('npm')) { throw 'Matching npm unnecessarily requires installation.' }
+    Set-Content -LiteralPath (Join-Path $npmRoot 'package.json') -Value '{"version":"11.16.0"}'
+    $outdated=Get-TranslateITPortableDownloadPlan -Pins $pins -ToolsRoot $npmToolsRoot -CacheRoot $cache
+    if (-not $outdated.ContainsKey('npm')) { throw 'An outdated bundled npm bypassed the pinned update.' }
+
+    $policy=Get-Content (Join-Path $PSScriptRoot '../config/requirements.json') -Raw | ConvertFrom-Json
+    $manifest=Get-Content (Join-Path $PSScriptRoot '../../../EngineData/Frontend/RustApp/package.json') -Raw | ConvertFrom-Json
+    if ($manifest.packageManager -cne ('npm@'+$policy.portable.npm.version)) {
+        throw 'Frontend packageManager and portable npm pins diverge.'
     }
     [IO.File]::WriteAllBytes($cached,[byte[]](9,8,7))
     $rejected=$false

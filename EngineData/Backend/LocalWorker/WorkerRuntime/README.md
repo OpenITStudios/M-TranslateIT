@@ -79,13 +79,22 @@ Current dependency versions:
 
 ```text
 Python       3.12.x
-PyTorch      2.11.0 / 2.11.0+cu126 on Windows/Linux CUDA path
+PyTorch      2.14.1 / 2.14.1+cu126 on Windows/Linux CUDA path
 Transformers 4.57.6 exact pin
 Tokenizers   0.22.2 resolved by uv.lock
-Accelerate   1.14.0 resolved by uv.lock
+Accelerate   1.15.0 resolved by uv.lock
 ```
 
-Transformers 4.57.6 is the validated MiLMMT runtime version. Implementation/dependency details belong here and in their source/lock owners rather than `CONTEXT.md` or `next-action.md`.
+Transformers 4.57.6 remains the reviewed MiLMMT runtime boundary. Updating the lock or passing source tests does not revalidate model quality, GPU coexistence or Meeting delivery.
+
+Compatibility ceilings retained during the 2026-10-26 dependency refresh:
+
+- The pinned GPT-SoVITS source requirements retain NumPy `<2`, librosa `0.10.2`, PEFT `<0.18` and TorchMetrics `<=1.5`. They remain explicit constraints, not claims that those packages are globally latest. SciPy and pandas are resolved to the newest versions allowed by that NumPy boundary.
+- Transformers stays at the reviewed 4.57.6 MiLMMT boundary; its dependency metadata keeps Hugging Face Hub below 1 and Tokenizers below 0.23. A Transformers 5 migration needs its own model/voice acceptance and is not implied by a lockfile refresh.
+- TorchAudio 2.11 is current and uses PyTorch's stable ABI, supporting PyTorch 2.11 and later ([upstream compatibility](https://docs.pytorch.org/audio/stable/installation.html)). Torch 2.14.1 keeps the existing CUDA 12.6 index; source/import tests are separate from GPU/model proof.
+- Python stays at 3.12.10 because the NumPy 1.26 Windows wheels support Python through 3.12, and 3.12.10 is the final official 3.12 Windows embeddable binary. Later 3.12 security releases are source-only ([Python release policy](https://www.python.org/downloads/release/python-31215/)). This leaves a security-maintenance limitation; it does not claim that 3.12.10 includes newer source-only fixes. A newer Python requires migration of the pinned voice dependency boundary.
+
+The other worker packages are resolved by `uv lock --upgrade`; no model/checkpoint or GPT-SoVITS source identity changes with a dependency refresh.
 
 ## PyTorch allocator diagnostic
 

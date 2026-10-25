@@ -83,15 +83,15 @@ def sdist_package(
 
 
 raw_package(
-    "ctranslate2-4.8.1.dist-info",
-    "https://raw.githubusercontent.com/OpenNMT/CTranslate2/0d8bcd362ac75ef860ef161d6f0efad0ae439ff0/LICENSE",
+    "ctranslate2-4.8.3.dist-info",
+    "https://raw.githubusercontent.com/OpenNMT/CTranslate2/8d91aa08225004755360daa43deb62b35b1ed65d/LICENSE",
     "LICENSE",
     "54aa79d9fe3c09e67a16dcd95b9e88676405a6ec174efda31036983cf7672ecb",
     [
-        "package=ctranslate2==4.8.1",
+        "package=ctranslate2==4.8.3",
         "source_repo=OpenNMT/CTranslate2",
-        "source_ref=v4.8.1",
-        "source_commit=0d8bcd362ac75ef860ef161d6f0efad0ae439ff0",
+        "source_ref=v4.8.3",
+        "source_commit=8d91aa08225004755360daa43deb62b35b1ed65d",
     ],
 )
 
@@ -165,12 +165,12 @@ raw_package(
     ],
 )
 
-onnx_root = dist_info("onnxruntime-1.28.0.dist-info")
+onnx_root = dist_info("onnxruntime-1.31.0.dist-info")
 write_material(
     onnx_root,
     "LICENSE",
     download(
-        "https://raw.githubusercontent.com/microsoft/onnxruntime/da9b5e364c465de65c49d91e696cd6485270757f/LICENSE"
+        "https://raw.githubusercontent.com/microsoft/onnxruntime/402979ac1bef89dcd55add41eaa7277c407599eb/LICENSE"
     ),
     "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c",
 )
@@ -178,17 +178,17 @@ write_material(
     onnx_root,
     "ThirdPartyNotices.txt",
     download(
-        "https://raw.githubusercontent.com/microsoft/onnxruntime/da9b5e364c465de65c49d91e696cd6485270757f/ThirdPartyNotices.txt"
+        "https://raw.githubusercontent.com/microsoft/onnxruntime/402979ac1bef89dcd55add41eaa7277c407599eb/ThirdPartyNotices.txt"
     ),
-    "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2",
+    "143764b952fdb1a7c69ce653bfba74a7744d6a8a573bfb73e235fba356c83de3",
 )
 write_source(
     onnx_root,
     [
-        "package=onnxruntime==1.28.0",
+        "package=onnxruntime==1.31.0",
         "source_repo=microsoft/onnxruntime",
-        "source_ref=v1.28.0",
-        "source_commit=da9b5e364c465de65c49d91e696cd6485270757f",
+        "source_ref=v1.31.0",
+        "source_commit=402979ac1bef89dcd55add41eaa7277c407599eb",
     ],
 )
 

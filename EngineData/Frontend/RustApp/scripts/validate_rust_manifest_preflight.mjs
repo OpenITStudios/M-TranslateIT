@@ -13,9 +13,10 @@ const policyPath = join(repoRoot, "tooling", "windows", "config", "requirements.
 // not a substitute for Cargo's dependency resolution, compilation or MSRV proof.
 // Any change to a reviewed locked version must receive a new source review.
 const reviewedLockFacts = [
-  ["time", "0.3.49", "1.88.0"],
-  ["icu_provider", "2.2.0", "1.86.0"],
-  ["tauri-plugin-updater", "2.11.0", "1.77.2"],
+  ["time", "0.3.55", "1.88.0"],
+  ["icu_provider", "2.4.0", "1.88.0"],
+  ["tauri-plugin-updater", "2.14.0", "1.90.0"],
+  ["sysinfo", "0.39.6", "1.95.0"],
 ];
 
 function versionParts(value) {

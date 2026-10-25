@@ -387,7 +387,7 @@ fn run_capture_thread(
 ) -> Result<(), String> {
     let host = cpal::default_host();
     let device = select_output_device(&host)?;
-    let device_name = device.name().ok();
+    let device_name = device.description().map(|description| description.name().to_owned()).ok();
     if incoming_output_conflicts_with_virtual_tts(device_name.as_deref(), virtual_playback_device) {
         return Err("meeting_sound:incoming_equals_virtual_tts_output".to_string());
     }
@@ -396,7 +396,7 @@ fn run_capture_thread(
         .map_err(|error| format!("Selected Meeting Sound endpoint has no usable output mix config: {error}"))?;
     let sample_format = supported.sample_format();
     let stream_config = supported.config();
-    let sample_rate_hz = stream_config.sample_rate.0;
+    let sample_rate_hz = stream_config.sample_rate;
     let channels = stream_config.channels;
 
     reset_finalized_incoming_utterance_producer(session_id, sample_rate_hz);
@@ -458,7 +458,7 @@ fn build_loopback_stream(
     callback_error_epoch: Arc<AtomicU64>,
 ) -> Result<cpal::Stream, String> {
     let channels = config.channels;
-    let sample_rate_hz = config.sample_rate.0;
+    let sample_rate_hz = config.sample_rate;
 
     macro_rules! build_stream {
         ($sample:ty, $observe:path) => {{
@@ -469,7 +469,7 @@ fn build_loopback_stream(
             let error_epoch = Arc::clone(&callback_error_epoch);
             device
                 .build_input_stream(
-                    config,
+                    *config,
                     move |data: &[$sample], _| {
                         let frame_count = frame_count(data.len(), channels);
                         frames.fetch_add(frame_count, Ordering::Relaxed);
@@ -502,7 +502,7 @@ fn build_loopback_stream(
             let mut mono_scratch = Vec::<f32>::new();
             device
                 .build_input_stream(
-                    config,
+                    *config,
                     move |data: &[f32], _| {
                         let count = frame_count(data.len(), channels);
                         frames.fetch_add(count, Ordering::Relaxed);
@@ -546,7 +546,7 @@ fn select_output_device(host: &cpal::Host) -> Result<cpal::Device, String> {
         let devices = host
             .output_devices()
             .map_err(|error| format!("Meeting Sound endpoints could not be enumerated: {error}"))?;
-        let resolved = resolve_unique_named_device(devices, &requested_name, |device| device.name().ok())
+        let resolved = resolve_unique_named_device(devices, &requested_name, |device| device.description().map(|description| description.name().to_owned()).ok())
             .map_err(|_| format!(
                 "Configured Meeting Sound endpoint '{requested_name}' is ambiguous. Incoming will not bind to an arbitrary output."
             ))?;
@@ -654,7 +654,7 @@ fn frame_count(sample_count: usize, channels: u16) -> u64 {
     (sample_count / usize::from(channels.max(1))) as u64
 }
 
-fn push_callback_error(callback_errors: &Arc<Mutex<Vec<String>>>, error: cpal::StreamError) {
+fn push_callback_error(callback_errors: &Arc<Mutex<Vec<String>>>, error: cpal::Error) {
     if let Ok(mut errors) = callback_errors.try_lock() {
         errors.push(error.to_string());
         if errors.len() > 20 {

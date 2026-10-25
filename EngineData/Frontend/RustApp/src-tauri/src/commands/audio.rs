@@ -166,7 +166,7 @@ fn clean_device_name(value: String) -> Option<String> {
 }
 
 fn device_name(device: &cpal::Device) -> Option<String> {
-    device.name().ok().and_then(clean_device_name)
+    device.description().map(|description| description.name().to_owned()).ok().and_then(clean_device_name)
 }
 
 struct CollectedAudioDevices {
@@ -345,7 +345,7 @@ pub fn probe_output_device_candidate(device_id: Option<String>) -> AudioDevicePr
         requested_device_id,
         resolved_device_name,
         is_default,
-        sample_rate_hz: Some(config.sample_rate().0),
+        sample_rate_hz: Some(config.sample_rate()),
         channels: Some(config.channels()),
         blocker: String::new(),
         note: "The selected Meeting Sound output endpoint has a usable native output configuration. Actual loopback audio remains Windows runtime proof."

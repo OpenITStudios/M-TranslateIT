@@ -11,7 +11,7 @@ const EXPECTED_PYTHON_VERSION = "3.12.10";
 const EXPECTED_G2P_VERSION = "2.1.0";
 const EXPECTED_FROZENDICT_VERSION = "2.4.7";
 const EXPECTED_SOXR_VERSION = "1.1.0";
-const EXPECTED_FSSPEC_VERSION = "2026.7.0";
+const EXPECTED_FSSPEC_VERSION = "2026.9.0";
 
 const normalizeText = (text) => String(text).replace(/\r\n/g, "\n").replace(/\r/g, "\n").trimEnd() + "\n";
 const requireFile = (path, label = path) => {

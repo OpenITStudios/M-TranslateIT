@@ -1,8 +1,12 @@
-# TranslateIT — staged source repair after end-to-end audit
+# TranslateIT — compatible dependency baseline refresh
 
 ## Current Status
 
-**PAUSED BY USER — 2026-10-19.** The user ended testing before the live microphone/Meeting phase because they were not ready to proceed. The integrated Windows developer session tested clean `Local` revision `a2614711b51983161230910a0e0eec0d3364bc35`. Toolchain/dependency preparation, repository/frontend contracts, strict Svelte, 418 frontend tests, worker compile/lint, 316 worker tests (2 skipped), evaluator self-tests, frontend build and locked Rust compile check passed. Native Text translated public prompts in both directions; Meeting first setup reached Ready with Built-in Male. Full proof and limitations are in [Current Validation](../docs/knowledge/current-validation.md#integrated-developer-acceptance--2026-10-19). This is partial developer acceptance, not release approval; `main` remains unchanged.
+**Dependency source goal completed — 2026-10-26.** All three dependency graphs are refreshed within the retained runtime boundaries. Frontend uses Vite 8.3.5, Svelte 5.57.2 and TypeScript 6.0.3 (the newest major accepted by svelte-check). Rust uses Tauri 2.12.5, CPAL 0.18.2, rubato 5.0.1, SHA-2 0.11.1 and sysinfo 0.39.6 with Rust 1.99.1. Worker uses Torch 2.14.1/cu126 and CTranslate2 4.8.3. Node 24 LTS/npm 12.2.1, uv 0.13.5, rustup 1.29.2, MinGit 2.56.0.windows.3 and the pinned FFmpeg 9.0 LGPL input are prepared; prior local portable bundles are preserved privately. Model/checkpoint and GPT-SoVITS source identities are unchanged.
+
+**Compatibility ceilings:** GPT-SoVITS retains NumPy/librosa/PEFT/TorchMetrics constraints; the reviewed MiLMMT boundary retains Transformers 4.57.6 and its Hub/Tokenizers ranges. Python remains the final official 3.12 Windows embeddable binary, 3.12.10; newer source-only security fixes are not claimed. The worker README owns these reasons. Node uses the latest LTS branch rather than the Current release line.
+
+**Observed source proof:** canonical prepare, repository/source contracts, strict Svelte/typecheck, production frontend build, 421 frontend tests, locked Cargo check, 337 Rust tests (1 ignored), worker Ruff, dependency imports, a TorchAudio CPU resampling fixture, portable-tool fixtures and FFmpeg synthetic PCM16/license checks passed on matching candidate files. npm audit reports zero vulnerabilities. Worker pytest: 314 passed, 2 failed because Windows denied symlink creation (WinError 1314), 2 skipped; this is partial proof. The ignored Rust audio replay, GPU/model inference, cold-start/UI behavior, production Meeting/receiver, package/install and clean-machine acceptance remain unexecuted. CI stays fully paused. Commit continuity records the exact delivery identity; previous native observations remain revision-scoped in Current Validation.
 
 ## Source repair after the paused native session — 2026-10-19
 
@@ -36,13 +40,13 @@ Owner approved a long-term, offline-first audio scenario/fixture/testing framewo
 
 ## Active Boundary
 
-No per-change tests on the user's PC: this remains one integrated local Windows test phase explicitly authorized by the user. GitHub default branch `main` remains reserved for explicitly approved final releases.
+No per-change tests on the user's PC: the dependency goal authorizes local source/toolchain verification, not resumed microphone or Meeting acceptance. Native acceptance remains one integrated local Windows test phase only after explicit authorization. GitHub default branch `main` remains reserved for explicitly approved final releases.
 
-Native acceptance is paused; do not start microphone capture or Meeting until the user explicitly resumes. Old application data is privately archived with verified hashes; do not restore it automatically. Initial worker status timed out at 30 seconds during dependency imports; an isolated probe finished in 28.36 seconds and one controlled restart reached Text ready. Cold-start reliability remains unresolved; neither deadlines nor runtime source were changed. Meeting setup reached Ready, but no live session was exercised. The idle development app and its local frontend server were closed. The owner-approved hosted source workflow is separate from these local/native observations.
+Native acceptance is paused; do not start microphone capture or Meeting until the user explicitly resumes. Old application data is privately archived with verified hashes; do not restore it automatically. Initial worker status timed out at 30 seconds during dependency imports; an isolated probe finished in 28.36 seconds and one controlled restart reached Text ready. Cold-start reliability remains unresolved; neither deadlines nor runtime source were changed. Meeting setup reached Ready, but no live session was exercised. The idle development app and its local frontend server were closed. All hosted source workflows remain paused.
 
 ## Next Step
 
-Wait for a new explicit user instruction to resume live acceptance. Then recover the recorded source/model/device identities and complete one Meeting Start → public test speech → Stop with a separate receiver before repeated cycles. Meeting has not been started; no live delivery is claimed. Retain cold-start import/recovery and UI unresponsiveness during voice preparation as unresolved. Do not repeat passed source checks unless the tested source or claim changes. Signing, installer, hosted CI dispatch and `main` promotion remain outside this continuation.
+When explicitly authorized, accept one integrated clean pinned candidate through local build/package and controlled Windows runtime acceptance, focusing on the updated dependency baseline, cold worker imports, selected voice and Meeting receiver. Include the two symlink-security tests in an environment with the required privilege; do not weaken or silently skip them. Native acceptance remains paused until that authorization. No CI dispatch, signing/publication or main promotion is implied.
 
 **Paused:** Partial integrated developer acceptance, stopped at the user's request before live Meeting. **Branch:** `Local`. Runtime proof is pinned to `a2614711b51983161230910a0e0eec0d3364bc35`; later documentation-only commits do not create new runtime proof. Earlier source notes below are background, not additional next actions.
 
@@ -272,32 +276,3 @@ These are future **acceptance scenarios**, not tests performed or runtime result
   scopes eventual measurement to the current engines, stage latency, CUDA
   memory coexistence and selected voice output. No model/voice/GPU tests,
   cloud CI or REA runtime analysis was executed.
-
-## Single next step
-
-**Current owner override (2026-10-20): all CI fully paused.**
-Every job in the nine retained workflows has `if: false`, and Local push
-validation no longer has a push trigger. No manual workflow invocation,
-re-run, model inference or build runs are authorized as part of routine
-ChatGPT source work. Previous targeted results are historical exact-SHA
-evidence only and do not apply to subsequent audio harness commits.
-
-**Active next development gate:** run the authored offline Python harness
-regression tests and ignored canonical Rust VAD/PCM16 fixture replay on one
-prepared, clean, pinned `Local` checkout when local execution is available;
-then gather matching real local-worker ASR/MiLMMT/TTS receipts. No such execution
-has yet been performed for the current audio harness source. Preserve the
-production-only boundary, then independently accept receiver and physical
-microphone in TARGET_WINDOWS when authorized.
-
-**Source candidates awaiting relevant executed proof:** a blocked worker has an
-explicit resource-guarded Retry Worker action, and application snapshot/intents
-and built-in voice selection use blocking-task offload rather than performing
-heavy readiness/asset work on the WebView event thread. These are source
-changes, not claims of repaired cold imports, restored blocked-worker behavior,
-or native UI responsiveness. Do not increase deadlines or auto-restore My Voice
-to cover these symptoms. Do not claim unexecuted source tests as passed; native Meeting acceptance remains paused at the user's request.
-
-**STOP boundary:** Do not start recurring cloud GPU/model jobs, change default
-branch or promote app source to `main`. Re-enable any GitHub Actions
-job only after a new explicit owner instruction, not merely a source-code update.

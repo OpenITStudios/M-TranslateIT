@@ -23,8 +23,8 @@ const expectedNltkPackages = {
   "taggers/averaged_perceptron_tagger_eng.zip": "6025f530624335c67d6547d44757b357b4e79bae030a0383e9887a92c1718f0b",
 };
 const exceptionalPythonLicenseMaterials = {
-  "ctranslate2-4.8.1.dist-info": {
-    source: ["package=ctranslate2==4.8.1", "source_repo=OpenNMT/CTranslate2", "source_ref=v4.8.1", "source_commit=0d8bcd362ac75ef860ef161d6f0efad0ae439ff0"],
+  "ctranslate2-4.8.3.dist-info": {
+    source: ["package=ctranslate2==4.8.3", "source_repo=OpenNMT/CTranslate2", "source_ref=v4.8.3", "source_commit=8d91aa08225004755360daa43deb62b35b1ed65d"],
     files: { "LICENSE": "54aa79d9fe3c09e67a16dcd95b9e88676405a6ec174efda31036983cf7672ecb" },
   },
   "flatbuffers-25.12.19.dist-info": {
@@ -43,11 +43,11 @@ const exceptionalPythonLicenseMaterials = {
     source: ["package=loguru==0.7.3", "sdist_sha256=19480589e77d47b8d85b2c827ad95d49bf31b0dcde16593892eb51dd18706eb6", "source_repo=Delgan/loguru", "source_ref=0.7.3", "source_commit=ae3bfd1b85b6b4a3db535f69b975687c79498be4"],
     files: { "LICENSE": "b35d026cc7aca9d5859a02eb87ddf7a386a24c986838651bd1f283f94e003327" },
   },
-  "onnxruntime-1.28.0.dist-info": {
-    source: ["package=onnxruntime==1.28.0", "source_repo=microsoft/onnxruntime", "source_ref=v1.28.0", "source_commit=da9b5e364c465de65c49d91e696cd6485270757f"],
+  "onnxruntime-1.31.0.dist-info": {
+    source: ["package=onnxruntime==1.31.0", "source_repo=microsoft/onnxruntime", "source_ref=v1.31.0", "source_commit=402979ac1bef89dcd55add41eaa7277c407599eb"],
     files: {
       "LICENSE": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c",
-      "ThirdPartyNotices.txt": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2",
+      "ThirdPartyNotices.txt": "143764b952fdb1a7c69ce653bfba74a7744d6a8a573bfb73e235fba356c83de3",
     },
   },
   "sentencepiece-0.2.2.dist-info": {
@@ -341,15 +341,15 @@ if (existsSync(ffmpegSourcePath)) {
   for (const [key, expected] of Object.entries({
     source_kind: "ffmpeg",
     binary_builder: "BtbN/FFmpeg-Builds",
-    builder_release_api: "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/autobuild-2026-09-30-13-08",
-    builder_release_id: "400057568",
-    builder_release_tag: "autobuild-2026-09-30-13-08",
-    builder_release_name: "Auto-Build 2026-09-30 13:08",
-    builder_release_published_at: "2026-09-30T13:09:24Z",
-    asset_id: "600950502",
-    archive: "ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-8.1.zip",
-    archive_sha256: "4a7642b2264c03e8a0ce8a3825b933ee5580656f45695a086fe7e294045ffc0a",
-    download_url: "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-8.1.zip",
+    builder_release_api: "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/autobuild-2026-10-25-13-00",
+    builder_release_id: "423406080",
+    builder_release_tag: "autobuild-2026-10-25-13-00",
+    builder_release_name: "Auto-Build 2026-10-25 13:00",
+    builder_release_published_at: "2026-10-25T13:01:14Z",
+    asset_id: "675057963",
+    archive: "ffmpeg-n9.0.2-36-g6882969ce9-win64-lgpl-9.0.zip",
+    archive_sha256: "47526345cc4800f4163337d5db8048a2d06c78a53bb234532f55a30dbfb49868",
+    download_url: "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-25-13-00/ffmpeg-n9.0.2-36-g6882969ce9-win64-lgpl-9.0.zip",
     license_profile: "LGPL-3.0-or-later",
     build_profile: "win64-lgpl-static",
     integrity_source: "pinned_release_asset_sha256",
@@ -372,8 +372,8 @@ if (existsSync(ffmpegSourcePath)) {
     const version = spawnSync(ffmpegPath, ["-hide_banner", "-version"], { encoding: "utf8", windowsHide: true });
     const versionText = `${version.stdout ?? ""}\n${version.stderr ?? ""}`.trim();
     const versionLine = versionText.split(/\r?\n/)[0]?.trim() ?? "";
-    if (version.status !== 0 || !/^ffmpeg version n?8\.1(?:\.|\s|-)/.test(versionLine)) {
-      fail(`Staged FFmpeg does not report the approved n8.1 stable line: ${versionLine || version.status}`);
+    if (version.status !== 0 || !/^ffmpeg version n?9\.0(?:\.|\s|-)/.test(versionLine)) {
+      fail(`Staged FFmpeg does not report the approved n9.0 stable line: ${versionLine || version.status}`);
     }
     if (source.ffmpeg_version_line && versionLine !== source.ffmpeg_version_line) {
       fail("FFMPEG_SOURCE.txt ffmpeg_version_line does not match the staged executable.");

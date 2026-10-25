@@ -1,4 +1,5 @@
-use rubato::{FftFixedInOut, Resampler};
+use rubato::audioadapter_buffers::direct::SequentialSlice;
+use rubato::{Fft, FixedSync, Resampler, WindowFunction};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -304,53 +305,29 @@ fn resample_mono_fft(samples: &[f32], source_rate: u32, target_rate: u32) -> Res
         return Ok(samples.iter().copied().map(safe_sample).collect());
     }
 
-    let mut resampler = FftFixedInOut::<f32>::new(
+    // Preserve the previous fixed-in/out FFT size and antialiasing window.
+    let mut resampler = Fft::<f32>::new_custom(
         source_rate as usize,
         target_rate as usize,
         RESAMPLE_CHUNK_FRAMES,
         1,
+        1,
+        WindowFunction::BlackmanHarris2,
+        FixedSync::Both,
     )
     .map_err(|error| format!("voice_lab:resampler_create_failed:{error}"))?;
-    let delay = resampler.output_delay();
     let expected_frames = (samples.len() as u128 * u128::from(target_rate)
         / u128::from(source_rate)) as usize;
-    let mut output = Vec::with_capacity(
-        expected_frames
-            .saturating_add(delay)
-            .saturating_add(resampler.output_frames_max()),
-    );
-    let mut offset = 0usize;
-
-    while samples.len().saturating_sub(offset) >= resampler.input_frames_next() {
-        let input_frames = resampler.input_frames_next();
-        let input = [&samples[offset..offset + input_frames]];
-        let chunk = resampler
-            .process(&input, None)
-            .map_err(|error| format!("voice_lab:resample_failed:{error}"))?;
-        output.extend(chunk.into_iter().next().unwrap_or_default());
-        offset = offset.saturating_add(input_frames);
-    }
-
-    if offset < samples.len() {
-        let input = [&samples[offset..]];
-        let chunk = resampler
-            .process_partial(Some(&input), None)
-            .map_err(|error| format!("voice_lab:resample_partial_failed:{error}"))?;
-        output.extend(chunk.into_iter().next().unwrap_or_default());
-    }
-
-    let no_input: Option<&[&[f32]]> = None;
-    let tail = resampler
-        .process_partial(no_input, None)
-        .map_err(|error| format!("voice_lab:resample_flush_failed:{error}"))?;
-    output.extend(tail.into_iter().next().unwrap_or_default());
-
-    let start = delay.min(output.len());
-    let available = output.len().saturating_sub(start);
-    if expected_frames == 0 || available < expected_frames {
+    let input = SequentialSlice::new(samples, 1, samples.len())
+        .map_err(|error| format!("voice_lab:resample_failed:{error}"))?;
+    // process_all flushes partial/tail frames and trims the startup delay once.
+    let mut output = resampler
+        .process_all(&input, samples.len(), None)
+        .map_err(|error| format!("voice_lab:resample_failed:{error}"))?
+        .take_data();
+    if expected_frames == 0 || output.len() < expected_frames {
         return Err("voice_lab:resample_output_incomplete".to_string());
     }
-    output.drain(..start);
     output.truncate(expected_frames);
     output.iter_mut().for_each(|sample| *sample = safe_sample(*sample));
     Ok(output)
@@ -370,6 +347,17 @@ mod tests {
     use std::f32::consts::TAU;
 
     static TEST_SERIAL: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn partial_fft_clips_keep_exact_duration_without_startup_padding() {
+        for (source_rate, frames) in [(44_100, 33), (48_000, 1024), (16_000, 33)] {
+            let samples = vec![0.25; frames];
+            let output = resample_mono_fft(&samples, source_rate, 32_000).unwrap();
+            assert_eq!(output.len(), frames * 32_000 / source_rate as usize);
+            assert!(output.iter().all(|sample| sample.is_finite()));
+            assert!(output.iter().any(|sample| sample.abs() > 0.1));
+        }
+    }
 
     #[test]
     fn stereo_48khz_take_is_downmixed_and_fft_resampled_to_32khz() {

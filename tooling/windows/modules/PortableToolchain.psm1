@@ -17,7 +17,7 @@ function Get-TranslateITVerifiedToolArchive {
           [Parameter(Mandatory=$true)][string]$CacheRoot)
     if ($ExpectedSha256 -cnotmatch '^[a-fA-F0-9]{64}$') { throw 'Portable tool SHA-256 pin missing.' }
     $uri = [Uri]$Url
-    if ($uri.Scheme -ne 'https' -or $uri.Host -notin @('nodejs.org','github.com','static.rust-lang.org')) {
+    if ($uri.Scheme -ne 'https' -or $uri.Host -notin @('nodejs.org','github.com','static.rust-lang.org','registry.npmjs.org')) {
         throw "Untrusted portable tool source: $Url"
     }
     if (-not (Test-Path -LiteralPath $CacheRoot -PathType Container)) {
@@ -102,6 +102,12 @@ function Get-TranslateITPortableDownloadPlan {
         }
         $plan[$entry.name] = Get-TranslateITVerifiedToolArchive -Url $entry.pin.url -ExpectedSha256 $entry.pin.sha256 -CacheRoot $CacheRoot
     }
+    $npmManifest = Join-Path $ToolsRoot 'node/node_modules/npm/package.json'
+    $npmMatches = (Test-Path -LiteralPath $npmManifest -PathType Leaf) -and
+        ((Get-Content -LiteralPath $npmManifest -Raw | ConvertFrom-Json).version -ceq $Pins.npm.version)
+    if (-not $npmMatches) {
+        $plan.npm = Get-TranslateITVerifiedToolArchive -Url $Pins.npm.url -ExpectedSha256 $Pins.npm.sha256 -CacheRoot $CacheRoot
+    }
     return $plan
 }
 
@@ -159,6 +165,14 @@ function Install-TranslateITPortableToolchain {
             $actual=(& (Join-Path $node 'node.exe') --version).Trim()
             if ($LASTEXITCODE -ne 0 -or $actual -ne ('v'+$pins.node.version)) { throw 'Pinned portable Node version check failed.' }
         }
+        if ($archives.ContainsKey('npm')) {
+            $installationStarted=$true
+            # Install the verified npm archive only into this portable Node prefix.
+            & (Join-Path $node 'node.exe') (Join-Path $node 'node_modules/npm/bin/npm-cli.js') install --global --prefix $node $archives.npm --ignore-scripts --no-audit --no-fund
+            if ($LASTEXITCODE -ne 0) { throw 'Pinned portable npm installation failed.' }
+        }
+        $npmVersion=(& (Join-Path $node 'node.exe') (Join-Path $node 'node_modules/npm/bin/npm-cli.js') --version | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $npmVersion -cne $pins.npm.version) { throw 'Pinned portable npm version check failed.' }
 
         # MinGit is the reviewed Git for Windows command-line-only distribution.
         # It is installed under this workspace and never writes an MSI/registry entry.

@@ -43,8 +43,8 @@ test("new durable history is independent of active engine and no restore is adve
   const lock = readFileSync(resolve(root, "src-tauri/Cargo.lock"), "utf8");
   const versions = rust("voice_lab/storage/actor_history.rs");
   const data = rust("voice_lab/storage/dataset_history.rs");
-  assert.match(rootCargo, /sha2 = "=0\.10\.9"/);
-  assert.match(lock, /name = "sha2"\nversion = "0\.10\.9"/);
+  assert.match(rootCargo, /sha2 = "=0\.11\.1"/);
+  assert.match(lock, /name = "sha2"\nversion = "0\.11\.1"/);
   assert.match(versions, /NOT an optimizer training checkpoint/);
   assert.match(versions, /No deletion, no activation/);
   assert.match(data, /Existing|worker continues reading the exact existing dataset/);

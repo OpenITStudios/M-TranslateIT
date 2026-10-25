@@ -14,9 +14,9 @@ test("reviewed locked dependency MSRV is aligned with Cargo and toolchain", () =
 });
 
 test("Rust 1.77 underclaim is rejected for the existing lockfile", () => {
-  const old = manifest.replace('rust-version = "1.88.0"', 'rust-version = "1.77"');
+  const old = manifest.replace('rust-version = "1.99.1"', 'rust-version = "1.77"');
   const oldPolicy = { ...policy, rust: { ...policy.rust, minimum: "1.77" } };
-  assert.match(evaluateRustMsrv(old, oldPolicy, lock).join("\n"), /time 0\.3\.49 requires at least Rust 1\.88/);
+  assert.match(evaluateRustMsrv(old, oldPolicy, lock).join("\n"), /time 0\.3\.55 requires at least Rust 1\.88/);
 });
 
 test("toolchain policy cannot drift from Cargo rust-version", () => {
@@ -26,8 +26,8 @@ test("toolchain policy cannot drift from Cargo rust-version", () => {
 
 test("unreviewed lock changes require new minimum compiler review", () => {
   const changed = lock.replace(
-    /(\[\[package\]\]\s*\nname = "time"\s*\nversion = ")0\.3\.49"/,
-    (_, prefix) => prefix + '0.3.50"',
+    /(\[\[package\]\]\s*\nname = "time"\s*\nversion = ")0\.3\.55"/,
+    (_, prefix) => prefix + '0.3.56"',
   );
   assert.notEqual(changed, lock);
   assert.match(evaluateRustMsrv(manifest, policy, changed).join("\n"), /time changed from reviewed/);
@@ -43,12 +43,9 @@ test("missing package is not silently treated as proof", () => {
 });
 
 test("future Tauri minor cannot silently retain the old MSRV", () => {
-  const future = lock.replace(
-    /(\[\[package\]\]\s*\nname = "tauri"\s*\nversion = ")2\.11\.2"/,
-    (_, prefix) => prefix + '2.12.0"',
-  );
-  assert.notEqual(future, lock);
-  assert.match(evaluateRustMsrv(manifest, policy, future).join("\n"), /Tauri 2\.12\+/);
+  const oldManifest = manifest.replace('rust-version = "1.99.1"', 'rust-version = "1.88.0"');
+  const oldPolicy = { ...policy, rust: { ...policy.rust, minimum: "1.88.0" } };
+  assert.match(evaluateRustMsrv(oldManifest, oldPolicy, lock).join("\n"), /Tauri 2\.12\+/);
 });
 
 test("integrated Cargo source check uses exact SHA, fresh frontend and locked deps", () => {

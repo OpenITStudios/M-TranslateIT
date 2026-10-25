@@ -96,7 +96,7 @@ fn find_output_device(requested_name: &str) -> Result<cpal::Device, String> {
     let devices = host
         .output_devices()
         .map_err(|_| "meeting_output:output_device_enumeration_failed".to_string())?;
-    resolve_unique_named_device(devices, requested_name, |device| device.name().ok())
+    resolve_unique_named_device(devices, requested_name, |device| device.description().map(|description| description.name().to_owned()).ok())
         .map_err(|_| "meeting_output:selected_output_device_ambiguous".to_string())?
         .ok_or_else(|| "meeting_output:selected_output_device_unavailable".to_string())
 }
@@ -108,7 +108,7 @@ pub fn prepare_meeting_output_device(requested_name: &str) -> Result<(), String>
         .default_output_config()
         .map_err(|_| "meeting_output:default_output_config_unavailable".to_string())?;
     let channels = config.channels();
-    let sample_rate = config.sample_rate().0;
+    let sample_rate = config.sample_rate();
     if channels == 0 || channels > MAX_OUTPUT_CHANNELS {
         return Err("meeting_output:unsupported_output_channel_count".to_string());
     }
@@ -226,8 +226,7 @@ impl PlaybackCursor {
         let timestamp = callback_info.timestamp();
         let playback_delay = timestamp
             .playback
-            .duration_since(&timestamp.callback)
-            .unwrap_or(Duration::ZERO);
+            .saturating_duration_since(timestamp.callback);
         let callback_at = Instant::now();
         let predicted_playback_at = callback_at
             .checked_add(playback_delay)
@@ -265,7 +264,7 @@ fn build_output_stream(
         cancel_requested: Arc::clone(&cancel_requested),
         generation,
         source_epoch,
-        sample_rate_hz: config.sample_rate.0,
+        sample_rate_hz: config.sample_rate,
         channels: config.channels,
     };
 
@@ -276,7 +275,7 @@ fn build_output_stream(
             let error_tx = completion_tx.clone();
             device
                 .build_output_stream(
-                    config,
+                    *config,
                     move |data: &mut [f32], info| cursor.fill(data, info, |value| value),
                     move |error| {
                         if let Ok(mut stored) = errors.lock() {
@@ -294,7 +293,7 @@ fn build_output_stream(
             let error_tx = completion_tx.clone();
             device
                 .build_output_stream(
-                    config,
+                    *config,
                     move |data: &mut [i16], info| {
                         cursor.fill(data, info, |value| {
                             (value.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16
@@ -316,7 +315,7 @@ fn build_output_stream(
             let error_tx = completion_tx.clone();
             device
                 .build_output_stream(
-                    config,
+                    *config,
                     move |data: &mut [u16], info| {
                         cursor.fill(data, info, |value| {
                             (((value.clamp(-1.0, 1.0) + 1.0) * 0.5) * u16::MAX as f32).round()
@@ -354,7 +353,7 @@ pub fn probe_prepared_meeting_output_device_functionally(
     if config.channels == 0 || config.channels > MAX_OUTPUT_CHANNELS {
         return Err("meeting_output:functional_probe_unsupported_channel_count".to_string());
     }
-    if !(MIN_OUTPUT_SAMPLE_RATE_HZ..=MAX_OUTPUT_SAMPLE_RATE_HZ).contains(&config.sample_rate.0) {
+    if !(MIN_OUTPUT_SAMPLE_RATE_HZ..=MAX_OUTPUT_SAMPLE_RATE_HZ).contains(&config.sample_rate) {
         return Err("meeting_output:functional_probe_unsupported_sample_rate".to_string());
     }
 
@@ -567,7 +566,7 @@ fn deliver_meeting_output_wav_inner(
     };
     let sample_format = supported.sample_format();
     let config: cpal::StreamConfig = supported.into();
-    let samples = match prepare_output_samples(&wav, config.sample_rate.0, config.channels) {
+    let samples = match prepare_output_samples(&wav, config.sample_rate, config.channels) {
         Ok(value) => Arc::new(value),
         Err(blocker) => return blocked(&blocker, false),
     };
@@ -634,7 +633,7 @@ fn deliver_meeting_output_wav_inner(
     let deadline = Duration::from_millis(delivery_deadline_ms(
         samples.len(),
         config.channels,
-        config.sample_rate.0,
+        config.sample_rate,
     ));
     let completion = wait_for_output_completion(&completion_rx, deadline, || {
         if !runtime_generation_is_authoritative(generation) {

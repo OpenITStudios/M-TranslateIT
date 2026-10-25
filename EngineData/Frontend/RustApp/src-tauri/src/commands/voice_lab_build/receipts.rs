@@ -74,7 +74,7 @@ pub(super) fn completion_file(paths: &VoiceLabStoragePaths) -> std::path::PathBu
 }
 
 fn sha_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn write_new_synced(path: &Path, data: &[u8]) -> Result<(), String> {

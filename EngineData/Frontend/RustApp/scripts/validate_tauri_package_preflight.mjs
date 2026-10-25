@@ -128,9 +128,9 @@ const cargoToml = readText(cargoTomlPath);
 requireMarkers(cargoToml, "Cargo.toml", [
   'name = "translateit"',
   'edition = "2021"',
-  'tauri = { version = "2"',
-  'tauri-plugin-updater = "=2.11.0"',
-  'tauri-build = { version = "2"',
+  'tauri = { version = "2.12.5"',
+  'tauri-plugin-updater = "=2.14.0"',
+  'tauri-build = { version = "2.7.4"',
 ]);
 
 const mainRs = readText(mainRsPath);
@@ -202,9 +202,9 @@ requireMarkers(meetingOutputRuntimeRs, "native Rust Meeting audio delivery runti
 
 const workerPyproject = readText(workerPyprojectPath);
 requireMarkers(workerPyproject, "canonical WorkerRuntime dependency set", [
-  '"ctranslate2==4.8.1",',
+  '"ctranslate2==4.8.3",',
   '"faster-whisper>=1.0.0",',
-  '"torch==2.11.0",',
+  '"torch==2.14.1",',
   '"torchaudio==2.11.0",',
   '"transformers==4.57.6",',
 ]);

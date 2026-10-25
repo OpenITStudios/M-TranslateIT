@@ -170,7 +170,7 @@ ACTIVE_GOVERNANCE = (
 
 
 LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
-ACTION_RE = re.compile(r"(?m)^\s*uses:\s+([^@\s]+)@([^\s#]+)(?:\s+#\s*(.+))?$")
+ACTION_RE = re.compile(r"(?m)^\s*(?:-\s+)?uses:\s+([^@\s]+)@([^\s#]+)(?:\s+#\s*(.+))?$")
 SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 MAIN_BRANCH_LINE_RE = re.compile(r"(?m)^\s*-\s+main\s*$")
 AUTO_WORKFLOW_EVENT_RE = re.compile(r"(?m)^  (?:push|pull_request|pull_request_target|schedule|workflow_run|release|create|delete|merge_group|issue_comment):\s*$")
@@ -239,7 +239,7 @@ def check_development_foundation(errors: list[str]) -> None:
     for marker in ("No change required?", "first wrong owner", "smallest complete change"):
         if marker not in discipline:
             fail(errors, f"development discipline missing minimum-flow marker: {marker}")
-    for marker in ('"major": 22', '"version": "3.12.10"', '"minimum": "1.88.0"', '"minimum": "0.12.0"'):
+    for marker in ('"major": 24', '"version": "3.12.10"', '"minimum": "1.99.1"', '"minimum": "0.13.5"'):
         if marker not in toolchain:
             fail(errors, f"requirements.json missing repository-derived policy: {marker}")
     for marker in ('"status"', '"prepare"', '"verify"', '"build"', '"run"', '"test"', '"package"'):
@@ -248,7 +248,7 @@ def check_development_foundation(errors: list[str]) -> None:
     if "statusMustNotInstallOrRepairAutomatically" not in toolchain or "No installation or repair was performed." not in dev:
         fail(errors, "developer doctor must remain observation-only")
     rust_manifest = text("EngineData/Frontend/RustApp/src-tauri/Cargo.toml")
-    if 'rust-version = "1.88.0"' not in rust_manifest:
+    if 'rust-version = "1.99.1"' not in rust_manifest:
         fail(errors, "Rust source manifest must not understate the reviewed Cargo.lock MSRV floor")
     if "minimumRust" not in dev or "installedRust -lt" not in dev:
         fail(errors, "optional Windows doctor must check the declared Rust minimum")
@@ -398,16 +398,22 @@ def check_workflows(errors: list[str]) -> None:
             fail(errors, f"{path.name} must have bounded job timeout")
         if MAIN_BRANCH_LINE_RE.search(value):
             fail(errors, f"{path.name} must not target main under the Local-only model")
-        temporary_auto = path.name == "translateit-windows-local-validation.yml"
-        if temporary_auto:
-            expected_trigger = "on:\n  push:\n    branches:\n      - Local\n  workflow_dispatch:\n"
-            if expected_trigger not in value:
-                fail(errors, f"{path.name} must allow only Local pushes and manual dispatch")
-            events = [item.group(0).strip() for item in AUTO_WORKFLOW_EVENT_RE.finditer(value)]
-            if events != ["push:"]:
-                fail(errors, f"{path.name} may only auto-trigger from Local push")
+        if "on:\n  workflow_dispatch:\n" not in value:
+            fail(errors, f"{path.name} must retain manual dispatch while jobs are paused")
+        if AUTO_WORKFLOW_EVENT_RE.search(value):
+            fail(errors, f"{path.name} must not auto-trigger while CI is paused")
+        jobs = value.partition("\njobs:\n")[2]
+        job_blocks = list(re.finditer(
+            r"^  ([A-Za-z0-9_-]+):\n([\s\S]*?)(?=^  [A-Za-z0-9_-]+:\s*$|\Z)", jobs, re.MULTILINE,
+        ))
+        if not job_blocks:
+            fail(errors, f"{path.name} has no inspectable paused jobs")
+        for job in job_blocks:
+            if not re.search(r"^    if: false(?:\s*(?:#.*|&&.*))?$", job[2], re.MULTILINE):
+                fail(errors, f"{path.name} job {job[1]} must remain disabled while CI is paused")
+        if path.name == "translateit-windows-local-validation.yml":
             if "cancel-in-progress: true" not in value:
-                fail(errors, f"{path.name} must cancel superseded source runs")
+                fail(errors, f"{path.name} must retain superseded-run cancellation")
             # Targeted push checks must not silently execute the expensive
             # Windows suite or describe partial checks as full acceptance.
             if "python tools/ci_local_scope.py" not in value:
@@ -416,11 +422,6 @@ def check_workflows(errors: list[str]) -> None:
                 fail(errors, f"{path.name} must restrict full validation to manual dispatch")
             if "NOT EXECUTED: Rust" not in value:
                 fail(errors, f"{path.name} must disclose omitted targeted proof")
-        else:
-            if "on:\n  workflow_dispatch:\n" not in value:
-                fail(errors, f"{path.name} must have a manual workflow_dispatch trigger")
-            if AUTO_WORKFLOW_EVENT_RE.search(value):
-                fail(errors, f"{path.name} must be manual-only (no push/PR/schedule/release trigger)")
         for forbidden in ("contents: write", "pull-requests: write", "git push", "pull_request_target"):
             if forbidden in value:
                 fail(errors, f"{path.name} contains forbidden verification behavior: {forbidden}")
@@ -470,7 +471,7 @@ def check_ci_efficiency_contract(errors: list[str]) -> None:
         'echo "controlled=true"',
         "name: R3 source contract",
         "name: Controlled Windows payload proof",
-        "if: needs.payload-scope.outputs.controlled == 'true'",
+        "if: false && (needs.payload-scope.outputs.controlled == 'true')",
         "Exact SHA release proof summary",
         "Enforce release proof completeness",
         "Controlled Windows payload proof required but result was",

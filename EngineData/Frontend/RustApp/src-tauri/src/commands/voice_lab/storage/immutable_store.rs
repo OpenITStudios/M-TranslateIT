@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 pub(super) fn hash_bytes(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 pub(super) fn checked_directory(path: &Path) -> Result<(), String> {
@@ -51,7 +51,7 @@ pub(super) fn hash_regular_file(path: &Path, cap: u64) -> Result<(String, u64), 
     if bytes != meta.len() {
         return Err("voice_lab:history_source_changed".into());
     }
-    Ok((format!("{:x}", digest.finalize()), bytes))
+    Ok((digest.finalize().iter().map(|byte| format!("{byte:02x}")).collect(), bytes))
 }
 
 pub(super) fn write_new_synced(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -103,4 +103,18 @@ pub(super) fn verify_manifest_by_id(parent: &Path, id: &str) -> Result<Vec<u8>, 
 
 pub(super) fn valid_id(id: &str) -> bool {
     id.len() == 64 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sha256_ids_retain_known_lowercase_zero_padded_encoding() {
+        assert_eq!(hash_bytes(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(hash_bytes(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert!(valid_id(&hash_bytes(b"abc")));
+    }
 }

@@ -135,13 +135,13 @@ if (nsis.installerHooks !== "./target/translateit-r3-payload-hooks.generated.nsh
 if (existsSync(join(tauriRoot, "target", "translateit-r3-payload-hooks.generated.nsh"))) fail("Generated R3 hook must stay out of source.");
 
 requireMarkers(stage, "release staging", [
-  "$ffmpegReleaseTag = 'autobuild-2026-09-30-13-08'",
-  "$ffmpegReleaseId = '400057568'",
-  "$ffmpegReleaseName = 'Auto-Build 2026-09-30 13:08'",
-  "$ffmpegReleasePublishedAt = '2026-09-30T13:09:24Z'",
-  "$ffmpegAssetId = '600950502'",
-  "$ffmpegAssetName = 'ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-8.1.zip'",
-  "$ffmpegArchiveSha = '4a7642b2264c03e8a0ce8a3825b933ee5580656f45695a086fe7e294045ffc0a'",
+  "$ffmpegReleaseTag = 'autobuild-2026-10-25-13-00'",
+  "$ffmpegReleaseId = '423406080'",
+  "$ffmpegReleaseName = 'Auto-Build 2026-10-25 13:00'",
+  "$ffmpegReleasePublishedAt = '2026-10-25T13:01:14Z'",
+  "$ffmpegAssetId = '675057963'",
+  "$ffmpegAssetName = 'ffmpeg-n9.0.2-36-g6882969ce9-win64-lgpl-9.0.zip'",
+  "$ffmpegArchiveSha = '47526345cc4800f4163337d5db8048a2d06c78a53bb234532f55a30dbfb49868'",
   "releases/download/$ffmpegReleaseTag/$ffmpegAssetName",
   "Assert-Hash $ffmpegArchive $ffmpegArchiveSha 'FFmpeg pinned archive'",
   "integrity_source=pinned_release_asset_sha256",
@@ -149,7 +149,7 @@ requireMarkers(stage, "release staging", [
 ]);
 forbidMarkers(stage, "release staging moving FFmpeg source", [
   "BtbN/FFmpeg-Builds/releases/latest",
-  "ffmpeg-n8.1-latest-win64-lgpl-8.1.zip",
+  "ffmpeg-n9.0-latest-win64-lgpl-9.0.zip",
   "$ffmpegRelease = Invoke-RestMethod",
 ]);
 

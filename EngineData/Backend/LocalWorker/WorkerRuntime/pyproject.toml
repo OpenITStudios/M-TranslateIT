@@ -5,7 +5,7 @@ description = "Internal Python runtime for the TranslateIT desktop application."
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "cn2an",
-    "ctranslate2==4.8.1",
+    "ctranslate2==4.8.3",
     "fast-langdetect>=0.3.1",
     "faster-whisper>=1.0.0",
     "ffmpeg-python",
@@ -29,7 +29,7 @@ dependencies = [
     "soundfile",
     "split-lang",
     "tensorboard",
-    "torch==2.11.0",
+    "torch==2.14.1",
     "torchaudio==2.11.0",
     "torchmetrics<=1.5",
     "tqdm",
@@ -60,7 +60,7 @@ dev = [
 
 [tool.uv]
 package = false
-required-version = ">=0.12.0"
+required-version = ">=0.13.5"
 exclude-dependencies = [
     { package = { name = "g2p-en", version = "2.1.0" }, dependencies = ["distance"] },
 ]

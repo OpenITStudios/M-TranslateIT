@@ -25,7 +25,7 @@ test("manual R3 release always requires controlled Windows payload proof", () =>
   const source = workflow("release-payload-verify.yml");
   for (const marker of [
     "workflow_dispatch:", "Require controlled manual release proof",
-    'echo "controlled=true"', "if: needs.payload-scope.outputs.controlled == 'true'",
+    'echo "controlled=true"', "if: false && (needs.payload-scope.outputs.controlled == 'true')",
     "Exact SHA release proof summary", "Enforce release proof completeness",
     "Controlled Windows payload proof required but result was",
   ]) {

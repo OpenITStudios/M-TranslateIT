@@ -58,15 +58,19 @@ function Assert-DevelopmentPrerequisites {
     $rustVersion = (& rustc --version).Trim()
     $uvVersion = (& uv --version).Trim()
 
-    if (-not $nodeVersion.StartsWith("22.")) {
-        throw "Node 22.x required by repository CI; found $nodeVersion"
-    }
-    if ($pythonVersion -ne "3.12.10") {
-        throw "Python 3.12.10 required; found $pythonVersion"
-    }
-
     $policyPath = Join-Path $PSScriptRoot "config\requirements.json"
     $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
+    if (-not $nodeVersion.StartsWith(([string]$policy.node.major + "."))) {
+        throw "Node $($policy.node.major).x required by the dependency baseline; found $nodeVersion"
+    }
+    if ($pythonVersion -ne $policy.python.version) {
+        throw "Python $($policy.python.version) required; found $pythonVersion"
+    }
+    $npmVersion = (& npm --version | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $npmVersion -cne $policy.portable.npm.version) {
+        throw "npm $($policy.portable.npm.version) required; found $npmVersion"
+    }
+
     $minimumRust = [Version]::Parse([string]$policy.rust.minimum)
     $minimumUv = [Version]::Parse([string]$policy.uv.minimum)
     $rustMatch = [regex]::Match($rustVersion, '^rustc\s+(\d+\.\d+\.\d+)(?:\s|$)')

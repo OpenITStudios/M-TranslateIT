@@ -44,17 +44,17 @@ fn run(
         let format = supported.sample_format();
         let config: cpal::StreamConfig = supported.into();
         if config.channels == 0 || config.channels > MAX_OUTPUT_CHANNELS
-            || !(MIN_OUTPUT_SAMPLE_RATE_HZ..=MAX_OUTPUT_SAMPLE_RATE_HZ).contains(&config.sample_rate.0)
+            || !(MIN_OUTPUT_SAMPLE_RATE_HZ..=MAX_OUTPUT_SAMPLE_RATE_HZ).contains(&config.sample_rate)
         {
             return Err("original_voice:unsupported_output_configuration".into());
         }
 
         let channels = config.channels;
-        let rate = config.sample_rate.0;
+        let rate = config.sample_rate;
         let (callback_tx, callback_rx) = mpsc::sync_channel::<Result<(), String>>(1);
         let failure_tx = callback_tx.clone();
         let failure_state = Arc::clone(&callback_failed);
-        let error_cb = move |_error: cpal::StreamError| {
+        let error_cb = move |_error: cpal::Error| {
             failure_state.store(true, Ordering::Release);
             let _ = failure_tx.try_send(Err("original_voice:stream_callback_failed".to_string()));
         };
@@ -64,7 +64,7 @@ fn run(
                 let confirmation = callback_tx.clone();
                 let mut first_callback = true;
                 device.build_output_stream(
-                &config,
+                config,
                 move |samples: &mut [f32], _| {
                     if first_callback && !samples.is_empty() {
                         first_callback = false;
@@ -88,7 +88,7 @@ fn run(
                 let confirmation = callback_tx.clone();
                 let mut first_callback = true;
                 device.build_output_stream(
-                &config,
+                config,
                 move |samples: &mut [i16], _| {
                     if first_callback && !samples.is_empty() {
                         first_callback = false;
@@ -112,7 +112,7 @@ fn run(
                 let confirmation = callback_tx.clone();
                 let mut first_callback = true;
                 device.build_output_stream(
-                &config,
+                config,
                 move |samples: &mut [u16], _| {
                     if first_callback && !samples.is_empty() {
                         first_callback = false;

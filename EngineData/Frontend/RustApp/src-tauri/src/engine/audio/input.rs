@@ -57,7 +57,7 @@ impl InputPreparationStatus {
         // Device acceptance is functional: the capture path converts/resamples the
         // native configuration at the segment boundary, so native rate/channels are
         // reported for honesty but never hard-gate device acceptance here.
-        let native_sample_rate_hz = config.sample_rate().0;
+        let native_sample_rate_hz = config.sample_rate();
         let native_channels = config.channels();
 
         Self {
@@ -233,7 +233,7 @@ fn build_functional_probe_stream(
             let error_tx = event_tx.clone();
             device
                 .build_input_stream(
-                    config,
+                    *config,
                     move |data: &[$sample], _| {
                         let frame_count = data.len() / channels;
                         if frame_count > 0 {
@@ -302,7 +302,8 @@ fn is_unsafe_input_name_character(character: char) -> bool {
 
 fn safe_device_name(device: &cpal::Device) -> Option<String> {
     let clean = device
-        .name()
+        .description()
+        .map(|description| description.name().to_owned())
         .ok()?
         .trim()
         .chars()

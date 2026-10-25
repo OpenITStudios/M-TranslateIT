@@ -280,13 +280,13 @@ Write-Host '[release-stage] Stage pinned FFmpeg n8.1 LGPL executable from BtbN'
 # Month-end BtbN release pin; the GitHub release/asset API supplies this
 # identity and archive SHA. The staged archive/executable/license still must
 # pass local integrity and LGPL build-option checks before packaging.
-$ffmpegReleaseTag = 'autobuild-2026-09-30-13-08'
-$ffmpegReleaseId = '400057568'
-$ffmpegReleaseName = 'Auto-Build 2026-09-30 13:08'
-$ffmpegReleasePublishedAt = '2026-09-30T13:09:24Z'
-$ffmpegAssetId = '600950502'
-$ffmpegAssetName = 'ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-8.1.zip'
-$ffmpegArchiveSha = '4a7642b2264c03e8a0ce8a3825b933ee5580656f45695a086fe7e294045ffc0a'
+$ffmpegReleaseTag = 'autobuild-2026-10-25-13-00'
+$ffmpegReleaseId = '423406080'
+$ffmpegReleaseName = 'Auto-Build 2026-10-25 13:00'
+$ffmpegReleasePublishedAt = '2026-10-25T13:01:14Z'
+$ffmpegAssetId = '675057963'
+$ffmpegAssetName = 'ffmpeg-n9.0.2-36-g6882969ce9-win64-lgpl-9.0.zip'
+$ffmpegArchiveSha = '47526345cc4800f4163337d5db8048a2d06c78a53bb234532f55a30dbfb49868'
 $ffmpegDownloadUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$ffmpegReleaseTag/$ffmpegAssetName"
 $ffmpegArchive = Join-Path $Temp 'ffmpeg.zip'
 Invoke-Download $ffmpegDownloadUrl $ffmpegArchive $ffmpegArchiveSha
@@ -299,7 +299,7 @@ if (-not $ffmpegExe -or -not $ffmpegLicense) { throw 'BtbN FFmpeg archive layout
 $ffmpegVersionOutput = @(& $ffmpegExe.FullName -hide_banner -version 2>&1)
 if ($LASTEXITCODE -ne 0 -or $ffmpegVersionOutput.Count -eq 0) { throw 'Staged FFmpeg executable did not report its version.' }
 $ffmpegVersionLine = ([string]$ffmpegVersionOutput[0]).Trim()
-if ($ffmpegVersionLine -notmatch '^ffmpeg version n?8\.1(?:\.|\s|-)') { throw "Unexpected FFmpeg stable line: $ffmpegVersionLine" }
+if ($ffmpegVersionLine -notmatch '^ffmpeg version n?9\.0(?:\.|\s|-)') { throw "Unexpected FFmpeg stable line: $ffmpegVersionLine" }
 $ffmpegBuildOutput = @(& $ffmpegExe.FullName -hide_banner -buildconf 2>&1)
 if ($LASTEXITCODE -ne 0 -or $ffmpegBuildOutput.Count -eq 0) { throw 'Staged FFmpeg executable did not report its build configuration.' }
 $ffmpegBuildText = [string]::Join("`n", $ffmpegBuildOutput)

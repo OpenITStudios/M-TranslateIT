@@ -373,7 +373,7 @@ fn build_stream_for_format(
     generation: u64,
 ) -> Result<cpal::Stream, String> {
     let channels = config.channels;
-    let sample_rate_hz = config.sample_rate.0;
+    let sample_rate_hz = config.sample_rate;
 
     match sample_format {
         cpal::SampleFormat::F32 => {
@@ -383,7 +383,7 @@ fn build_stream_for_format(
             let mut mono_scratch = Vec::<f32>::new();
             device
                 .build_input_stream(
-                    config,
+                    *config,
                     move |data: &[f32], _| {
                         record_frames(data.len(), channels, &frames);
                         if channels <= 1 {
@@ -428,7 +428,7 @@ fn build_stream_for_format(
             let mut mono_scratch = Vec::<f32>::new();
             device
                 .build_input_stream(
-                    config,
+                    *config,
                     move |data: &[i16], _| {
                         record_frames(data.len(), channels, &frames);
                         // Reuse one callback-owned scratch Vec. Conversion and downmix
@@ -461,7 +461,7 @@ fn build_stream_for_format(
             let mut mono_scratch = Vec::<f32>::new();
             device
                 .build_input_stream(
-                    config,
+                    *config,
                     move |data: &[u16], _| {
                         record_frames(data.len(), channels, &frames);
                         mono_f32_from_u16_into(data, channels, &mut mono_scratch);
@@ -503,7 +503,7 @@ fn select_input_device(host: &cpal::Host) -> Result<cpal::Device, String> {
         let devices = host
             .input_devices()
             .map_err(|error| format!("Configured microphone could not be enumerated: {error}"))?;
-        let resolved = resolve_unique_named_device(devices, &requested_name, |device| device.name().ok())
+        let resolved = resolve_unique_named_device(devices, &requested_name, |device| device.description().map(|description| description.name().to_owned()).ok())
             .map_err(|_| format!(
                 "Configured microphone '{requested_name}' is ambiguous across multiple Windows endpoints. No arbitrary microphone was selected."
             ))?;
@@ -528,13 +528,13 @@ fn run_capture_thread(
 ) -> Result<(), String> {
     let host = cpal::default_host();
     let device = select_input_device(&host)?;
-    let device_name = device.name().ok();
+    let device_name = device.description().map(|description| description.name().to_owned()).ok();
     let default_config = device
         .default_input_config()
         .map_err(|error| format!("Selected microphone has no usable input config: {error}"))?;
     let sample_format = default_config.sample_format();
     let stream_config: cpal::StreamConfig = default_config.into();
-    let sample_rate_hz = stream_config.sample_rate.0;
+    let sample_rate_hz = stream_config.sample_rate;
     let channels = stream_config.channels;
 
     reset_live_audio_buffer(sample_rate_hz, channels);
@@ -593,7 +593,7 @@ fn record_frames(sample_count: usize, channels: u16, frames_received: &Arc<Atomi
     frames_received.fetch_add((sample_count / channel_count) as u64, Ordering::Relaxed);
 }
 
-fn push_callback_error(callback_errors: &Arc<Mutex<Vec<String>>>, error: cpal::StreamError) {
+fn push_callback_error(callback_errors: &Arc<Mutex<Vec<String>>>, error: cpal::Error) {
     if let Ok(mut errors) = callback_errors.try_lock() {
         errors.push(error.to_string());
         if errors.len() > 20 {
