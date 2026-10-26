@@ -21,6 +21,49 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Lean testing-system completion audit — 2026-10-26
+
+Executable source: clean Local `81a16a50d8ccfd4c51453e3ba69109081b1c4a7b`.
+This completes the requested lean test-system delivery, not acceptance of MiLMMT
+quality or the native product. Four exact-source validators passed, including
+38 contract tests and 191/40 translation evaluator controls. The first real
+Unicode failure drove a proved transport correction, not a changed fixture/model.
+
+| Requirement | Observed evidence and limits |
+|---|---|
+| Efficient risk-based checks | Existing corpus selects 28/191 cases with reasons and 16 declared risk tags checked per direction. No full/held-out cases deleted. Reference-control grading medians 3.97/22.78 ms; fresh fast worker wall 15,781 ms, not an inference speedup versus an unexecuted full run. |
+| Effective quality calibration | Controls accept faithful alternatives and reject reversed day/number roles, changed monetary values/signs and separate positive forbidden instructions. Actual fast run completed 28 canonical CUDA/BF16 responses: 15 passes, 13 review flags, zero unverified; worker 22712 terminated. Failures are retained, not tuned away. |
+| Modular, maintainable, lean | Existing runner/transport, manifest and evaluators are reused; corpus owns membership/reasons and semantic expectations. Changed paths since the goal are test tooling/docs only; production source and model/dependencies unchanged. Gate selection and maintenance policy remain in existing READMEs. |
+| Strict evidence/admission | Nine envelope controls, stale-source prevention, incomplete-report rejection, immutable output and process cleanup are protected. Real disposable-child code-point test defeats symmetric encoding corruption. Actual stale fixture-manifest attempt was refused before pipeline inference. Fast comparison cannot authorize full promotion. |
+| Integrated fixture path | Fresh current-source Rust VAD/writer processed 48 hash-bound inputs; downstream core acceptance covers its selected 13 scenarios × 2 rounds, all 26 PASS, worker 5184 terminated. Selected stages executed 22 ASR, 22 translation, 20 TTS and 20 spoken-content ASR calls. This is not all 48 downstream scenarios, device/native delivery or perceptual naturalness. |
+| Reusable evidence | Actual CLI offline regrading matched the fast report's 13 flags and the core report's complete checks/counts/verdict. Audit verified all original 191 emitted worker requests, frozen held-out bytes and production source unchanged. No repeated inference was needed for regrading. |
+
+The core probe initially used an old fixture manifest (same audio bytes, obsolete
+scenario fingerprint) and was correctly rejected; corrected invocation used the
+existing `.workspace/reports/neural-fixtures-m1-silero-v1` manifest matching
+`a7e191bb...`. Neither source expectations nor WAVs were regenerated. Final core
+report/sidecar bind exact source, VAD, segment hashes, model/actor identity and
+scope. Fresh worker timing p95: ASR 403 ms, translation 308 ms, TTS 528 ms,
+spoken-content ASR 389 ms. These exclude native device/meeting delivery and do not
+prove long-duration stability; a fresh endurance rerun was not justified by a
+transport-encoding repair with no resource-lifecycle policy change.
+
+| Private receipt | SHA-256 |
+|---|---|
+| `.workspace/reports/quality-system-source-81a16a50.json` | `bd81f553daa488962c432f94e976e2153d22728d275c4418ab108c1d4a40f71b` |
+| `.workspace/reports/quality-system-fast-81a16a50.json` | `b02957ef802e169453ba9a981cc8f901b67b6199c5db08a49a2f87f9633831ba` |
+| `.workspace/reports/quality-system-core-current-81a16a50.json` | `648a217685cb5292c2fe8c6e2b27815fc68ba6c7c1a1356abbb8b254c642ad6f` |
+| `.workspace/reports/quality-system-core-current-81a16a50.json.artifacts/vad.json` | `9f90156afba0159f446b89d5124c90203690c8851be79a8456c166d1f767e0ae` |
+| `.workspace/reports/quality-system-acceptance-81a16a50.json` | `823f472a33e2e736ce449415f65c48e76bb1e0ff7cbd19569ca6817e3a2f4d79` |
+
+The audit binds the independently invoked `*-rescore.json` receipts as well.
+Proof ceiling is **EXECUTED_SOURCE / INTEGRATION_FIXTURE**. Current full-model
+and held-out inference were not repeated: no inference candidate changed.
+Held-out bilingual adjudication, naturalness, installed/native/physical capture
+and independent receiver remain **NOT EXECUTED** by this delivery. MiLMMT quality
+remains **FAIL / OPEN**; thirteen flags are review signals, not thirteen confirmed
+model errors. Completing the test system does not waive these product gates.
+
 ### Fresh worker execution exposed host-encoding defect — 2026-10-26
 
 Clean `d7007e4b2b60319220ae30ac53e8e1f76ff5a2ce` passed all four existing

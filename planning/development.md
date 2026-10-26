@@ -2,69 +2,36 @@
 
 ## Current Status
 
-**Active owner goal: efficient, effective and lean quality testing.** Success is
-measured by distinct product risks protected, faithful variants accepted,
-meaning-changing counterexamples rejected, actionable first-stage diagnosis and
-bounded execution cost, not case/assertion totals. Reuse existing evaluators,
-stable scenarios and valid captured evidence; no parallel framework or added
-runtime dependency. Complete this goal only after the risk-based fast selection
-and broader quality gates are explicit and exercised within their actual proof
-ceilings; do not equate source controls with linguistic/native acceptance.
+**Lean, effective testing-system goal delivered (2026-10-26).** Source candidate
+`81a16a50d8ccfd4c51453e3ba69109081b1c4a7b` passed exact-source admission and
+fresh model/fixture acceptance. Existing `worker_runner.py` is the execution owner:
+`--translation-suite fast|full` for direct translation, `--profile source|core|endurance`
+for source/audio/resource questions. Existing evaluators remain grading owners;
+corpora/scenarios own stable expectations and selection. No new engine, dependency
+or parallel test framework was added. The maintained gate/cost/maintenance policy
+is in `tools/translation_quality/README.md`, not this continuation.
 
-**Direct translation worker candidate integrated (2026-10-26).** Existing
-`worker_runner.py --translation-suite fast|full` now executes the selected cases
-through one existing offline transport and grades with the canonical evaluator.
-Manifest model/revision, direction, completion/EOS, output text, source identity
-and child termination bind execution. Invalid output stops further requests;
-incomplete reports cannot be reloaded as successful quality bundles. Linguistic
-flags require review rather than claiming an automatically proved model error.
-Six focused simulated-worker tests and the 37-test source contract group passed;
-changed runner/tests passed Ruff. Existing evaluator TRY004 findings are unchanged.
-This candidate has not yet executed real model inference; that is the remaining
-proof step for the lean-system goal, with known model quality failures retained.
+The 28-case fast selection has explicit reasons and risk checks in both directions;
+all 191 regression and 40 held-out cases remain. Calibrated controls distinguish
+faithful variants from reversed corrections, changed numeric values and local
+negated forbidden phrases. Real-child code-point controls protect UTF-8 transport;
+a failed earlier model run exposed that defect and remains preserved. Output,
+EOS, source/model identity and child cleanup are enforced. Missing/invalid output
+cannot pass; fast-only output cannot authorize full promotion.
 
-**First real fast run separated a harness encoding defect.** Clean `d7007e4b`
-source admission passed all four validators. Real inference completed eleven
-responses, then stopped at the Unicode case with
-`translation:input_token_count_unavailable`; report is incomplete and child
-termination is confirmed. A real disposable-child probe proved inherited cp1252
-changes source code points, including a surrogate, before tokenization. The
-existing Worker now pins UTF-8 for stdin/stdout. Its real transport control
-compares code points inside the child, not just an echo that can hide symmetric
-encoding errors. All 38 source contract tests and changed-file Ruff pass.
-This correction changes only test transport; the app/model remain unchanged.
+Fresh fast execution completed all 28 requests on CUDA/BF16 in 15,781 ms including
+cold loading and cleanup: 15 declared passes, 13 review flags, no missing evidence,
+worker terminated. Fresh audio core passed all 13 scenarios × 2 rounds, with
+current-source VAD/writer inputs. Offline regrading agreed exactly for both.
+The independent completion audit verified unchanged 191 requests, unchanged
+held-out and production source, identity-bound receipts and scope limits.
+`current-validation.md` owns receipt hashes and requirement-by-requirement proof.
 
-**Fast translation selection implemented (2026-10-26).** Existing corpus metadata
-selects 28 cases (16 ID→EN, 12 EN→ID), each with a risk reason. It covers the
-declared 16 common risk tags in each direction and retains observed action,
-reference and invented-purpose failures; tag coverage is not semantic acceptance
-or a minimality proof. Existing CLI accepts `--suite fast`, with independent
-selection/full-corpus identity and explicit exclusion of full-promotion authority.
-Full remains default; all 191 regression and 40 held-out cases remain. Seven
-actual CLI controls and evaluator/pipeline source tests pass. Reference-control
-grading medians were about 4 ms fast versus 23 ms full; this is not model latency.
-Historical output regrading finds 13 fast flags versus 59 full, not an improvement
-rate. No fast model execution has been performed. Direct fast worker execution
-still needs integration with existing transport before this goal is complete.
-
-**Quality-test calibration delivered through numeric roles (2026-10-26).**
-AI-assisted desk review of the original 60 flags provisionally found 32 checker
-mismatches, 17 meaning errors and 11 unresolved cases; this is not independent
-bilingual acceptance or an overall error rate. Existing contracts now reject
-reversed day corrections, reversed incoming fifteen/fifty roles and reversed
-budget amounts. The budget contract accepts its declared dot/comma thousands
-forms while rejecting sign, extra-digit and fractional changes. Case-local
-negative-phrase exceptions preserve independent positive forbidden occurrences;
-there is no global negation or number-inference heuristic.
-
-Evaluator self-tests and ten audio-pipeline source tests pass. Retained-output
-regrading proves all 191 worker requests unchanged: numeric calibration removes
-one demonstrated formatting false alarm (60 to 59 flags); other grades are
-identical to the parent. The earlier negative-phrase correction changed only
-failure detail. Corpus membership, held-out content, MiLMMT and application
-behavior remain unchanged; no new inference or native acceptance is claimed.
-`tools/translation_quality/HUMAN_EVALUATION.md` owns triage procedure and
-`current-validation.md` owns receipt identities and proof limits.
+This closes the testing-system goal. MiLMMT linguistic quality remains FAIL/OPEN;
+flags are not automatically adjudicated errors. Full/held-out inference was not
+repeated after unchanged model behavior. Human bilingual review, naturalness,
+physical capture, installed-app and independent-receiver gates remain separate
+product acceptance, not a reason to repeat source/endurance tests blindly.
 
 **Standalone Text removed from the application (2026-10-26).** The owner has
 chosen Meeting voice translation as the product focus and retained MiLMMT;
@@ -157,7 +124,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Validate this integrated candidate on a clean exact Local SHA: execute the existing source profile, then one fresh direct fast translation run with the existing canonical interpreter/assets. Confirm identity/completion/cleanup and actionable known failures; measure real fixture wall cost separately from evaluator timings. Audit completion against the lean-system objective without requiring a false model-quality PASS or rerunning unchanged full/held-out inference. Retain full regression, bilingual, audio/native/perceptual acceptance as distinct gates; current application/model behavior remains unchanged.
+Review the 13 fresh fast-suite quality flags against their exact source/output pairs before proposing a MiLMMT change. Separate faithful wording rejected by narrow checks, demonstrated meaning errors and unresolved interpretation; preserve critical contrary controls and keep full/held-out/native gates conditional on an actual candidate. No model replacement, prompt context/style/glossary, automatic retry or phrase replacement follows from completed test-system work.
 
 ## Retained My Voice source candidate (paused)
 
