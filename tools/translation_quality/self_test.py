@@ -125,10 +125,37 @@ def main() -> int:
     assert recovered["promotion_provenance_complete"] is True
     assert recovered["promotion_safe_on_declared_critical_invariants"] is True
 
+    # Lock down the actual native failure without rewriting model output.
+    budget_case = next(case for case in corpus["cases"] if case["id"] == "en-id-budget-purpose-001")
+    invented_budget = "Jangan kirim laporan hari ini. Kirimlah besok pukul tiga sore setelah saya menyetujuinya. Anggaran pembangunannya adalah lima belas juta rupiah."
+    budget_failure = evaluator.invariant_result(budget_case, invented_budget)
+    assert budget_failure["critical_pass"] is False
+    assert budget_failure["forbidden_hits"] == ["pembangun"]
+    assert evaluator.invariant_result(budget_case, budget_case["references"][0])["critical_pass"] is True
+
+    # A new meaning loss must not hide behind an already-failed approval cue.
+    previous_case = "id-en-informal-workplace-005"
+    already_failed = dict(perfect)
+    already_failed[previous_case] = "Here, only this version will be approved. Don't do the previous one."
+    worse = dict(already_failed)
+    worse[previous_case] = "Here, only this version is approved. Don't do that before."
+    worsened = evaluator.compare_reports(
+        corpus, already_failed, worse,
+        baseline_corpus_fingerprint=fingerprint,
+        candidate_corpus_fingerprint=fingerprint,
+        baseline_source_identity="baseline-sha",
+        candidate_source_identity="candidate-sha",
+    )
+    assert worsened["baseline_critical_failures"] == 1
+    assert worsened["candidate_critical_failures"] == 1
+    assert worsened["critical_regressions"] == [previous_case]
+    assert worsened["critical_regression_details"][previous_case]["missing_concepts"] == [["previous"]]
+    assert worsened["promotion_safe_on_declared_critical_invariants"] is False
+
     stats = evaluator.corpus_stats(corpus)
     assert stats["case_count"] == validation["case_count"]
     assert stats["directions"]["id-en"] == 109
-    assert stats["directions"]["en-id"] == 81
+    assert stats["directions"]["en-id"] == 82
     assert stats["legacy_context_fixture_count"] == 3
     assert stats["risk_tags"]["meaning"] >= 100
 

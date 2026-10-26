@@ -4,7 +4,6 @@ import argparse
 import hashlib
 import json
 import re
-import sys
 import unicodedata
 from collections import defaultdict
 from pathlib import Path
@@ -355,14 +354,26 @@ def compare_reports(
     candidate_cases = {row["case_id"]: row for row in candidate["cases"]}
 
     critical_regressions = []
+    critical_regression_details = {}
     critical_recoveries = []
     score_deltas = {}
     regressions_by_risk_tag: dict[str, list[str]] = defaultdict(list)
     for case_id in sorted(baseline_cases):
         base_row = baseline_cases[case_id]
         cand_row = candidate_cases[case_id]
-        if base_row["critical_pass"] and not cand_row["critical_pass"]:
+        # Compare each declared failure: an already-failed case can still lose
+        # another fact or acquire a new forbidden meaning.
+        added_failures = {
+            field: [item for item in cand_row[field] if item not in base_row[field]]
+            for field in ("missing_literals", "missing_concepts", "forbidden_hits")
+        }
+        order_regressed = base_row["ordered_match"] and not cand_row["ordered_match"]
+        if any(added_failures.values()) or order_regressed:
             critical_regressions.append(case_id)
+            critical_regression_details[case_id] = {
+                **added_failures,
+                "order_regressed": order_regressed,
+            }
             for tag in cand_row["risk_tags"]:
                 regressions_by_risk_tag[tag].append(case_id)
         elif not base_row["critical_pass"] and cand_row["critical_pass"]:
@@ -417,6 +428,7 @@ def compare_reports(
         "baseline_critical_failures": baseline["critical_failures"],
         "candidate_critical_failures": candidate["critical_failures"],
         "critical_regressions": critical_regressions,
+        "critical_regression_details": critical_regression_details,
         "critical_recoveries": critical_recoveries,
         "critical_regressions_by_risk_tag": dict(sorted(regressions_by_risk_tag.items())),
         "mean_char_ngram_f1_delta": round(
@@ -443,7 +455,7 @@ def compare_reports(
             and not critical_regressions
         ),
         "note": (
-            "Comparison detects newly introduced declared-invariant failures. "
+            "Comparison detects newly introduced declared-invariant failures, including within already-failed cases. "
             "It does not prove semantic superiority or replace human review."
         ),
     }

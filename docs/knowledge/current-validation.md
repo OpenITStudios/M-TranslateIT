@@ -21,6 +21,73 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Translation inference experiments and comparison repair — 2026-10-26
+
+Runtime source: clean Local `723fc247` (the subsequent working-tree edits affect
+quality tooling/docs only). Exact pinned MiLMMT weights, official source-only
+prompt and CUDA device were used. No alternate model, dependency or application
+inference change was installed/promoted.
+
+| Experiment | Observed outcome | Decision |
+|---|---|---|
+| Greedy vs four-beam decoding, three minimized/original inputs each | Both retain unsupported construction purpose in the multi-sentence input | Reject as cure; no full beam corpus promotion |
+| FP32 CUDA computation from the pinned weights, three inputs | Original construction purpose remains; `park this topic` still becomes cancellation. Contract approval improves in this one probe | Reject as cure; no general precision-quality claim |
+| Sentence-only Text inference, all 190 unchanged regression requests plus original native case | Removes construction purpose but loses `previous version` reference in an existing case; only two corpus outputs changed. Both sets had 59 declared flags, mean character n-gram delta -0.0009 | Reject; incoming/raw Meeting policy was not changed or accepted |
+
+The comparator had counted a regression only when a formerly passing case failed.
+Consequently an already-failed case could lose a further meaning cue and still
+leave `promotion_safe_on_declared_critical_invariants=true`. A self-test using the
+actual previous-version baseline/candidate strings failed before repair. The
+canonical comparator now compares new missing literal/concept entries, forbidden
+hits and ordering failures in every case. It adds `critical_regression_details`
+without a second grading owner. Regrading the same fingerprint-bound 190-case
+real outputs now identifies `id-en-informal-workplace-005` losing `previous` and
+the actual comparison CLI exits 1. Improving another defect cannot cancel that
+new failure. This is executed comparison behavior over real model receipts, not
+a universal semantic oracle.
+
+The touched evaluator's unused `sys` import is removed. Ruff leaves one
+pre-existing TRY004 recommendation in the legacy result-bundle type-error path;
+its exception contract was not changed as part of fidelity work.
+
+The regression corpus appends `en-id-budget-purpose-001` with the actual native
+three-sentence source, faithful reference and forbidden unsupported construction/
+project purpose. Existing case content and the frozen held-out corpus remain
+unchanged. Fresh canonical worker execution completed all 191 requests; the new
+case correctly fails with `forbidden_hits=["pembangun"]`. There are 60 declared
+flags, including known narrow-matcher false positives; do not equate them with
+60 reviewed translation errors. Evaluator self-tests passed for 191 regression
+and 40 held-out cases; held-out **model inference was not executed**, because no
+candidate was accepted. Repository validation and corpus integrity passed.
+The owned fixture worker was intentionally terminated by the existing runner;
+this does not prove native Stop/Close or audio delivery.
+
+Proof ceiling: **INTEGRATION_FIXTURE** for local model experiments/regrading,
+**EXECUTED_SOURCE** for the comparison/corpus repair. **Semantic fidelity remains
+FAIL / OPEN.** No runtime source was replaced by rejected experiments, and no
+throwaway production code/dependency/cache was introduced for them. Reports and
+the frozen old corpus copy are private evidence under
+`.workspace/reports/translation-fidelity-723fc247/`:
+
+| Receipt | SHA-256 |
+|---|---|
+| `beam-probe.json` | `c8b9664fbda1e55bebd05b72eaf74dc85bb33d05bb04ce164d0ae28c21f478d3` |
+| `fp32-probe.json` | `78850c2a8f396b3a04e1db3ba0b0501ac446b894ee4fe8b9dfe863be28a1aa0f` |
+| `sentence-regression.json` | `7bfa87fba34f636182b45d5536cf28b62f0a44201ad7dba6897c6cb7a32678f6` |
+| `sentence-comparison-fixed-gate.json` | `b5acf12510d130348276a5a1e3aed6e21bad84c39055343d6e3c29df5faeb3c4` |
+| `baseline-191.json` | `9a58ad074148c6650f5811960b6adfed4cec2688fb98e55a01ae272632ca6488` |
+| `baseline-191-score.json` | `126da83508e8b7585fb5a63b2f429361a730832a861c5202f07b9a30025d6a57` |
+
+A model-replacement evaluation is proposed, not accepted or executed. Official
+[Tencent Hy-MT2-1.8B model card](https://huggingface.co/tencent/Hy-MT2-1.8B)
+lists Indonesian/English, Apache-2.0 and recommends Transformers >=5.6.0;
+[official files](https://huggingface.co/tencent/Hy-MT2-1.8B/tree/main) list a
+4.08 GB weight file. Current installed Transformers 4.57.6 contains the named
+Hunyuan architecture mapping, and the upstream config itself names 4.57.6;
+that static evidence does not settle runtime compatibility. No weight download,
+experimental dependency installation, replacement, quality or coexistence claim
+follows before the pending owner choice and actual local comparison.
+
 ### Retired context and hint removal — 2026-10-26
 
 The current Local repair removes the dormant `translation_style`, `terminology`

@@ -46,6 +46,41 @@ idle close only, not cleanup-incomplete recovery with devices. Matching private
 logs and the public-case receipt are under `.workspace/reports/acceptance-8582fc2a/`;
 [current validation](../docs/knowledge/current-validation.md) owns proof limits.
 
+## Current translation quality investigation
+
+**Quality remains FAIL / OPEN (2026-10-26).** On clean Local
+`723fc247`, isolated same-model experiments rejected beam search (four beams)
+and CUDA FP32 computation as cures: both retain the original unsupported
+construction purpose. Sentence-only Text inference removes that word but changes
+`Yang sebelumnya jangan` into `Don't do that before`, losing the previous-version
+reference. The 190-case matched comparison originally reported no new failing
+cases (59 flags in both sets, character n-gram delta -0.0009), which was an
+unsafe comparison blind spot, not evidence of an acceptable candidate.
+
+The canonical evaluator now detects additional missing literals/concepts,
+forbidden phrases and ordering failures inside already-failed cases. Its real
+captured-output CLI comparison rejects sentence isolation with exit 1 and names
+the newly missing `previous` concept. A red-before-fix self-test reproduces that
+specific blind spot. The native budget-purpose failure is appended to the
+regression corpus; existing cases and the frozen 40-case held-out set are
+unchanged. Fresh canonical worker execution completed all 191 requests and
+correctly flags the original construction-purpose failure. The total 60 flags
+include existing narrow-matcher false positives, not 60 adjudicated model errors.
+No runtime/model/prompt/decoding/segmentation change was promoted; diagnostic
+changes lived only in terminated processes and no experimental dependency or
+model was installed. No additional unused production translation mechanism was
+identified for deletion beyond the previous context/hint cleanup.
+
+A separate model-evaluation decision is pending owner response: evaluate Tencent
+`Hy-MT2-1.8B` offline in a developer-only workspace, not as an application model
+replacement. Its official card lists Indonesian/English and Apache-2.0; weights
+are approximately 4.08 GB. The card recommends Transformers >=5.6.0, whereas the
+current application pins 4.57.6; local mapping/config inspection alone does not
+prove compatible loading. Do not alter the application dependency pin or install
+an experimental runtime before the owner's evaluation choice. No alternative
+weights were downloaded, and no claim of better local quality/memory/latency has
+been made. The application stays on MiLMMT until a separately accepted result.
+
 ## Retained native exit repair
 
 **Native exit gate repaired (2026-10-26).** `application_runtime/shutdown.rs`
@@ -98,7 +133,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Address the now-reproduced canonical model fidelity failure: compare one evidence-backed inference change against the preserved 190-case same-model baseline, inspect semantic regressions rather than accepting matcher scores alone, and use the frozen held-out corpus only after a candidate is fixed. If the pinned model cannot meet fidelity, present a separate model decision before replacement. Never restore context memory, style/glossary/ASR hints, phrase replacement, generic warnings or repeated inference until PASS. Resume the integrated native acceptance only after quality acceptance; Meeting, updater, My Voice training and legacy-cache cleanup do not resume automatically.
+Resolve the pending owner choice to evaluate Hy-MT2-1.8B locally as a separate candidate; if accepted, pin its revision, verify isolated runtime compatibility and compare source-only outputs against the retained 191-case MiLMMT baseline before any application change. Freeze a viable candidate before using the 40-case held-out benchmark, and require semantic review plus latency/memory evidence. Do not reintroduce context/style/glossary/ASR hints, phrase replacement or inference-until-PASS. Integrated native acceptance remains stopped until fidelity is accepted.
 
 ## Retained My Voice source candidate (paused)
 

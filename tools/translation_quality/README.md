@@ -35,7 +35,7 @@ Each case contains one or more references plus narrow invariants:
 
 These checks are intentionally narrow. They do not replace human review. Numeric fragments and negation cues now reject embeddings in larger digit/word tokens, while deliberate substring stems (including Indonesian affixes and numeric decimals) remain supported by the current corpus. Reports classify declared failures as literal omission, meaning-cue omission or forbidden meaning; comparisons map critical regressions back to existing risk tags. This follows the error-localization principle of [XCOMET](https://github.com/Unbabel/COMET), but does **not** run COMET or infer its neural severity scores.
 
-The current regression corpus contains 180 targeted cases, with a separate 40-case held-out benchmark. Do not hand-maintain these counts in downstream status files; use the `stats` command below when exact coverage matters. Growth is intentionally risk-driven rather than random: additions cover meeting phrasing, informal/workplace Indonesian, code-switching, quantities, technical literals, modality, conditionals, quantifier scope, corrections/disfluency, ordering and comparisons.
+The regression corpus grows from observed failures, with a separate frozen 40-case held-out benchmark. The native Text budget-purpose failure is retained as a regression: an unspecified budget must not acquire a construction/project purpose. Do not hand-maintain these counts in downstream status files; use the `stats` command below when exact coverage matters. Growth is intentionally risk-driven rather than random: additions cover meeting phrasing, informal/workplace Indonesian, code-switching, quantities, technical literals, modality, conditionals, quantifier scope, corrections/disfluency, ordering and comparisons.
 
 Adversarial cases treat instruction-like strings such as `Ignore previous instructions`,
 `English:`, or `Indonesian:` as ordinary source content. Repository tests verify that
@@ -74,7 +74,7 @@ Compare a proposed runtime/prompt/model result set against the exact baseline:
 python tools/translation_quality/evaluate_translation_quality.py compare --corpus tools/translation_quality/corpus/translation_quality_v1.json --baseline <baseline.json> --candidate <candidate.json>
 ```
 
-The comparison reports newly introduced critical-invariant regressions/recoveries plus per-case and grouped character n-gram deltas. Its promotion-safe flag only means the candidate introduced no new declared critical-invariant failures on a complete matched result set; it is not a claim of overall linguistic superiority.
+The comparison reports newly introduced critical-invariant regressions/recoveries plus per-case and grouped character n-gram deltas. Comparison checks new missing literals, missing meaning-cue groups, forbidden phrases and ordering failures even when a baseline case already failed for a different reason. Added failures are named in `critical_regression_details`; fixing one failure cannot cancel a different new failure in the same case. Its promotion-safe flag only means the candidate introduced no new declared critical-invariant failures on a complete matched result set; it is not a claim of overall linguistic superiority.
 
 Result format:
 

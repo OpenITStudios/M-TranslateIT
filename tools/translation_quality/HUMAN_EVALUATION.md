@@ -21,7 +21,7 @@ Use a held-out bilingual set that is not used to tune the candidate. Include bot
 - finalized Meeting utterances with corrections and references in the source text;
 - technical terminology present in the source text.
 
-The 180-case regression corpus may seed risk discovery, and the 40-case held-out benchmark protects release comparison, but the final human review set should still contain unseen wording. Do not tune prompts or model selection against the held-out benchmark.
+The regression corpus may seed risk discovery, and the 40-case held-out benchmark protects release comparison, but the final human review set should still contain unseen wording. Do not tune prompts or model selection against the held-out benchmark.
 
 ## Blind review
 

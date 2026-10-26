@@ -5147,6 +5147,52 @@
         "meaning",
         "negation"
       ]
+    },
+    {
+      "id": "en-id-budget-purpose-001",
+      "direction": "en-id",
+      "category": "hallucination_risk",
+      "source": "Don't send the report today. Send it tomorrow at three o'clock in the afternoon after I approve it. The budget is fifteen million rupiah.",
+      "references": [
+        "Jangan kirim laporan hari ini. Kirim besok pukul tiga sore setelah saya menyetujuinya. Anggarannya lima belas juta rupiah."
+      ],
+      "preserve": [],
+      "required_any": [
+        [
+          "jangan"
+        ],
+        [
+          "besok"
+        ],
+        [
+          "tiga sore",
+          "15.00",
+          "3 sore"
+        ],
+        [
+          "menyetujui",
+          "persetujuan"
+        ],
+        [
+          "lima belas juta",
+          "15 juta",
+          "15.000.000"
+        ],
+        [
+          "rupiah"
+        ]
+      ],
+      "forbidden": [
+        "pembangun",
+        "konstruksi",
+        "proyek"
+      ],
+      "risk_tags": [
+        "meaning",
+        "hallucination",
+        "number",
+        "negation"
+      ]
     }
   ]
 }
