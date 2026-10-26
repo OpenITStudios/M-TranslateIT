@@ -11,6 +11,19 @@ runtime dependency. Complete this goal only after the risk-based fast selection
 and broader quality gates are explicit and exercised within their actual proof
 ceilings; do not equate source controls with linguistic/native acceptance.
 
+**Fast translation selection implemented (2026-10-26).** Existing corpus metadata
+selects 28 cases (16 ID→EN, 12 EN→ID), each with a risk reason. It covers the
+declared 16 common risk tags in each direction and retains observed action,
+reference and invented-purpose failures; tag coverage is not semantic acceptance
+or a minimality proof. Existing CLI accepts `--suite fast`, with independent
+selection/full-corpus identity and explicit exclusion of full-promotion authority.
+Full remains default; all 191 regression and 40 held-out cases remain. Seven
+actual CLI controls and evaluator/pipeline source tests pass. Reference-control
+grading medians were about 4 ms fast versus 23 ms full; this is not model latency.
+Historical output regrading finds 13 fast flags versus 59 full, not an improvement
+rate. No fast model execution has been performed. Direct fast worker execution
+still needs integration with existing transport before this goal is complete.
+
 **Quality-test calibration delivered through numeric roles (2026-10-26).**
 AI-assisted desk review of the original 60 flags provisionally found 32 checker
 mismatches, 17 meaning errors and 11 unresolved cases; this is not independent
@@ -121,7 +134,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Select and implement the smallest justified fast quality package by distinct risks in both directions, preserving observed real failures and measuring actual selection/grading cost separately from model inference cost. Reuse the existing corpus/evaluator and keep broader regression/held-out gates explicit; do not delete unreviewed coverage to reduce counts or claim tag coverage proves semantics. Keep mixed/ambiguous outputs unresolved, retain MiLMMT and current application behavior. Model-quality and integrated speech-to-Meeting acceptance remain open; no model download, updater work or My Voice training follows automatically.
+Integrate the fast/full direct-translation diagnostic with existing persistent-worker transport and strict source/model/output identity, without a second worker framework. Prove incomplete/unsuccessful outputs cannot pass and measure execution cost separately from evaluator cost; retain known MiLMMT failures rather than tune until PASS. Keep full regression, held-out bilingual review and native/perceptual gates explicit. Current application/model behavior remains unchanged; no model download, updater work or My Voice training follows automatically.
 
 ## Retained My Voice source candidate (paused)
 

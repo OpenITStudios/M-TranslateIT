@@ -21,6 +21,49 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Risk-based fast translation selection — 2026-10-26
+
+Parent Local `a710ee3367a86f832cbc45d0dd0f181c2971b3b3`. The existing regression
+corpus now owns an explicit 28-case selection (16 ID→EN, 12 EN→ID), reasons and
+16 required common risk tags. Selection validates each tag in each direction,
+known IDs and nonempty reasons. All 191 regression cases remain; frozen held-out
+content is unchanged. Tags are not proof of complete semantic coverage or minimal
+set size. The selection retains observed approval/signature, park/cancel,
+previous-version reference and budget-purpose failures. Count-only self-test
+thresholds were removed while semantic/category/coverage controls remain.
+
+Existing evaluator CLI supports `--suite fast`; default full behavior remains.
+Emitted requests and reports bind the selected fingerprint plus full-corpus
+identity. Fast-for-full and full-for-fast results are incomplete, and even a
+complete clean fast comparison cannot set the promotion-safe flag. New source
+controls reject malformed selection, unknown IDs and uncovered risks, and verify
+selected worker requests exactly equal their full counterparts. Evaluator and
+ten audio-pipeline source tests pass. Seven actual UTF-8 CLI controls pass for
+stats, emit, successful reference-control grading, missing output, mismatched
+selection sizes and non-promotable fast comparison. Reference strings used for
+these controls are explicitly labeled, not presented as model output. The first
+CLI probe used Windows default output encoding and failed UTF-8 decoding; the
+successful bounded rerun explicitly used Python `-X utf8`.
+
+Seven in-process reference-control grading samples per selection gave median
+3.97 ms fast versus 22.78 ms full. This measures evaluator work only, excluding
+model/startup/transport/native latency. Regrading retained `723fc247` output
+finds 13 flags in the fast subset and 59 in full; it still catches the named
+historical failures. Different denominators are not a quality improvement.
+No new model inference or fast worker execution occurred.
+
+Private receipt `.workspace/reports/quality-fast-a710ee33-utf8/receipt.json`,
+SHA-256 `561c57367d189f69ca97f1aee6d0b50aab0b0164f91c3f744a844918e247c5db`,
+binds actual CLI reports/exit codes, grading samples, original result identity
+and source hashes. Full fingerprint:
+`8a6834f1f4937b0492fec6bbe45e9d4d86c7dac0c82b4ba836794bde3c6e240e`;
+fast fingerprint:
+`b86eaf0bfdb0ff4414baa2310f3cdd22ec471ce6e5e773f93f28ed808b24bc8c`.
+Pipeline log: `.workspace/reports/quality-fast-pipeline.log`.
+Proof ceiling: **EXECUTED_SOURCE** and historical-output analysis. Fast direct
+worker execution remains unimplemented; overall linguistic/native/perceptual
+quality is not accepted by selection or green controls.
+
 ### Numeric correction roles and declared formats — 2026-10-26
 
 Parent Local `2eeaf46c9568fc89dfc5de760cc11f096413de37`. Executable controls

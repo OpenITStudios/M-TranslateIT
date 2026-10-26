@@ -118,7 +118,40 @@ def load_corpus(path: Path) -> dict:
                     or not all(isinstance(value, str) and value.strip() for value in pair)
                 ):
                     raise ValueError(f"{case_id}: invalid context pair")
+    if "fast_suite" in data:
+        select_suite(data, "fast")
     return data
+
+
+def select_suite(corpus: dict, name: str) -> dict:
+    if name == "full":
+        return corpus
+    if name != "fast":
+        raise ValueError(f"unknown quality suite: {name}")
+    spec = corpus.get("fast_suite", {})
+    if not isinstance(spec, dict):
+        raise ValueError("invalid fast quality suite: object required")
+    reasons = spec.get("cases", {})
+    risks = spec.get("required_risk_tags", [])
+    known = {case["id"] for case in corpus["cases"]}
+    if (not isinstance(reasons, dict) or not reasons or not set(reasons) < known
+            or any(not isinstance(reason, str) or not reason.strip() for reason in reasons.values())
+            or not isinstance(risks, list) or not risks
+            or any(not isinstance(tag, str) or not tag.strip() for tag in risks)
+            or len(risks) != len(set(risks))):
+        raise ValueError("invalid fast quality suite: declared cases, reasons and risks required")
+    cases = [case for case in corpus["cases"] if case["id"] in reasons]
+    for direction in ("id-en", "en-id"):
+        covered = {tag for case in cases if case["direction"] == direction for tag in case["risk_tags"]}
+        if missing := set(risks) - covered:
+            raise ValueError(f"fast quality suite lacks {direction} risks: {sorted(missing)}")
+    return {
+        **{key: value for key, value in corpus.items() if key != "fast_suite"},
+        "cases": cases,
+        "selection": {"name": "fast", "full_corpus_fingerprint": corpus_fingerprint(corpus),
+                      "full_case_count": len(corpus["cases"]), "required_risk_tags": risks,
+                      "case_reasons": reasons},
+    }
 
 
 _POLARITY_TERMS = {
@@ -234,6 +267,7 @@ def corpus_stats(corpus: dict) -> dict:
             legacy_context_fixtures += 1
     return {
         "schema": "translateit.translation_quality.stats.v1",
+        "selection": corpus.get("selection"),
         "corpus_fingerprint": corpus_fingerprint(corpus),
         "case_count": len(corpus["cases"]),
         "legacy_context_fixture_count": legacy_context_fixtures,
@@ -316,6 +350,7 @@ def evaluate(
     )
     return {
         "schema": "translateit.translation_quality.report.v1",
+        "selection": corpus.get("selection"),
         "corpus_fingerprint": expected_fingerprint,
         "result_corpus_fingerprint": result_corpus_fingerprint or None,
         "source_identity": source_identity or None,
@@ -432,6 +467,8 @@ def compare_reports(
     }
     return {
         "schema": "translateit.translation_quality.comparison.v1",
+        "selection": corpus.get("selection"),
+        "full_regression_evaluated": not bool(corpus.get("selection")),
         "complete_result_sets": (
             baseline["complete_result_set"] and candidate["complete_result_set"]
         ),
@@ -461,7 +498,8 @@ def compare_reports(
             and candidate["provenance_matches_corpus"]
         ),
         "promotion_safe_on_declared_critical_invariants": (
-            baseline["complete_result_set"]
+            not corpus.get("selection")
+            and baseline["complete_result_set"]
             and candidate["complete_result_set"]
             and bool(baseline["source_identity"])
             and bool(candidate["source_identity"])
@@ -501,6 +539,7 @@ def emit_requests(corpus: dict) -> dict:
         requests.append({"case_id": case["id"], "request": request})
     return {
         "schema": "translateit.translation_quality.requests.v1",
+        "selection": corpus.get("selection"),
         "corpus_fingerprint": corpus_fingerprint(corpus),
         "requests": requests,
     }
@@ -513,11 +552,13 @@ def main() -> int:
         choices=("validate-corpus", "stats", "emit-requests", "evaluate", "compare"),
     )
     parser.add_argument("--corpus", type=Path, required=True)
+    parser.add_argument("--suite", choices=("full", "fast"), default="full",
+                        help="fast is diagnostic only; full is required for promotion comparison")
     parser.add_argument("--results", type=Path)
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--candidate", type=Path)
     args = parser.parse_args()
-    corpus = load_corpus(args.corpus)
+    corpus = select_suite(load_corpus(args.corpus), args.suite)
     if args.command == "validate-corpus":
         report = validate_corpus(corpus)
         print(json.dumps(report, ensure_ascii=False, indent=2))

@@ -63,6 +63,49 @@ adversarial case correctly until the real model output is evaluated.
 
 ## Commands
 
+### Choose the smallest relevant gate
+
+| Change | First check | Broader evidence when needed |
+|---|---|---|
+| Evaluator/contract only | Existing self-test; explicitly regrade retained output when every worker request is unchanged | Review faithful/wrong-meaning controls; no automatic inference rerun |
+| Translation behavior | Fresh `fast` requests and grading for early failure discovery | Full regression before promotion, then held-out bilingual review for linguistic decisions |
+| Audio/protocol integration | Existing audio `core` pipeline | Additional cases only for affected acoustic/stage risks |
+| Lifecycle/resource behavior | Relevant source controls and audio `core` | `endurance` for repetition/resource questions; not for more language diversity |
+| Integrated candidate | Accepted source/quality gates | Coordinated installed/native/independent-receiver and perceptual acceptance |
+
+### Fast translation diagnostics
+
+`fast_suite` in the existing regression corpus owns membership, per-case reasons
+and required risk tags. It references existing cases; it does not copy their
+sources or expectations. Loading validates known cases, nonempty reasons and
+required-tag coverage separately in both directions. Current membership retains
+observed action, reference and invented-purpose failures, rather than choosing
+only passing cases. Tags are a coverage check, not proof of semantic adequacy or
+a mathematically minimal selection. Full regression preserves the unselected
+cases, including additional normalization, repetition and legacy-fixture risks.
+
+Use the same CLI/evaluator with `--suite fast`; default remains `full`:
+
+```powershell
+python -X utf8 tools/translation_quality/evaluate_translation_quality.py stats --corpus tools/translation_quality/corpus/translation_quality_v1.json --suite fast
+python -X utf8 tools/translation_quality/evaluate_translation_quality.py emit-requests --corpus tools/translation_quality/corpus/translation_quality_v1.json --suite fast
+python -X utf8 tools/translation_quality/evaluate_translation_quality.py evaluate --corpus tools/translation_quality/corpus/translation_quality_v1.json --suite fast --results <fast-results.json>
+```
+
+These commands select/emit/grade; they **do not execute a worker**. Output includes
+selection identity, full-corpus identity, case reasons and the selected fingerprint.
+The result bundle must match the emitted selection. Missing, extra, full-for-fast,
+fast-for-full or mismatched-fingerprint results cannot establish a complete match.
+Do not relabel retained full outputs as newly executed fast results. A `fast`
+comparison always leaves the promotion-safe flag false and exits nonzero, even
+when its declared invariants do not regress: full regression is still required.
+The frozen held-out corpus has no fast selection and remains a separate gate.
+
+Fast lowers request count; actual inference/startup costs require their own
+execution evidence. In-process grading time does not prove model or native
+latency. The existing audio core profile remains the executable audio-stage
+integration gate; a direct translation selection cannot replace it.
+
 Report machine-derived corpus coverage:
 
 ```powershell

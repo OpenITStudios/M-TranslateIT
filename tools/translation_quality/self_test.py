@@ -24,7 +24,23 @@ def main() -> int:
     corpus = evaluator.load_corpus(CORPUS)
     validation = evaluator.validate_corpus(corpus)
     assert validation["ok"], validation
-    assert validation["case_count"] >= 170
+    fast = evaluator.select_suite(corpus, "fast")
+    assert len(fast["cases"]) < len(corpus["cases"])
+    assert {"en-id-budget-purpose-001", "en-id-meet-010", "id-en-informal-workplace-005"}.issubset(
+        {case["id"] for case in fast["cases"]}
+    )
+    assert evaluator.select_suite(corpus, "full") is corpus
+    for invalid in (
+        {**corpus, "fast_suite": []},
+        {**corpus, "fast_suite": {**corpus["fast_suite"], "cases": {"unknown": "invalid case"}}},
+        {**corpus, "fast_suite": {**corpus["fast_suite"], "required_risk_tags": ["uncovered"]}},
+    ):
+        try:
+            evaluator.select_suite(invalid, "fast")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("accepted invalid fast selection")
     assert set(validation["directions"]) == {"en-id", "id-en"}
     assert {"meaning", "number", "negation", "omission", "hallucination", "entity", "terminology"}.issubset(
         set(validation["risk_tags"])
@@ -51,6 +67,26 @@ def main() -> int:
     assert len(fingerprint) == 64
 
     perfect = {case["id"]: case["references"][0] for case in corpus["cases"]}
+    fast_perfect = {case["id"]: perfect[case["id"]] for case in fast["cases"]}
+    fast_fingerprint = evaluator.corpus_fingerprint(fast)
+    assert evaluator.evaluate(fast, fast_perfect, result_corpus_fingerprint=fast_fingerprint)["complete_result_set"]
+    assert not evaluator.evaluate(corpus, fast_perfect)["complete_result_set"]
+    assert not evaluator.evaluate(fast, perfect)["complete_result_set"]
+    same_fast = evaluator.compare_reports(
+        fast, fast_perfect, fast_perfect,
+        baseline_corpus_fingerprint=fast_fingerprint, candidate_corpus_fingerprint=fast_fingerprint,
+        baseline_source_identity="baseline-sha", candidate_source_identity="candidate-sha",
+    )
+    assert same_fast["complete_result_sets"]
+    assert not same_fast["full_regression_evaluated"]
+    assert not same_fast["promotion_safe_on_declared_critical_invariants"]
+    bad_fast = {**fast_perfect, "en-id-budget-purpose-001": "Anggaran pembangunannya adalah lima belas juta rupiah."}
+    bad_budget = next(row for row in evaluator.evaluate(fast, bad_fast)["cases"] if row["case_id"] == "en-id-budget-purpose-001")
+    assert not bad_budget["critical_pass"]
+    assert {item["case_id"]: item["request"] for item in evaluator.emit_requests(fast)["requests"]} == {
+        item["case_id"]: item["request"] for item in evaluator.emit_requests(corpus)["requests"]
+        if item["case_id"] in fast_perfect
+    }
     report = evaluator.evaluate(corpus, perfect)
     assert report["complete_result_set"] is True
     assert report["critical_failures"] == 0
@@ -204,10 +240,7 @@ def main() -> int:
 
     stats = evaluator.corpus_stats(corpus)
     assert stats["case_count"] == validation["case_count"]
-    assert stats["directions"]["id-en"] == 109
-    assert stats["directions"]["en-id"] == 82
     assert stats["legacy_context_fixture_count"] == 3
-    assert stats["risk_tags"]["meaning"] >= 100
 
     requests = evaluator.emit_requests(corpus)
     assert requests["corpus_fingerprint"] == fingerprint
