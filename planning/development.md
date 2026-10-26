@@ -2,6 +2,28 @@
 
 ## Current Status
 
+**Integrated developer acceptance stopped at a semantic failure (2026-10-26).**
+Candidate `8582fc2a34f9bc277d792ad39471c1cd6e8777da` passed repository/source
+contracts, frozen npm installation, strict typecheck, 421 frontend tests,
+326 worker tests (2 additional POSIX-only skips), 344 Rust tests (1 ignored
+replay), all three evaluator self-tests and the exact-SHA canonical build.
+The native app launched; public ID→EN Text, Copy acknowledgment and pane-preserving
+Swap were observed. EN→ID completed but added a construction purpose:
+`The budget is fifteen million rupiah.` became
+`Anggaran pembangunannya adalah lima belas juta rupiah.`
+This fails PR-041 semantic fidelity; review hints do not make it accepted.
+The failure is located in the translation lane; the internal request/provider/model
+cause has not yet been separated. No rerun or phrase-specific repair was applied.
+
+The run stopped before microphone capture, Meeting Start, independent receiver,
+Mute/source switching, repeated sessions and transcript/export. The app was
+closed normally and the owned process/frontend listener exited. This proves an
+idle close only, not cleanup-incomplete recovery with devices. Matching private
+logs and the public-case receipt are under `.workspace/reports/acceptance-8582fc2a/`;
+[current validation](../docs/knowledge/current-validation.md) owns proof limits.
+
+## Retained native exit repair
+
 **Native exit gate repaired (2026-10-26).** `application_runtime/shutdown.rs`
 now rejects a failed Meeting Stop and re-reads runtime ownership plus the
 canonical Meeting cleanup-pending fact before stopping the helper or clearing
@@ -12,7 +34,7 @@ passed locally. Controlled callbacks prove pending cleanup blocks shutdown,
 verified release permits ordered shutdown and helper/marker failure refuses
 clean exit; they do not prove actual native-window/device behavior.
 
-No per-change tests on the user's PC. The next native proof belongs to
+No per-change tests on the user's PC. Resume native proof only within
 one integrated local Windows test phase under the existing acceptance runbook.
 GitHub default branch `main` remains reserved for explicitly approved final
 outcomes; `Local` is the only development authority and CI remains paused.
@@ -52,7 +74,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Perform candidate admission for one pinned developer-mode end-to-end acceptance phase using `docs/knowledge/operations/target-windows-performance.md`: reconcile source/build proof and physical microphone/receiver prerequisites before the existing first-start → Text → outbound Meeting → Stop/restart → transcript/export flow. Keep updater installation and My Voice training outside the initial built-in-voice baseline; no native or receiver PASS may be inferred from worker fixtures. Legacy-cache cleanup is deferred by the user's focus change.
+Diagnose the captured EN→ID semantic addition using the preserved acceptance receipt: separate the exact Text request/chunk/prompt from raw canonical model output, then repair only the proven owner with quality-regression evidence before resuming the integrated acceptance flow. Do not hide the addition with a phrase replacement, model swap, generic warning or repeated inference until PASS. Meeting, updater, My Voice training and legacy-cache cleanup do not resume automatically.
 
 ## Retained My Voice source candidate (paused)
 

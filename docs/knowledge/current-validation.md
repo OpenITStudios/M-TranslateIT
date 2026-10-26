@@ -21,6 +21,36 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Integrated developer acceptance — stopped 2026-10-26
+
+Pinned clean candidate: `8582fc2a34f9bc277d792ad39471c1cd6e8777da`, branch
+`Local`. The owner authorized the grouped acceptance phase and approved the
+dedicated Windows UAC worker-test child. No cloud inference, CI, release build
+or private-data restoration occurred; npm used the existing frozen lockfile.
+
+| Gate / flow | Observed evidence | Limit |
+|---|---|---|
+| Source admission | Repository verification, npm ci, source contracts, strict Svelte check and 421 frontend tests passed | Source evidence only |
+| Worker suite | 326 passed; 2 POSIX process-group cases skipped; zero failures/errors | Elevated child exit 0 and JUnit XML retained; skips are not PASS |
+| Evaluator self-tests | Translation 190 regression + 40 held-out; ASR 60; TTS 30 passed | Evaluator behavior, not general model quality |
+| Rust / canonical build | 344 Rust tests passed, 1 replay ignored; canonical frontend rebuild and locked Cargo check passed with externally pinned expected SHA | No installed-runtime proof |
+| Native launch / Text | Real Tauri developer app launched and Text navigation worked. Three-sentence ID→EN output preserved negation, time and amount; command duration 5,715 ms. Copy acknowledged success; Swap preserved both panes and disabled Copy until a current result | One public sample; clipboard contents not independently read; pending-edit races and Clear not tested |
+| EN→ID fidelity | **FAIL**: successful native command (727 ms) translated `The budget is fifteen million rupiah.` within the three-sentence input as `Anggaran pembangunannya adalah lima belas juta rupiah.` | Construction purpose is absent from the source. PR-041 failed despite complete output and visible review hints; internal request/provider/model cause remains unseparated |
+| Cleanup | Native Close exited the idle TranslateIT process and the owned frontend listener | Not Meeting Stop, orphan-writer recovery or active audio teardown |
+| Remaining native acceptance | **NOT EXECUTED** after the first semantic failure | Microphone capture, Meeting Start/output, independent receiver, Mute/source switching, repeated sessions, transcript/export and installed app remain outstanding |
+
+Control initially encountered stale window identities and competing user input;
+the owner yielded control and native UI observation then proceeded. This is not
+classified as an application defect. Acceptance stopped at the semantic failure;
+no inference retry, runtime edit, model change or wording replacement followed.
+
+Private receipt `.workspace/reports/acceptance-8582fc2a/summary.json` has SHA-256
+`366bf374ac723e9ace8391b47336c2f10d8c0ab8d3811d6af22edd9f744febef`.
+It retains the public inputs/outputs, exact source, gate counts and source-log
+hashes. Matching JUnit, build, evaluator and native trace files remain in that
+directory. The native failure is **LIVE_RUNTIME** Text evidence; the source
+gates are **EXECUTED_SOURCE**, and neither proves Meeting or installed delivery.
+
 ### Native Stop/Close release gate — bounded repair 2026-10-26
 
 `commands/application_runtime/shutdown.rs` now checks successful Meeting Stop,
