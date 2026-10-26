@@ -106,6 +106,38 @@ execution evidence. In-process grading time does not prove model or native
 latency. The existing audio core profile remains the executable audio-stage
 integration gate; a direct translation selection cannot replace it.
 
+### Execute the selected translation stage
+
+The existing persistent-worker runner accepts the same selection. From a clean,
+exact pinned Local checkout with the existing canonical interpreter/model assets:
+
+```powershell
+python -X utf8 tools/audio_validation/worker_runner.py --translation-suite fast --source-sha <clean-Local-SHA> --python EngineData/Backend/LocalWorker/WorkerRuntime/.venv/Scripts/python.exe --output <new-fast-worker-report.json>
+```
+
+Use `--translation-suite full` for complete development regression. Run relevant
+source controls once per changed candidate before model execution. Start with
+fast to find failures cheaply; use full when evaluating a viable behavior-changing
+candidate, not repeated full runs after unchanged known failures. This path uses
+one existing offline worker transport and the canonical manifest/evaluator. It
+does not preload ASR/TTS, synthesize fixtures or access a microphone. No case IDs,
+round reduction, alternate model, automatic retry or download fallback is offered.
+
+The report includes exact source, selection and manifest identities, actual
+per-case responses, process ID/termination, elapsed wall time and check evidence.
+Wall time includes cold load, requests, grading and cleanup; it is not live
+Meeting latency. Output must be new. Source mismatch prevents worker startup;
+transport, failed/empty/incomplete/EOS-capped/wrong-direction/wrong-model output
+stops further requests, marks remaining cases unverified and exits nonzero.
+Incomplete execution reports cannot be loaded as quality-result bundles.
+
+An executed declared-invariant failure is labeled `translation_quality_check`
+with `requires_linguistic_review`; it is not automatically adjudicated as a
+model error. Complete but linguistically flagged runs remain usable for explicit
+comparison, preserving their failed verdict. Zero exit requires complete, cleaned
+execution and every selected declared check passing. Neither fast nor full output
+substitutes for held-out bilingual, perceptual or native Meeting acceptance.
+
 Report machine-derived corpus coverage:
 
 ```powershell

@@ -12,6 +12,12 @@
 
 ## Workflow
 
+The same persistent transport also supports direct translation-only `fast|full`
+diagnostics via `--translation-suite`; see the [quality execution contract](../translation_quality/README.md#execute-the-selected-translation-stage).
+This is a separate stage selection, not an audio profile or replacement for
+VAD→ASR→translation→TTS core acceptance. It has no audio fixture, recording,
+voice, rounds or device arguments and reuses the canonical translation evaluator.
+
 ### Official regression entry point
 
 The maintained acceptance entry point is `worker_runner.py --profile source|core|endurance`. It uses existing validators and the canonical VAD/worker; it never installs dependencies, regenerates audio, uses cloud inference or triggers CI. Run it from the prepared local development shell with the existing Python/Cargo/model prerequisites. Reports and their `.json.artifacts/` directories must be new; original evidence is never overwritten.

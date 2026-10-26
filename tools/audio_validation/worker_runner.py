@@ -6,6 +6,7 @@ This exercises direct worker ASR/translation/optional selected voice only.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import queue
@@ -516,13 +517,95 @@ def run(fixtures: Path, python: Path, expected_sha: str,
     return output
 
 
+def run_translation_quality(python: Path, expected_sha: str, suite: str, timeout: float) -> dict:
+    """Translation-stage diagnostics using the same persistent transport and grader."""
+    pinned_source(expected_sha)
+    quality_root = ROOT / "tools/translation_quality"
+    spec = importlib.util.spec_from_file_location("worker_translation_quality", quality_root / "evaluate_translation_quality.py")
+    grader = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(grader)
+    corpus = grader.select_suite(grader.load_corpus(quality_root / "corpus/translation_quality_v1.json"), suite)
+    manifest_path = WORKER.parent / "model_manifest.json"
+    models = [item for item in json.loads(manifest_path.read_text(encoding="utf-8"))["models"]
+              if item.get("stage") == "translation_bidirectional_id_en"]
+    if len(models) != 1 or models[0].get("backend") != "milmmt":
+        raise ValueError("one canonical MiLMMT manifest entry required")
+    model = models[0]
+    records, rejected = [], {}
+    worker = None
+    error = None
+    stopped = False
+    started = time.monotonic()
+    try:
+        worker = Worker(python, timeout)
+        for item in grader.emit_requests(corpus)["requests"]:
+            ident, request = item["case_id"], item["request"]
+            try:
+                response = worker.invoke(**request)
+            except WorkerTransportError as exc:
+                rejected[ident] = {"stage": "worker_transport", "error": str(exc)}
+                error = str(exc)
+                break
+            direction = f"{request['source_language']}->{request['target_language']}"
+            if (not translation_receipt_complete(response, direction)
+                    or response.get("model_id") != model["model_id"]
+                    or response.get("model_revision") != model["revision"]
+                    or response.get("translation_contract") != "canonical_bidirectional_id_en"
+                    or response.get("hit_token_ceiling") is True):
+                rejected[ident] = {"stage": "translation_output_contract", "response": response}
+                error = "translation:incomplete_or_unbound_output"
+                break
+            records.append({"case_id": ident, "translated_text": response["translated_text"], "response": response})
+    except (OSError, ValueError) as exc:
+        error = str(exc)
+    finally:
+        if worker is not None:
+            try:
+                worker.close()
+                stopped = worker.child.poll() is not None
+                if not stopped:
+                    error = "worker_cleanup:not_terminated"
+            except (OSError, RuntimeError) as exc:
+                error = f"worker_cleanup:{exc}"
+    try:
+        pinned_source(expected_sha)
+    except ValueError as exc:
+        error = f"source_identity:{exc}"
+    identity = f"{expected_sha}:{model['model_id']}@{model['revision']}"
+    values = {row["case_id"]: row["translated_text"] for row in records}
+    evaluation = grader.evaluate(corpus, values, result_corpus_fingerprint=grader.corpus_fingerprint(corpus), source_identity=identity)
+    checks = []
+    for index, row in enumerate(evaluation["cases"]):
+        ident = row["case_id"]
+        stage = rejected.get(ident, {}).get("stage")
+        status = "FAIL" if stage else "UNVERIFIED" if ident not in values else "PASS" if row["critical_pass"] else "FAIL"
+        checks.append({"case_id": ident, "status": status,
+                       "first_wrong_stage": stage or ("worker_execution" if ident not in values else "translation_quality_check" if status == "FAIL" else None),
+                       "requires_linguistic_review": ident in values and not row["critical_pass"],
+                       "expected": "complete canonical model output and declared semantic invariants",
+                       "evidence": f"#/rejected/{ident}" if stage else f"#/evaluation/cases/{index}"})
+    complete = not error and stopped and evaluation["complete_result_set"]
+    return {"schema": "translateit.translation_quality.worker_run.v1",
+            "execution_profile": {"name": f"translation-{suite}"},
+            "proof": "INTEGRATION_FIXTURE_TRANSLATION_STAGE_NOT_SPEECH_OR_NATIVE_ACCEPTANCE",
+            "source_identity": identity, "corpus_fingerprint": grader.corpus_fingerprint(corpus),
+            "selection": corpus.get("selection"), "model_manifest_sha256": fingerprint(manifest_path),
+            "worker_python": str(python.resolve()), "worker_terminated": stopped,
+            "worker_pid": worker.child.pid if worker is not None else None,
+            "execution_complete": complete, "execution_error": error,
+            "elapsed_ms": round((time.monotonic() - started) * 1000),
+            "results": records, "rejected": rejected, "evaluation": evaluation, "checks": checks,
+            "counts": {state: sum(row["status"] == state for row in checks) for state in ("PASS", "FAIL", "UNVERIFIED")},
+            "verdict": "PASS" if complete and not evaluation["critical_failures"] else "FAIL"}
+
+
 def run_source_checks(expected_sha: str) -> dict:
     """Bounded existing validators; no model imports, downloads or native capture."""
     pinned_source(expected_sha)
     commands = [
         ("audio_contracts", [sys.executable, "-m", "unittest", "tools.tests.test_audio_validation",
                             "tools.tests.test_audio_vad_receipts", "tools.tests.test_audio_pipeline",
-                            "tools.tests.test_audio_fault_runner"]),
+                            "tools.tests.test_audio_fault_runner", "tools.tests.test_translation_worker"]),
         ("asr_evaluator", [sys.executable, "tools/asr_quality/self_test.py"]),
         ("translation_evaluator", [sys.executable, "tools/translation_quality/self_test.py"]),
         ("tts_evaluator", [sys.executable, "tools/tts_quality/self_test.py"]),
@@ -561,7 +644,7 @@ def report_summary(report: dict, output: Path) -> dict:
             "verdict": report.get("verdict", "NOT_GRADED"), "counts": report.get("counts"),
             "proof": report["proof"], "output": str(output), "failures": failed[:5],
             "additional_failures_in_report": max(0, len(failed) - 5),
-            "execution_error": report.get("transport_error") or report.get("source_admission_error")}
+            "execution_error": report.get("execution_error") or report.get("transport_error") or report.get("source_admission_error")}
 
 
 def admission_failure(profile: dict, source_sha: str, source_checks: dict, stage: str, error: str) -> dict:
@@ -583,6 +666,7 @@ def main() -> int:
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--ids", nargs="+")
     selection.add_argument("--profile", choices=("source", "core", "endurance"))
+    selection.add_argument("--translation-suite", choices=("fast", "full"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument("--vad-timeout", type=int, default=600)
@@ -595,6 +679,14 @@ def main() -> int:
     args = parser.parse_args()
     if args.output.exists() or args.output.is_symlink():
         parser.error("output must be a new report; previous evidence is immutable")
+    if args.translation_suite:
+        if args.python is None or any((args.fixtures, args.include_voice, args.finalized_pipeline,
+                                       args.vad_observations, args.segments_dir, args.vad_source_sha, args.rounds is not None)):
+            parser.error("translation suite requires --python and accepts no audio/round arguments")
+        result = run_translation_quality(args.python, args.source_sha, args.translation_suite, args.timeout)
+        publish_report(args.output, result)
+        print(json.dumps(report_summary(result, args.output), ensure_ascii=False, indent=2))
+        return 0 if result["verdict"] == "PASS" else 2
     if args.profile and args.rounds is not None:
         parser.error("named profiles own their round count; --rounds is for custom --ids only")
     source_checks = None

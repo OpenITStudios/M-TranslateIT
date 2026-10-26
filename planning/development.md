@@ -11,6 +11,18 @@ runtime dependency. Complete this goal only after the risk-based fast selection
 and broader quality gates are explicit and exercised within their actual proof
 ceilings; do not equate source controls with linguistic/native acceptance.
 
+**Direct translation worker candidate integrated (2026-10-26).** Existing
+`worker_runner.py --translation-suite fast|full` now executes the selected cases
+through one existing offline transport and grades with the canonical evaluator.
+Manifest model/revision, direction, completion/EOS, output text, source identity
+and child termination bind execution. Invalid output stops further requests;
+incomplete reports cannot be reloaded as successful quality bundles. Linguistic
+flags require review rather than claiming an automatically proved model error.
+Six focused simulated-worker tests and the 37-test source contract group passed;
+changed runner/tests passed Ruff. Existing evaluator TRY004 findings are unchanged.
+This candidate has not yet executed real model inference; that is the remaining
+proof step for the lean-system goal, with known model quality failures retained.
+
 **Fast translation selection implemented (2026-10-26).** Existing corpus metadata
 selects 28 cases (16 ID→EN, 12 EN→ID), each with a risk reason. It covers the
 declared 16 common risk tags in each direction and retains observed action,
@@ -134,7 +146,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Integrate the fast/full direct-translation diagnostic with existing persistent-worker transport and strict source/model/output identity, without a second worker framework. Prove incomplete/unsuccessful outputs cannot pass and measure execution cost separately from evaluator cost; retain known MiLMMT failures rather than tune until PASS. Keep full regression, held-out bilingual review and native/perceptual gates explicit. Current application/model behavior remains unchanged; no model download, updater work or My Voice training follows automatically.
+Validate this integrated candidate on a clean exact Local SHA: execute the existing source profile, then one fresh direct fast translation run with the existing canonical interpreter/assets. Confirm identity/completion/cleanup and actionable known failures; measure real fixture wall cost separately from evaluator timings. Audit completion against the lean-system objective without requiring a false model-quality PASS or rerunning unchanged full/held-out inference. Retain full regression, bilingual, audio/native/perceptual acceptance as distinct gates; current application/model behavior remains unchanged.
 
 ## Retained My Voice source candidate (paused)
 

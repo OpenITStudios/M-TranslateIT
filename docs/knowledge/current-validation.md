@@ -21,6 +21,31 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Direct fast/full worker source candidate — 2026-10-26
+
+Parent Local `034be0df31d599c776fdf4ce3869d5085a8aa922`. Existing worker runner
+now accepts `--translation-suite fast|full`; transport, manifest and grading are
+reused, with no parallel worker framework or inference implementation. The source
+candidate binds exact clean source before/after execution, corpus selection,
+manifest hash, model/revision, directions, complete/EOS flags, nonempty output,
+process ID and child termination. Invalid responses stop remaining inference.
+Per-case transport/output violations are separated from declared quality checks;
+the latter require linguistic review and are not automatically model-error claims.
+Incomplete worker reports cannot be loaded as quality bundles; complete flagged
+runs remain inspectable/comparable without changing their verdict.
+
+Six new focused simulated-worker tests exercise both entire selections with one
+worker, exact emitted requests, nine invalid-envelope variants, transport loss,
+cleanup refusal, source mismatch before spawn, output immutability, CLI exit codes
+and complete-but-linguistically-failed output. Together with existing audio
+contracts, 37 source tests passed. Translation evaluator self-tests passed 191/40.
+Runner and new test module pass Ruff; the evaluator retains the parent's two
+TRY004 recommendations, not introduced by this guard. Logs:
+`.workspace/reports/quality-worker-source.log` and
+`.workspace/reports/quality-worker-controls-final.log`.
+Proof is **EXECUTED_SOURCE**, not real model or native execution. Fresh exact-SHA
+source admission plus one fast worker run remains the explicit next proof step.
+
 ### Risk-based fast translation selection — 2026-10-26
 
 Parent Local `a710ee3367a86f832cbc45d0dd0f181c2971b3b3`. The existing regression

@@ -279,6 +279,8 @@ def corpus_stats(corpus: dict) -> dict:
 
 def load_result_bundle(path: Path) -> dict:
     raw = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(raw, dict) and raw.get("schema") == "translateit.translation_quality.worker_run.v1" and raw.get("execution_complete") is not True:
+        raise ValueError("incomplete worker execution cannot be used as a quality result bundle")
     rows = raw.get("results") if isinstance(raw, dict) else raw
     if not isinstance(rows, list):
         raise ValueError("results must be a list or an object containing results")
