@@ -1,6 +1,25 @@
-# TranslateIT — development workspace cleanup
+# TranslateIT — integrated application acceptance
 
-## Current workspace outcome
+## Current Status
+
+**Native exit gate repaired (2026-10-26).** `application_runtime/shutdown.rs`
+now rejects a failed Meeting Stop and re-reads runtime ownership plus the
+canonical Meeting cleanup-pending fact before stopping the helper or clearing
+the recovery marker. A missing session is no longer sufficient for clean exit.
+Four targeted Rust shutdown tests, twelve close/recovery Node tests, the
+ApplicationRuntime architecture validator and the frontend production build
+passed locally. Controlled callbacks prove pending cleanup blocks shutdown,
+verified release permits ordered shutdown and helper/marker failure refuses
+clean exit; they do not prove actual native-window/device behavior.
+
+No per-change tests on the user's PC. The next native proof belongs to
+one integrated local Windows test phase under the existing acceptance runbook.
+GitHub default branch `main` remains reserved for explicitly approved final
+outcomes; `Local` is the only development authority and CI remains paused.
+Updater install concurrency remains a separate audit finding; no updater,
+audio/AI algorithm, model, private data or release behavior changed here.
+
+## Retained workspace outcome
 
 **First bounded cleanup delivered (2026-10-26).** `manage.cmd clean` now previews
 renewable build outputs; `-Profile cache` previews npm/uv/pip and root pytest/Ruff
@@ -13,8 +32,9 @@ assets, the worker environment and reports; this is metadata evidence, not a
 new model/native acceptance claim. Models, active environments, accepted audio
 fixtures and proof artifacts remain in place. Root `.cache` and staging remain
 review candidates; one small failed-test fixture remains after an automatic
-approval-review rejection of its removal. Repository verification still reports
-three pre-existing planning-text contract failures; those are outside cleanup.
+approval-review rejection of its removal. Three planning-text contract failures
+were recorded at cleanup delivery; the current continuation restores those
+canonical boundaries and repository verification now passes.
 The [workspace contract](../docs/system/windows-workspace-boundaries.md#explicit-development-cleanup)
 owns cleanup/retention rules. No source-root or installed-app path migration occurred.
 
@@ -32,7 +52,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Review the remaining root `.cache` and `.workspace/staging` against current consumers and verified replacements, producing one explicit obsolete-file list before any further deletion. Do not broaden cleanup to models, UserData, active tools/environments or accepted fixture/proof artifacts.
+Perform candidate admission for one pinned developer-mode end-to-end acceptance phase using `docs/knowledge/operations/target-windows-performance.md`: reconcile source/build proof and physical microphone/receiver prerequisites before the existing first-start → Text → outbound Meeting → Stop/restart → transcript/export flow. Keep updater installation and My Voice training outside the initial built-in-voice baseline; no native or receiver PASS may be inferred from worker fixtures. Legacy-cache cleanup is deferred by the user's focus change.
 
 ## Retained My Voice source candidate (paused)
 

@@ -21,6 +21,28 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Native Stop/Close release gate — bounded repair 2026-10-26
+
+`commands/application_runtime/shutdown.rs` now checks successful Meeting Stop,
+then fresh runtime ownership and the existing Meeting cleanup-pending fact
+before helper shutdown and recovery-marker removal. Targeted offline Cargo
+execution passed all four shutdown tests; controlled callbacks verify the
+orphan-cleanup → verified-release transition, retained/unavailable ownership,
+helper failure, marker failure and shutdown order. These tests do not terminate
+a real worker, operate native windows or reproduce native audio teardown.
+The source wiring/close policy Node tests passed 12/12, ApplicationRuntime
+architecture and repository validation passed, and the real frontend production
+build passed. Current continuation preserves the canonical branch/execution
+boundaries; the earlier missing planning-text markers are reconciled.
+The initial Cargo attempt stopped because cleanup had removed `dist`; the
+ordinary frontend build regenerated it before successful test execution.
+No dependencies, models, audio algorithms, updater or installed runtime changed.
+
+Proof ceiling: **EXECUTED_SOURCE**, on the bounded Local working-tree repair;
+actual Close/Stop/Retry Stop with devices, independent receiver delivery and
+the integrated current-candidate build/acceptance gate remain **NOT EXECUTED**.
+The earlier regression receipts below keep their own exact source and scope.
+
 ### Maintained automatic regression system — accepted 2026-10-26
 
 The requested modular, maintainable regression-system delivery is complete for the agreed vital package, with executable proof on clean `0d571fb472741df02179cdb739ea5379070ec6ef`. This closes the test-system goal, not full-product/native acceptance. `worker_runner.py --profile source|core|endurance` is the single maintained entry point; `scenarios.json` owns independent package/round policy, `harness.py` fixture identity, `worker_runner.py` execution/transport, and `pipeline_checks.py` the decision path shared with offline `harness.py score`. Canonical ASR/translation/TTS evaluators retain their semantic owners. No new runtime engine, dependency, cloud service, CI or parallel test framework was introduced.
