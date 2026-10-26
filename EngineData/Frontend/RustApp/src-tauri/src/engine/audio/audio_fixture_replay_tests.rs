@@ -104,6 +104,7 @@ fn stage_for_case(
     case: &Case,
     samples: &[f32],
     temp_dir: &Path,
+    retain_segments: bool,
 ) -> serde_json::Value {
     let session = format!("audio-public-{}", case.id);
     clear_finalized_incoming_utterance_producer();
@@ -117,6 +118,7 @@ fn stage_for_case(
     let mut writer_valid = 0u32;
     let mut speech_ms = Vec::<u64>::new();
     let mut latest_blocker = String::new();
+    let mut segments = Vec::<serde_json::Value>::new();
 
     let mut collect = || {
         while let Some(utterance) = try_take_finalized_incoming_utterance(&session) {
@@ -133,12 +135,22 @@ fn stage_for_case(
                     if let Ok(metadata) = fs::metadata(&target) {
                         if metadata.len() >= 46 {
                             writer_valid += 1;
+                            if retain_segments {
+                                let bytes = fs::read(&target).expect("read actual finalized WAV");
+                                let pcm = parse_pcm16_mono_16k(&bytes).expect("canonical finalized WAV");
+                                segments.push(json!({
+                                    "file": target.file_name().unwrap().to_str().unwrap(),
+                                    "sha256": sha256_hex(&bytes),
+                                    "frames": pcm.len(),
+                                    "rate_hz": TARGET_SAMPLE_RATE_HZ,
+                                }));
+                            }
                         }
                     }
                 }
                 Err(error) => latest_blocker = format!("pcm16_writer:{}", error.kind()),
             }
-            let _ = fs::remove_file(target);
+            if !retain_segments { let _ = fs::remove_file(target); }
         }
     };
     // Input is the exact hashed audio; 200-ms callback-size chunks keep
@@ -175,6 +187,7 @@ fn stage_for_case(
         "writer_attempts": writer_attempts,
         "writer_valid": writer_valid,
         "speech_duration_ms": speech_ms,
+        "segments": segments,
         "test_added_quiet_ms": added_quiet_ms,
         "test_only": true,
         "blocker": latest_blocker,
@@ -206,9 +219,14 @@ fn explicit_public_audio_fixture_replay_receipts() {
     assert_eq!(suite.schema, "translateit.audio_suite.v1");
     assert_eq!(suite.cases.len(), data.fixtures.len());
 
-    let temp_dir = std::env::temp_dir().join(format!(
+    let retained = std::env::var_os("TRANSLATEIT_AUDIO_SEGMENT_ROOT").map(PathBuf::from);
+    if let Some(directory) = &retained {
+        assert!(directory.is_absolute() && !directory.exists(),
+            "explicit new absolute segment directory required");
+    }
+    let temp_dir = retained.clone().unwrap_or_else(|| std::env::temp_dir().join(format!(
         "translateit-audio-replay-{}", std::process::id()
-    ));
+    )));
     fs::create_dir(&temp_dir).expect("unique temporary replay directory required");
     let run = std::panic::catch_unwind(|| {
         for case in &suite.cases {
@@ -219,7 +237,7 @@ fn explicit_public_audio_fixture_replay_receipts() {
                 .expect("read public audio sample");
             assert_eq!(sha256_hex(&bytes), fixture.sha256, "fixture byte hash mismatch");
             let pcm = parse_pcm16_mono_16k(&bytes).expect("canonical PCM16 mono 16k fixture");
-            let stage = stage_for_case(case, &pcm, &temp_dir);
+            let stage = stage_for_case(case, &pcm, &temp_dir, retained.is_some());
             println!("{}{}", RECEIPT_PREFIX, json!({
                 "schema": "translateit.audio_vad_receipt.v1",
                 "scenario_id": case.id,
@@ -230,6 +248,6 @@ fn explicit_public_audio_fixture_replay_receipts() {
             }));
         }
     });
-    let _ = fs::remove_dir_all(&temp_dir);
+    if retained.is_none() { let _ = fs::remove_dir_all(&temp_dir); }
     if let Err(error) = run { std::panic::resume_unwind(error); }
 }

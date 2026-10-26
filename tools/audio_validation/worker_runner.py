@@ -161,6 +161,119 @@ def stage_result(response: dict, name: str) -> dict:
     return result
 
 
+def finalized_asr_outcome(response: dict, *, non_speech: bool) -> str:
+    text = response.get("transcript_text", "")
+    if non_speech:
+        if response.get("ok") is True and isinstance(text, str) and text.strip():
+            return "NON_SPEECH_TRANSCRIPT"
+        if (response.get("ok") is False and not text
+                and response.get("blocker") == "asr:empty_transcript"):
+            return "ASR_REJECTED_EMPTY"
+        return "UNVERIFIED_ASR_FAILURE"
+    return ("SPEECH_TRANSCRIBED" if response.get("ok") is True
+            and isinstance(text, str) and text.strip() else "SPEECH_ASR_FAILED")
+
+
+def run_finalized(fixtures: Path, python: Path, expected_sha: str, selection: set[str],
+                  result_path: Path, timeout: float, vad_observations: Path,
+                  segments_dir: Path) -> dict:
+    """Diagnostic ASR on actual exported Rust segments, not app acceptance."""
+    from vad_runner import CLAIM, verify_segments
+
+    pinned_source(expected_sha)
+    manifest = inspect(fixtures)
+    suite, suite_id = specs()
+    cases = {r["id"]: r for r in suite}
+    if not selection or not selection.issubset(cases):
+        raise ValueError("select known finalized scenario IDs")
+    if result_path.exists() or result_path.is_symlink():
+        raise ValueError("finalized ASR result already exists")
+    prior = json.loads(vad_observations.read_text(encoding="utf-8"))
+    if (not isinstance(prior, dict) or not isinstance(prior.get("source_identity"), dict)
+            or prior.get("schema") != RESULT_SCHEMA or prior.get("scenario_fingerprint") != suite_id
+            or prior.get("audio_fingerprint") != manifest["audio_fingerprint"]
+            or prior.get("source_identity", {}).get("local_sha") != expected_sha):
+        raise ValueError("VAD source/audio/scenario identity differs")
+    rows = prior.get("results", [])
+    if not isinstance(rows, list) or len(rows) != len(cases):
+        raise ValueError("incomplete finalized VAD observations")
+    expected_hashes = {r["id"]: r["sha256"] for r in manifest["fixtures"]}
+    observed = {}
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("stages"), dict):
+            raise TypeError("invalid finalized VAD observation")
+        case = row.get("scenario_id")
+        stage = row.get("stages", {}).get("vad", {})
+        if (not isinstance(case, str) or not isinstance(stage, dict)
+                or case not in cases or case in observed
+                or row.get("audio_sha256") != expected_hashes[case]
+                or stage.get("claim") != CLAIM or stage.get("test_only") is not True):
+            raise ValueError("invalid/unbound finalized VAD observation")
+        observed[case] = stage
+    if observed.keys() != cases.keys():
+        raise ValueError("incomplete finalized VAD observations")
+    segment_id = verify_segments(segments_dir, observed)
+    if prior.get("segment_fingerprint") != segment_id:
+        raise ValueError("exported segment fingerprint differs")
+    report = {"schema": "translateit.finalized_asr_probe.v1",
+              "source_identity": {"local_sha": expected_sha, "context": "LOCAL_CODE_RUST_VAD_TO_ASR"},
+              "scenario_fingerprint": suite_id, "audio_fingerprint": manifest["audio_fingerprint"],
+              "segment_fingerprint": segment_id, "results": [],
+              "downstream": "TRANSLATION_TTS_MEETING_NOT_EXECUTED",
+              "proof": "FINALIZED_ASR_PROBE_NOT_EXECUTED"}
+    # The canonical worker accepts CacheData/LogData inputs only. Stage a verified
+    # byte-identical copy there; do not widen its allowed paths for test tooling.
+    cache = ROOT / "UserData/CacheData"
+    cache.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="finalized-asr-probe-", dir=cache) as work:
+        worker = Worker(python, timeout)
+        try:
+            report["worker_status"] = stage_result(worker.invoke("status"), "status")
+            report["asr_preload"] = worker.invoke("asr_preload")
+            # Full outbound readiness also requires a selected voice. This
+            # diagnostic admits only the independently executed ASR preload.
+            if report["asr_preload"].get("ok") is True:
+                for case in suite:
+                    name = case["id"]
+                    if name not in selection:
+                        continue
+                    segments = observed[name]["segments"]
+                    if not segments:
+                        report["results"].append({"scenario_id": name, "outcome": "NO_VAD_SEGMENT"})
+                    for segment in segments:
+                        source = segments_dir / segment["file"]
+                        audio = Path(work) / segment["file"]
+                        shutil.copyfile(source, audio)
+                        if fingerprint(audio) != segment["sha256"]:
+                            raise ValueError("staged finalized segment changed identity")
+                        response = worker.invoke("transcribe", audio_path=str(audio),
+                                                 language=case["language"], beam_size=1,
+                                                 vad_filter=False)
+                        report["proof"] = "EXPORTED_CANONICAL_INCOMING_VAD_WAV_TO_REAL_WORKER_ASR_ONLY"
+                        if fingerprint(audio) != segment["sha256"]:
+                            raise ValueError("ASR input changed while consumed")
+                        report["results"].append({
+                            "scenario_id": name, "segment": segment,
+                            "input_sha256": fingerprint(audio),
+                            "asr": stage_result(response, "asr"),
+                            "asr_runtime": {k: response.get(k) for k in ("model_id", "device", "compute_type")},
+                            "outcome": finalized_asr_outcome(response, non_speech=case["kind"] != "speech"),
+                        })
+        except WorkerTransportError as exc:
+            report["transport_error"] = str(exc)
+        finally:
+            worker.close()
+    # Original exports remain available for reproducibility after worker cleanup.
+    if verify_segments(segments_dir, observed) != segment_id:
+        raise ValueError("exported finalized segments changed during ASR")
+    pinned_source(expected_sha)
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    with result_path.open("x", encoding="utf-8") as output:
+        json.dump(report, output, ensure_ascii=False, indent=2)
+        output.write("\n")
+    return report
+
+
 def run(fixtures: Path, python: Path, expected_sha: str,
         selection: set[str], result_path: Path, voice: bool, timeout: float) -> dict:
     pinned_source(expected_sha)
@@ -296,9 +409,17 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument("--include-voice", action="store_true")
+    parser.add_argument("--vad-observations", type=Path)
+    parser.add_argument("--segments-dir", type=Path)
     args = parser.parse_args()
-    result = run(args.fixtures, args.python, args.source_sha,
-                 set(args.ids), args.output, args.include_voice, args.timeout)
+    if args.vad_observations is not None or args.segments_dir is not None:
+        if args.vad_observations is None or args.segments_dir is None or args.include_voice:
+            parser.error("finalized ASR requires --vad-observations and --segments-dir, without --include-voice")
+        result = run_finalized(args.fixtures, args.python, args.source_sha, set(args.ids),
+                               args.output, args.timeout, args.vad_observations, args.segments_dir)
+    else:
+        result = run(args.fixtures, args.python, args.source_sha,
+                     set(args.ids), args.output, args.include_voice, args.timeout)
     print(json.dumps({"cases": len(result["results"]), "proof": result["proof"],
                       "output": str(args.output)}, indent=2))
     return 0
@@ -307,6 +428,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (ValueError, OSError, WorkerTransportError, subprocess.CalledProcessError) as error:
+    except (ValueError, TypeError, OSError, WorkerTransportError, subprocess.CalledProcessError) as error:
         print(f"audio-runner: {type(error).__name__}: {error}", file=sys.stderr)
         raise SystemExit(2) from None

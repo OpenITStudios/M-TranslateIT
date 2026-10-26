@@ -9,12 +9,22 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
+import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 
 from harness import (
-    RESULT_SCHEMA, ROOT, inspect, specs,
+    RATE,
+    RESULT_SCHEMA,
+    ROOT,
+    digest,
+    fingerprint,
+    inspect,
+    metrics,
+    specs,
 )
 from worker_runner import pinned_source
 
@@ -33,7 +43,7 @@ def parse_receipts(output: str, manifest: dict, scenario_hash: str) -> dict[str,
         start = line.index(PREFIX) + len(PREFIX)
         payload = json.loads(line[start:].strip())
         if not isinstance(payload, dict):
-            raise ValueError("Rust replay receipt must be an object")
+            raise TypeError("Rust replay receipt must be an object")
         case = payload.get("scenario_id")
         if (case not in expected or case in observed
                 or payload.get("schema") != RECEIPT_SCHEMA
@@ -102,8 +112,43 @@ def make_observations(
     }
 
 
+def verify_segments(root: Path, observed: dict[str, dict]) -> str:
+    """Verify the actual Rust writer output, never the original fixture WAV."""
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("explicit real segment directory required")
+    expected = set()
+    records = []
+    for case, stage in observed.items():
+        if not re.fullmatch(r"A[0-9]{2}", case):
+            raise ValueError("invalid segment scenario ID")
+        rows = stage.get("segments")
+        attempts = stage.get("writer_attempts")
+        if (type(attempts) is not int or not 0 <= attempts <= 1000
+                or not isinstance(rows, list) or len(rows) != stage.get("writer_valid")):
+            raise ValueError(f"{case}: complete exported writer receipts required")
+        for row in rows:
+            if not isinstance(row, dict):
+                raise TypeError("invalid finalized segment receipt")
+            name = row.get("file", "")
+            # Exact ordinal names exclude paths, aliases and original WAVs.
+            valid_names = {f"{case}_{i}.wav" for i in range(1, attempts + 1)}
+            if name not in valid_names or name in expected:
+                raise ValueError("invalid/duplicate finalized segment name")
+            path = root / name
+            checked = metrics(path)
+            if (checked["rate_hz"] != RATE or row.get("rate_hz") != RATE
+                    or checked["frames"] != row.get("frames")
+                    or fingerprint(path) != row.get("sha256")):
+                raise ValueError("finalized segment hash/PCM identity differs")
+            expected.add(name)
+            records.append({"scenario_id": case, **row})
+    if {p.name for p in root.iterdir()} != expected:
+        raise ValueError("segment directory has missing or untracked files")
+    return digest(records)
+
+
 def run(fixtures: Path, source_sha: str, output: Path, timeout: int,
-        worker_observations: Path | None = None) -> dict:
+        worker_observations: Path | None = None, segments_dir: Path | None = None) -> dict:
     if not 30 <= timeout <= 3600:
         raise ValueError("timeout must be 30–3600 seconds")
     pinned_source(source_sha)
@@ -115,6 +160,7 @@ def run(fixtures: Path, source_sha: str, output: Path, timeout: int,
     if prior is not None and not isinstance(prior, dict):
         raise ValueError("prior worker evidence must be an object")
     env = dict(os.environ)
+    env.pop("TRANSLATEIT_AUDIO_SEGMENT_ROOT", None)
     env.update({
         "TRANSLATEIT_AUDIO_FIXTURE_ROOT": str(fixtures.resolve(strict=True)),
         "TRANSLATEIT_AUDIO_FINGERPRINT": manifest["audio_fingerprint"],
@@ -129,14 +175,27 @@ def run(fixtures: Path, source_sha: str, output: Path, timeout: int,
         "explicit_public_audio_fixture_replay_receipts", "--",
         "--ignored", "--nocapture", "--test-threads=1",
     ]
-    result = subprocess.run(invocation, cwd=CARGO_ROOT, env=env, shell=False,
-                            capture_output=True, text=True, timeout=timeout)
-    if result.returncode != 0:
-        raise ValueError("Rust fixture replay failed; compile/runtime proof unavailable: "
-                         + (result.stderr[-700:] or result.stdout[-700:]))
-    observed = parse_receipts(result.stdout, manifest, scenario_hash)
-    pinned_source(source_sha)
-    document = make_observations(source_sha, manifest, scenarios, scenario_hash, observed, prior)
+    if segments_dir is not None:
+        if segments_dir.exists() or segments_dir.is_symlink():
+            raise ValueError("exported segment destination already exists")
+        segments_dir.parent.mkdir(parents=True, exist_ok=True)
+    context = (tempfile.TemporaryDirectory(prefix="audio-vad-export-", dir=segments_dir.parent)
+               if segments_dir is not None else nullcontext(None))
+    with context as work:
+        if work is not None:
+            staged = Path(work).resolve() / "segments"
+            env["TRANSLATEIT_AUDIO_SEGMENT_ROOT"] = str(staged)
+        result = subprocess.run(invocation, check=False, cwd=CARGO_ROOT, env=env, shell=False,
+                                capture_output=True, text=True, timeout=timeout)
+        if result.returncode != 0:
+            raise ValueError("Rust fixture replay failed; compile/runtime proof unavailable: "
+                             + (result.stderr[-700:] or result.stdout[-700:]))
+        observed = parse_receipts(result.stdout, manifest, scenario_hash)
+        pinned_source(source_sha)
+        document = make_observations(source_sha, manifest, scenarios, scenario_hash, observed, prior)
+        if segments_dir is not None:
+            document["segment_fingerprint"] = verify_segments(staged, observed)
+            staged.rename(segments_dir)
     output.parent.mkdir(parents=True, exist_ok=True)
     # Create-only file mode prevents a competing run from replacing past proof.
     with output.open("x", encoding="utf-8") as stream:
@@ -151,10 +210,11 @@ def main() -> int:
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--worker-observations", type=Path)
+    parser.add_argument("--segments-dir", type=Path)
     parser.add_argument("--timeout", type=int, default=900)
     args = parser.parse_args()
     result = run(args.fixtures, args.source_sha, args.output, args.timeout,
-                 args.worker_observations)
+                 args.worker_observations, args.segments_dir)
     print(json.dumps({"output": str(args.output), "cases": len(result["results"]),
                       "proof": result["proof"]}, indent=2))
     return 0
@@ -163,6 +223,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (ValueError, OSError, json.JSONDecodeError, subprocess.TimeoutExpired) as error:
+    except (ValueError, TypeError, OSError, json.JSONDecodeError, subprocess.TimeoutExpired) as error:
         print(f"audio-vad-runner: {type(error).__name__}: {error}", file=sys.stderr)
         raise SystemExit(2) from None

@@ -3,16 +3,44 @@ from __future__ import annotations
 
 import copy
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parents[1] / "audio_validation"
 sys.path.insert(0, str(HERE))
-import harness  # noqa: E402
-import vad_runner  # noqa: E402
+import harness
+import vad_runner
+from worker_runner import finalized_asr_outcome
 
 
 class AudioVadReceiptTests(unittest.TestCase):
+    def test_exported_writer_wav_is_bound_and_original_substitution_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            audio = root / "A14_1.wav"
+            harness.write_wave(audio, [1000, -1000] * 16000)
+            stage = {"writer_attempts": 1, "writer_valid": 1, "segments": [{
+                "file": "A14_1.wav", "sha256": harness.fingerprint(audio),
+                "frames": 32000, "rate_hz": 16000,
+            }]}
+            original = vad_runner.verify_segments(root, {"A14": stage})
+            self.assertEqual(len(original), 64)
+            # An independently valid WAV is still not the finalized segment.
+            harness.write_wave(audio, [2000, -2000] * 16000)
+            with self.assertRaisesRegex(ValueError, "identity differs"):
+                vad_runner.verify_segments(root, {"A14": stage})
+
+    def test_failed_asr_is_never_classified_as_safe_noise(self):
+        self.assertEqual(finalized_asr_outcome({"ok": False, "transcript_text": "",
+                         "blocker": "asr:empty_transcript"}, non_speech=True), "ASR_REJECTED_EMPTY")
+        self.assertEqual(finalized_asr_outcome({"ok": False, "transcript_text": "",
+                         "blocker": "asr:model_failed"}, non_speech=True), "UNVERIFIED_ASR_FAILURE")
+        self.assertEqual(finalized_asr_outcome({"ok": True, "transcript_text": "halo"},
+                         non_speech=True), "NON_SPEECH_TRANSCRIPT")
+        self.assertEqual(finalized_asr_outcome({"ok": True, "transcript_text": ""},
+                         non_speech=True), "UNVERIFIED_ASR_FAILURE")
+
     def setUp(self):
         self.scenarios, self.scenario_hash = harness.specs()
         self.record = {row["id"]: "a" * 64 for row in self.scenarios}

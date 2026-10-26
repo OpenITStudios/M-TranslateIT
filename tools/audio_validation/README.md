@@ -44,6 +44,19 @@ To **combine Rust VAD evidence and real local worker output** from the exact sam
 
 The Rust test has `#[ignore]` and therefore does not run in routine Rust tests. Its receipts include the canonical incoming producer's finalized/drop/overflow counts and the canonical PCM16 writer outcome. It **does not** exercise CPAL input device acquisition, session/generation-based outbound routing, the production writer's complete path admission, or user speech quality. Unselected stages stay `UNVERIFIED`. If actual speech is misclassified by the existing gate, preserve that failure as a diagnostic rather than weakening the gate to force a green result.
 
+### Explicit finalized-WAV → ASR diagnostic
+
+Use `--segments-dir` on `vad_runner.py` to retain the actual writer outputs in a **new** directory. Each exported WAV carries its filename, SHA-256, PCM16 frame count and 16-kHz rate in the VAD observation. The runner verifies the complete exported file set before publishing it. Existing export/result destinations are refused. Without this option, temporary replay WAVs are still removed.
+
+```powershell
+python tools/audio_validation/vad_runner.py --fixtures <canonical-fixture-directory> --source-sha <clean-Local-SHA> --segments-dir .workspace/reports/finalized-segments-001 --output .workspace/reports/finalized-vad-001.json
+python tools/audio_validation/worker_runner.py --fixtures <canonical-fixture-directory> --source-sha <same-clean-Local-SHA> --python EngineData/Backend/LocalWorker/WorkerRuntime/.venv/Scripts/python.exe --vad-observations .workspace/reports/finalized-vad-001.json --segments-dir .workspace/reports/finalized-segments-001 --ids A01 A14 --output .workspace/reports/finalized-asr-001.json
+```
+
+This is a bounded diagnostic of the first noise failure with a positive speech control. It deliberately preserves the failing VAD expectation; it does not bypass an application readiness gate or certify all 48 scenarios. The worker input is a hash-verified copy of the **exported finalized segment** staged temporarily under the canonical allowed CacheData input root, never the original fixture WAV. Source/audio/scenario/segment identities must match, and retained segment hashes are rechecked after worker cleanup. ASR uses the existing worker protocol with `vad_filter=False` because Rust already supplied finalized input; no second worker/model/provider is added.
+
+The separate `translateit.finalized_asr_probe.v1` receipt distinguishes actual non-speech transcription, an explicit `asr:empty_transcript` rejection and other ASR/transport failures. It is a diagnostic receipt, not a replacement product DTO or canonical 48-case score. Full outbound status can remain blocked by an unavailable voice; only successful executed ASR preload admits this ASR-only probe. No translation, TTS, native session, receiver or production suppression is claimed. Do not use `--include-voice` with this probe. Generated public segments remain local for reproduction; private user recordings are never inputs.
+
 Compare results from an identical fixture set:
 
 ```powershell
