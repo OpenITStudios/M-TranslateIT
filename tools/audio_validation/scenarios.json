@@ -127,7 +127,7 @@
       "tone_hz": 220,
       "tone_amplitude": 0.26,
       "language": "id",
-      "expect": "numeric_overflow"
+      "expect": "no_speech"
     },
     {
       "id": "A16",

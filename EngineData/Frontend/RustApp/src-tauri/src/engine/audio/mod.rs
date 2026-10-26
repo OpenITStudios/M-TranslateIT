@@ -9,10 +9,9 @@ pub mod live_segment_writer;
 pub mod meeting_output;
 pub mod original_voice_pcm;
 pub mod meeting_sound_capture;
-// Deterministic handoff prototype: production callback remains unchanged until
-// offline Rust execution and matched device tests prove the new boundary.
-#[cfg(test)]
+// Bounded callback-to-CPU transport; capture and finalizer retain their owners.
 mod pcm_handoff;
+mod silero;
 #[cfg(test)]
 mod pcm_handoff_replay;
 #[cfg(test)]

@@ -15,6 +15,20 @@ from worker_runner import finalized_asr_outcome, grade_finalized_asr
 
 
 class AudioVadReceiptTests(unittest.TestCase):
+    def test_zero_segments_are_safe_only_for_proven_non_speech_rejection(self):
+        cases = {r["id"]: r for r in harness.specs()[0]}
+        report = {"results": [{"scenario_id": "A14", "outcome": "VAD_REJECTED_NON_SPEECH",
+            "vad": {"ok": True, "finalized_count": 0, "overflow_count": 0}, "asr_executed": False}]}
+        self.assertEqual(grade_finalized_asr(report, cases, {"A14"})["verdict"], "PASS")
+        report["results"][0]["asr_executed"] = True
+        self.assertEqual(grade_finalized_asr(report, cases, {"A14"})["verdict"], "UNVERIFIED")
+        report["results"][0]["asr_executed"] = False
+        report["results"][0]["vad"]["ok"] = False
+        self.assertEqual(grade_finalized_asr(report, cases, {"A14"})["verdict"], "UNVERIFIED")
+        report["results"][0]["scenario_id"] = "A34"
+        report["results"][0]["vad"]["ok"] = True
+        self.assertEqual(grade_finalized_asr(report, cases, {"A34"})["verdict"], "UNVERIFIED")
+
     def test_probe_requires_real_control_and_preserves_negation_failure(self):
         cases = {r["id"]: r for r in harness.specs()[0]}
         report = {"results": [

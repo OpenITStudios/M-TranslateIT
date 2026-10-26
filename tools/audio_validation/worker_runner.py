@@ -197,6 +197,11 @@ def grade_finalized_asr(report: dict, cases: dict, selection: set[str]) -> dict:
         check = {"scenario_id": name, "status": "UNVERIFIED"}
         if any(r in ("SPEECH_ASR_FAILED", "NON_SPEECH_TRANSCRIPT") for r in outcomes):
             check["status"] = "FAIL"
+        elif (case["kind"] != "speech" and len(rows) == 1
+              and outcomes == ["VAD_REJECTED_NON_SPEECH"]
+              and rows[0].get("asr_executed") is False and not rows[0].get("asr")
+              and rows[0].get("vad") == {"ok": True, "finalized_count": 0, "overflow_count": 0}):
+            check.update({"status": "PASS", "proof": "CANONICAL_VAD_REJECTED_BEFORE_ASR"})
         elif rows and all(r == "ASR_REJECTED_EMPTY" for r in outcomes) and case["kind"] != "speech":
             check["status"] = "PASS"
         elif rows and all(r == "SPEECH_TRANSCRIBED" for r in outcomes) and case["kind"] == "speech":
@@ -278,7 +283,13 @@ def run_finalized(fixtures: Path, python: Path, expected_sha: str, selection: se
                         continue
                     segments = observed[name]["segments"]
                     if not segments:
-                        report["results"].append({"scenario_id": name, "outcome": "NO_VAD_SEGMENT"})
+                        vad = observed[name]
+                        rejected = (case["kind"] != "speech" and vad.get("ok") is True
+                                    and vad.get("finalized_count") == 0 and vad.get("overflow_count") == 0)
+                        report["results"].append({"scenario_id": name,
+                            "outcome": "VAD_REJECTED_NON_SPEECH" if rejected else "NO_VAD_SEGMENT",
+                            "vad": {k: vad.get(k) for k in ("ok", "finalized_count", "overflow_count")},
+                            "asr_executed": False})
                     for segment in segments:
                         source = segments_dir / segment["file"]
                         audio = Path(work) / segment["file"]

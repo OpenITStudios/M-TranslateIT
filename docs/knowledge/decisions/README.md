@@ -222,6 +222,16 @@ Built-in references are LibriSpeech/OpenSLR-derived CC-BY-4.0 material with exac
 
 **Owners:** `GITHUB_RULES.md` (repository policy), `AGENTS.md` (routing), `.agents/permissions/permission-policy.json` (advisory action denial), `docs/knowledge/current-validation.md` (proof), and `docs/knowledge/operations/target-windows-performance.md` (grouped local admission).
 
+### D-047 — One native local speech detector before finalization
+
+**Context:** energy-only admission accepted synthetic noise and missed quiet speech. ASR no-speech confidence did not separate the reproduced noise from legitimate quiet speech. A developer-only 130-control local comparison supported neural speech presence, and the owner explicitly approved canonical Silero integration on 2026-10-26.
+
+**Decision:** the Rust audio owner uses one CPU Silero detector before its existing finalizer, via bounded callback-to-CPU PCM transport. Per-lane recurrent/context state resets on source discontinuity, format loss and Stop; failure is explicit. Already-finalized WAVs still enter ASR with worker VAD disabled. No second Python process, parallel detector or energy-only runtime fallback is authorized. Model/DLL sizes/hashes are pinned; runtime downloads are disabled.
+
+**Why / tradeoffs:** speech likelihood replaces loudness as admission; clipping, minimum speech and bounded overflow/finalization remain separate responsibilities. Native ONNX Runtime adds a Rust binding and relies on pinned assets already present in the private worker package set. A tone is rejected as non-speech and can no longer stand in for classified-utterance overflow proof. Separate overflow fixtures retain that safety contract.
+
+**Evidence boundary / follow-up:** Current Validation owns exact executed receipts. Synthetic/model/source results do not prove installed delivery, physical microphones, music/fan rejection, endpoint timing or receiving-app behavior. Audio owns inference/transport/lifecycle; release packaging must validate private-runtime assets and notices before installed acceptance.
+
 ## Recording policy
 
 Record a durable decision only when architecture/workflow/reasoning must survive sessions, multiple owners depend on it, a meaningful tradeoff exists, or an old method is explicitly superseded.

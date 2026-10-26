@@ -172,8 +172,8 @@ fn build_status(window: Option<&LiveAudioWindow>) -> LiveAudioBufferStatusReport
     // keeps that copy out of the realtime callback where latency variance matters.
     let snapshot = window.samples_mono.iter().copied().collect::<Vec<_>>();
     let evidence = AudioEvidenceReport::from_samples(&snapshot);
-    // Diagnostics must evaluate with the SAME active gate profile the production
-    // speech pipeline uses, not a second divergent default threshold set.
+    // Rolling-window energy/quality diagnostics only. Canonical speech presence
+    // is determined by the per-session Silero CPU owner, never by this snapshot.
     let vad_result = evaluate_vad_gate(evidence.clone(), &runtime_vad_profile().gate);
     let requires_resample_to_target = window.sample_rate_hz != TARGET_SAMPLE_RATE_HZ;
     let source_downmixed_to_mono = window.source_channels != TARGET_CHANNELS;

@@ -14,7 +14,6 @@ use super::finalized_utterance::{
     observe_finalized_incoming_mono_f32_samples,
     observe_finalized_incoming_i16_samples, observe_finalized_incoming_i32_samples,
     observe_finalized_incoming_i64_samples, observe_finalized_incoming_u8_samples,
-    reset_finalized_incoming_utterance_producer,
 };
 use crate::engine::runtime_settings::load_settings;
 
@@ -305,8 +304,7 @@ fn stop_meeting_sound_capture_runtime_owned(
         let cleared = if let Some(session_id) = expected_session {
             clear_finalized_incoming_utterance_producer_for_session(session_id)
         } else {
-            clear_finalized_incoming_utterance_producer();
-            true
+            clear_finalized_incoming_utterance_producer()
         };
         let foreign_active = guard.is_some();
         return MeetingSoundCaptureStopReport {
@@ -332,8 +330,7 @@ fn stop_meeting_sound_capture_runtime_owned(
     let producer_cleared = if expected_session.is_some() {
         clear_finalized_incoming_utterance_producer_for_session(&stopped_session)
     } else {
-        clear_finalized_incoming_utterance_producer();
-        true
+        clear_finalized_incoming_utterance_producer()
     };
     MeetingSoundCaptureStopReport {
         ok: joined && producer_cleared,
@@ -399,7 +396,7 @@ fn run_capture_thread(
     let sample_rate_hz = stream_config.sample_rate;
     let channels = stream_config.channels;
 
-    reset_finalized_incoming_utterance_producer(session_id, sample_rate_hz);
+    super::finalized_utterance::start_finalized_incoming_silero(session_id, sample_rate_hz)?;
     if !bind_finalized_incoming_capture_errors(session_id, Arc::clone(&callback_error_epoch)) {
         return Err("meeting_sound:discontinuity_binding_failed".to_string());
     }
@@ -430,7 +427,9 @@ fn run_capture_thread(
     let _ = stop_rx.recv();
     drop(stream);
     // Old callback teardown must never discard another session's VAD producer.
-    clear_finalized_incoming_utterance_producer_for_session(session_id);
+    if !clear_finalized_incoming_utterance_producer_for_session(session_id) {
+        return Err("silero:cleanup_pending".to_string());
+    }
     Ok(())
 }
 
@@ -581,12 +580,14 @@ fn build_status_from_guard(runtime: Option<&MeetingSoundCaptureRuntime>) -> Meet
                 suppressed_frames: runtime.suppressed_frames.load(Ordering::Relaxed),
                 suppression_active: runtime.suppression.load(Ordering::Acquire),
                 callback_error_count: runtime.callback_error_epoch.load(Ordering::Acquire)
+                    .saturating_add(super::finalized_utterance::finalized_pcm_drop_count(true))
                     .min(usize::MAX as u64) as usize,
-                latest_callback_error: errors.last().cloned(),
+                latest_callback_error: super::finalized_utterance::finalized_speech_fault(true).or_else(|| errors.last().cloned())
+                    .or_else(|| (super::finalized_utterance::finalized_pcm_drop_count(true) > 0).then(|| "silero:pcm_discontinuity".to_string())),
                 blocker: if runtime.cleanup_pending {
                     "meeting_sound:cleanup_pending".to_string()
                 } else {
-                    String::new()
+                    super::finalized_utterance::finalized_speech_fault(true).unwrap_or_default()
                 },
                 note: if runtime.cleanup_pending {
                     "Meeting Sound thread exit is unconfirmed; old session ownership remains reserved until Retry Stop succeeds.".to_string()

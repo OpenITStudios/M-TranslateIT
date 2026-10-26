@@ -1,8 +1,7 @@
-//! Fixed-capacity PCM handoff prototype for one Meeting lane / session generation.
-//! A future CPAL producer would never wait for a lock or allocate a chunk.
+//! Fixed-capacity PCM handoff for one Meeting lane / session generation.
+//! CPAL admission never waits for the ring lock or allocates a chunk.
 //! A loss invalidates buffered audio rather than joining speech across a gap.
-//! NOT wired to production capture until offline playback/VAD replay and native
-//! timing can be run; the legacy audio path remains the baseline.
+//! The speech CPU owner drains this transport; native timing is separate proof.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, TryLockError};
@@ -199,6 +198,9 @@ impl PcmHandoff {
         self.lost_samples.fetch_add(samples as u64, Ordering::Relaxed);
         self.loss_epoch.fetch_add(1, Ordering::AcqRel);
     }
+
+    // An intentional source reset breaks continuity without inventing a callback error.
+    pub(super) fn invalidate(&self) { self.loss_epoch.fetch_add(1, Ordering::AcqRel); }
 
     /// Intended for CPAL. Does not wait for a contested mutex or grow storage.
     pub fn try_push(&self, samples: &[f32]) -> PcmPush {

@@ -459,8 +459,8 @@ mod tests {
         let handoff = Arc::new(
             PcmHandoff::new(session_id, PcmLane::Incoming, 31, 16_000).unwrap(),
         );
-        let mut worker = PcmCpuConsumer::start(Arc::clone(&handoff), 16_000, 6_400)
-            .expect("start canonical VAD consumer");
+        // This case proves draining/Stop, not producer contention (covered separately).
+        // Prefill before starting the consumer so a legal LockBusy drop cannot race it.
         assert_eq!(
             handoff.try_push(&[0.10; 6_400]),
             super::super::pcm_handoff::PcmPush::Accepted(6_400),
@@ -469,6 +469,8 @@ mod tests {
             handoff.try_push(&[0.0; 6_400]),
             super::super::pcm_handoff::PcmPush::Accepted(6_400),
         );
+        let mut worker = PcmCpuConsumer::start(Arc::clone(&handoff), 16_000, 6_400)
+            .expect("start canonical VAD consumer");
 
         let mut recognized = None;
         for _ in 0..200 {

@@ -12,7 +12,7 @@ use super::finalized_utterance::{
     clear_finalized_incoming_utterance_producer, clear_finalized_meeting_sequence,
     evicted_pending_utterance_count, observe_finalized_incoming_mono_f32_samples,
     overflow_dropped_utterance_count, reset_finalized_drop_counters,
-    reset_finalized_incoming_utterance_producer, reset_finalized_meeting_sequence,
+    reset_finalized_meeting_sequence,
     try_take_finalized_incoming_utterance,
 };
 use super::live_segment_writer::write_pcm16_wav;
@@ -113,7 +113,8 @@ fn stage_for_case(
     clear_finalized_meeting_sequence();
     reset_finalized_drop_counters();
     reset_finalized_meeting_sequence(&session);
-    reset_finalized_incoming_utterance_producer(&session, TARGET_SAMPLE_RATE_HZ);
+    super::finalized_utterance::start_finalized_incoming_silero(&session, TARGET_SAMPLE_RATE_HZ)
+        .expect("canonical pinned Silero must load before replay");
 
     let mut finalized = 0u32;
     let mut writer_attempts = 0u32;
@@ -166,26 +167,28 @@ fn stage_for_case(
             "gate": gate,
         }));
         observe_finalized_incoming_mono_f32_samples(frame, TARGET_SAMPLE_RATE_HZ);
+        super::finalized_utterance::wait_silero_fixture();
         collect();
     }
-    // Observe the drop only after a natural boundary, keeping all 61 seconds
-    // of the numeric stress tone uninterrupted and its original hash unchanged.
+    // Keep the original non-speech tone intact; the disclosed tail closes speech.
     let overflow_before_quiet = overflow_dropped_utterance_count();
     let added_quiet_ms = 1000;
     if added_quiet_ms > 0 {
         let silence = vec![0.0; FRAME_SAMPLES];
         for _ in 0..added_quiet_ms / 200 {
             observe_finalized_incoming_mono_f32_samples(&silence, TARGET_SAMPLE_RATE_HZ);
+            super::finalized_utterance::wait_silero_fixture();
             collect();
         }
     }
     let overflow = overflow_dropped_utterance_count();
+    let neural_windows = super::finalized_utterance::wait_silero_fixture();
     let eviction = evicted_pending_utterance_count();
     clear_finalized_incoming_utterance_producer();
     clear_finalized_meeting_sequence();
     let ok = match case.expect.as_str() {
         "no_speech" => finalized == 0 && overflow == 0,
-        "numeric_overflow" => finalized == 0 && overflow_before_quiet == 0 && overflow == 1,
+        "numeric_overflow" => panic!("use direct classified-observation tests for numeric overflow"),
         _ => finalized >= 1 && writer_attempts == writer_valid && eviction == 0,
     };
     json!({
@@ -200,6 +203,9 @@ fn stage_for_case(
         "speech_duration_ms": speech_ms,
         "segments": segments,
         "window_gates": window_gates,
+        "silero_windows": neural_windows,
+        "detector": "silero-v6-cpu-native",
+        "detector_sha256": super::silero::MODEL_SHA256,
         "test_added_quiet_ms": added_quiet_ms,
         "test_only": true,
         "blocker": latest_blocker,
@@ -259,6 +265,13 @@ fn explicit_public_audio_fixture_replay_receipts() {
                 "stage": stage,
             }));
         }
+        let fixture = data.fixtures.iter().find(|item| item.id == "A34").expect("quiet lifecycle control");
+        let bytes = fs::read(fixture_file(&directory, fixture)).unwrap();
+        assert_eq!(sha256_hex(&bytes), fixture.sha256);
+        super::finalized_utterance::verify_silero_fixture_lifecycle(&parse_pcm16_mono_16k(&bytes).unwrap());
+        println!("AUDIO_VAD_LIFECYCLE_JSON={}", json!({"source_discontinuity_reset": true,
+            "stale_stop_preserved_new_owner": true, "cpu_stop_joined": true,
+            "late_pcm_rejected": true, "format_failure_explicit": true, "test_only": true}));
     });
     if retained.is_none() { let _ = fs::remove_dir_all(&temp_dir); }
     if let Err(error) = run { std::panic::resume_unwind(error); }

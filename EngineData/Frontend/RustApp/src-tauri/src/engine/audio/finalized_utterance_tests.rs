@@ -270,6 +270,8 @@ fn quiet_speech_inside_an_utterance_is_retained_until_actual_silence() {
 #[test]
 fn incoming_bounded_wait_distinguishes_deferred_retry_from_stopped_producer() {
     let sync = FinalizedProducerSync {
+        ingress: Mutex::new(None),
+        transport_loss: AtomicU64::new(0),
         state: Mutex::new(Some(FinalizedProducerState {
             session_id: "retry-session".to_string(),
             generation: None,
@@ -354,6 +356,8 @@ fn scoped_producer_stop_rejects_stale_generation_or_session_atomically() {
     // Local instance rather than the global VAD producer: no test fixture
     // can interrupt production-like session state or parallel test cases.
     let sync = FinalizedProducerSync {
+        ingress: Mutex::new(None),
+        transport_loss: AtomicU64::new(0),
         state: Mutex::new(Some(FinalizedProducerState {
             session_id: "new-meeting".to_string(),
             generation: Some(42),
@@ -378,18 +382,18 @@ fn scoped_producer_stop_rejects_stale_generation_or_session_atomically() {
         callback_lock_observations: AtomicU64::new(0),
         callback_lock_wait_max_ns: AtomicU64::new(0),
     };
-    assert!(clear_producer_if(&sync, |owner| owner.generation == Some(41)));
+    assert!(clear_producer_if(&sync, |_, generation, _| generation == Some(41)));
     assert_eq!(sync.state.lock().unwrap().as_ref().unwrap().generation, Some(42));
-    assert!(clear_producer_if(&sync, |owner| owner.generation == Some(42)));
+    assert!(clear_producer_if(&sync, |_, generation, _| generation == Some(42)));
     assert!(sync.state.lock().unwrap().is_none());
-    assert!(clear_producer_if(&sync, |owner| owner.generation == Some(42)));
+    assert!(clear_producer_if(&sync, |_, generation, _| generation == Some(42)));
 
     reset_producer(&sync, "new-incoming", None, LANE_INCOMING, 16_000);
-    assert!(clear_producer_if(&sync, |owner| owner.session_id == "old-incoming"));
+    assert!(clear_producer_if(&sync, |session, _, _| session == "old-incoming"));
     assert_eq!(
         sync.state.lock().unwrap().as_ref().unwrap().session_id,
         "new-incoming",
     );
-    assert!(clear_producer_if(&sync, |owner| owner.session_id == "new-incoming"));
+    assert!(clear_producer_if(&sync, |session, _, _| session == "new-incoming"));
     assert!(sync.state.lock().unwrap().is_none());
 }

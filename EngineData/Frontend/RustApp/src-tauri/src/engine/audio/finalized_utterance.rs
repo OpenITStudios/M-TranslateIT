@@ -4,7 +4,9 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::evidence::AudioEvidenceReport;
-use super::vad::{evaluate_vad_gate, runtime_vad_profile, RuntimeVadProfile, VadGateResult};
+use super::vad::{runtime_vad_profile, RuntimeVadProfile, VadGateResult};
+#[cfg(test)]
+use super::vad::evaluate_vad_gate;
 use super::{duration_ms, AudioFrame, TARGET_CHANNELS, TARGET_SAMPLE_RATE_HZ};
 use crate::engine::runtime_state::runtime_generation_is_authoritative;
 
@@ -19,6 +21,10 @@ const MAX_FINALIZING_QUIET_OVERHANG_MS: u32 = 1_000;
 const MAX_PENDING_FINALIZED_UTTERANCES: usize = 2;
 const LANE_YOU: &str = "you";
 const LANE_INCOMING: &str = "incoming";
+
+#[path = "speech_ingress.rs"]
+mod speech_ingress;
+use speech_ingress::SpeechIngress;
 
 static OVERFLOW_DROPPED_UTTERANCES: AtomicU64 = AtomicU64::new(0);
 static EVICTED_PENDING_UTTERANCES: AtomicU64 = AtomicU64::new(0);
@@ -116,6 +122,8 @@ struct FinalizedProducerState {
 }
 
 struct FinalizedProducerSync {
+    ingress: Mutex<Option<SpeechIngress>>,
+    transport_loss: AtomicU64,
     state: Mutex<Option<FinalizedProducerState>>,
     ready: Condvar,
     // Aggregate observation only, never microphone or meeting text.
@@ -135,6 +143,8 @@ static FINALIZED_MEETING_SEQUENCE: OnceLock<Mutex<Option<MeetingSequenceState>>>
 
 fn outbound_sync() -> &'static FinalizedProducerSync {
     FINALIZED_OUTBOUND_PRODUCER.get_or_init(|| FinalizedProducerSync {
+        ingress: Mutex::new(None),
+        transport_loss: AtomicU64::new(0),
         state: Mutex::new(None),
         ready: Condvar::new(),
         callback_lock_observations: AtomicU64::new(0),
@@ -144,6 +154,8 @@ fn outbound_sync() -> &'static FinalizedProducerSync {
 
 fn incoming_sync() -> &'static FinalizedProducerSync {
     FINALIZED_INCOMING_PRODUCER.get_or_init(|| FinalizedProducerSync {
+        ingress: Mutex::new(None),
+        transport_loss: AtomicU64::new(0),
         state: Mutex::new(None),
         ready: Condvar::new(),
         callback_lock_observations: AtomicU64::new(0),
@@ -186,6 +198,7 @@ fn allocate_meeting_sequence(session_id: &str) -> Option<u64> {
     Some(sequence)
 }
 
+#[cfg(test)]
 pub fn reset_finalized_outbound_utterance_producer(
     session_id: &str,
     generation: u64,
@@ -200,8 +213,8 @@ pub fn reset_finalized_outbound_utterance_producer(
     );
 }
 
-pub fn clear_finalized_outbound_utterance_producer() {
-    clear_producer(outbound_sync());
+pub fn clear_finalized_outbound_utterance_producer() -> bool {
+    clear_producer(outbound_sync())
 }
 
 // Only stop the producer still owned by the requested Meeting generation.
@@ -210,11 +223,12 @@ pub fn clear_finalized_outbound_utterance_producer_for_generation(generation: u6
     if generation == 0 {
         return false;
     }
-    clear_producer_if(outbound_sync(), |producer| {
-        producer.generation == Some(generation) && producer.lane == LANE_YOU
+    clear_producer_if(outbound_sync(), |_, owner_generation, lane| {
+        owner_generation == Some(generation) && lane == LANE_YOU
     })
 }
 
+#[cfg(test)]
 pub fn reset_finalized_incoming_utterance_producer(session_id: &str, sample_rate_hz: u32) {
     reset_producer(
         incoming_sync(),
@@ -225,8 +239,8 @@ pub fn reset_finalized_incoming_utterance_producer(session_id: &str, sample_rate
     );
 }
 
-pub fn clear_finalized_incoming_utterance_producer() {
-    clear_producer(incoming_sync());
+pub fn clear_finalized_incoming_utterance_producer() -> bool {
+    clear_producer(incoming_sync())
 }
 
 // A delayed Stop from a previous Meeting cannot clear a newer incoming lane.
@@ -234,10 +248,8 @@ pub fn clear_finalized_incoming_utterance_producer_for_session(session_id: &str)
     if session_id.is_empty() {
         return false;
     }
-    clear_producer_if(incoming_sync(), |producer| {
-        producer.session_id == session_id
-            && producer.lane == LANE_INCOMING
-            && producer.generation.is_none()
+    clear_producer_if(incoming_sync(), |owner_session, generation, lane| {
+        owner_session == session_id && lane == LANE_INCOMING && generation.is_none()
     })
 }
 
@@ -351,6 +363,7 @@ fn reset_producer(
     let initial_utterance_capacity = samples_for_duration(sample_rate_hz, initial_utterance_ms);
 
     sync.callback_lock_observations.store(0, Ordering::Relaxed);
+    sync.transport_loss.store(0, Ordering::Release);
     sync.callback_lock_wait_max_ns.store(0, Ordering::Relaxed);
     if let Ok(mut guard) = sync.state.lock() {
         *guard = Some(FinalizedProducerState {
@@ -379,25 +392,118 @@ fn reset_producer(
     }
 }
 
-fn clear_producer(sync: &FinalizedProducerSync) {
-    if let Ok(mut guard) = sync.state.lock() {
-        *guard = None;
-        sync.ready.notify_all();
-    }
+fn clear_producer(sync: &FinalizedProducerSync) -> bool {
+    clear_producer_if(sync, |_, _, _| true)
 }
 
 // The owner check and mutation must use the SAME producer lock. An identity
 // precheck followed by unconditional clear would race a newer producer reset.
 fn clear_producer_if(
     sync: &FinalizedProducerSync,
-    belongs_to_request: impl FnOnce(&FinalizedProducerState) -> bool,
+    belongs_to_request: impl FnOnce(&str, Option<u64>, &str) -> bool,
 ) -> bool {
+    let Ok(mut ingress) = sync.ingress.lock() else { return false };
     let Ok(mut guard) = sync.state.lock() else { return false };
-    if guard.as_ref().is_some_and(belongs_to_request) {
-        *guard = None;
-        sync.ready.notify_all();
-    }
+    let matches = if let Some(state) = guard.as_ref() {
+        belongs_to_request(&state.session_id, state.generation, state.lane)
+    } else if let Some(cpu) = ingress.as_ref() {
+        belongs_to_request(&cpu.session, cpu.generation, cpu.lane)
+    } else { return true };
+    if !matches { return true; }
+    *guard = None;
+    sync.ready.notify_all();
+    drop(guard);
+    if let Some(cpu) = ingress.as_mut() { if !cpu.stop() { return false; } }
+    *ingress = None;
     true
+}
+
+fn start_silero(sync: &'static FinalizedProducerSync, session: &str,
+    generation: Option<u64>, lane: &'static str, rate: u32) -> Result<(), String> {
+    if !clear_producer(sync) { return Err("silero:cleanup_pending".to_string()); }
+    let mut ingress = sync.ingress.lock().map_err(|_| "silero:ingress_poisoned")?;
+    reset_producer(sync, session, generation, lane, rate);
+    match SpeechIngress::start(sync, session, generation, lane, rate) {
+        Ok(cpu) => { *ingress = Some(cpu); Ok(()) }
+        Err(error) => {
+            if let Ok(mut state) = sync.state.lock() { *state = None; sync.ready.notify_all(); }
+            Err(error)
+        }
+    }
+}
+
+pub fn start_finalized_outbound_silero(session: &str, generation: u64, rate: u32) -> Result<(), String> {
+    start_silero(outbound_sync(), session, Some(generation), LANE_YOU, rate)
+}
+
+pub fn start_finalized_incoming_silero(session: &str, rate: u32) -> Result<(), String> {
+    start_silero(incoming_sync(), session, None, LANE_INCOMING, rate)
+}
+
+pub fn finalized_speech_fault(incoming: bool) -> Option<String> {
+    let sync = if incoming { incoming_sync() } else { outbound_sync() };
+    match sync.ingress.lock() {
+        Ok(ingress) => ingress.as_ref().and_then(SpeechIngress::fault),
+        Err(_) => Some("silero:ingress_poisoned".to_string()),
+    }
+}
+
+pub fn finalized_pcm_drop_count(incoming: bool) -> u64 {
+    let sync = if incoming { incoming_sync() } else { outbound_sync() };
+    sync.transport_loss.load(Ordering::Acquire).saturating_add(
+        sync.ingress.lock().ok().and_then(|i| i.as_ref().map(SpeechIngress::dropped_callbacks)).unwrap_or(0))
+}
+
+#[cfg(test)]
+pub(super) fn wait_silero_fixture() -> Vec<serde_json::Value> {
+    let guard = incoming_sync().ingress.lock().unwrap();
+    let cpu = guard.as_ref().expect("fixture must start canonical Silero");
+    cpu.wait_processed();
+    cpu.observations()
+}
+
+#[cfg(test)]
+pub(super) fn verify_silero_fixture_lifecycle(pcm: &[f32]) {
+    use std::thread;
+    let session = "silero-lifecycle";
+    reset_finalized_meeting_sequence(session);
+    start_finalized_incoming_silero(session, 16_000).unwrap();
+    for chunk in pcm[..pcm.len() / 2].chunks(3_200) {
+        observe_finalized_incoming_mono_f32_samples(chunk, 16_000);
+        wait_silero_fixture();
+    }
+    let reset = reset_finalized_incoming_speech_boundary(session).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while incoming_sync().state.lock().unwrap().as_ref().unwrap().capture_epoch <= reset {
+        assert!(Instant::now() < deadline, "CPU must acknowledge the source discontinuity");
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert!(clear_finalized_incoming_utterance_producer_for_session("stale-session"));
+    for chunk in pcm.chunks(3_200) {
+        observe_finalized_incoming_mono_f32_samples(chunk, 16_000);
+        wait_silero_fixture();
+    }
+    for _ in 0..5 {
+        observe_finalized_incoming_mono_f32_samples(&vec![0.0; 3_200], 16_000);
+        wait_silero_fixture();
+    }
+    let utterance = try_take_finalized_incoming_utterance(session).expect("speech after reset survives stale Stop");
+    assert!(utterance.capture_provenance.unwrap().audio_epoch > reset);
+    assert!(try_take_finalized_incoming_utterance(session).is_none());
+    assert!(clear_finalized_incoming_utterance_producer_for_session(session));
+    assert!(incoming_sync().ingress.lock().unwrap().is_none(), "CPU worker joined before releasing its lease");
+    observe_finalized_incoming_mono_f32_samples(pcm, 16_000);
+    assert!(try_take_finalized_incoming_utterance(session).is_none());
+    start_finalized_incoming_silero(session, 16_000).unwrap();
+    observe_finalized_incoming_mono_f32_samples(&[0.0; 512], 48_000);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while incoming_sync().state.lock().unwrap().is_some() {
+        assert!(Instant::now() < deadline, "format failure must wake the finalizer consumer");
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(finalized_speech_fault(true).as_deref(), Some("silero:capture_rate_changed"));
+    assert!(clear_finalized_incoming_utterance_producer());
+    clear_finalized_meeting_sequence();
 }
 
 pub fn observe_finalized_outbound_f32_samples(
@@ -496,6 +602,24 @@ fn observe_finalized_mono_samples(
     samples: &[f32],
     sample_rate_hz: u32,
 ) {
+    let started = Instant::now();
+    let locked = sync.ingress.try_lock();
+    sync.callback_lock_observations.fetch_add(1, Ordering::Relaxed);
+    sync.callback_lock_wait_max_ns.fetch_max(started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64, Ordering::Relaxed);
+    match locked {
+        Ok(ingress) => {
+            if let Some(cpu) = ingress.as_ref() { cpu.push(samples, sample_rate_hz); return; }
+        }
+        Err(_) => { sync.transport_loss.fetch_add(1, Ordering::Release); return; }
+    }
+    // Explicit source-unit fixtures exercise finalizer mechanics with classified
+    // energy observations. Production has no energy-detector fallback.
+    #[cfg(test)]
+    observe_energy_fixture(sync, samples, sample_rate_hz);
+}
+
+#[cfg(test)]
+fn observe_energy_fixture(sync: &FinalizedProducerSync, samples: &[f32], sample_rate_hz: u32) {
     if samples.is_empty() || sample_rate_hz == 0 {
         return;
     }
@@ -671,10 +795,10 @@ fn ingest_observation(
 ) -> bool {
     let speech_like = gate.accepted;
     // A failed quality gate is not itself an end-of-speech observation.
-    let silence_like = !speech_like
+    let silence_like = gate.reason == "silero_silence" || (!speech_like
         && gate.reason != "rejected_clipping"
         && matches!(evidence.reason.as_str(),
-            "rejected_silence" | "rejected_low_energy" | "rejected_low_snr");
+            "rejected_silence" | "rejected_low_energy" | "rejected_low_snr"));
     if !state.in_utterance {
         if speech_like {
             state.in_utterance = true;
@@ -796,8 +920,7 @@ fn finalize_current_utterance(state: &mut FinalizedProducerState) -> bool {
     ));
 
     let speech_evidence = AudioEvidenceReport::from_samples(&state.current_samples[..speech_end]);
-    let speech_gate = evaluate_vad_gate(speech_evidence, &state.profile.gate);
-    if !speech_gate.accepted {
+    if speech_evidence.clipping_ratio > state.profile.gate.max_clipping_ratio || speech_evidence.peak == 0.0 {
         reset_current_utterance(state);
         return false;
     }

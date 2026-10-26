@@ -11,7 +11,7 @@ use super::original_voice_pcm;
 use super::finalized_utterance::{
     bind_finalized_outbound_capture_errors, clear_finalized_outbound_utterance_producer,
     observe_finalized_outbound_f32_samples,
-    observe_finalized_outbound_mono_f32_samples, reset_finalized_outbound_utterance_producer,
+    observe_finalized_outbound_mono_f32_samples,
 };
 use super::guided_take::append_guided_f32;
 use super::live_audio_buffer::{
@@ -243,11 +243,11 @@ pub fn stop_live_capture_runtime() -> LiveCaptureStopReport {
 
     if guard.is_none() {
         clear_live_audio_buffer();
-        clear_finalized_outbound_utterance_producer();
+        let cleared = clear_finalized_outbound_utterance_producer();
         return LiveCaptureStopReport {
-            ok: true,
+            ok: cleared,
             status: inactive_status(
-                "live_capture:not_active",
+                if cleared { "live_capture:not_active" } else { "silero:cleanup_pending" },
                 "No live microphone stream was active.",
             ),
             message: "No live microphone stream was active. Rolling/finalized audio state was cleared and Stop remains safe.".to_string(),
@@ -269,6 +269,11 @@ pub fn stop_live_capture_runtime() -> LiveCaptureStopReport {
         };
     }
 
+    if !clear_finalized_outbound_utterance_producer() {
+        active.cleanup_pending = true;
+        return LiveCaptureStopReport { ok: false, status: build_status_from_guard(guard.as_ref()),
+            message: "Speech detector CPU cleanup is unconfirmed; Retry Stop before Start.".to_string() };
+    }
     let mut runtime = guard.take().expect("matching capture owner still held");
     let thread_stopped = runtime
         .capture_thread
@@ -539,14 +544,16 @@ fn run_capture_thread(
 
     reset_live_audio_buffer(sample_rate_hz, channels);
     if finalized_outbound_enabled {
-        reset_finalized_outbound_utterance_producer(&session_id, generation, sample_rate_hz);
+        super::finalized_utterance::start_finalized_outbound_silero(&session_id, generation, sample_rate_hz)?;
         if !bind_finalized_outbound_capture_errors(
             &session_id, generation, Arc::clone(&callback_error_epoch),
         ) {
             return Err("live_capture:discontinuity_binding_failed".to_string());
         }
     } else {
-        clear_finalized_outbound_utterance_producer();
+        if !clear_finalized_outbound_utterance_producer() {
+            return Err("silero:cleanup_pending".to_string());
+        }
     }
     let stream = match build_stream_for_format(
         &device,
@@ -584,7 +591,9 @@ fn run_capture_thread(
     // The stream must stay on its owner thread because cpal streams are not Send on all platforms.
     let _ = stop_rx.recv();
     drop(stream);
-    clear_finalized_outbound_utterance_producer();
+    if !clear_finalized_outbound_utterance_producer() {
+        return Err("silero:cleanup_pending".to_string());
+    }
     Ok(())
 }
 
@@ -624,12 +633,14 @@ fn build_status_from_guard(runtime: Option<&LiveCaptureRuntime>) -> LiveCaptureS
                 active_age_ms: Some(active_age_ms),
                 frames_received: runtime.frames_received.load(Ordering::Relaxed),
                 callback_error_count: runtime.callback_error_epoch.load(Ordering::Acquire)
+                    .saturating_add(super::finalized_utterance::finalized_pcm_drop_count(false))
                     .min(usize::MAX as u64) as usize,
-                latest_callback_error: errors.last().cloned(),
+                latest_callback_error: super::finalized_utterance::finalized_speech_fault(false).or_else(|| errors.last().cloned())
+                    .or_else(|| (super::finalized_utterance::finalized_pcm_drop_count(false) > 0).then(|| "silero:pcm_discontinuity".to_string())),
                 blocker: if runtime.cleanup_pending {
                     "live_capture:cleanup_pending".to_string()
                 } else {
-                    String::new()
+                    super::finalized_utterance::finalized_speech_fault(false).unwrap_or_default()
                 },
                 note: if runtime.cleanup_pending {
                     "Microphone capture thread exit is unconfirmed. The previous owner is reserved; Retry Stop before Start.".to_string()
