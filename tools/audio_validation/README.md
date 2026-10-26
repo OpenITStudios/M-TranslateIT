@@ -12,7 +12,7 @@
 
 ## Workflow
 
-For human-like Indonesian listening samples, start with the owner-selected [local neural comparison](NATURAL_VOICES.md#current-selected-method-local-neural-listening-preview). It preserves 44.1-kHz originals, generates separate 16-kHz copies and requires listening acceptance before quality use. The eSpeak route below remains mechanical smoke tooling; it is not the accepted natural-speech quality source.
+For natural Indonesian input, use the owner-accepted M1/F1 profiles through the existing [local neural fixture workflow](NATURAL_VOICES.md#current-selected-method-local-neural-listening-preview). The listening preview preserves 44.1-kHz originals; the canonical generator publishes separate hashed 16-kHz fixtures using the same synthesis. Profile acceptance does not certify every sentence or any ASR/VAD/Meeting result. The eSpeak route below remains mechanical smoke tooling.
 
 From repository root, with Python 3.12 and an installed offline eSpeak-compatible synthesizer:
 

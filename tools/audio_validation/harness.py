@@ -163,7 +163,7 @@ def resample(values: list[int], original: int) -> list[int]:
     return output
 
 
-def generate_samples(row: dict, exe: str, temp: Path, seed: int) -> list[int]:
+def generate_samples(row: dict, exe: str, temp: Path, seed: int, speech=None) -> list[int]:
     kind = row["kind"]
     count = round(row.get("duration_ms", 0)*RATE/1000)
     rng = random.Random(f"translateit-audio-v1:{seed}:{row['id']}")
@@ -175,21 +175,24 @@ def generate_samples(row: dict, exe: str, temp: Path, seed: int) -> list[int]:
     if kind == "tone":
         hz, amp = row.get("tone_hz", 220), row.get("tone_amplitude", .25)
         return [round(32767*amp*math.sin(2*math.pi*hz*i/RATE)) for i in range(count)]
-    if not exe:
+    if not exe and speech is None:
         raise ValueError("speech synthesis must be explicitly enabled with --tts-exe")
     text = row["reference"]
     parts = text.split(",", 1) if row.get("comma_pause_ms") else [text]
     samples = []
     for n, part in enumerate(parts):
-        filename = temp / f"{row['id']}-{n}.wav"
-        try:
-            subprocess.run([exe, "-v", row["language"], "-s",
-                            str(row.get("rate_wpm", 155)), "-w", str(filename), part.strip()],
-                           shell=False, check=True, capture_output=True, timeout=45)
-            pcm, rate = decode_wave(filename)
-            samples.extend(resample(pcm, rate))
-        finally:
-            filename.unlink(missing_ok=True)
+        if speech is not None:
+            samples.extend(speech(part.strip(), row, seed))
+        else:
+            filename = temp / f"{row['id']}-{n}.wav"
+            try:
+                subprocess.run([exe, "-v", row["language"], "-s",
+                                str(row.get("rate_wpm", 155)), "-w", str(filename), part.strip()],
+                               shell=False, check=True, capture_output=True, timeout=45)
+                pcm, rate = decode_wave(filename)
+                samples.extend(resample(pcm, rate))
+            finally:
+                filename.unlink(missing_ok=True)
         if n+1 < len(parts):
             samples.extend([0]*round(row["comma_pause_ms"]*RATE/1000))
     samples = [0]*round(row.get("prefix_ms", 0)*RATE/1000) + samples
@@ -216,20 +219,46 @@ def fixture_digest(records: list[dict]) -> str:
 
 
 def generate(target: Path, tts: str, seed: int, suite_path: Path = SUITE,
-             corpus_path: Path = CORPUS) -> dict:
+             corpus_path: Path = CORPUS, *, neural_model: Path | None = None,
+             voice: str = "M1") -> dict:
     if target.exists() or target.is_symlink():
         raise ValueError("fixture directory already exists; never overwrite prior evidence")
-    if not tts or not shutil.which(tts):
-        raise ValueError("explicit offline espeak-compatible --tts-exe is required")
-    # Verify required speech languages before writing any fixture. A missing
-    # Indonesian/English voice must not silently use the synthesizer default.
-    from generation_doctor import doctor
-    readiness = doctor(tts)
-    if not readiness["ok"]:
-        raise ValueError("offline synthesizer is missing a required language voice")
+    speech = None
+    executable = ""
+    if neural_model is not None:
+        if tts or voice not in ("M1", "F1"):
+            raise ValueError("choose one synthesizer and an approved M1/F1 voice")
+        from local_neural_comparison import (
+            PACKAGES,
+            PINS,
+            load_engine,
+            pins,
+            speech_pcm,
+        )
+        engine = load_engine(neural_model)
+
+        def speech(text, row, selected_seed):
+            return speech_pcm(engine, text, row, voice, selected_seed)
+
+        generator = {"name": "explicit-local-supertonic-3", "model": pins()["repo"],
+                     "revision": pins()["revision"], "voice": voice, "steps": 16,
+                     "speed": "rate_wpm/155", "packages": PACKAGES,
+                     "asset_pins_sha256": fingerprint(PINS),
+                     "harness_sha256": fingerprint(Path(__file__)),
+                     "neural_generator_sha256": fingerprint(PINS.with_name("local_neural_comparison.py")),
+                     "resampler": "scipy.signal.resample_poly:160/441"}
+    else:
+        if not tts or not shutil.which(tts):
+            raise ValueError("explicit offline espeak-compatible --tts-exe is required")
+        # Verify required speech languages before writing any fixture.
+        from generation_doctor import doctor
+        readiness = doctor(tts)
+        if not readiness["ok"]:
+            raise ValueError("offline synthesizer is missing a required language voice")
+        executable = readiness["generator"]["executable"]
+        generator = {"name": "explicit-local-espeak", "version": readiness["generator"]["version"],
+                     "resampler": "deterministic-linear-fixture-only"}
     items, suite_hash = specs(suite_path, corpus_path)
-    version = readiness["generator"]["version"]
-    executable = readiness["generator"]["executable"]
     target.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="audio-fixtures-", dir=target.parent) as tmpdir:
         temp = Path(tmpdir)
@@ -237,15 +266,14 @@ def generate(target: Path, tts: str, seed: int, suite_path: Path = SUITE,
         rows = []
         for item in items:
             wav = temp/"samples"/f"{item['id']}.wav"
-            write_wave(wav, generate_samples(item, executable, temp, seed))
+            write_wave(wav, generate_samples(item, executable, temp, seed, speech))
             rows.append({"id": item["id"], "file": f"samples/{item['id']}.wav",
                          "sha256": fingerprint(wav),
                          "reference_sha256": hashlib.sha256(item["reference"].encode()).hexdigest(),
                          "metrics": metrics(wav)})
         result = {"schema": FIXTURE_SCHEMA, "scenario_fingerprint": suite_hash,
                   "audio_fingerprint": fixture_digest(rows), "seed": seed,
-                  "generator": {"name": "explicit-local-espeak", "version": version,
-                                "resampler": "deterministic-linear-fixture-only"},
+                  "generator": generator,
                   "fixtures": rows,
                   "proof": "GENERATED_WAV_ONLY_NOT_SPEECH_RECOGNITION_OR_NATIVE_PROOF"}
         (temp/"fixtures.json").write_text(json.dumps(result, indent=2, ensure_ascii=False)+"\n", encoding="utf-8")
@@ -267,7 +295,7 @@ def inspect(target: Path, suite_path: Path = SUITE,
     if not isinstance(rows, list) or len(rows) != len(items):
         raise ValueError("fixture record coverage incomplete")
     expected = {r["id"]: r for r in items}
-    if {r.get("id") for r in rows} != expected:
+    if {r.get("id") for r in rows} != set(expected):
         raise ValueError("fixture IDs do not match scenario coverage")
     for row in rows:
         name = row["id"]
@@ -449,6 +477,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--corpus", type=Path, default=CORPUS)
     parser.add_argument("--fixtures", type=Path)
     parser.add_argument("--tts-exe")
+    parser.add_argument("--neural-model-dir", type=Path)
+    parser.add_argument("--voice", choices=("M1", "F1"), default="M1")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--observations", type=Path)
     parser.add_argument("--baseline", type=Path)
@@ -461,7 +491,8 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "generate":
         if args.fixtures is None:
             parser.error("generate requires --fixtures")
-        answer = generate(args.fixtures, args.tts_exe or "", args.seed, args.suite, args.corpus)
+        answer = generate(args.fixtures, args.tts_exe or "", args.seed, args.suite, args.corpus,
+                          neural_model=args.neural_model_dir, voice=args.voice)
     elif args.command == "inspect":
         if args.fixtures is None:
             parser.error("inspect requires --fixtures")

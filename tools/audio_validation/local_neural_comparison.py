@@ -106,26 +106,63 @@ def review_html(data: dict) -> str:
             + ''.join(rows) + '</html>')
 
 
-def generate(model_dir: Path, destination: Path) -> dict:
-    if destination.exists() or destination.is_symlink():
-        raise ValueError("comparison destination exists; never overwrite prior samples")
+def load_engine(model_dir: Path):
     verify_assets(model_dir)
     installed = {name: version(name) for name in PACKAGES}
     if installed != PACKAGES:
         raise ValueError("use the isolated pinned neural-fixture requirements")
     os.environ.update({"HF_HUB_OFFLINE": "1", "HF_HUB_DISABLE_TELEMETRY": "1",
                        "TRANSFORMERS_OFFLINE": "1"})
-    import numpy as np
-    import soundfile as sf
-    from scipy.signal import resample_poly
     from supertonic import TTS
 
     engine = TTS(model="supertonic-3", model_dir=model_dir, auto_download=False,
                  intra_op_num_threads=4, inter_op_num_threads=1)
     if engine.sample_rate != 44100:
         raise ValueError("unexpected model sample rate")
+    return engine
+
+
+def synthesize(engine, text: str, language: str, voice: str, seed: int, speed: float = 1.0):
+    import numpy as np
+    from scipy.signal import resample_poly
+
+    if language not in ("id", "en") or voice not in VOICES:
+        raise ValueError("explicit ID/EN language and approved preview voice required")
+    np.random.seed(seed)
+    waveform, duration = engine.synthesize(text, voice_style=engine.get_voice_style(voice),
+                                           lang=language, total_steps=16, speed=speed)
+    seconds = float(duration[0])
+    if not 0.1 <= seconds <= 125:
+        raise ValueError("unexpected generated duration")
+    waveform = waveform[0, :round(seconds * engine.sample_rate)]
+    if not waveform.size or not np.isfinite(waveform).all():
+        raise ValueError("empty/nonfinite generated waveform")
+    # Do not hide clipping or silence with automatic normalization.
+    if np.max(np.abs(waveform)) >= 1 or np.sqrt(np.mean(waveform**2)) <= .0005:
+        raise ValueError("clipped/silent generated waveform")
+    converted = resample_poly(waveform, 160, 441)
+    if not np.isfinite(converted).all() or np.max(np.abs(converted)) >= 1:
+        raise ValueError("invalid/clipped resampled waveform")
+    return waveform, converted
+
+
+def speech_pcm(engine, text: str, row: dict, voice: str, seed: int) -> list[int]:
+    import numpy as np
+
+    _, converted = synthesize(engine, text, row["language"], voice, seed,
+                              speed=row.get("rate_wpm", 155) / 155)
+    return np.rint(converted * 32767).astype(np.int16).tolist()
+
+
+def generate(model_dir: Path, destination: Path) -> dict:
+    if destination.exists() or destination.is_symlink():
+        raise ValueError("comparison destination exists; never overwrite prior samples")
+    engine = load_engine(model_dir)
+    import soundfile as sf
+
     data = plan()
-    data.update({"packages": installed, "generator_sha256": fingerprint(Path(__file__)),
+    data.update({"packages": {name: version(name) for name in PACKAGES},
+                 "generator_sha256": fingerprint(Path(__file__)),
                  "asset_pins_sha256": fingerprint(PINS), "seed": 42, "steps": 16,
                  "speed": 1.0, "resampler": "scipy.signal.resample_poly:160/441",
                  "provider": "CPUExecutionProvider", "files": [],
@@ -135,27 +172,13 @@ def generate(model_dir: Path, destination: Path) -> dict:
         root = Path(work) / "preview"
         (root / "samples").mkdir(parents=True)
         for voice in VOICES:
-            style = engine.get_voice_style(voice)
             for row in data["samples"]:
-                np.random.seed(42)
                 started = time.monotonic()
-                waveform, duration = engine.synthesize(row["reference"], voice_style=style,
-                                                       lang="id", total_steps=16, speed=1.0)
-                seconds = float(duration[0])
-                if not 0.1 <= seconds <= 30:
-                    raise ValueError("unexpected generated duration")
-                waveform = waveform[0, :round(seconds * engine.sample_rate)]
-                if not waveform.size or not np.isfinite(waveform).all():
-                    raise ValueError("empty/nonfinite generated waveform")
-                # Do not hide clipping or silence with automatic normalization.
-                if np.max(np.abs(waveform)) >= 1 or np.sqrt(np.mean(waveform**2)) <= .0005:
-                    raise ValueError("clipped/silent generated waveform")
+                waveform, converted = synthesize(engine, row["reference"], "id", voice, 42)
+                seconds = len(waveform) / engine.sample_rate
                 native = f"samples/{row['id']}-{voice}-44100.wav"
                 canonical = f"samples/{row['id']}-{voice}-16000.wav"
                 sf.write(root / native, waveform, 44100, subtype="PCM_16")
-                converted = resample_poly(waveform, 160, 441)
-                if not np.isfinite(converted).all() or np.max(np.abs(converted)) >= 1:
-                    raise ValueError("invalid/clipped resampled waveform")
                 sf.write(root / canonical, converted, 16000, subtype="PCM_16")
                 checked = metrics(root / canonical)
                 data["files"].append({**row, "voice": voice, "file": canonical,

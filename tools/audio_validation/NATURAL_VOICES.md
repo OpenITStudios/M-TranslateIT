@@ -20,7 +20,16 @@ Only the explicit `prepare` action downloads the pinned public assets. Generatio
 
 `listen.html` contains offline audio players. Listen to the preserved **44.1-kHz PCM16 originals** for naturalness; the separate **16-kHz PCM16** copies use anti-aliased polyphase resampling for eventual ASR input. There is no pitch shifting, automatic loudness normalization or eSpeak fallback. Silence, nonfinite samples and clipping fail generation. These numeric checks do not establish naturalness or faithful pronunciation.
 
-Listening acceptance remains **PENDING** until the owner evaluates both voices: natural rhythm and pronunciation, intact “tidak”/“bukan”, “lima belas” versus “lima puluh”, clear English words, no missing/repeated speech, and usable pauses. An unacceptable voice is rejected rather than used to grade the application. The preview has its own `translateit.local_neural_comparison.v1` identity; it is not yet an approved 48-case `audio_fixtures.v1` suite and must not be fed to that runner as one. After listening acceptance, carry the approved source into the existing fixture generator and connected VAD→ASR acceptance work; do not mark those stages passed from this preview.
+**Owner voice-profile acceptance — 2026-10-26:** after receiving the M1/F1 A04 listening examples, the owner accepted their sound and authorized continuation. This accepts the selected voice profiles for test preparation; it does not certify that every generated sentence was heard or pronounced correctly. Preserve the original preview and its immutable generation-time PENDING receipt; this canonical decision records the later acceptance. Check negation, numbers, English words, missing/repeated speech and pauses during scenario acceptance.
+
+The preview keeps its separate `translateit.local_neural_comparison.v1` identity. To create the **canonical 48-case fixtures**, use the existing harness with the same verified model and one selected profile:
+
+```powershell
+.workspace/tools/neural-fixture-venv/Scripts/python.exe tools/audio_validation/harness.py generate --neural-model-dir .workspace/tools/neural-fixture-model --voice M1 --fixtures .workspace/reports/neural-fixtures-m1-001
+.workspace/tools/neural-fixture-venv/Scripts/python.exe tools/audio_validation/harness.py inspect --fixtures .workspace/reports/neural-fixtures-m1-001
+```
+
+`--voice F1` creates a separately identified variant, not a replacement for prior M1 hashes. The harness reuses the preview's synthesis/anti-aliased conversion and its existing seeded noise/gain/clipping/quiet-tail transformations. Fast-speech cases set neural speed to `rate_wpm/155`; comma-pause cases synthesize each part and insert the configured silence. Silence/noise/tone cases retain their existing generators. A failed neural source never falls back to eSpeak. All 48 WAVs are published together only after successful generation; fixture hashes, voice/model/package/settings and both generator-source hashes are recorded. This does not connect VAD output to ASR or prove any app stage passed.
 
 ## Optional Azure comparison (not selected or executed)
 
