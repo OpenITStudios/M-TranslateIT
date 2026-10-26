@@ -16,6 +16,8 @@ use super::finalized_utterance::{
     try_take_finalized_incoming_utterance,
 };
 use super::live_segment_writer::write_pcm16_wav;
+use super::evidence::AudioEvidenceReport;
+use super::vad::{evaluate_vad_gate, runtime_vad_profile};
 use super::TARGET_SAMPLE_RATE_HZ;
 
 const RECEIPT_PREFIX: &str = "AUDIO_VAD_RECEIPT_JSON=";
@@ -119,6 +121,7 @@ fn stage_for_case(
     let mut speech_ms = Vec::<u64>::new();
     let mut latest_blocker = String::new();
     let mut segments = Vec::<serde_json::Value>::new();
+    let mut window_gates = Vec::<serde_json::Value>::new();
 
     let mut collect = || {
         while let Some(utterance) = try_take_finalized_incoming_utterance(&session) {
@@ -155,13 +158,20 @@ fn stage_for_case(
     };
     // Input is the exact hashed audio; 200-ms callback-size chunks keep
     // the existing 120-ms minimum voice evidence threshold intact.
-    for frame in samples.chunks(FRAME_SAMPLES) {
+    for (index, frame) in samples.chunks(FRAME_SAMPLES).enumerate() {
+        let gate = evaluate_vad_gate(AudioEvidenceReport::from_samples(frame), &runtime_vad_profile().gate);
+        window_gates.push(json!({
+            "start_sample": index * FRAME_SAMPLES,
+            "sample_count": frame.len(),
+            "gate": gate,
+        }));
         observe_finalized_incoming_mono_f32_samples(frame, TARGET_SAMPLE_RATE_HZ);
         collect();
     }
-    // An explicitly disclosed quiet tail closes unfinished speech. The original
-    // 61-second uninterrupted tone receives NO added silence.
-    let added_quiet_ms = if case.expect == "numeric_overflow" { 0 } else { 1000 };
+    // Observe the drop only after a natural boundary, keeping all 61 seconds
+    // of the numeric stress tone uninterrupted and its original hash unchanged.
+    let overflow_before_quiet = overflow_dropped_utterance_count();
+    let added_quiet_ms = 1000;
     if added_quiet_ms > 0 {
         let silence = vec![0.0; FRAME_SAMPLES];
         for _ in 0..added_quiet_ms / 200 {
@@ -175,19 +185,21 @@ fn stage_for_case(
     clear_finalized_meeting_sequence();
     let ok = match case.expect.as_str() {
         "no_speech" => finalized == 0 && overflow == 0,
-        "numeric_overflow" => finalized == 0 && overflow >= 1,
+        "numeric_overflow" => finalized == 0 && overflow_before_quiet == 0 && overflow == 1,
         _ => finalized >= 1 && writer_attempts == writer_valid && eviction == 0,
     };
     json!({
         "ok": ok,
         "finalized_count": finalized,
         "overflow_count": overflow,
+        "overflow_before_quiet": overflow_before_quiet,
         "evicted_count": eviction,
         "writer_ok": writer_attempts > 0 && writer_valid == writer_attempts,
         "writer_attempts": writer_attempts,
         "writer_valid": writer_valid,
         "speech_duration_ms": speech_ms,
         "segments": segments,
+        "window_gates": window_gates,
         "test_added_quiet_ms": added_quiet_ms,
         "test_only": true,
         "blocker": latest_blocker,

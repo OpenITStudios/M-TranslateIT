@@ -236,6 +236,38 @@ fn clipped_burst_during_active_speech_does_not_become_a_silence_boundary() {
 }
 
 #[test]
+fn quiet_speech_inside_an_utterance_is_retained_until_actual_silence() {
+    let _serial = crate::engine::runtime_state::runtime_test_guard();
+    let session = "quiet-speech-boundary";
+    clear_finalized_incoming_utterance_producer();
+    reset_finalized_meeting_sequence(session);
+    reset_finalized_incoming_utterance_producer(session, 16_000);
+    let tone = |amplitude: f32| -> Vec<f32> {
+        (0..3_200).map(|i| amplitude * (2.0 * std::f32::consts::PI * 220.0 * i as f32 / 16_000.0).sin()).collect()
+    };
+    let strong = tone(0.3);
+    let quiet = tone(0.008);
+    let evidence = AudioEvidenceReport::from_samples(&quiet);
+    assert!(evidence.reason.is_empty(), "quiet acoustic evidence is not silence");
+    assert!(!evaluate_vad_gate(evidence, &runtime_vad_profile().gate).accepted);
+    observe_finalized_incoming_mono_f32_samples(&strong, 16_000);
+    observe_finalized_incoming_mono_f32_samples(&quiet, 16_000);
+    let premature = try_take_finalized_incoming_utterance(session);
+    observe_finalized_incoming_mono_f32_samples(&strong, 16_000);
+    observe_finalized_incoming_mono_f32_samples(&silence_of(16_000, 400), 16_000);
+    let completed = try_take_finalized_incoming_utterance(session);
+    let extra = try_take_finalized_incoming_utterance(session);
+    clear_finalized_incoming_utterance_producer();
+    clear_finalized_meeting_sequence();
+    assert!(premature.is_none(), "quality rejection must not invent an end of speech");
+    let completed = completed.expect("real silence must finalize the complete utterance");
+    assert_eq!(completed.speech_duration_ms, 600);
+    assert_eq!(completed.frame.samples.len(), 16_000);
+    assert_eq!(&completed.frame.samples[3_200..6_400], quiet.as_slice());
+    assert!(extra.is_none());
+}
+
+#[test]
 fn incoming_bounded_wait_distinguishes_deferred_retry_from_stopped_producer() {
     let sync = FinalizedProducerSync {
         state: Mutex::new(Some(FinalizedProducerState {

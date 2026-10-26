@@ -670,6 +670,11 @@ fn ingest_observation(
     gate: &VadGateResult,
 ) -> bool {
     let speech_like = gate.accepted;
+    // A failed quality gate is not itself an end-of-speech observation.
+    let silence_like = !speech_like
+        && gate.reason != "rejected_clipping"
+        && matches!(evidence.reason.as_str(),
+            "rejected_silence" | "rejected_low_energy" | "rejected_low_snr");
     if !state.in_utterance {
         if speech_like {
             state.in_utterance = true;
@@ -700,8 +705,7 @@ fn ingest_observation(
         if state.current_samples.len() > max_samples {
             // A phrase just under 60 s must not be discarded merely because
             // its closing VAD-rejected quiet frame makes the buffer longer.
-            let closing_quiet = !speech_like
-                && gate.reason != "rejected_clipping"
+            let closing_quiet = silence_like
                 && state.speech_samples < max_samples
                 && state.current_samples.len()
                     <= samples_for_duration(
@@ -723,11 +727,9 @@ fn ingest_observation(
         return false;
     }
 
-    // Clipping is a quality rejection, not evidence of silence. A distorted
-    // burst inside speech must not end the utterance prematurely; preserve
-    // the bounded samples for the unchanged final whole-utterance quality gate.
-    // Clipping alone still cannot start a new utterance or count as speech.
-    if gate.reason == "rejected_clipping" {
+    // Preserve quiet/uncertain speech and clipping for the final whole-utterance
+    // quality gate. Neither can start an utterance or count as accepted speech.
+    if !silence_like {
         state.trailing_silence_samples = 0;
         return false;
     }
