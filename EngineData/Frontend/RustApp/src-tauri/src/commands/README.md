@@ -10,7 +10,6 @@ This folder contains the Tauri command boundary for the current Meeting / Text /
 - `mic_test.rs` — Microphone Test Start/Stop wrappers.
 - `runtime.rs` / `runtime_inventory.rs` — runtime readiness and explicit model-presence verification.
 - `settings.rs` — runtime settings load/save and audio-device selection.
-- `text_translation.rs` — standalone Text translation through the same worker.
 - `virtual_mic_route.rs` — managed virtual microphone used by the meeting application.
 - `voice_lab.rs`, `voice_lab_recording.rs`, `voice_lab_build.rs` — legacy internal protocol/storage implementation identifiers for the product feature now named **My Voice**; `voice_lab/storage.rs` owns dataset freezing, actor-package validation, WAV inspection, and transactional candidate promotion. These names remain only where changing them requires an explicit compatibility migration; they are not product vocabulary.
 - `diagnostic_trace.rs` — bounded diagnostics trace command support.

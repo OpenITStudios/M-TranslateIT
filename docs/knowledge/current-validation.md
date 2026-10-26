@@ -21,6 +21,55 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Standalone Text application removal — 2026-10-26
+
+Owner decision: retain MiLMMT and focus the application on Meeting voice
+translation; direct text requests are an internal verification mechanism. The
+replacement-model proposal below is superseded, not awaiting approval.
+
+The repair removes Text navigation/header/page/hidden mounting, setup entry,
+product readiness/status branch, frontend facade/API/cache/result policy, and the
+registered native `translate_text` command plus its Rust module. Normal routes
+are Meeting / My Voice / Settings. Meeting caption policies reject legacy Text
+payloads. Schema 13 accepts older settings and omits retired Text direction keys
+on ordinary save/clone; incoming Meeting language preferences and audio/setup
+preferences remain. Existing private settings were not rewritten for proof.
+
+Executed on the repair working tree: strict Svelte check zero errors/warnings,
+source-contract validation, production frontend build, native developer build and all 407 frontend tests
+passed. All 335 Rust tests passed with one opt-in replay ignored. All 75 affected
+ASR/translation/worker tests passed; evaluator self-tests passed 191 regression
+and 40 held-out cases. Removed positive Text UI/command tests are replaced by
+retired-surface/internal-worker boundary assertions; lower counts are not a claim
+of expanded coverage. The initial negative surface test was red before removal;
+subsequent compile/test failures exposed stale sidebar copy, a controller argument,
+validator input and a settings-only test fixture, all repaired in the final source.
+The source-contract validator still checks parity of every remaining registered
+native invocation; no blanket exclusion was introduced.
+
+All 16 impact-tool tests passed using a temporary hash-recorded copy of current
+tracked working-tree source without generated environments. Direct execution in
+this installed workspace reached the existing 360-file source-graph capacity;
+the parent has 352 tracked eligible source files, and ignored environment source
+is also traversed by the current analyzer. This is an environment/tooling boundary,
+not proof that dependency closure is complete. No analyzer capacity change was
+made. The source-view copy is not shipped; automatic policy review rejected its
+recursive deletion (`blocked by policy`) and it remains in the ignored
+`.workspace/tmp/remove-text-impact-source-view` directory. Its source hashes are
+retained in `.workspace/reports/remove-text-impact-view.json`.
+
+Logs/JUnit remain under `.workspace/reports/remove-text-*`. Proof ceiling is
+**EXECUTED_SOURCE**. Rendered native navigation, setup deferral, installed delivery
+and full speech-to-Meeting behavior are **NOT EXECUTED** for this repair. No worker
+inference source, model, voice, audio algorithm or dependency changed; existing
+internal standalone/chunk/EOS tests remain. Native helper translation-probe
+scheduling is retained as an internal mechanism, not a public Text action.
+
+Semantic fidelity is still **FAIL / OPEN**: the earlier construction-purpose error
+is reproducible on the raw provider path and is not cured by retiring the UI.
+Remaining integrated native acceptance therefore stays stopped. The owner has
+chosen further current-model fidelity work rather than an alternate-model download.
+
 ### Translation inference experiments and comparison repair — 2026-10-26
 
 Runtime source: clean Local `723fc247` (the subsequent working-tree edits affect

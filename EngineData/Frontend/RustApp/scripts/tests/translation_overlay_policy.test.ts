@@ -88,7 +88,8 @@ test("visibility admission denies hidden or disabled Meeting content", () => {
   assert.equal(mayPresentOverlayCaption(p, c), true);
   assert.equal(mayPresentOverlayCaption({ ...p, visibility: "hidden" }, c), false);
   assert.equal(mayPresentOverlayCaption({ ...p, meetingEnabled: false }, c), false);
-  assert.equal(mayPresentOverlayCaption({ ...p, meetingEnabled: false }, { ...c, source: "text" }), true);
+  // @ts-expect-error Legacy windows must not reactivate retired Text captions.
+  assert.equal(mayPresentOverlayCaption(p, { ...c, source: "text" }), false);
 });
 
 test("a newer source-only turn clears obsolete captions until translation succeeds", () => {

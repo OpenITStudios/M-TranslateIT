@@ -1,6 +1,6 @@
 export const APPLICATION_MEETING_OWNER_ID = "translateit_application_meeting";
 
-export type AppRoute = "meeting" | "text" | "my-voice" | "settings";
+export type AppRoute = "meeting" | "my-voice" | "settings";
 
 export type CommandResult = {
   ok: boolean;
@@ -17,8 +17,6 @@ export type RuntimeCommandError = {
 
 export type RuntimeSettings = {
   schema_version: number;
-  source_language: string;
-  target_language: string;
   meeting_listen_source_language: string;
   meeting_listen_target_language: string;
   meeting_setup_state: "new" | "deferred" | "completed" | string;

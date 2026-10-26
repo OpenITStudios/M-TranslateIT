@@ -46,13 +46,10 @@ English Meeting Sound
 
 Incoming is optional/degradable and must never block otherwise healthy outbound translation.
 
-### Text
+### Internal translation verification
 
-```text
-Indonesian text ↔ English text
-```
-
-Text is standalone type/paste translation. It does not depend on Meeting audio or My Voice.
+Direct ID ↔ EN text requests are developer fixtures for isolating model errors
+from ASR/audio errors. They are not a standalone application feature.
 
 ### My Voice
 
@@ -78,7 +75,7 @@ Translation     → one canonical pipeline
 Meeting capture → Session Listening
 Meeting voice   → Built-in Male/Female or approved My Voice
 Incoming        → optional EN speech → ID text
-Text            → paste/type ID ↔ EN
+Text input      → internal worker verification only
 UI language     → English
 Runtime         → local-first after required assets are installed
 Distribution    → personal/owned machines
@@ -91,7 +88,7 @@ Removed/deferred from current product:
 - user-facing Realtime/Quality translation modes;
 - user-selectable translation styles including Natural/Formal;
 - Meeting Presets, custom Spoken Terms/Preferred Words and ASR/translation bias;
-- alternative Text wording and clipboard-to-caption Quick Translate;
+- standalone Text workspace, alternative wording and clipboard-to-caption Quick Translate;
 - Document/file translation;
 - general History/Saved workspace;
 - Audio Studio/broadcast workflows;
@@ -114,8 +111,8 @@ Meeting outbound
 Meeting incoming
 → current finalized English utterance only
 
-Text
-→ current text only
+Internal text verification
+→ current input only
 ```
 
 History/Saved data and incoming participant turns never become automatic translation context; incoming remains context-free.
@@ -163,7 +160,7 @@ Priority:
 ```text
 Meeting outbound
 > Meeting incoming
-> Text
+> internal translation verification
 > diagnostics/setup
 ```
 
@@ -189,12 +186,11 @@ Normal top-level navigation:
 
 ```text
 Meeting
-Text
 My Voice
 Settings
 ```
 
-Meeting uses one state-dependent Start/Stop action, an Original/TranslateIT microphone source selector and contextual setup recovery; finalized dialogue appears when Live. One Quick Access popup exposes contextual Meeting controls and caption visibility without adding a second audio owner. Text is source/swap/Translate/Copy/Clear. Settings uses categorized Voice & Audio, Meeting Captions and Help sections. All technical internals stay in Help/Diagnostics.
+Meeting uses one state-dependent Start/Stop action, an Original/TranslateIT microphone source selector and contextual setup recovery; finalized dialogue appears when Live. One Quick Access popup exposes contextual Meeting controls and caption visibility without adding a second audio owner. Settings uses categorized Voice & Audio, Meeting Captions and Help sections. All technical internals stay in Help/Diagnostics.
 
 ## Proof standard
 

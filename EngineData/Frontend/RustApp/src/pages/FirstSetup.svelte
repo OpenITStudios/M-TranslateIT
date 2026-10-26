@@ -28,7 +28,7 @@
     onOpenMyVoice,
   }: {
     initialSettings: RuntimeSettings;
-    onComplete: (settings: RuntimeSettings, destination?: "meeting" | "text") => void | Promise<void>;
+    onComplete: (settings: RuntimeSettings) => void | Promise<void>;
     onOpenMyVoice: (settings: RuntimeSettings) => void | Promise<void>;
   } = $props();
 
@@ -172,20 +172,6 @@
     }
   }
 
-  async function openTextInstead(): Promise<void> {
-    if (busy || step !== 1) return;
-    busy = true;
-    message = "Saving...";
-    try {
-      // Mark only Meeting setup as deferred. Do not claim setup completed.
-      // Keep the existing checkpoint so Meeting can be resumed later.
-      const saved = await persistSetupFact("deferred", step);
-      if (saved) await onComplete(settings, "text");
-    } finally {
-      busy = false;
-    }
-  }
-
   async function saveSelectedMicrophone(): Promise<void> {
     if (busy) return;
     const candidate = selectedMicrophone.trim() || null;
@@ -319,9 +305,9 @@
     <section class="mx-auto grid max-w-[720px] gap-6 px-8 py-9">
       {#if step === 1}
         <div>
-          <span class="ti-kicker">Choose a task</span>
-          <h1 class="ti-page-title text-[2.2rem]">How would you like to start?</h1>
-          <p class="ti-page-copy">Translate text now, or set up your microphone and English voice for meetings. Meeting setup can wait.</p>
+          <span class="ti-kicker">Meeting setup</span>
+          <h1 class="ti-page-title text-[2.2rem]">Set up Meeting translation</h1>
+          <p class="ti-page-copy">Set up your microphone and English voice for meetings. You can finish setup later.</p>
         </div>
       {:else if step === 2}
         <div>
@@ -412,7 +398,6 @@
         meetingReady={snapshot?.readiness.meetingReady === true && routeCheck === "ready"}
         onBack={goBack}
         onDefer={deferSetup}
-        onOpenText={openTextInstead}
         onAdvance={advance}
         onRepair={repairSetup}
         onRefresh={refreshReadiness}

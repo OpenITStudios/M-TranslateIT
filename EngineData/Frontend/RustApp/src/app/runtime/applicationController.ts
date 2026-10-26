@@ -153,7 +153,6 @@ export function createApplicationController(initialSettings: RuntimeSettings): {
       state.revision += 1;
       const meeting = runtimeProductFacade.mapProductMeetingState(session);
       const readiness = runtimeProductFacade.mapProductReadiness({
-        settings: state.snapshot.settings,
         helper: state.snapshot.helper,
         workerStatus: state.snapshot.workerStatus,
         inputStatus: state.snapshot.inputStatus,

@@ -61,7 +61,7 @@ This file maps semantic responsibility to the current owner. It does not carry p
 | Native close flow | `closeController.ts` + `nativeCloseRuntime.ts` + `closePolicy.ts` |
 | Translation overlay presentation | `translationOverlay*.ts` + `pages/TranslationOverlay.svelte` |
 | First-setup navigation/resume | `SetupNavigation.svelte` + `setupFlow.ts` |
-| Text cache / translation feedback | `textTranslationCache.ts`, `translationFeedbackState.ts` |
+| Translation feedback | `translationFeedbackState.ts` |
 | One-shot updater frontend | `appUpdateApi.ts` + `UpdateAction.svelte` |
 
 ## Application runtime authority

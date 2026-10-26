@@ -306,13 +306,6 @@
 
         <div class="divide-y divide-[var(--ti-border)]">
           <StatusRow
-            label="Text translation"
-            value="Indonesian ↔ English"
-            detail="Written Indonesian ↔ English translation."
-            status={snapshot.readiness.textReady ? "Ready" : snapshot.readiness.textStatus}
-            tone={snapshot.readiness.textReady ? "good" : snapshot.readiness.level === "unavailable" ? "danger" : "warning"}
-          />
-          <StatusRow
             label="Meeting translation"
             value="Indonesian voice → English voice"
             detail="Checks the microphone, voice, and connection needed for calls."

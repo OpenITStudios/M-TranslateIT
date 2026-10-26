@@ -3,16 +3,8 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-const CURRENT_SCHEMA_VERSION: u32 = 12;
+const CURRENT_SCHEMA_VERSION: u32 = 13;
 const MAX_SETTING_TEXT_CHARS: usize = 160;
-
-fn default_source_language() -> String {
-    "id".to_string()
-}
-
-fn default_target_language() -> String {
-    "en".to_string()
-}
 
 fn default_meeting_listen_source_language() -> String {
     "en".to_string()
@@ -52,8 +44,6 @@ impl Default for AudioSettings {
 #[serde(default)]
 pub struct RuntimeSettings {
     pub schema_version: u32,
-    pub source_language: String,
-    pub target_language: String,
     pub meeting_listen_source_language: String,
     pub meeting_listen_target_language: String,
     pub meeting_setup_state: String,
@@ -65,8 +55,6 @@ impl Default for RuntimeSettings {
     fn default() -> Self {
         Self {
             schema_version: CURRENT_SCHEMA_VERSION,
-            source_language: default_source_language(),
-            target_language: default_target_language(),
             meeting_listen_source_language: default_meeting_listen_source_language(),
             meeting_listen_target_language: default_meeting_listen_target_language(),
             meeting_setup_state: default_meeting_setup_state(),
@@ -112,8 +100,6 @@ impl RuntimeSettings {
 
     pub fn sanitized(mut self) -> Self {
         self.schema_version = CURRENT_SCHEMA_VERSION;
-        self.source_language = sanitize_language(&self.source_language, "id");
-        self.target_language = sanitize_language(&self.target_language, "en");
         self.meeting_listen_source_language =
             sanitize_language(&self.meeting_listen_source_language, "en");
         self.meeting_listen_target_language =
@@ -242,8 +228,6 @@ mod tests {
         let _ = fs::remove_file(&path);
         let settings = RuntimeSettings::load_or_default(&path);
         assert_eq!(settings.schema_version, CURRENT_SCHEMA_VERSION);
-        assert_eq!(settings.source_language, "id");
-        assert_eq!(settings.target_language, "en");
         assert_eq!(settings.meeting_listen_source_language, "en");
         assert_eq!(settings.meeting_listen_target_language, "id");
         assert_eq!(settings.meeting_setup_state, "new");
@@ -322,8 +306,6 @@ mod tests {
         let _ = fs::remove_file(&temp);
 
         let mut committed = RuntimeSettings::default();
-        committed.source_language = "en".to_string();
-        committed.target_language = "id".to_string();
         committed.meeting_setup_state = "completed".to_string();
         committed.meeting_setup_checkpoint = 4;
         committed.audio.input_device_id = Some("Committed Microphone".to_string());
@@ -337,8 +319,6 @@ mod tests {
         fs::remove_file(&path).expect("simulate crash after destination removal");
 
         let recovered = RuntimeSettings::load_or_default(&path);
-        assert_eq!(recovered.source_language, "en");
-        assert_eq!(recovered.target_language, "id");
         assert_eq!(recovered.meeting_setup_state, "completed");
         assert_eq!(recovered.meeting_setup_checkpoint, 4);
         assert_eq!(
@@ -350,8 +330,8 @@ mod tests {
         assert!(!temp.exists(), "uncommitted temp settings should be discarded");
 
         let reloaded = RuntimeSettings::load_or_default(&path);
-        assert_eq!(reloaded.source_language, "en");
-        assert_eq!(reloaded.target_language, "id");
+        assert_eq!(reloaded.meeting_setup_state, "completed");
+        assert_eq!(reloaded.audio.input_device_id, recovered.audio.input_device_id);
 
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(&backup);
@@ -397,8 +377,6 @@ mod tests {
 
         let settings = RuntimeSettings::load_or_default(&path);
         assert_eq!(settings.schema_version, CURRENT_SCHEMA_VERSION);
-        assert_eq!(settings.source_language, "en");
-        assert_eq!(settings.target_language, "id");
         assert_eq!(settings.meeting_setup_state, "deferred");
         assert_eq!(settings.meeting_setup_checkpoint, 3);
         assert_eq!(settings.audio.input_device_id.as_deref(), Some("Legacy Microphone"));
@@ -411,6 +389,9 @@ mod tests {
             .save_pretty(&path)
             .expect("migrated settings should save in the current small shape");
         let saved = fs::read_to_string(&path).expect("saved settings should be readable");
+        let saved_json: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        assert!(saved_json.get("source_language").is_none());
+        assert!(saved_json.get("target_language").is_none());
         let _ = fs::remove_file(&path);
 
         for retired in [

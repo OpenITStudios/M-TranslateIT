@@ -1,85 +1,45 @@
-# TranslateIT — integrated application acceptance
+# TranslateIT — Meeting translation focus
 
 ## Current Status
 
-**Integrated developer acceptance stopped at a semantic failure (2026-10-26).**
-Candidate `8582fc2a34f9bc277d792ad39471c1cd6e8777da` passed repository/source
-contracts, frozen npm installation, strict typecheck, 421 frontend tests,
-326 worker tests (2 additional POSIX-only skips), 344 Rust tests (1 ignored
-replay), all three evaluator self-tests and the exact-SHA canonical build.
-The native app launched; public ID→EN Text, Copy acknowledgment and pane-preserving
-Swap were observed. EN→ID completed but added a construction purpose:
-`The budget is fifteen million rupiah.` became
-`Anggaran pembangunannya adalah lima belas juta rupiah.`
-This fails PR-041 semantic fidelity; review hints do not make it accepted.
-Local diagnosis on `ec5c1df3716eba359535525e68b5b948b846f00b` reproduced the
-same addition directly from the pinned canonical model, including the raw
-Meeting-kind provider path without the standalone wrapper. The exact input fits
-one chunk. No prior-turn context or user preference is needed to trigger it;
-this separates the observed error from the retired context-memory feature.
-No model, prompt, decoding policy or phrase replacement has been promoted.
+**Standalone Text removed from the application (2026-10-26).** The owner has
+chosen Meeting voice translation as the product focus and retained MiLMMT;
+model-replacement research/download is no longer the active continuation.
+Normal navigation is Meeting / My Voice / Settings. Text's page, hidden mount,
+setup shortcut, status/readiness branches, frontend bridge/facade/cache/result
+policy and registered Tauri command/module are removed. Caption admission
+rejects retired Text payloads; Meeting captions remain. Settings schema 13 drops
+Text-only source/target direction preferences on ordinary save/clone, retaining
+Meeting incoming directions and audio/setup preferences. Private UserData was
+not migrated or deleted by this repair.
 
-**Retired context/hint surface removed (2026-10-26).** The current repair removes
-stored style/terminology/spoken-term fields and the unused Rust hotword builder,
-projects only active frontend settings, and retires the worker's still-working
-ASR hotwords input. Settings schema 12 reads older files and drops retired fields
-on ordinary save while preserving active preferences; actual UserData was not
-rewritten. Stale skill/routing instructions that demanded last-three-pairs
-injection are reconciled with current foundation. Negative compatibility tests
-and immutable historical benchmark metadata remain as regression evidence.
+Direct text translation remains an internal canonical worker mechanism for
+isolating ASR vs model errors. Existing worker chunk/EOS/size bounds and both
+language directions remain; the internal native verification scheduling tier is
+still used by worker probes, not an application Text feature. No AI/audio/model,
+dependency, voice, route or inference policy was changed.
 
-Proof on the repair working tree: 418 frontend tests, strict typecheck and source
-contracts passed; 75 affected worker tests, six Rust settings tests and 15 agent
-corpus/scorer tests passed; repository verification passed. Twelve real local
-model requests (six matched pairs, both directions across Text and both Meeting
-lane markers) produced identical output with/without malicious legacy context,
-style, terminology, alternative and system-prompt keys. This is controlled
-worker integration proof, not native Meeting acceptance. The model still adds
-construction purpose in the original English input, so semantic quality remains
-**FAIL / OPEN**. Historical 190-case real-model baseline is retained; its 59
-invariant flags include matcher false positives and are not 59 adjudicated errors.
+Verification on the repair working tree: strict Svelte check (zero errors and
+warnings), source contracts, production frontend build, native developer build and 407 frontend tests
+passed; 335 Rust tests passed with one replay ignored; 75 affected worker tests
+and 191-regression/40-held-out evaluator self-tests passed. This proves source
+and fixture boundaries, not rendered native or installed-app acceptance. An
+additional 16 impact-tool tests pass in a hash-recorded view of current tracked
+source. Direct execution in the installed workspace hits the unchanged graph
+capacity because environment/generated source files are scanned too; no analyzer
+limit was raised or source failure hidden. Its temporary source-view cleanup was
+rejected by automatic policy review (`blocked by policy`); the ignored copy stays
+under `.workspace/tmp/remove-text-impact-source-view`, outside application/package.
 
-The run stopped before microphone capture, Meeting Start, independent receiver,
-Mute/source switching, repeated sessions and transcript/export. The app was
-closed normally and the owned process/frontend listener exited. This proves an
-idle close only, not cleanup-incomplete recovery with devices. Matching private
-logs and the public-case receipt are under `.workspace/reports/acceptance-8582fc2a/`;
+**MiLMMT semantic fidelity remains FAIL / OPEN.** The construction-purpose
+addition was previously reproduced from raw canonical inference as well as the
+now-retired Text UI. Keeping MiLMMT and removing Text do not fix that output.
+Beam search and FP32 retained the addition; sentence isolation introduced a
+reference regression and was rejected. The repaired comparison gate catches new
+errors inside already-failed cases; the native budget example is retained in the
+191-case regression corpus. No rejected inference candidate was promoted.
+Private receipts remain under `.workspace/reports/translation-fidelity-723fc247/`;
 [current validation](../docs/knowledge/current-validation.md) owns proof limits.
-
-## Current translation quality investigation
-
-**Quality remains FAIL / OPEN (2026-10-26).** On clean Local
-`723fc247`, isolated same-model experiments rejected beam search (four beams)
-and CUDA FP32 computation as cures: both retain the original unsupported
-construction purpose. Sentence-only Text inference removes that word but changes
-`Yang sebelumnya jangan` into `Don't do that before`, losing the previous-version
-reference. The 190-case matched comparison originally reported no new failing
-cases (59 flags in both sets, character n-gram delta -0.0009), which was an
-unsafe comparison blind spot, not evidence of an acceptable candidate.
-
-The canonical evaluator now detects additional missing literals/concepts,
-forbidden phrases and ordering failures inside already-failed cases. Its real
-captured-output CLI comparison rejects sentence isolation with exit 1 and names
-the newly missing `previous` concept. A red-before-fix self-test reproduces that
-specific blind spot. The native budget-purpose failure is appended to the
-regression corpus; existing cases and the frozen 40-case held-out set are
-unchanged. Fresh canonical worker execution completed all 191 requests and
-correctly flags the original construction-purpose failure. The total 60 flags
-include existing narrow-matcher false positives, not 60 adjudicated model errors.
-No runtime/model/prompt/decoding/segmentation change was promoted; diagnostic
-changes lived only in terminated processes and no experimental dependency or
-model was installed. No additional unused production translation mechanism was
-identified for deletion beyond the previous context/hint cleanup.
-
-A separate model-evaluation decision is pending owner response: evaluate Tencent
-`Hy-MT2-1.8B` offline in a developer-only workspace, not as an application model
-replacement. Its official card lists Indonesian/English and Apache-2.0; weights
-are approximately 4.08 GB. The card recommends Transformers >=5.6.0, whereas the
-current application pins 4.57.6; local mapping/config inspection alone does not
-prove compatible loading. Do not alter the application dependency pin or install
-an experimental runtime before the owner's evaluation choice. No alternative
-weights were downloaded, and no claim of better local quality/memory/latency has
-been made. The application stays on MiLMMT until a separately accepted result.
 
 ## Retained native exit repair
 
@@ -133,7 +93,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Resolve the pending owner choice to evaluate Hy-MT2-1.8B locally as a separate candidate; if accepted, pin its revision, verify isolated runtime compatibility and compare source-only outputs against the retained 191-case MiLMMT baseline before any application change. Freeze a viable candidate before using the 40-case held-out benchmark, and require semantic review plus latency/memory evidence. Do not reintroduce context/style/glossary/ASR hints, phrase replacement or inference-until-PASS. Integrated native acceptance remains stopped until fidelity is accepted.
+Continue MiLMMT semantic-fidelity work through the existing internal worker fixtures for the actual Meeting translation stage, using the retained budget-purpose failure and reference-regression evidence. Keep the current model, no Text application feature, no context/style/glossary/ASR hints and no phrase replacement or inference-until-PASS. Resume the integrated speech-to-Meeting acceptance only after the quality gate is accepted; no replacement-model download, updater work or My Voice training follows automatically.
 
 ## Retained My Voice source candidate (paused)
 

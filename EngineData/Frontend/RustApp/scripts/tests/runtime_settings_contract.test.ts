@@ -45,8 +45,6 @@ test("RuntimeSettings schema version stays aligned with frontend defaults", () =
 
 test("core RuntimeSettings defaults remain aligned", () => {
   for (const [field, value] of [
-    ["source_language", "id"],
-    ["target_language", "en"],
     ["meeting_listen_source_language", "en"],
     ["meeting_listen_target_language", "id"],
     ["meeting_setup_state", "new"],

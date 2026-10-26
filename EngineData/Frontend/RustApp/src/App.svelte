@@ -41,7 +41,6 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
   import Meeting from "./pages/Meeting.svelte";
   import MyVoice from "./pages/MyVoice.svelte";
   import Settings from "./pages/Settings.svelte";
-  import Text from "./pages/Text.svelte";
 
   const applicationController = createApplicationController(defaultSettings());
   const meetingLiveController = createMeetingLiveController();
@@ -78,9 +77,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
         ? "Unavailable"
         : snapshot?.readiness.meetingReady
           ? "Ready"
-          : snapshot?.readiness.textReady
-            ? "Degraded"
-            : snapshot?.readiness.level === "blocked"
+          : snapshot?.readiness.level === "blocked"
               ? "Setup Needed"
               : "Checking",
   );
@@ -173,17 +170,14 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
 
   async function finishFirstSetup(
     next: RuntimeSettings,
-    destination: "meeting" | "text" = "meeting",
   ): Promise<void> {
-    // The chosen task is a navigation preference, not Meeting readiness.
-    // Text still receives its own runtime status after deferred setup is saved.
     booting = true;
     try {
       applicationController.applySettings(next);
       applicationState = applicationController.read();
-      route = destination;
+      route = "meeting";
       await refreshSnapshot(
-        destination === "text" ? "Type or paste text to translate." : "Setup saved.",
+        "Setup saved.",
         next,
       );
     } finally {
@@ -493,8 +487,6 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
             onRefresh={refreshSnapshot}
             onNavigate={navigate}
           />
-        {:else if route === "text"}
-          <!-- Text workspace stays mounted below during navigation. -->
         {:else if route === "my-voice"}
           <MyVoice
             voiceChangesLocked={snapshot.resources.audio_locked || snapshot.voiceBuildActive}
@@ -516,14 +508,6 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
             onNotice={setNotice}
           />
         {/if}
-        <div class={route === "text" ? "" : "hidden"}>
-          <Text
-            settings={snapshot.settings}
-            textStatus={snapshot.readiness.textStatus}
-            onSettingsChange={applySettings}
-            onNotice={setNotice}
-          />
-        </div>
       </div>
     </section>
   </main>

@@ -42,7 +42,7 @@ test("close flow coordination is owned outside App.svelte", () => {
 
 test("runtime product facade remains a thin compatibility surface", () => {
   assert.match(facade, /from "\.\/productAudioFacade"/);
-  assert.match(facade, /from "\.\/productTranslationFacade"/);
+  assert.doesNotMatch(facade, /productTranslationFacade|runProductTranslation/);
   assert.match(facade, /from "\.\/productSetupFacade"/);
   assert.doesNotMatch(facade, /async function probeProductAudioDevice/);
   assert.doesNotMatch(facade, /async function runProductTranslationAlternative/);

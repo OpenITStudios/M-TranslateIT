@@ -11,7 +11,6 @@ index.html
 -> src/App.svelte
    ├─ pages/FirstSetup.svelte
    ├─ pages/Meeting.svelte
-   ├─ pages/Text.svelte
    ├─ pages/MyVoice.svelte
    └─ pages/Settings.svelte
 ```
@@ -55,7 +54,7 @@ No SvelteKit, frontend router, Redux-like state library, heavy UI framework, CSS
 
 ## Product Surface
 
-Normal UI is Meeting / Text / My Voice / Settings, with Setup shown when required. Audio Studio, History/Saved, Documents, tone/mode controls, and developer pipeline controls are not initial core.
+Normal UI is Meeting / My Voice / Settings, with Setup shown when required. Audio Studio, History/Saved, Documents, tone/mode controls, and developer pipeline controls are not initial core.
 
 Meeting lifecycle, settings persistence, audio truth, model/provider truth, My Voice training state, and translation execution remain owned by the existing Rust/Python runtime. Svelte state is presentation/application state only.
 

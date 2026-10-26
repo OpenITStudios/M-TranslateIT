@@ -46,9 +46,9 @@ Meeting also supports **Original Microphone** passthrough over the same selected
 
 Meeting translation uses the current finalized utterance only; prior translated examples are not used as prompt context. Incoming remains context-free. Recognized Meeting turns are automatically retained in separate local session archives (not raw audio) until explicit saved-transcript deletion. A manual offline HTML export is a separate file and remains after source-archive Delete. Meeting Start fails closed if its required archive writer cannot start.
 
-### Text
+### Internal translation verification
 
-Standalone Indonesian ↔ English text translation with explicit direction, Translate, result review, and Copy. Document/file translation is not current scope.
+Direct Indonesian ↔ English text requests are internal worker/developer fixtures for isolating translation from speech recognition. The application exposes no standalone Text workspace.
 
 ### My Voice
 

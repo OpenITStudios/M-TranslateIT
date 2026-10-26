@@ -68,7 +68,7 @@ class ImpactPlanningTests(unittest.TestCase):
         self.assertEqual(plan["manualWorkflowCandidates"], ["repository-verify.yml"])
 
     def test_unregistered_source_cannot_claim_complete_dependency_closure(self):
-        plan = plan_impacted([FRONT + "src/app/runtime/textTranslationCache.ts"])
+        plan = plan_impacted([FRONT + "src/app/runtime/translationOverlayState.ts"])
         self.assertTrue(plan["reviewRequired"])
         self.assertEqual(plan["dependencyCoverage"], "CONSERVATIVE")
         self.assertIn("frontend", plan["domains"])

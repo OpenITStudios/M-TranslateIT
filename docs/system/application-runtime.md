@@ -54,7 +54,7 @@ The floating translation overlay remains frontend-owned. It manages window prese
 
 `ApplicationSnapshot.revision` is a monotonic snapshot-build sequence, not a semantic state-change revision. Use owner/session/generation/domain fields to detect meaningful state transitions.
 
-`ApplicationSnapshot` is a cheap reconciliation contract. Building it may inspect local in-process/native status, but it must not run expensive worker requests, model inference, functional probes, or recovery actions. Cheap capabilities therefore cover only what current local state can prove; detailed Text translation readiness remains owned by the product readiness layer after explicit worker-capability inspection. Deep AI readiness belongs to the product/detail query that explicitly needs it. This keeps close checks, settings mutations, and runtime events bounded and prevents orchestration from creating hidden latency.
+`ApplicationSnapshot` is a cheap reconciliation contract. Building it may inspect local in-process/native status, but it must not run expensive worker requests, model inference, functional probes, or recovery actions. Cheap capabilities therefore cover only what current local state can prove; directional translation capability remains an internal model fact inspected by the product readiness layer; Meeting preflight determines user-facing readiness. Deep AI readiness belongs to the product/detail query that explicitly needs it. This keeps close checks, settings mutations, and runtime events bounded and prevents orchestration from creating hidden latency.
 
 
 ### Event-first Meeting reconciliation
@@ -83,7 +83,7 @@ These controllers may coordinate existing public runtime/query APIs, but they mu
 
 ### Product facade split
 
-`runtimeProductFacade.ts` is a compatibility/public composition surface, not a domain implementation owner. Product audio, text translation, and setup/recovery logic live in `productAudioFacade.ts`, `productTranslationFacade.ts`, and `productSetupFacade.ts` respectively. New unrelated product behavior must not be appended to the root facade by default.
+`runtimeProductFacade.ts` is a compatibility/public composition surface, not a domain implementation owner. Product audio and setup/recovery logic live in `productAudioFacade.ts` and `productSetupFacade.ts` respectively. Direct text translation belongs only to internal worker/developer verification, with no standalone native application command. New unrelated product behavior must not be appended to the root facade by default.
 
 
 ### Product-state policy split

@@ -304,7 +304,6 @@ const productFacadeSource = readFileSync(
 );
 for (const required of [
   'from "./productAudioFacade"',
-  'from "./productTranslationFacade"',
   'from "./productSetupFacade"',
 ]) {
   if (!productFacadeSource.includes(required)) {

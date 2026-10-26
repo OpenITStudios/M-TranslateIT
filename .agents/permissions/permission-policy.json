@@ -63,9 +63,7 @@
       "EngineData/Frontend/RustApp/src/styles/**"
     ],
     "local-ai-runtime-development": [
-      "EngineData/Backend/LocalWorker/WorkerRuntime/**",
-      "EngineData/Frontend/RustApp/src-tauri/src/commands/text_translation.rs",
-      "EngineData/Frontend/RustApp/src/app/bridge/productTranslationFacade.ts"
+      "EngineData/Backend/LocalWorker/WorkerRuntime/**"
     ],
     "windows-audio-runtime-development": [
       "EngineData/Frontend/RustApp/src-tauri/src/engine/audio/**",

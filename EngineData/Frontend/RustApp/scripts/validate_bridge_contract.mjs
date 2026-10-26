@@ -163,7 +163,6 @@ const contractPairs = [
   ["src-tauri/src/commands/audio.rs", "AudioDeviceListReport", "src/app/shared/types.ts", "AudioDeviceListReport"],
   ["src-tauri/src/commands/audio.rs", "AudioDeviceProbeReport", "src/app/bridge/runtimeApi.ts", "AudioDeviceProbeReport"],
   ["src-tauri/src/commands/settings.rs", "AudioDeviceSelectionResult", "src/app/bridge/runtimeApi.ts", "AudioDeviceSelectionCommandResult"],
-  ["src-tauri/src/commands/text_translation.rs", "TextTranslationResult", "src/app/bridge/runtimeApi.ts", "TextTranslationCommandResult"],
   ["src-tauri/src/commands/runtime_inventory.rs", "ModelInventoryItem", "src/app/shared/types.ts", "ModelInventoryItem"],
   ["src-tauri/src/commands/runtime_inventory.rs", "ModelInventoryReport", "src/app/shared/types.ts", "ModelInventoryReport"],
 ];
@@ -187,7 +186,6 @@ const boundaryFiles = [
   "src/app/bridge/runtimeApi.ts",
   "src/app/bridge/runtimeProductFacade.ts",
   "src/app/bridge/productAudioFacade.ts",
-  "src/app/bridge/productTranslationFacade.ts",
   "src/app/bridge/productSetupFacade.ts",
   "src/app/bridge/runtimeProductState.ts",
   "src/app/bridge/productMeetingState.ts",

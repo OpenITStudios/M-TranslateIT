@@ -51,28 +51,19 @@ const firstSetup = readFileSync(new URL("../../src/pages/FirstSetup.svelte", imp
 const setupNavigation = readFileSync(new URL("../../src/components/setup/SetupNavigation.svelte", import.meta.url), "utf8");
 const appShell = readFileSync(new URL("../../src/App.svelte", import.meta.url), "utf8");
 
-test("first launch gives Text its own task entry without completing Meeting setup", () => {
-  const start = firstSetup.indexOf("async function openTextInstead()");
-  const end = firstSetup.indexOf("\n  async function saveSelectedMicrophone()", start);
-  assert.ok(start >= 0 && end > start, "Text entry must use the existing FirstSetup owner");
-  const entry = firstSetup.slice(start, end);
-  assert.match(entry, /persistSetupFact\("deferred", step\)/);
-  assert.match(entry, /if \(saved\) await onComplete\(settings, "text"\)/);
-  assert.doesNotMatch(entry, /persistSetupFact\("completed"/);
-
-  assert.match(setupNavigation, /onOpenText: \(\) => void \| Promise<void>/);
-  assert.match(setupNavigation, /Translate text/);
+test("setup exposes only Meeting setup and honest deferral", () => {
+  assert.doesNotMatch(firstSetup, /openTextInstead|onOpenText|Translate text|destination/);
+  assert.doesNotMatch(setupNavigation, /onOpenText|Translate text/);
   assert.match(setupNavigation, /Set up meeting translation/);
   assert.match(setupNavigation, /Set Up Later/);
+  assert.match(firstSetup, /persistSetupFact\("deferred", step\)/);
 });
 
-test("Text destination is explicit; returning users retain Meeting as the default", () => {
+test("finishing or deferring setup returns to Meeting without claiming readiness", () => {
   const start = appShell.indexOf("async function finishFirstSetup(");
-  const end = appShell.indexOf("\n  async function openMyVoiceFromSetup(", start);
-  assert.ok(start >= 0 && end > start);
+  const end = appShell.indexOf("async function openMyVoiceFromSetup(", start);
   const entry = appShell.slice(start, end);
-  assert.match(entry, /destination: "meeting" \| "text" = "meeting"/);
-  assert.match(entry, /route = destination/);
+  assert.match(entry, /route = "meeting"/);
   assert.match(entry, /await refreshSnapshot/);
-  assert.match(appShell, /let route=\$state<AppRoute>\("meeting"\)/);
+  assert.doesNotMatch(entry, /destination|text/);
 });

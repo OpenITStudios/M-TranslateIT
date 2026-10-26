@@ -51,10 +51,10 @@ function requestNativeOverlayVisible(visible: boolean): Promise<void> {
   return nativeVisibilityTask;
 }
 
-// Meeting termination invalidates its caption without erasing an explicit Text overlay.
+// Meeting termination invalidates the latest caption by revision.
 export async function clearLatestMeetingOverlay(): Promise<void> {
   const previous = latestPresented;
-  if (previous?.source !== "meeting") return;
+  if (!previous) return;
   latestPresented = null;
   const payload: TranslationOverlayClearPayload = { onlyRevision: previous.revision };
   try { await emitTo(OVERLAY_WINDOW_LABEL, TRANSLATION_OVERLAY_CLEAR_EVENT, payload); }

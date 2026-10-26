@@ -264,8 +264,8 @@ mod tests {
     fn audio_preference_change_detects_only_audio_drift() {
         let current = RuntimeSettings::default();
         let mut language_only = current.clone();
-        language_only.source_language = "en".to_string();
-        language_only.target_language = "id".to_string();
+        language_only.meeting_listen_source_language = "id".to_string();
+        language_only.meeting_listen_target_language = "en".to_string();
         assert!(!audio_preferences_changed(&current, &language_only));
 
         let mut input_change = current.clone();

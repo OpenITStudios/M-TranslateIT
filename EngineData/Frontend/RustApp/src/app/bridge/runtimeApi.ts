@@ -62,16 +62,6 @@ export type VirtualMicRouteContractStatus = {
   updated_unix_ms: number;
 };
 
-export type TextTranslationCommandResult = {
-  ok: boolean;
-  state: string;
-  translated_text: string;
-  user_message: string;
-  blocker: string;
-  needs_review: boolean;
-  review_hints: string[];
-};
-
 export type MeetingSessionPreflightStatus = {
   ready_for_start: boolean;
   start_eligible: boolean;
@@ -245,18 +235,6 @@ type NativeInputPreparationStatus = InputPreparationStatus & {
 
 function commandFallback(message: string, state = "frontend_bridge_error"): CommandResult {
   return { ok: false, state, message };
-}
-
-function textTranslationFallback(): TextTranslationCommandResult {
-  return {
-    ok: false,
-    state: "frontend_bridge_error",
-    translated_text: "",
-    user_message: "Translation is unavailable right now. Try again or check Diagnostics.",
-    blocker: "frontend_bridge_unavailable",
-    needs_review: false,
-    review_hints: [],
-  };
 }
 
 function helperWorkerFallback(task: string, message: string): HelperBridgeWorkerResponse {
@@ -534,14 +512,6 @@ export const runtimeApi = {
 
   async selectAudioDevice(kind: "microphone" | "meeting-sound", deviceId: string | null): Promise<AudioDeviceSelectionCommandResult | null> {
     return invokeNullable<AudioDeviceSelectionCommandResult>("select_product_audio_device", { kind, deviceId });
-  },
-
-  async translateText(source: string): Promise<TextTranslationCommandResult> {
-    return invokeOr<TextTranslationCommandResult>(
-      "translate_text",
-      { source },
-      textTranslationFallback(),
-    );
   },
 
   async verifyModels(): Promise<ModelInventoryReport | null> {

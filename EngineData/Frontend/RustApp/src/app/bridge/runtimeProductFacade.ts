@@ -20,9 +20,6 @@ import {
   selectProductAudioDevice,
 } from "./productAudioFacade";
 import {
-  runProductTranslation,
-} from "./productTranslationFacade";
-import {
   runProductRecoveryAction,
   runProductSetupAction,
 } from "./productSetupFacade";
@@ -39,9 +36,6 @@ export {
   selectProductAudioDevice,
 } from "./productAudioFacade";
 export {
-  runProductTranslation,
-} from "./productTranslationFacade";
-export {
   runProductRecoveryAction,
   runProductSetupAction,
 } from "./productSetupFacade";
@@ -51,7 +45,6 @@ export type {
   ProductAudioDeviceProbe,
   ProductAudioDeviceSelectionResult,
 } from "./productAudioFacade";
-export type { ProductTranslationResult } from "./productTranslationFacade";
 export type {
   ProductRecoveryAction,
   ProductSetupAction,
@@ -174,7 +167,6 @@ async function mapApplicationSnapshotToProduct(
   const inputStatus = application.input;
   const meeting = mapProductMeetingState(meetingSession);
   const readiness = mapProductReadiness({
-    settings,
     helper,
     workerStatus,
     inputStatus,
@@ -253,7 +245,6 @@ export const runtimeProductFacade = {
   mapProductMeetingState,
   mapProductReadiness,
   runProductMeetingAction,
-  runProductTranslation,
   runProductSetupAction,
   runProductRecoveryAction,
 };

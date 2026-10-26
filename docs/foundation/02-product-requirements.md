@@ -20,14 +20,14 @@ This file contains **current law only**. Superseded choices belong in `docs/know
 ### PR-001 — Primary use case
 **MUST:** TranslateIT primarily support simple Indonesian ↔ English translation for online meetings.
 
-### PR-002 — Text
-**MUST:** Text remain independently usable without Meeting audio or My Voice.
+### PR-002 — Internal translation verification
+**MUST:** Direct text translation remain an internal worker/developer verification mechanism only. Do not expose a Text workspace, navigation entry, setup shortcut or standalone native application command.
 
 ### PR-003 — Reliability before breadth
 **MUST:** Translation completeness, meaning, safe delivery and truthful readiness outrank extra features/modes.
 
 ### PR-004 — Product boundary
-**MUST:** Normal top-level product remain `Meeting | Text | My Voice | Settings`.
+**MUST:** Normal top-level product remain `Meeting | My Voice | Settings`.
 
 **NOT CURRENT CORE:** Document Translation, general History/Saved UI, Audio Studio, Push to Talk, Pause/Resume, Realtime/Quality user modes, Auto/Casual tone styles, additional languages, partial translated subtitles, incoming Indonesian TTS, imported-audio/quick-clone My Voice, multiple normal voice engines/providers. Style selectors, Spoken Terms, Preferred Words, Meeting Presets and Text floating captions are retired from active product behavior.
 
@@ -37,7 +37,7 @@ This file contains **current law only**. Superseded choices belong in `docs/know
 **MUST:** Windows is the current supported/validated platform.
 
 ### PR-011 — Local-first
-**MUST:** After required assets are installed, ASR, translation, Meeting voice synthesis and Text operate without a required cloud speech/translation/voice API.
+**MUST:** After required assets are installed, ASR, translation, Meeting voice synthesis operate without a required cloud speech/translation/voice API.
 
 ### PR-012 — No silent cloud fallback
 **MUST NOT:** Local failure silently route speech/text/voice data to cloud services.
@@ -52,8 +52,8 @@ This file contains **current law only**. Superseded choices belong in `docs/know
 ### PR-020 — Languages
 **MUST:** Support Indonesian ↔ English only.
 
-### PR-021 — Text directions
-**MUST:** Text support ID→EN and EN→ID.
+### PR-021 — Internal translation directions
+**MUST:** Internal worker fixtures support ID→EN and EN→ID independently of audio, to diagnose the Meeting translation stage.
 
 ### PR-022 — Required outbound Meeting flow
 **MUST:**
@@ -122,7 +122,7 @@ Indonesian speech
 ## 6. Translation
 
 ### PR-040 — One canonical behavior
-**MUST:** Meeting and Text expose one canonical ID ↔ EN translation behavior, not user-selectable model/mode choices.
+**MUST:** Meeting uses one canonical ID ↔ EN translation behavior, not user-selectable model/mode choices.
 
 ### PR-041 — Fidelity priority
 **MUST:** Preserve intended meaning first, then facts/names/numbers/dates/units/URLs/versions/technical terms, then natural grammar.
@@ -131,13 +131,13 @@ Indonesian speech
 **SHOULD:** Common Indonesian/English code-switching and technical terms remain understandable without a speculative glossary subsystem becoming prerequisite.
 
 ### PR-043 — Technical terminology without user bias
-**SHOULD:** Preserve established technical terms through the canonical translator. Stored user terminology and Spoken Terms remain inert; they must not enter Text, Meeting or ASR requests.
+**SHOULD:** Preserve established technical terms through the canonical translator. Stored user terminology and Spoken Terms remain inert; they must not enter translation or ASR requests.
 
 ### PR-044 — Single translation behavior
 **MUST:** Use one natural baseline translation behavior. Do not expose Natural/Formal or other user-selectable style instructions.
 
 ### PR-044A — No alternative text generation UI
-**MUST NOT:** Expose alternative wording or clipboard-to-caption tools on the Text page or normal Quick Actions.
+**MUST NOT:** Expose alternative wording or clipboard-to-caption tools in normal application controls.
 
 ### PR-044B — Truthful output and review
 **MUST NOT:** Treat EOS/response framing as proof of semantic fidelity. Known prompt echoes, language mismatches and incomplete text must be rejected rather than promoted to spoken audio or a reusable result. A generic warning is not a replacement for quality validation.
@@ -147,7 +147,7 @@ Indonesian speech
 
 **MUST:** Incoming Meeting translation remain context-free.
 
-**MUST:** Text remain standalone and not consume Meeting context.
+**MUST:** Internal text fixtures remain standalone and not consume Meeting context.
 
 **MUST NOT:** General History/Saved data become automatic model context.
 
@@ -176,7 +176,7 @@ Indonesian speech
 **MUST:** Commit `Live` only when required outbound path, including selected Meeting voice and route, is actually ready. Duplicate Start must not create another session.
 
 ### PR-054 — Resource priority
-**MUST:** `Meeting outbound > Meeting incoming > Text > diagnostics/setup`; queues remain bounded. My Voice training is outside this live queue and mutually exclusive with Meeting.
+**MUST:** `Meeting outbound > Meeting incoming > internal translation verification > diagnostics/setup`; queues remain bounded. My Voice training is outside this live queue and mutually exclusive with Meeting.
 
 ### PR-055 — Bounded recovery
 **MUST:** Required outbound recovery remain bounded and owned by the canonical Meeting owner. Newer explicit user action beats stale automatic recovery.
@@ -190,10 +190,10 @@ Indonesian speech
 **SHOULD:** Use validated CUDA when beneficial.
 
 ### PR-061 — GPU scope
-**MUST NOT:** NVIDIA GPU be required for app startup or ordinary Text merely because Meeting/My Voice may benefit from it.
+**MUST NOT:** NVIDIA GPU be required for app startup merely because Meeting/My Voice may benefit from it.
 
 ### PR-062 — CPU truth
-**MUST:** Text remain truthful on supported CPU-only operation when the translation runtime is available.
+**MUST:** Internal translation verification remain truthful on supported CPU-only operation when the translation runtime is available.
 
 ### PR-063 — Meeting performance truth
 **MUST:** Report impractical CPU/GPU Meeting performance honestly rather than claiming equivalent realtime behavior.
@@ -266,34 +266,30 @@ Neither TranslateIT's Meeting Sound selector nor its virtual microphone route ch
 ### PR-079 — Display-name collision safety
 **MUST:** In the pinned CPAL name-based runtime, audio discovery and stream preparation agree: duplicate endpoint display names cannot be treated as one usable pinned device. Never silently choose the first same-named input, meeting-sound output or virtual playback endpoint. Stable Windows endpoint-ID migration remains a separate native compatibility and dependency decision.
 
-## 10. Text
+## 10. Internal text verification only
 
-### PR-090 — Explicit action
-**MUST:** Text translate only on explicit Translate.
+### PR-090 — Application boundary
+**MUST NOT:** Expose standalone Text translation in navigation, setup, settings or registered native app commands.
 
-### PR-091 — Simple workflow
-**MUST:** Type/paste → choose direction → Translate → review → Copy.
+### PR-091 — Developer entry
+**MUST:** Exercise current-source-only text through the canonical worker and existing quality/fixture tools, not a hidden application workspace.
 
 ### PR-092 — Result safety
-**MUST:** Older results never overwrite newer user intent; changed source makes prior result visibly previous/outdated.
+**MUST:** Internal translation checks preserve direction and require complete output/EOS; they do not replace speech-flow acceptance.
 
 ### PR-093 — Size truth
-**MUST NOT:** Silently truncate large Text input; expose a clear bounded limit/failure.
+**MUST NOT:** Silently truncate internal text fixtures. Preserve the existing worker's bounded input/chunk/failure contracts.
 
-### PR-094 — Text cache
-**MAY:** Reuse identical Text translations from a small in-memory per-launch cache keyed only by source and translation direction. Cache must be invalidated on translation-contract changes.
-
-**MUST:** Cache remain bounded and process-local. **MUST NOT:** Persist translation results across app launches or use cached Meeting context.
+### PR-094 — No application Text state
+**MUST NOT:** Retain standalone Text UI caches, editable panes or direction preferences in application settings.
 
 ### PR-095 — Quick Translate
-**MUST NOT:** Expose clipboard-to-caption Quick Translate. No retired Quick Translate or alternative-wording native commands may remain registered.
-
-**MUST NOT:** Run a background clipboard watcher.
+**MUST NOT:** Expose clipboard-to-caption Quick Translate, alternative wording or a background clipboard watcher.
 
 ## 11. Privacy and storage
 
 ### PR-100 — Meeting archive scope
-**MUST:** Text remains independent of general History/Saved persistence. Meeting uses a session-specific local archive for recognized transcript entries, not a general conversation History service or automatic translation context.
+**MUST:** Meeting uses a session-specific local archive for recognized transcript entries, not a general conversation History service or automatic translation context.
 
 **MUST:** Original Microphone and TranslateIT Audio each create a session archive before microphone capture. If archive creation or the writer cannot begin, native Meeting Start must reject Live and perform bounded rollback; Original does not require ASR, translation or TTS.
 
@@ -473,7 +469,7 @@ Neither TranslateIT's Meeting Sound selector nor its virtual microphone route ch
 ## 13. UI
 
 ### PR-160 — Navigation
-**MUST:** Meeting | Text | My Voice | Settings.
+**MUST:** Meeting | My Voice | Settings.
 
 ### PR-160A — One on-demand Quick Access
 **MUST:** Quick Access is one small, single-instance popup for in-meeting controls; do not maintain parallel Quick Nav/Quick Actions/Command Palette panels or replicate Sidebar lists. The UI exposes only truthful microphone status, Original/TranslateIT source selection, independent Mute/Unmute, Floating Captions Show/Hide and Start/Stop (with Stop confirmation). Mute is not a third source.
@@ -549,6 +545,6 @@ Neither TranslateIT's Meeting Sound selector nor its virtual microphone route ch
 **MUST:** Static source/config never be reported as target runtime/device/model success when that context did not run.
 
 ### PR-181 — Acceptance boundary
-Target-capable acceptance remains scenario-specific and includes as applicable: physical microphone capture, final ASR, ID→EN and EN→ID translation, built-in voice Meeting use, My Voice train/evaluate/reuse, Meeting Microphone delivery, optional incoming behavior, Stop/Close, end-to-end latency/stability, standalone Text, install/runtime and clean-machine behavior.
+Target-capable acceptance remains scenario-specific and includes as applicable: physical microphone capture, final ASR, ID→EN and EN→ID translation, built-in voice Meeting use, My Voice train/evaluate/reuse, Meeting Microphone delivery, optional incoming behavior, Stop/Close, end-to-end latency/stability, internal translation fixtures, install/runtime and clean-machine behavior.
 
 No arbitrary quality/latency threshold is invented without relevant evidence.

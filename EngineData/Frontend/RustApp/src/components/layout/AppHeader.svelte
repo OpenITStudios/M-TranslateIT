@@ -27,11 +27,9 @@
   const routeTitle = $derived(
     route === "meeting"
       ? "Meeting"
-      : route === "text"
-        ? "Text"
-        : route === "my-voice"
-          ? "My Voice"
-          : "Settings",
+      : route === "my-voice"
+        ? "My Voice"
+        : "Settings",
   );
 </script>
 

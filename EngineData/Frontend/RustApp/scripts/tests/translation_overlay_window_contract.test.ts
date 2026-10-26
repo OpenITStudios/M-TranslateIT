@@ -124,10 +124,10 @@ test("native visibility is serialized and coalesces to the latest user intent", 
   assert.match(overlayRuntime, /await requestNativeOverlayVisible\(readOverlayPreferences\(\)\.visibility !== "hidden"\)/);
 });
 
-test("Meeting end and reset revoke the previous caption, never a newer Text overlay", () => {
+test("Meeting end and reset revoke the previous caption without clearing a newer revision", () => {
   assert.match(meetingLiveController, /void clearLatestMeetingOverlay\(\)/);
   assert.match(meetingLiveController, /await clearLatestMeetingOverlay\(\)/);
-  assert.match(overlayRuntime, /if \(previous\?\.source !== "meeting"\) return/);
+  assert.match(overlayRuntime, /if \(!previous\) return/);
   assert.match(overlayRuntime, /onlyRevision: previous\.revision/);
   assert.match(overlayPage, /onlyRevision && caption\?\.revision !== onlyRevision/);
   assert.match(overlayRuntime, /if \(!caption\) \{\s*await clearLatestMeetingOverlay\(\)/);

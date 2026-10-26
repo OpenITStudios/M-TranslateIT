@@ -18,7 +18,6 @@ Current normal navigation:
 
 ```text
 Meeting
-Text
 My Voice
 Settings
 ```
@@ -56,7 +55,7 @@ Alternate Meeting source: **Original Microphone** passes the selected physical m
 - One canonical translation pipeline with natural baseline wording; no user-facing Realtime/Quality or translation-style modes.
 - Meeting translation currently uses only the finalized source utterance; prior model translations are not prompt context.
 - Incoming translation remains context-free.
-- Text is paste/type only; document/file translation is removed.
+- Direct text translation is internal worker/developer verification only; no Text application workspace or standalone native command.
 - Full English UI copy.
 - Session Listening is the normal Meeting translation capture mode; Original Microphone passthrough and source switching share the same session. Push to Talk and Pause/Resume are outside current scope.
 - Two ready built-in English voices allow day-one Meeting use without My Voice training.

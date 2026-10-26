@@ -19,7 +19,7 @@ This is current source architecture, not a pending migration. `src/App.svelte`, 
 ## Owns
 
 - application shell/lifecycle;
-- Meeting/Text/My Voice/Settings navigation and workspace composition;
+- Meeting/My Voice/Settings navigation and workspace composition;
 - product-level readiness/capability mapping;
 - settings integration;
 - frontend↔Tauri bridge/facade ownership;

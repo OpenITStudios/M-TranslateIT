@@ -29,8 +29,6 @@ test("caption width and contrast persist as bounded presets", () => {
 
 test("floating caption preferences belong directly to Meeting Settings", () => {
   const settings = readFileSync(new URL("../../src/pages/Settings.svelte", import.meta.url), "utf8");
-  const textPage = readFileSync(new URL("../../src/pages/Text.svelte", import.meta.url), "utf8");
   assert.match(settings, /<FloatingCaptionPreferences/);
   assert.match(settings, /Meeting Captions/);
-  assert.doesNotMatch(textPage, /publishTranslationOverlay|Floating caption/);
 });

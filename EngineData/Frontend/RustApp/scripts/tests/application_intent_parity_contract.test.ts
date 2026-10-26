@@ -69,13 +69,10 @@ test("blocked worker recovery is explicit and guarded by active owners", () => {
   assert.match(diagnosticsPage, /onSetupAction\("retry-worker"\)/);
 });
 
-const textCommand = readFileSync(new URL("../../src-tauri/src/commands/text_translation.rs", import.meta.url), "utf8");
 const helperCommand = readFileSync(new URL("../../src-tauri/src/commands/helper_bridge.rs", import.meta.url), "utf8");
 const modelCommand = readFileSync(new URL("../../src-tauri/src/commands/runtime.rs", import.meta.url), "utf8");
 
-test("slow translation, AI worker status and disk inventory are off the UI event thread", () => {
-  assert.match(textCommand, /pub async fn translate_text\(/);
-  assert.match(textCommand, /spawn_blocking\(move \|\| translate_text_blocking\(source\)\)/);
+test("AI worker status and disk inventory are off the UI event thread", () => {
   assert.match(helperCommand, /pub async fn helper_bridge_worker_status\(/);
   assert.match(helperCommand, /spawn_blocking\(\|\| send_worker_task\("status", json!\(\{\}\)\)\)/);
   assert.match(modelCommand, /pub async fn verify_models\(/);

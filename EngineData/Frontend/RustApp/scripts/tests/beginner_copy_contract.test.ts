@@ -11,7 +11,6 @@ const primarySurfaces = [
   "src/App.svelte",
   "src/pages/FirstSetup.svelte",
   "src/pages/Meeting.svelte",
-  "src/pages/Text.svelte",
   "src/pages/MyVoice.svelte",
   "src/components/my-voice/BuiltinVoicePicker.svelte",
   "src/components/my-voice/QuickVoicePreview.svelte",

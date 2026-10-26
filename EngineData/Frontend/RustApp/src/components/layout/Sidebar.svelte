@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AudioLines, Languages, Mic, Settings } from "@lucide/svelte";
+  import { AudioLines, Mic, Settings } from "@lucide/svelte";
   import type { AppRoute } from "../../app/shared/types";
 
   let {
@@ -14,7 +14,6 @@
 
   const items = [
     { route: "meeting" as const, label: "Meeting", description: "Translate your voice in calls", icon: Mic },
-    { route: "text" as const, label: "Text", description: "Translate written text", icon: Languages },
     { route: "my-voice" as const, label: "My Voice", description: "Choose or create the voice others hear", icon: AudioLines },
     { route: "settings" as const, label: "Settings", description: "Microphone, translation, and help", icon: Settings },
   ];
@@ -29,7 +28,6 @@
   function presenceLabel(): string {
     if (presence === "Live") return "Translation is live";
     if (presence === "Ready") return "Ready to translate";
-    if (presence === "Degraded") return "Text translation ready";
     if (presence === "Setup Needed") return "Setup needed";
     if (presence === "Unavailable") return "Unavailable";
     if (presence === "Stop Needed") return "Meeting cleanup needed";

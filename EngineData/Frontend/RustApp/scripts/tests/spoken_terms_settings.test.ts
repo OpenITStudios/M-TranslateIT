@@ -7,17 +7,19 @@ test("settings defaults and cloning discard retired AI preferences", () => {
   const settings = defaultSettings();
   const legacy = {
     ...settings,
+    source_language: "en",
+    target_language: "id",
     translation_style: "formal",
     terminology: [{ indonesian: "arsip", english: "UNTRUSTED_TERM" }],
     spoken_terms: [{ term: "UNTRUSTED_HOTWORD", aliases: [] }],
     context_pairs: [["OLD_SOURCE", "OLD_TARGET"]],
   };
   const cloned = cloneSettings(legacy);
-  for (const retired of ["translation_style", "terminology", "spoken_terms", "context_pairs"]) {
+  for (const retired of ["source_language", "target_language", "translation_style", "terminology", "spoken_terms", "context_pairs"]) {
     assert.equal(Object.hasOwn(settings, retired), false);
     assert.equal(Object.hasOwn(cloned, retired), false);
   }
-  assert.equal(settings.schema_version, 12);
+  assert.equal(settings.schema_version, 13);
   assert.deepEqual(cloned, settings);
   cloned.audio.noise_suppression = "off";
   assert.equal(settings.audio.noise_suppression, "auto");

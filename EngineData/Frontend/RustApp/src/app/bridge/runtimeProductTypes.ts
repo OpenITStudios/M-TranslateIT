@@ -6,11 +6,10 @@ import type {
   RuntimeSettings,
 } from "../shared/types";
 
-export type ProductReadinessLevel = "ready" | "partial" | "blocked" | "checking" | "unavailable";
+export type ProductReadinessLevel = "ready" | "blocked" | "checking" | "unavailable";
 
 export type ProductReadiness = {
   level: ProductReadinessLevel;
-  textReady: boolean;
   helperReady: boolean;
   microphoneReady: boolean;
   asrReady: boolean;
@@ -20,12 +19,10 @@ export type ProductReadiness = {
   meetingRouteReady: boolean;
   meetingReady: boolean;
   approvedVoiceReady: boolean | null;
-  canTranslateText: boolean;
   recording: boolean;
   nextAction: string;
   blockers: string[];
   summary: string;
-  textStatus: string;
   helperStatus: string;
   modelStatus: string;
   microphoneStatus: string;

@@ -12,7 +12,6 @@
     meetingReady,
     onBack,
     onDefer,
-    onOpenText,
     onAdvance,
     onRepair,
     onRefresh,
@@ -27,7 +26,6 @@
     meetingReady: boolean;
     onBack: () => void;
     onDefer: () => void | Promise<void>;
-    onOpenText: () => void | Promise<void>;
     onAdvance: (step: SetupStep) => void | Promise<void>;
     onRepair: () => void | Promise<void>;
     onRefresh: () => void | Promise<void>;
@@ -45,15 +43,9 @@
   </div>
 
   <div class="ti-action-row justify-end">
-    {#if step === 1}
-      <button type="button" class="ti-button ti-button-secondary" disabled={busy} onclick={() => void onOpenText()}>
-        Translate text
-      </button>
-    {:else}
-      <button type="button" class="ti-button ti-button-secondary" disabled={busy} onclick={() => void onDefer()}>
-        Set Up Later
-      </button>
-    {/if}
+    <button type="button" class="ti-button ti-button-secondary" disabled={busy} onclick={() => void onDefer()}>
+      Set Up Later
+    </button>
 
     {#if step === 1}
       <button type="button" class="ti-button" disabled={busy} onclick={() => void onAdvance(2)}>
