@@ -2,6 +2,20 @@
 
 ## Current Status
 
+**Source gate passed; first native run inconclusive (2026-10-26).** Candidate
+`71a731efef24d255fb77dac00257adb8a1abf8b1` passed 407 frontend tests, worker
+compile/static checks, 326 worker tests (two POSIX-only skips), four audio source
+validators, frontend build and locked Rust compile check. Symlink tests required
+a bounded administrator test process and fresh temporary directory; no source
+change was needed. The native dev app actually launched with Built-in Male and
+reached Live. Optional incoming was still Windows Default; the owner confirmed
+YouTube was playing through speakers, so this was not a controlled outbound-only
+baseline. Native callback errors appeared for incoming and later microphone;
+their cause remains UNKNOWN. Mic Test reported Too quiet. Normal Stop could not
+be confirmed because UI automation detected concurrent input; emergency closure
+removed the owned app and worker. No controlled speech/receiver or full-Meeting
+PASS is claimed. Current Validation owns exact proof and residual boundaries.
+
 **Integrated Meeting runbook aligned (2026-10-26).** The existing
 `docs/knowledge/operations/target-windows-performance.md` now groups the next
 native baseline into five flows: readiness/Start, outbound receiver delivery,
@@ -164,7 +178,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Perform candidate admission for the five-flow Meeting baseline in the existing target-Windows runbook: pin one clean Local SHA, establish locked build/runtime/device/receiver prerequisites and identify any source blocker before entering the coordinated local phase. The retained core receipt covers 13 scenarios × 2 rounds at its recorded source, not current native application acceptance. Keep the two REVIEW and six owner-accepted FAIL diagnostics visible; no repeated unchanged translation inference, incremental user-PC testing, CI execution, model replacement, context saver or corrective translation layer follows from this runbook repair.
+In the admitted integrated Windows phase, isolate the first native audio observation: use supported application controls to disable optional incoming and establish an audio environment without unrelated speaker playback, then observe physical capture, built-in Start and confirmed Stop on one pinned candidate. Resolve through the Windows audio owner only if callback errors reproduce; do not infer that YouTube caused the callbacks or repair MiLMMT. This is continuation of the same native phase, not incremental user-PC testing or permission to inject fixtures into production capture. Retain exact revision-scoped source proof, two REVIEW and six owner-accepted FAIL diagnostics; no CI, model/context/style/glossary change or corrective layer is authorized.
 
 ## Retained My Voice source candidate (paused)
 

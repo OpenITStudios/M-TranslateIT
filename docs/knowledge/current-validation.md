@@ -21,6 +21,55 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Integrated candidate source gate and first native observation — 2026-10-26
+
+Executed candidate: clean Local `71a731efef24d255fb77dac00257adb8a1abf8b1`.
+Repository/frontend contracts passed; Svelte reported zero errors/warnings and
+407 frontend tests passed. Worker compile/static checks passed. The first worker
+suite was blocked by missing symlink privilege (`WinError 1314`) and a separate
+access-denied cleanup of an old pytest temporary link. A bounded administrator
+process reran the unchanged complete worker suite with a new temporary directory:
+326 passed, zero failed, two POSIX-only process-group tests skipped on Windows.
+The two symlink-security tests executed successfully; no test was weakened.
+The existing audio source profile passed all four validators. `manage.cmd build`
+rebuilt the frontend and passed `cargo check --locked` with 16 Rust warnings.
+These are **EXECUTED_SOURCE** results, not Rust-unit, linguistic or native-flow
+acceptance. No model/engine/dependency change or new model-quality run occurred.
+
+| Private evidence | SHA-256 |
+|---|---|
+| `.workspace/reports/worker-admission-71a731ef-6a360b3d3eea4657bfcab495a3edb7a3/receipt.json` | `498097af62f11ccbc951f80c4fd86f0b35c13df761541bdb47256d3ba8c261e5` |
+| `.workspace/reports/worker-admission-71a731ef-6a360b3d3eea4657bfcab495a3edb7a3/junit.xml` | `cc321bf2187c0bd34d91fac2a68dff45b0c6ff3ffec2883b0524b36196e87197` |
+| `.workspace/reports/candidate-audio-source-71a731ef-20261026.json` | `42a11a8c38e87d1a1fbc446432205232c092e119561a11197abac9b9f3f229d6` |
+| `.workspace/reports/candidate-compile-71a731ef-f25d8e7a9475485da82a4dc2bcaa6a8c.log` | `3523779d7ea2e44ab2f96ee0ec2cf31071991f618dd22868c783ddaf420cf6fa` |
+
+`manage.cmd run` then actually compiled and launched the native Tauri development
+app at that same candidate. Windows UI observations confirmed Built-in Male
+selected, Mic Test entering/exiting its owned state, and translated Meeting Start
+reaching Live without My Voice training. Microphone quality reported Too quiet.
+The observation at approximately 18 seconds after the Start click is not a
+measured Start-to-Live latency. No controlled spoken turn or independent receiver
+delivery was proved.
+
+This was **not the controlled outbound-only baseline**: optional incoming remained
+on Windows Default, and the owner subsequently confirmed YouTube was playing
+through speakers. Endpoint-wide Meeting Sound can capture that output, and
+speaker sound can also reach the microphone; uncontrolled incoming transcripts
+are not fixture/model-quality evidence. UI reported native callback errors first
+for optional Meeting Sound and later for the required microphone. The underlying
+device/callback cause is **UNKNOWN**; playback alone does not establish that cause
+or a source defect. First separating evidence is a controlled outbound-only run
+with optional incoming disabled through supported application controls and an
+isolated input/output environment. Preserve the existing engine and thresholds.
+
+Normal Meeting Stop remains **NOT VERIFIED**: UI automation reported stale state
+and concurrent user input, preventing confirmed Stop. Emergency cleanup terminated
+only the identified development app; its known worker and WebView processes were
+observed absent afterward. This is not Stop-lifecycle acceptance. Automatic local
+transcript retention occurred; no ambient text/audio was copied into repository
+evidence or deleted. The native flow remains **Perlu pemeriksaan**, not a full
+Meeting PASS; subsequent documentation does not promote this revision's proof.
+
 ### Owner disposition of six translation diagnostics — 2026-10-26
 
 At Local `f9114530e7172931ff1a165d2544e9a752362753`, the owner reviewed the six
