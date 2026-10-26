@@ -579,9 +579,9 @@ def run_translation_quality(python: Path, expected_sha: str, suite: str, timeout
     for index, row in enumerate(evaluation["cases"]):
         ident = row["case_id"]
         stage = rejected.get(ident, {}).get("stage")
-        status = "FAIL" if stage else "UNVERIFIED" if ident not in values else "PASS" if row["critical_pass"] else "FAIL"
+        status = "FAIL" if stage else "UNVERIFIED" if ident not in values else row["quality_status"]
         checks.append({"case_id": ident, "status": status,
-                       "first_wrong_stage": stage or ("worker_execution" if ident not in values else "translation_quality_check" if status == "FAIL" else None),
+                       "first_wrong_stage": stage or ("worker_execution" if ident not in values else "translation_quality_check" if status in ("FAIL", "REVIEW") else None),
                        "requires_linguistic_review": ident in values and not row["critical_pass"],
                        "expected": "complete canonical model output and declared semantic invariants",
                        "evidence": f"#/rejected/{ident}" if stage else f"#/evaluation/cases/{index}"})
@@ -596,8 +596,8 @@ def run_translation_quality(python: Path, expected_sha: str, suite: str, timeout
             "execution_complete": complete, "execution_error": error,
             "elapsed_ms": round((time.monotonic() - started) * 1000),
             "results": records, "rejected": rejected, "evaluation": evaluation, "checks": checks,
-            "counts": {state: sum(row["status"] == state for row in checks) for state in ("PASS", "FAIL", "UNVERIFIED")},
-            "verdict": "PASS" if complete and not evaluation["critical_failures"] else "FAIL"}
+            "counts": {state: sum(row["status"] == state for row in checks) for state in ("PASS", "REVIEW", "FAIL", "UNVERIFIED")},
+            "verdict": evaluation["verdict"] if complete else "FAIL"}
 
 
 def run_source_checks(expected_sha: str) -> dict:

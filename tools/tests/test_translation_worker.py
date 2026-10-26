@@ -122,6 +122,29 @@ class TranslationWorkerTests(unittest.TestCase):
             path.write_text(json.dumps(report), encoding="utf-8")
             self.assertEqual(len(quality.load_result_bundle(path)["results"]), len(report["results"]))
 
+    def test_unrecognized_wording_is_review_and_cannot_silently_pass(self):
+        worker = self.worker()
+        original = worker.invoke.side_effect
+
+        def invoke(**request):
+            response = original(**request)
+            if worker.invoke.call_count == 1:
+                response["translated_text"] = "I meant Thursday instead of Tuesday."
+            return response
+
+        worker.invoke.side_effect = invoke
+        report = self.run_fixture(worker)
+        self.assertTrue(report["execution_complete"])
+        self.assertEqual(report["verdict"], "REVIEW")
+        self.assertEqual(report["counts"]["REVIEW"], 1)
+        self.assertEqual(report["counts"]["FAIL"], 0)
+        self.assertTrue(report["checks"][0]["requires_linguistic_review"])
+        with tempfile.TemporaryDirectory() as folder:
+            argv = ["worker_runner.py", "--translation-suite", "fast", "--python", "canonical-python.exe",
+                    "--source-sha", SHA, "--output", str(Path(folder) / "review.json")]
+            with patch.object(sys, "argv", argv), patch.object(worker_runner, "run_translation_quality", return_value=report), patch("builtins.print"):
+                self.assertEqual(worker_runner.main(), 2)
+
     def test_stale_source_prevents_worker_start(self):
         with patch.object(worker_runner, "pinned_source", side_effect=ValueError("stale source")), patch.object(worker_runner, "Worker") as factory, self.assertRaisesRegex(ValueError, "stale source"):
             worker_runner.run_translation_quality(Path("canonical-python.exe"), SHA, "fast", 120)

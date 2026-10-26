@@ -10,6 +10,42 @@ It deliberately separates **quality measurement** from **quality claims**:
 
 ## Corpus
 
+### Judge meaning, not reference wording
+
+References are examples of faithful translations, not exact output templates.
+There is no percentage-similarity requirement or grammar/style pass threshold.
+Character n-gram F1 remains informational and never decides the quality verdict.
+
+The canonical evaluator and direct worker report distinguish:
+
+- **PASS:** the declared meaning/literal checks are satisfied; accepted synonyms
+  and different sentence structures need not match reference wording.
+- **REVIEW:** a lexical cue or expected ordering was not recognized. This may be
+  a faithful unlisted variant, omission or ambiguity; it is not automatically a
+  mistranslation. Review does not become a silent pass.
+- **FAIL:** empty output, a declared contrary-meaning pattern, or a missing
+  explicitly strict literal is detected. Pattern checks remain bounded and do
+  not replace linguistic adjudication of unexpected wording.
+- **UNVERIFIED:** required evidence/case coverage or provenance is incomplete.
+
+`quality_status`, `quality_counts` and `verdict` are the decision-facing fields.
+The existing `critical_pass`/`critical_failures` fields retain conservative raw
+declared-check signals for regression consumers; they are not counts of confirmed
+semantic errors. REVIEW and FAIL both return nonzero; incomplete worker output,
+changed numbers/roles, and fast-only comparisons retain their admission guards.
+Full comparison also requires the candidate's declared verdict to be PASS;
+unchanged unresolved flags cannot authorize promotion merely because no new
+regression appeared.
+
+Ordinary terminology such as branch/cabang or required/diperlukan belongs in
+accepted meaning-cue alternatives, not exact-byte requirements. `strict_preserve`
+may only name existing `preserve` entries that require exact identity, such as
+the declared filename, email or ticket ID. Other unmatched literals remain review
+signals. Mixed cases need all their meanings checked: accepting diperlukan must
+not hide unresolved Meeting-sound identity, and accepting janganlah/lock file
+must not allow regenerate to become restore. Fixture cue variants are never sent
+to the worker as glossary, style, history or prompt content.
+
 `corpus/translation_quality_v1.json` is a versioned regression set covering both directions and high-risk meeting cases:
 
 - negation and corrections;
@@ -168,7 +204,7 @@ Compare a proposed runtime/prompt/model result set against the exact baseline:
 python tools/translation_quality/evaluate_translation_quality.py compare --corpus tools/translation_quality/corpus/translation_quality_v1.json --baseline <baseline.json> --candidate <candidate.json>
 ```
 
-The comparison reports newly introduced critical-invariant regressions/recoveries plus per-case and grouped character n-gram deltas. Comparison checks new missing literals, missing meaning-cue groups, forbidden phrases and ordering failures even when a baseline case already failed for a different reason. Added failures are named in `critical_regression_details`; fixing one failure cannot cancel a different new failure in the same case. Its promotion-safe flag only means the candidate introduced no new declared critical-invariant failures on a complete matched result set; it is not a claim of overall linguistic superiority.
+The comparison reports newly introduced declared-invariant regressions/recoveries plus per-case and grouped character n-gram deltas. It checks new missing literals, missing meaning-cue groups, forbidden phrases and ordering failures even when a baseline case already flagged a different issue. Added flags are named in `critical_regression_details`; fixing one cannot cancel another. Promotion safety requires a full matched comparison, identified sources, no new declared regression and a candidate verdict of PASS. It is not a claim of overall linguistic superiority or a replacement for bilingual review.
 
 Result format:
 

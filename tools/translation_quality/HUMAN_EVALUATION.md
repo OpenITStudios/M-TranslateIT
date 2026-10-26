@@ -59,6 +59,15 @@ At least one reviewer must be fluent in Indonesian and English. For a release-ch
 
 ## Scoring
 
+Judge whether a reader understands the same message and can take the same
+action. Reference wording, formality, grammatical preference and sentence
+structure need not match. Naturalness is descriptive; it blocks acceptance only
+when wording materially obscures or changes understanding, not for stylistic
+preference. Ordinary technical words may have clear target-language equivalents;
+keep exact identity requirements for actual names, filenames, IDs and other
+explicit literals. Automated REVIEW is unresolved evidence, not a critical error
+or permission to accept an output without checking the remaining meaning.
+
 Score each output from 1–5 on four dimensions:
 
 1. **Meaning fidelity** — preserves the intended proposition, negation, modality, references and conditions.

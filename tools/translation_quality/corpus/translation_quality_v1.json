@@ -369,18 +369,30 @@
         "Jangan regenerasi lockfile atau mengubah kontrak API."
       ],
       "preserve": [
-        "lockfile",
         "API"
       ],
       "required_any": [
         [
-          "jangan"
+          "jangan",
+          "janganlah"
         ],
         [
           "kontrak"
+        ],
+        [
+          "lockfile",
+          "lock file"
+        ],
+        [
+          "regenerasi",
+          "buat ulang",
+          "hasilkan ulang"
         ]
       ],
-      "forbidden": [],
+      "forbidden": [
+        "restorasi",
+        "restore"
+      ],
       "risk_tags": [
         "technical",
         "terminology"
@@ -400,17 +412,24 @@
       ],
       "required_any": [
         [
-          "kirim"
+          "kirim",
+          "hantarkan",
+          "antarkan"
         ],
         [
           "tetap terbuka",
-          "biarkan"
+          "biarkan",
+          "tetap buka"
         ]
       ],
       "forbidden": [],
       "risk_tags": [
         "entity",
         "literal"
+      ],
+      "strict_preserve": [
+        "team@example.com",
+        "MIV-204"
       ]
     },
     {
@@ -422,15 +441,20 @@
         "Tolong cek branch sebelum melakukan push hotfix."
       ],
       "preserve": [
-        "branch",
         "hotfix"
       ],
       "required_any": [
         [
-          "tolong"
+          "tolong",
+          "silakan",
+          "harap"
         ],
         [
           "sebelum"
+        ],
+        [
+          "branch",
+          "cabang"
         ]
       ],
       "forbidden": [],
@@ -607,6 +631,9 @@
       "forbidden": [],
       "risk_tags": [
         "literal"
+      ],
+      "strict_preserve": [
+        "Rencana—Final_v2.1"
       ]
     },
     {
@@ -1029,15 +1056,21 @@
         ],
         [
           "yet",
-          "for now"
+          "for now",
+          "hold off"
         ]
       ],
       "forbidden": [
         "send it now"
       ],
-        "forbidden_exceptions": {
-          "send it now": ["don't send it now", "don’t send it now", "do not send it now", "not send it now"]
-        },
+      "forbidden_exceptions": {
+        "send it now": [
+          "don't send it now",
+          "don’t send it now",
+          "do not send it now",
+          "not send it now"
+        ]
+      },
       "risk_tags": [
         "disfluency",
         "meaning"
@@ -1838,7 +1871,9 @@
       ],
       "forbidden": [
         "I approved that contract.",
-        "I have approved that contract."
+        "I have approved that contract.",
+        "signed the contract",
+        "signed that contract"
       ],
       "risk_tags": [
         "negation",
@@ -2941,7 +2976,8 @@
           "second point"
         ],
         [
-          "go back"
+          "go back",
+          "get back"
         ]
       ],
       "forbidden": [],
@@ -3019,7 +3055,9 @@
           "nanti"
         ]
       ],
-      "forbidden": [],
+      "forbidden": [
+        "batalkan"
+      ],
       "risk_tags": [
         "meeting",
         "meaning"
@@ -3644,16 +3682,24 @@
       "preserve": [],
       "required_any": [
         [
-          "paling banyak"
+          "paling banyak",
+          "maksimal",
+          "maksimum",
+          "tidak lebih dari"
         ],
         [
-          "lima"
+          "lima",
+          "5"
         ],
         [
-          "pending"
+          "pending",
+          "tertunda",
+          "belum selesai"
         ]
       ],
-      "forbidden": [],
+      "forbidden": [
+        "sebagian besar"
+      ],
       "risk_tags": [
         "quantifier",
         "meaning"
@@ -3865,16 +3911,60 @@
           "mikrofon"
         ],
         [
-          "wajib"
+          "wajib",
+          "diperlukan"
         ],
         [
           "opsional"
+        ],
+        [
+          "meeting sound",
+          "suara rapat",
+          "audio rapat",
+          "suara meeting",
+          "audio meeting"
         ]
       ],
-      "forbidden": [],
+      "forbidden": [
+        "mikrofon opsional",
+        "suara rapat wajib",
+        "meeting sound wajib"
+      ],
       "risk_tags": [
         "omission",
         "meaning"
+      ],
+      "ordered_any": [
+        [
+          "mikrofon",
+          [
+            "wajib",
+            "diperlukan"
+          ],
+          [
+            "meeting sound",
+            "suara rapat",
+            "audio rapat",
+            "suara meeting",
+            "audio meeting"
+          ],
+          "opsional"
+        ],
+        [
+          [
+            "meeting sound",
+            "suara rapat",
+            "audio rapat",
+            "suara meeting",
+            "audio meeting"
+          ],
+          "opsional",
+          "mikrofon",
+          [
+            "wajib",
+            "diperlukan"
+          ]
+        ]
       ]
     },
     {
@@ -4436,7 +4526,8 @@
           "mungkin"
         ],
         [
-          "untuk sekarang"
+          "untuk sekarang",
+          "untuk saat ini"
         ]
       ],
       "forbidden": [],

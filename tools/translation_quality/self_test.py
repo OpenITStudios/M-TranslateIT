@@ -24,6 +24,36 @@ def main() -> int:
     corpus = evaluator.load_corpus(CORPUS)
     validation = evaluator.validate_corpus(corpus)
     assert validation["ok"], validation
+    cases_by_id = {case["id"]: case for case in corpus["cases"]}
+    faithful_variants = {
+        "en-id-entity-001": "Hantarkan laporan tersebut ke team@example.com dan tetap buka tiket MIV-204.",
+        "en-id-code-switch-001": "Silakan periksa cabang sebelum Anda meng-push hotfix tersebut.",
+        "id-en-disfluency-001": "So, uh, maybe we should hold off on this one; don't send it now.",
+        "id-en-meet-015": "Can we get back to the second point for a moment?",
+        "en-id-dis-011": "Jadi, um, mungkin sebaiknya tetap tidak berubah untuk saat ini.",
+        "en-id-technical-001": "Janganlah membuat ulang lock file atau mengubah kontrak API.",
+        "en-id-omit-011": "Mikrofon diperlukan; suara rapat opsional.",
+    }
+    for ident, translated in faithful_variants.items():
+        result = evaluator.invariant_result(cases_by_id[ident], translated)
+        assert result["quality_status"] == "PASS", (ident, result)
+        assert evaluator.char_ngram_f1(translated, cases_by_id[ident]["references"][0]) < 1
+    meaning_changes = {
+        "en-id-technical-001": "Janganlah merestorasi file lock file atau mengubah kontrak API.",
+        "id-en-unicode-001": "The file name is Plan—Final_v2.1 and the symbol is © 2026.",
+        "id-en-negation-010": "I haven't signed the contract yet.",
+        "en-id-meet-010": "Mari kita batalkan topik ini dan kembali membicarakannya nanti.",
+        "en-id-quant-011": "Sebagian besar hanya ada lima item yang masih belum selesai diproses.",
+        "en-id-omit-011": "Mikrofon opsional; suara rapat wajib.",
+        "en-id-budget-purpose-001": "Anggaran pembangunannya adalah lima belas juta rupiah.",
+    }
+    for ident, translated in meaning_changes.items():
+        assert evaluator.invariant_result(cases_by_id[ident], translated)["quality_status"] == "FAIL", ident
+    ambiguous = evaluator.invariant_result(cases_by_id["en-id-omit-011"], "Mikrofon diperlukan; sambungan audio opsional.")
+    assert ambiguous["quality_status"] == "REVIEW"
+    assert ambiguous["missing_concepts"]  # accepting required/diperlukan must not erase the unresolved sound concept
+    changed_entity = evaluator.invariant_result(cases_by_id["en-id-entity-001"], "Kirim laporan ke other@example.com dan biarkan tiket MIV-204 tetap terbuka.")
+    assert changed_entity["quality_status"] == "FAIL"
     fast = evaluator.select_suite(corpus, "fast")
     assert len(fast["cases"]) < len(corpus["cases"])
     assert {"en-id-budget-purpose-001", "en-id-meet-010", "id-en-informal-workplace-005"}.issubset(
@@ -91,12 +121,23 @@ def main() -> int:
     assert report["complete_result_set"] is True
     assert report["critical_failures"] == 0
     assert report["critical_pass_rate"] == 1.0
+    assert report["verdict"] == "PASS"
+    assert report["quality_counts"]["REVIEW"] == report["quality_counts"]["FAIL"] == 0
     assert report["corpus_fingerprint"] == fingerprint
     assert report["provenance_matches_corpus"] is True
     assert report["group_critical_pass_rates"]["id-en"] == 1.0
     assert report["group_critical_pass_rates"]["contextual_meeting"] == 1.0
     assert report["risk_tag_critical_pass_rates"]["meaning"] == 1.0
     assert report["risk_tag_critical_pass_rates"]["number"] == 1.0
+    unresolved = {**perfect, "id-en-correction-001": "I meant Thursday instead of Tuesday."}
+    unresolved_comparison = evaluator.compare_reports(
+        corpus, unresolved, unresolved,
+        baseline_corpus_fingerprint=fingerprint, candidate_corpus_fingerprint=fingerprint,
+        baseline_source_identity="baseline-sha", candidate_source_identity="candidate-sha",
+    )
+    assert not unresolved_comparison["critical_regressions"]
+    assert unresolved_comparison["candidate_quality_counts"]["REVIEW"] == 1
+    assert not unresolved_comparison["promotion_safe_on_declared_critical_invariants"]
 
     mismatched = evaluator.evaluate(
         corpus,
@@ -171,6 +212,14 @@ def main() -> int:
                 assert "invalid forbidden phrase exceptions" in str(error), error
             else:
                 raise AssertionError(f"accepted unsafe exception contract: {exceptions}")
+        invalid = {**corpus, "cases": [{**cases_by_id["en-id-entity-001"], "strict_preserve": ["undeclared literal"]}]}
+        invalid_path.write_text(json.dumps(invalid), encoding="utf-8")
+        try:
+            evaluator.load_corpus(invalid_path)
+        except ValueError as error:
+            assert "strict literals must be declared" in str(error), error
+        else:
+            raise AssertionError("accepted an undeclared strict literal")
 
     candidate = dict(perfect)
     candidate["id-en-negation-001"] = "I will attend the meeting tomorrow."

@@ -2,6 +2,26 @@
 
 ## Current Status
 
+**Meaning-first evaluation adjusted (2026-10-26).** Owner clarification:
+understandable, faithful translations may differ from reference wording; grammar
+or lexical similarity is not an acceptance target. Existing grader/direct worker
+reports now distinguish PASS / REVIEW / FAIL / UNVERIFIED. Missing cue/order
+matches require review, while declared contrary meanings and explicitly strict
+identity literals fail. REVIEW cannot produce zero-exit acceptance. Existing raw
+critical-check fields remain conservative regression signals, not model-error
+counts. No production model/prompt/context behavior changed.
+Full comparison also requires candidate PASS; unchanged REVIEW/FAIL cannot
+authorize promotion through the no-new-regression check alone.
+
+Eleven existing contracts now accept clear variants and protect mixed meanings.
+The prior 28 actual outputs regrade to 20 PASS / 2 REVIEW / 6 detected pattern or
+literal FAIL; five lexical false alarms are removed. Meeting-sound wording and
+the previous-version approval ellipsis remain REVIEW. All 191 requests, fast
+membership and frozen held-out bytes are unchanged. This is revised measurement,
+not improved model output or human acceptance. Evaluator self-tests, 39 source
+contract tests and actual PASS/REVIEW/FAIL CLI controls pass. New inference was
+unnecessary; current validation owns original/source/grader identity and receipts.
+
 **Lean, effective testing-system goal delivered (2026-10-26).** Source candidate
 `81a16a50d8ccfd4c51453e3ba69109081b1c4a7b` passed exact-source admission and
 fresh model/fixture acceptance. Existing `worker_runner.py` is the execution owner:
@@ -124,7 +144,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Review the 13 fresh fast-suite quality flags against their exact source/output pairs before proposing a MiLMMT change. Separate faithful wording rejected by narrow checks, demonstrated meaning errors and unresolved interpretation; preserve critical contrary controls and keep full/held-out/native gates conditional on an actual candidate. No model replacement, prompt context/style/glossary, automatic retry or phrase replacement follows from completed test-system work.
+Review the two unresolved meaning cases (Meeting-sound terminology and previous-version approval ellipsis) against their source/output before accepting or changing their contracts. Preserve detected action/literal/addition failures and run full/held-out/native gates only for an actual behavior-changing candidate. No model replacement, prompt context/style/glossary, automatic retry or phrase replacement follows from this measurement repair.
 
 ## Retained My Voice source candidate (paused)
 

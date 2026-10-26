@@ -21,6 +21,60 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Meaning-first quality verdict calibration — 2026-10-26
+
+Parent Local `87b5e3e870750d71867d90835f169ddde56793eb`. Owner clarified that
+clear equivalent meaning, rather than reference similarity or preferred grammar,
+owns acceptance. The existing evaluator now reports `quality_status` and grouped
+`quality_counts`: absent lexical/order cues require REVIEW; empty output,
+explicit contrary-pattern hits or missing declared strict identity literals FAIL.
+PASS is limited to declared checks. Missing/provenance-incomplete evidence remains
+UNVERIFIED. N-gram similarity is not a verdict input. Existing raw critical-check
+fields remain conservative regression signals, not confirmed semantic-error counts.
+Direct worker summaries preserve REVIEW as distinct and nonzero-exit; transport,
+completion/EOS/model identity and fast-promotion guards are unchanged.
+Full comparison now also refuses promotion with any unresolved candidate REVIEW
+or detected FAIL, even if baseline and candidate have identical flags; source
+controls verify this independently of new-regression detection.
+
+Eleven existing contracts accept clear target-language alternatives and improve
+mixed-meaning protection. Hantarkan/tetap buka, branch/cabang with silakan,
+hold off, get back and untuk saat ini pass; changed action, quoted filename,
+approval/signature, defer/cancel, upper bound and added construction purpose remain
+detected. Required/diperlukan alone cannot accept a lost Meeting-sound concept;
+that actual wording remains REVIEW rather than a claimed proved mistranslation.
+Fixture aliases are not emitted to the model. No corpus case, source text,
+direction, fast membership, reference or frozen held-out text was changed.
+
+Executed source evidence: evaluator self-tests passed 191 regression/40 held-out;
+39 audio/translation source-contract tests passed. Faithful controls with
+similarity below 1 pass, contrary and strict-literal controls fail, an ambiguous
+complete worker run reports REVIEW, and REVIEW cannot exit successfully. Three
+actual CLI synthetic controls produced PASS/exit 0, REVIEW/exit 1 and FAIL/exit 1.
+Runner/test Ruff pass; evaluator retains the parent's two TRY004 recommendations.
+
+Explicit offline regrading preserves original `81a16a50` captured model identity
+and receipt: the same 28 outputs yield 20 PASS, 2 REVIEW, 6 detected pattern/literal
+FAIL, zero missing. Five faithful variants recover from lexical false alarms.
+The two review cases are `en-id-omit-011` and `id-en-informal-workplace-005`.
+Historical 191-output regrading yields 137/48/6 respectively; these are declared
+decision classes, not measured true translation accuracy. All 191 emitted worker
+requests and selected requests were proven unchanged; no inference was rerun.
+Original runtime receipts were not rewritten or relabeled as new inference.
+
+| Private evidence | SHA-256 |
+|---|---|
+| `.workspace/reports/meaning-first-final-87b5e3e.json` | `88ff36993860efe9a8b744fb074bdc1947116d7986f1b54591ab606913be29d7` |
+| `.workspace/reports/meaning-first-cli-87b5e3e/receipt.json` | `59e685008164c58ba3dd4ac9180a11d233da1afb2f177d8696dd26ca7c348a59` |
+
+Source log: `.workspace/reports/meaning-first-source-final.log`. New full/fast
+fingerprints are `9f4508a0b24e2f0555ff2ad00c53f02f409f3390653af15d636020e10569bd67`
+and `84282fbde4df68e5c3fde5801e8020354b4929c22887a00d2a5a595d4b35191f`.
+Proof ceiling: **EXECUTED_SOURCE / historical-output regrading**. No production,
+model, dependency, audio algorithm, fresh runtime or native/perceptual proof changed.
+Unexpected paraphrases still need review; these literal checks are not a general
+semantic oracle, and previous model-error counts must not be inferred from them.
+
 ### Lean testing-system completion audit — 2026-10-26
 
 Executable source: clean Local `81a16a50d8ccfd4c51453e3ba69109081b1c4a7b`.

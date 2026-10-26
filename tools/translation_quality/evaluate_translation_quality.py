@@ -75,6 +75,9 @@ def load_corpus(path: Path) -> dict:
         for field in ("preserve", "required_any", "forbidden"):
             if field not in case:
                 raise ValueError(f"{case_id}: missing {field}")
+        strict = case.get("strict_preserve", [])
+        if not isinstance(strict, list) or any(not isinstance(item, str) or item not in case["preserve"] for item in strict):
+            raise ValueError(f"{case_id}: strict literals must be declared in preserve")
         exceptions = case.get("forbidden_exceptions", {})
         if not isinstance(exceptions, dict) or any(
             cue not in case["forbidden"] or not isinstance(phrases, list) or not phrases
@@ -217,7 +220,11 @@ def invariant_result(case: dict, translated: str) -> dict:
         ordered_match = any(re.search(
             r".*?".join(ordered_cue_pattern(cue) for cue in sequence), ordered_text
         ) is not None for sequence in case["ordered_any"])
+    passed = bool(norm) and not missing_literals and not missing_concepts and not forbidden_hits and ordered_match
+    strict_missing = any(item in case.get("strict_preserve", []) for item in missing_literals)
+    quality_status = "FAIL" if not norm or forbidden_hits or strict_missing else "PASS" if passed else "REVIEW"
     return {
+        "quality_status": quality_status,
         "missing_literals": missing_literals,
         "missing_concepts": missing_concepts,
         "forbidden_hits": forbidden_hits,
@@ -231,7 +238,7 @@ def invariant_result(case: dict, translated: str) -> dict:
             )
             if present
         ],
-        "critical_pass": not missing_literals and not missing_concepts and not forbidden_hits and ordered_match,
+        "critical_pass": passed,
     }
 
 
@@ -328,6 +335,8 @@ def evaluate(
     for case in corpus["cases"]:
         translated = results.get(case["id"], "")
         inv = invariant_result(case, translated)
+        if case["id"] not in results:
+            inv["quality_status"] = "UNVERIFIED"
         score = max((char_ngram_f1(translated, ref) for ref in case["references"]), default=0.0)
         if not inv["critical_pass"]:
             critical_failures += 1
@@ -350,6 +359,10 @@ def evaluate(
         not result_corpus_fingerprint
         or result_corpus_fingerprint == expected_fingerprint
     )
+    complete = not missing and not unknown and provenance_matches
+    quality_counts = {state: sum(row["quality_status"] == state for row in rows)
+                      for state in ("PASS", "REVIEW", "FAIL", "UNVERIFIED")}
+    verdict = "UNVERIFIED" if not complete else "FAIL" if quality_counts["FAIL"] else "REVIEW" if quality_counts["REVIEW"] else "PASS"
     return {
         "schema": "translateit.translation_quality.report.v1",
         "selection": corpus.get("selection"),
@@ -357,7 +370,9 @@ def evaluate(
         "result_corpus_fingerprint": result_corpus_fingerprint or None,
         "source_identity": source_identity or None,
         "provenance_matches_corpus": provenance_matches,
-        "complete_result_set": not missing and not unknown and provenance_matches,
+        "complete_result_set": complete,
+        "quality_counts": quality_counts,
+        "verdict": verdict,
         "missing_case_ids": missing,
         "unknown_case_ids": unknown,
         "critical_failures": critical_failures,
@@ -376,7 +391,7 @@ def evaluate(
             for key, values in sorted(risk_grouped_critical.items())
         },
         "cases": rows,
-        "note": "Character n-gram F1 and declared invariants are regression signals, not standalone proof of translation quality.",
+        "note": "Similarity is informational. Missing lexical cues require REVIEW; declared contrary patterns or missing strict literals FAIL. Legacy critical_failures counts unmatched checks, not confirmed meaning errors. PASS is limited to declared checks, not general semantic proof.",
     }
 
 
@@ -481,6 +496,7 @@ def compare_reports(
         "candidate_provenance_matches_corpus": candidate["provenance_matches_corpus"],
         "baseline_critical_failures": baseline["critical_failures"],
         "candidate_critical_failures": candidate["critical_failures"],
+        "candidate_quality_counts": candidate["quality_counts"],
         "critical_regressions": critical_regressions,
         "critical_regression_details": critical_regression_details,
         "critical_recoveries": critical_recoveries,
@@ -507,6 +523,7 @@ def compare_reports(
             and bool(candidate["source_identity"])
             and baseline["provenance_matches_corpus"]
             and candidate["provenance_matches_corpus"]
+            and candidate["verdict"] == "PASS"
             and not critical_regressions
         ),
         "note": (
@@ -598,7 +615,7 @@ def main() -> int:
         source_identity=result_bundle["source_identity"],
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 0 if report["complete_result_set"] and report["critical_failures"] == 0 else 1
+    return 0 if report["verdict"] == "PASS" else 1
 
 
 if __name__ == "__main__":
