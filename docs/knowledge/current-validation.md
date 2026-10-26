@@ -49,6 +49,27 @@ Changed native capture/status/Stop acceptance is **NOT EXECUTED** on this candid
 The two historical native drops remain unattributed, and the separate incoming
 native error/uncontrolled recognized phrases retain their earlier limits.
 
+**Exact-source admission update:** clean
+`ce2beb57c95c7df6d380a11a0bdebe4e90cbd9a9` passed the locked frontend/Rust build
+and frontend quick 408 checks. A fresh default-parallel Rust run then returned
+**335 passed / 4 failed / 1 ignored**. The first failure was scheduler deadline
+test `waiting_meeting_incoming == 0` observing one; the other scheduler and bridge
+contract failures followed a poisoned shared scheduler lock. Scheduler tests use
+their own serial guard while bridge contracts also access the global scheduler;
+this is an isolation hypothesis, not a proved production audio regression.
+A separating `cargo test ... helper_bridge -- --test-threads=1` passed 32 tests;
+it does not erase or replace the failed full-suite admission result. This
+independent helper/scheduler test boundary requires its own bounded diagnosis;
+no scheduler/runtime change was made under the audio repair.
+
+Private exact-source logs: `.workspace/reports/pcm-status-native-ce2beb57-build.log`,
+`pcm-status-ce2beb57-rust.log`, `pcm-status-ce2beb57-frontend.log` and
+`pcm-status-ce2beb57-helper-serial.log`. Developer launch succeeded, but the user
+stopped Computer Use before Start and requested work without PC control. No
+native capture/export/Stop outcome was collected for this source. Further UI
+interaction is deferred under that instruction; no microphone action or manual
+user testing is requested. Goal completion remains unproved.
+
 ### Controlled status/callback contention reproduction — 2026-10-26
 
 The candidate based on `4dae67517a7294339c268659f55779666895c4e0` extends the
