@@ -2,6 +2,16 @@
 
 ## Current Status
 
+**Owner accepts the six discussed translation limitations for continued development
+(2026-10-26).** Keep MiLMMT and its natural current-source translation behavior.
+Do not pursue these six outputs with phrase substitutions, added prompt rules,
+context/history saving, style/glossary injection or a second corrective engine.
+This is a bounded owner acceptance of the inspected outputs, not permission to
+accept every future action/number/identity error. Current Validation records the
+exact cases and evidence boundary. Retain the original 20 PASS / 2 REVIEW / 6 FAIL
+diagnostics; they do not require runtime repair before continuing Meeting testing.
+No automatic PASS override, promotion-gate bypass or release acceptance follows.
+
 **Meaning-first evaluation adjusted (2026-10-26).** Owner clarification:
 understandable, faithful translations may differ from reference wording; grammar
 or lexical similarity is not an acceptance target. Existing grader/direct worker
@@ -47,8 +57,9 @@ The independent completion audit verified unchanged 191 requests, unchanged
 held-out and production source, identity-bound receipts and scope limits.
 `current-validation.md` owns receipt hashes and requirement-by-requirement proof.
 
-This closes the testing-system goal. MiLMMT linguistic quality remains FAIL/OPEN;
-flags are not automatically adjudicated errors. Full/held-out inference was not
+This closes the testing-system goal. MiLMMT's declared quality checks retain
+their flags; the six inspected failures are owner-accepted development limitations
+as described above, not a new engine-repair task. Full/held-out inference was not
 repeated after unchanged model behavior. Human bilingual review, naturalness,
 physical capture, installed-app and independent-receiver gates remain separate
 product acceptance, not a reason to repeat source/endurance tests blindly.
@@ -144,7 +155,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Review the two unresolved meaning cases (Meeting-sound terminology and previous-version approval ellipsis) against their source/output before accepting or changing their contracts. Preserve detected action/literal/addition failures and run full/held-out/native gates only for an actual behavior-changing candidate. No model replacement, prompt context/style/glossary, automatic retry or phrase replacement follows from this measurement repair.
+Map the existing 13 core audio scenarios and their retained evidence to the canonical Meeting acceptance scenarios to identify the smallest remaining end-to-end proof. Keep the two lexical REVIEW signals and six owner-accepted FAIL diagnostics visible; do not rerun unchanged translation inference or repair the engine merely to clear them. Native/install/receiver proof remains separate and unexecuted until its admitted integrated phase; no incremental user-PC testing, model replacement, context saver or corrective translation layer is authorized.
 
 ## Retained My Voice source candidate (paused)
 

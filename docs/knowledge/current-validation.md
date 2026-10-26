@@ -21,6 +21,37 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Owner disposition of six translation diagnostics — 2026-10-26
+
+At Local `f9114530e7172931ff1a165d2544e9a752362753`, the owner reviewed the six
+discussed outputs, considered them understandable/minor for this stage, and
+authorized continuation without piecemeal engine intervention. This disposition
+is limited to the retained outputs identified below; it does not establish that
+their meanings are equivalent or that similar future errors are acceptable.
+
+| Retained case | Discussed limitation |
+|---|---|
+| `en-id-technical-001` | Regenerate rendered as restore |
+| `id-en-unicode-001` | Quoted filename translated |
+| `id-en-negation-010` | Approve rendered as sign |
+| `en-id-meet-010` | Temporary topic deferral rendered as cancellation |
+| `en-id-quant-011` | Maximum-five constraint obscured |
+| `en-id-budget-purpose-001` | Construction purpose added to unspecified budget |
+
+Evidence identity remains the original captured `81a16a50` outputs and the
+`meaning-first-final-87b5e3e.json` regrading receipt below. The diagnostic counts
+remain **20 PASS / 2 REVIEW / 6 FAIL**, with zero missing. No new inference,
+linguistic improvement, independent bilingual acceptance or native acceptance
+was executed by recording this decision. The two lexical REVIEW cases remain
+unresolved diagnostics, not an instruction to modify the engine.
+
+Continue Meeting verification with these known development limitations visible.
+Keep the model, prompt, decoding and current-source-only boundary unchanged; no
+context saver, style/glossary injection, phrase patch, corrective model or grading
+override is introduced. Automated promotion guards and foundation fidelity goals
+remain intact. This is owner disposition for continued development, not a passing
+quality receipt or release authorization.
+
 ### Meaning-first quality verdict calibration — 2026-10-26
 
 Parent Local `87b5e3e870750d71867d90835f169ddde56793eb`. Owner clarified that
