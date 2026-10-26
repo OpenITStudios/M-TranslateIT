@@ -2,6 +2,18 @@
 
 ## Current Status
 
+**Capture-health classification repaired at source (2026-10-26).** Native callback
+errors, PCM drop counts and speech-pipeline blockers are now separate in the
+existing capture reports. Health keeps actual native-device failures actionable;
+internal PCM loss is degraded capture, not a lost microphone. The existing notice
+monitor surfaces degraded capture, incoming preserves pipeline-failure evidence,
+and explicit Diagnostics export includes per-lane numeric counts without raw
+callback text/device identity. Two production status-projection tests reproduced
+the old conflation before repair. Rust tests passed 338/one ignored, frontend 408,
+with source contracts and typechecking passing. Native cause remains unverified
+until the separated counters are observed on a clean candidate; no PCM transport,
+VAD threshold, engine/model/prompt, incoming toggle or retry behavior changed.
+
 **No-speech Start/Stop exercised (2026-10-26).** Native candidate
 `535a3daab89f61985abb4b9bfdc27ec83de86362` launched with Built-in Male and
 reached Live, but the required-microphone callback warning reproduced with no
@@ -189,7 +201,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Diagnose the reproduced required-microphone callback warning at the existing Windows capture/health owner, using the underlying native error and per-session capture observations to separate real stream failure from stale/misclassified health evidence. Do not blame YouTube, modify MiLMMT, add an incoming toggle or invent an outbound-only result. Continue within the admitted integrated phase without requiring user speech or new incremental PC tests. Retain the successful normal Stop observation, exact revision-scoped source proof, two REVIEW and six owner-accepted FAIL diagnostics; no CI, fixture injection or model/context/style/glossary/corrective layer is authorized.
+On the clean repaired candidate in the admitted integrated phase, run one no-speech Built-in Male Start/Stop and explicit Diagnostics export; inspect the separate native-error and PCM-drop counts to identify the actual callback-warning source. Preserve normal Stop, session identity and privacy. Incoming remains automatic; no outbound-only or translation-quality claim follows. No CI, model/context/style/glossary change, incoming toggle or corrective translation layer is authorized.
 
 ## Retained My Voice source candidate (paused)
 

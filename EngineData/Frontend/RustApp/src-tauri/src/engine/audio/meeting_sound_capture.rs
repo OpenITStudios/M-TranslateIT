@@ -32,6 +32,7 @@ pub struct MeetingSoundCaptureStatus {
     pub suppression_active: bool,
     pub callback_error_count: usize,
     pub latest_callback_error: Option<String>,
+    pub pcm_drop_count: u64,
     pub blocker: String,
     pub note: String,
 }
@@ -559,6 +560,18 @@ fn select_output_device(host: &cpal::Host) -> Result<cpal::Device, String> {
 }
 
 fn build_status_from_guard(runtime: Option<&MeetingSoundCaptureRuntime>) -> MeetingSoundCaptureStatus {
+    build_status_with_capture_health(
+        runtime,
+        runtime.map_or(0, |_| super::finalized_utterance::finalized_pcm_drop_count(true)),
+        runtime.and_then(|_| super::finalized_utterance::finalized_speech_fault(true)),
+    )
+}
+
+fn build_status_with_capture_health(
+    runtime: Option<&MeetingSoundCaptureRuntime>,
+    pcm_drop_count: u64,
+    speech_fault: Option<String>,
+) -> MeetingSoundCaptureStatus {
     match runtime {
         Some(runtime) => {
             let errors = runtime
@@ -580,14 +593,13 @@ fn build_status_from_guard(runtime: Option<&MeetingSoundCaptureRuntime>) -> Meet
                 suppressed_frames: runtime.suppressed_frames.load(Ordering::Relaxed),
                 suppression_active: runtime.suppression.load(Ordering::Acquire),
                 callback_error_count: runtime.callback_error_epoch.load(Ordering::Acquire)
-                    .saturating_add(super::finalized_utterance::finalized_pcm_drop_count(true))
                     .min(usize::MAX as u64) as usize,
-                latest_callback_error: super::finalized_utterance::finalized_speech_fault(true).or_else(|| errors.last().cloned())
-                    .or_else(|| (super::finalized_utterance::finalized_pcm_drop_count(true) > 0).then(|| "silero:pcm_discontinuity".to_string())),
+                latest_callback_error: errors.last().cloned(),
+                pcm_drop_count,
                 blocker: if runtime.cleanup_pending {
                     "meeting_sound:cleanup_pending".to_string()
                 } else {
-                    super::finalized_utterance::finalized_speech_fault(true).unwrap_or_default()
+                    speech_fault.unwrap_or_default()
                 },
                 note: if runtime.cleanup_pending {
                     "Meeting Sound thread exit is unconfirmed; old session ownership remains reserved until Retry Stop succeeds.".to_string()
@@ -646,6 +658,7 @@ fn inactive_status(blocker: &str, note: &str) -> MeetingSoundCaptureStatus {
         suppression_active: false,
         callback_error_count: 0,
         latest_callback_error: None,
+        pcm_drop_count: 0,
         blocker: blocker.to_string(),
         note: note.to_string(),
     }
@@ -677,6 +690,33 @@ mod isolation_tests {
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
+
+    #[test]
+    fn capture_status_separates_native_errors_from_pcm_loss() {
+        use super::*;
+        let (stop_tx, _) = mpsc::channel();
+        let runtime = MeetingSoundCaptureRuntime {
+            stop_tx, capture_thread: None, cleanup_pending: false, session_id: "incoming-test".into(),
+            device_name: None, sample_rate_hz: 48_000, channels: 1, sample_format: "f32".into(),
+            started_unix_ms: current_unix_ms(), frames_received: Arc::new(AtomicU64::new(48_000)),
+            suppressed_frames: Arc::new(AtomicU64::new(0)), suppression: Arc::new(AtomicBool::new(false)),
+            callback_errors: Arc::new(Mutex::new(Vec::new())),
+            callback_error_epoch: Arc::new(AtomicU64::new(0)),
+        };
+        let status = build_status_with_capture_health(Some(&runtime), 4, None);
+        assert_eq!(status.callback_error_count, 0, "PCM loss is not a native stream error");
+        assert_eq!(status.latest_callback_error, None);
+        assert_eq!(status.pcm_drop_count, 4);
+        assert!(status.stream_active);
+        runtime.callback_error_epoch.store(1, Ordering::Release);
+        runtime.callback_errors.lock().unwrap().push("native loopback error".into());
+        let status = build_status_with_capture_health(Some(&runtime), 4, Some("silero:pcm_poisoned".into()));
+        assert_eq!(status.callback_error_count, 1);
+        assert_eq!(status.latest_callback_error.as_deref(), Some("native loopback error"));
+        assert_eq!(status.pcm_drop_count, 4);
+        assert_eq!(status.blocker, "silero:pcm_poisoned");
+        assert_eq!(build_status_with_capture_health(None, 4, None).pcm_drop_count, 0);
+    }
 
     #[test]
     fn loopback_thread_exit_stays_unconfirmed_at_timeout() {

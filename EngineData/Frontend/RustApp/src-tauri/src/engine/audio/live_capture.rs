@@ -36,6 +36,7 @@ pub struct LiveCaptureStatusReport {
     pub frames_received: u64,
     pub callback_error_count: usize,
     pub latest_callback_error: Option<String>,
+    pub pcm_drop_count: u64,
     pub blocker: String,
     pub note: String,
 }
@@ -612,6 +613,18 @@ fn push_callback_error(callback_errors: &Arc<Mutex<Vec<String>>>, error: cpal::E
 }
 
 fn build_status_from_guard(runtime: Option<&LiveCaptureRuntime>) -> LiveCaptureStatusReport {
+    build_status_with_capture_health(
+        runtime,
+        runtime.map_or(0, |_| super::finalized_utterance::finalized_pcm_drop_count(false)),
+        runtime.and_then(|_| super::finalized_utterance::finalized_speech_fault(false)),
+    )
+}
+
+fn build_status_with_capture_health(
+    runtime: Option<&LiveCaptureRuntime>,
+    pcm_drop_count: u64,
+    speech_fault: Option<String>,
+) -> LiveCaptureStatusReport {
     match runtime {
         Some(runtime) => {
             let active_age_ms = current_unix_ms().saturating_sub(runtime.started_unix_ms);
@@ -633,14 +646,13 @@ fn build_status_from_guard(runtime: Option<&LiveCaptureRuntime>) -> LiveCaptureS
                 active_age_ms: Some(active_age_ms),
                 frames_received: runtime.frames_received.load(Ordering::Relaxed),
                 callback_error_count: runtime.callback_error_epoch.load(Ordering::Acquire)
-                    .saturating_add(super::finalized_utterance::finalized_pcm_drop_count(false))
                     .min(usize::MAX as u64) as usize,
-                latest_callback_error: super::finalized_utterance::finalized_speech_fault(false).or_else(|| errors.last().cloned())
-                    .or_else(|| (super::finalized_utterance::finalized_pcm_drop_count(false) > 0).then(|| "silero:pcm_discontinuity".to_string())),
+                latest_callback_error: errors.last().cloned(),
+                pcm_drop_count,
                 blocker: if runtime.cleanup_pending {
                     "live_capture:cleanup_pending".to_string()
                 } else {
-                    super::finalized_utterance::finalized_speech_fault(false).unwrap_or_default()
+                    speech_fault.unwrap_or_default()
                 },
                 note: if runtime.cleanup_pending {
                     "Microphone capture thread exit is unconfirmed. The previous owner is reserved; Retry Stop before Start.".to_string()
@@ -705,6 +717,7 @@ fn inactive_status(blocker: &str, note: &str) -> LiveCaptureStatusReport {
         frames_received: 0,
         callback_error_count: 0,
         latest_callback_error: None,
+        pcm_drop_count: 0,
         blocker: blocker.to_string(),
         note: note.to_string(),
     }
@@ -728,6 +741,32 @@ fn safe_sample(value: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_status_separates_native_errors_from_pcm_loss() {
+        let (stop_tx, _) = mpsc::channel();
+        let runtime = LiveCaptureRuntime {
+            stop_tx, capture_thread: None, cleanup_pending: false,
+            owner_id: APPLICATION_MEETING_OWNER_ID.to_string(), session_id: "capture-test".into(),
+            device_name: None, sample_rate_hz: 48_000, channels: 1, sample_format: "f32".into(),
+            started_unix_ms: current_unix_ms(), frames_received: Arc::new(AtomicU64::new(48_000)),
+            callback_errors: Arc::new(Mutex::new(Vec::new())),
+            callback_error_epoch: Arc::new(AtomicU64::new(0)),
+        };
+        let status = build_status_with_capture_health(Some(&runtime), 3, None);
+        assert_eq!(status.callback_error_count, 0, "PCM loss is not a native stream error");
+        assert_eq!(status.latest_callback_error, None);
+        assert_eq!(status.pcm_drop_count, 3);
+        assert!(status.stream_active);
+        runtime.callback_error_epoch.store(2, Ordering::Release);
+        runtime.callback_errors.lock().unwrap().push("native stream error".into());
+        let status = build_status_with_capture_health(Some(&runtime), 3, Some("silero:pcm_poisoned".into()));
+        assert_eq!(status.callback_error_count, 2);
+        assert_eq!(status.latest_callback_error.as_deref(), Some("native stream error"));
+        assert_eq!(status.pcm_drop_count, 3);
+        assert_eq!(status.blocker, "silero:pcm_poisoned");
+        assert_eq!(build_status_with_capture_health(None, 3, None).pcm_drop_count, 0);
+    }
 
     #[test]
     fn capture_exit_wait_is_bounded_and_rechecks_exact_thread() {

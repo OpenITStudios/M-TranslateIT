@@ -31,7 +31,7 @@ async function readLiveReliabilityNotice(): Promise<ReliabilityNotice | null> {
   if (watchdog.action_required && watchdog.blocker) {
     return { key: watchdog.blocker, message: watchdog.note };
   }
-  if (devices.optional_device_lost && devices.blocker) {
+  if (!devices.healthy && devices.blocker) {
     return { key: devices.blocker, message: devices.note };
   }
   return null;

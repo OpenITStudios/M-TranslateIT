@@ -20,6 +20,14 @@ test("support bundle omits raw local identifiers", () => {
   assert.match(support, /sanitize_diagnostic_text/);
 });
 
+test("capture health distinguishes native errors and PCM loss without exporting raw callback text", () => {
+  assert.match(support, /"native_callback_error_count": microphone_capture\.callback_error_count/);
+  assert.match(support, /"pcm_drop_count": microphone_capture\.pcm_drop_count/);
+  assert.match(support, /"native_callback_error_count": incoming_capture\.callback_error_count/);
+  assert.match(support, /"pcm_drop_count": incoming_capture\.pcm_drop_count/);
+  assert.doesNotMatch(support, /"latest_callback_error"\s*:|"device_name"\s*:/);
+});
+
 
 test("support bundle snapshot does not mutate incident history while observing guards", () => {
   assert.match(support, /without_runtime_incident_recording/);

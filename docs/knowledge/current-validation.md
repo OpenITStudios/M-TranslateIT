@@ -21,6 +21,32 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Capture-health separation source repair — 2026-10-26
+
+Parent Local `25f9a96f2f3cbef2ecf4133d0e7e2a7b877403fc`. Both capture-status
+builders had added internal PCM drops to native callback counts and could replace
+the latest native error with a speech-processing fault. Two tests of those actual
+production status projections reproduced the false native counts (3/4 with zero
+native errors) before the fix. Reports now retain native count/latest error,
+separate PCM drop counts and existing speech-pipeline blockers. No audio admission,
+discontinuity discard, model, prompt, threshold or recovery mechanism changed.
+
+Health classifies native errors as before, pipeline faults as capture failure,
+and PCM loss as degraded capture without device-loss flags. Required stream
+progress/device/route failures retain priority over historical PCM loss. Original
+passthrough does not inherit speech-pipeline prerequisites. The existing advisory
+notice handles nonhealthy capture; matching incoming snapshots retain real native
+or pipeline failure. Diagnostics adds only counts, frame progress, stream-active
+flags and sanitized pipeline blockers, never raw callback text or device names.
+
+Pre-delivery source evidence: Rust suite 338 passed/one ignored; frontend suite
+408 passed; source/bridge/privacy contracts and Svelte typecheck passed. Tests cover
+native versus PCM separation for both lanes, simultaneous native/fault/loss
+priority, explicit pipeline-fault recovery, inactive reports and privacy fields.
+This is **EXECUTED_SOURCE**, not proof that the real previous warnings were only
+PCM loss. Clean-candidate native counter observation remains to be executed in the
+same integrated acceptance phase; unrelated worker/model inference is not rerun.
+
 ### No-speech native Start/Stop observation — 2026-10-26
 
 Executed on clean Local `535a3daab89f61985abb4b9bfdc27ec83de86362`; only

@@ -171,10 +171,16 @@ pub(super) fn current_incoming_status() -> MeetingIncomingRuntimeStatus {
             status.capture_active = capture_matches_session && capture.stream_active;
             status.suppressed = capture_matches_session && capture.suppression_active;
         }
-        if capture_matches_session && capture.stream_active && capture.callback_error_count > 0 {
+        if capture_matches_session && capture.stream_active
+            && (capture.callback_error_count > 0 || !capture.blocker.is_empty())
+        {
             status.degraded = true;
             if status.blocker.is_empty() {
-                status.blocker = "meeting_incoming:capture_callback_error".to_string();
+                status.blocker = if capture.callback_error_count > 0 {
+                    "meeting_incoming:capture_callback_error".to_string()
+                } else {
+                    capture.blocker.clone()
+                };
             }
         }
     }

@@ -121,13 +121,55 @@ fn selected_device_present(selected: Option<&str>, mut names: impl Iterator<Item
 fn record_if_needed(status: DeviceLossGuardStatus) -> DeviceLossGuardStatus {
     if !status.healthy && !status.blocker.is_empty() {
         let _ = record_runtime_incident(
-            "device_loss",
+            if matches!(status.state.as_str(), "capture_degraded" | "capture_failed") {
+                "audio_capture"
+            } else {
+                "device_loss"
+            },
             &status.component,
             &status.blocker,
             &status.note,
         );
     }
     status
+}
+
+fn capture_issue_status(
+    incoming: bool,
+    native_errors: usize,
+    pcm_drops: u64,
+    pipeline_blocker: &str,
+) -> Option<DeviceLossGuardStatus> {
+    let component = if incoming { "meeting_sound" } else { "microphone" };
+    if native_errors > 0 {
+        return Some(if incoming {
+            status("optional_device_lost", false, false, false, true, component,
+                "device_loss:meeting_sound_callback_error",
+                "Meeting Sound capture reported a native callback error. Incoming translation is optional; required outbound translation remains authoritative.")
+        } else {
+            status("required_device_lost", false, true, true, false, component,
+                "device_loss:microphone_callback_error",
+                "The required microphone stream reported a native callback error. TranslateIT will not silently switch devices; stop Translation before recovery.")
+        });
+    }
+    if !pipeline_blocker.is_empty() {
+        return Some(status("capture_failed", false, !incoming, false, false, component,
+            pipeline_blocker, if incoming {
+                "Incoming speech processing failed inside TranslateIT. Incoming captions are unavailable; required outbound remains independent. No device was substituted."
+            } else {
+                "Microphone speech processing failed inside TranslateIT. Stop Translation before recovery; this is not evidence that the microphone device was lost."
+            }));
+    }
+    if pcm_drops > 0 {
+        return Some(status("capture_degraded", false, false, false, false, component,
+            if incoming { "capture:meeting_sound_pcm_discontinuity" } else { "capture:microphone_pcm_discontinuity" },
+            if incoming {
+                "Some incoming audio blocks were dropped inside TranslateIT during this session. Interrupted speech is discarded; this does not establish a native device failure."
+            } else {
+                "Some microphone audio blocks were dropped inside TranslateIT during this session. Interrupted speech is discarded; this does not establish a native device failure."
+            }));
+    }
+    None
 }
 
 #[tauri::command]
@@ -167,17 +209,14 @@ pub fn get_device_loss_guard_status() -> DeviceLossGuardStatus {
             "The required microphone capture is no longer active. TranslateIT will not silently switch microphones; stop Translation and reconnect or reselect the device.",
         ));
     }
-    if live.callback_error_count > 0 {
-        return record_if_needed(status(
-            "required_device_lost",
-            false,
-            true,
-            true,
-            false,
-            "microphone",
-            "device_loss:microphone_callback_error",
-            "The required microphone stream reported a native callback error. TranslateIT will not silently switch devices; stop Translation before recovery.",
-        ));
+    // Original passthrough does not depend on the speech-processing producer.
+    let microphone_issue = capture_issue_status(
+        false, live.callback_error_count,
+        if meeting.audio_source == "original" { 0 } else { live.pcm_drop_count },
+        if meeting.audio_source == "original" { "" } else { &live.blocker },
+    );
+    if let Some(issue) = microphone_issue.as_ref().filter(|issue| issue.action_required) {
+        return record_if_needed(issue.clone());
     }
 
     // A native stream can stall with no CPAL callback error.
@@ -290,17 +329,15 @@ pub fn get_device_loss_guard_status() -> DeviceLossGuardStatus {
         ));
     }
 
-    if incoming.stream_active && incoming.callback_error_count > 0 {
-        return record_if_needed(status(
-            "optional_device_lost",
-            false,
-            false,
-            false,
-            true,
-            "meeting_sound",
-            "device_loss:meeting_sound_callback_error",
-            "Meeting Sound capture reported a native callback error. Incoming translation is optional; required outbound translation remains authoritative.",
-        ));
+    let incoming_issue = incoming.stream_active.then(|| capture_issue_status(
+        true, incoming.callback_error_count, incoming.pcm_drop_count, &incoming.blocker,
+    )).flatten();
+    if let Some(issue) = incoming_issue.as_ref().filter(|issue| issue.state != "capture_degraded") {
+        return record_if_needed(issue.clone());
+    }
+    // Historical PCM loss cannot mask an actual stream, route or progress failure.
+    if let Some(issue) = microphone_issue.or(incoming_issue) {
+        return record_if_needed(issue);
     }
 
     record_if_needed(status(
@@ -317,8 +354,31 @@ pub fn get_device_loss_guard_status() -> DeviceLossGuardStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::{capture_frames_stalled, selected_device_present, CaptureProgress, CAPTURE_STALL_THRESHOLD};
+    use super::{capture_frames_stalled, capture_issue_status, selected_device_present, CaptureProgress, CAPTURE_STALL_THRESHOLD};
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn capture_health_preserves_loss_without_claiming_device_failure() {
+        for incoming in [false, true] {
+            assert!(capture_issue_status(incoming, 0, 0, "").is_none());
+            let loss = capture_issue_status(incoming, 0, 7, "").unwrap();
+            assert_eq!(loss.state, "capture_degraded");
+            assert!(!loss.healthy);
+            assert!(!loss.action_required);
+            assert!(!loss.required_device_lost && !loss.optional_device_lost);
+            assert!(loss.blocker.ends_with("pcm_discontinuity"));
+            let fault = capture_issue_status(incoming, 0, 7, "silero:pcm_poisoned").unwrap();
+            assert_eq!(fault.state, "capture_failed");
+            assert_eq!(fault.blocker, "silero:pcm_poisoned");
+            assert_eq!(fault.action_required, !incoming);
+            assert!(!fault.required_device_lost && !fault.optional_device_lost);
+            let native = capture_issue_status(incoming, 1, 7, "silero:pcm_poisoned").unwrap();
+            assert_eq!(native.required_device_lost, !incoming);
+            assert_eq!(native.optional_device_lost, incoming);
+            assert_eq!(native.action_required, !incoming);
+            assert!(native.blocker.ends_with("callback_error"));
+        }
+    }
 
     #[test]
     fn silent_pcm_counts_as_callback_progress_but_no_frames_stalls() {

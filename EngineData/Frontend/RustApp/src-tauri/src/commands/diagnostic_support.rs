@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::engine::audio::finalized_utterance::finalized_callback_lock_metrics;
+use crate::engine::audio::live_capture::live_capture_status;
+use crate::engine::audio::meeting_sound_capture::meeting_sound_capture_status;
 use crate::engine::logging::sanitize_diagnostic_text;
 use crate::engine::paths::ProjectPaths;
 
@@ -41,6 +43,8 @@ fn sanitized(value: &str) -> String {
 #[tauri::command]
 pub fn export_diagnostic_support_bundle() -> DiagnosticSupportBundleResult {
     let paths = ProjectPaths::discover();
+    let microphone_capture = live_capture_status();
+    let incoming_capture = meeting_sound_capture_status();
     let (meeting, helper, watchdog, devices, recovery, long_session, incidents, route, latency, capture_lock) =
         without_runtime_incident_recording(|| {
             (
@@ -57,7 +61,23 @@ pub fn export_diagnostic_support_bundle() -> DiagnosticSupportBundleResult {
             )
         });
 
-    let payload = json!({
+    let capture_health = json!({
+        "microphone": {
+            "stream_active": microphone_capture.stream_active,
+            "frames_received": microphone_capture.frames_received,
+            "native_callback_error_count": microphone_capture.callback_error_count,
+            "pcm_drop_count": microphone_capture.pcm_drop_count,
+            "speech_pipeline_blocker": sanitized(&microphone_capture.blocker),
+        },
+        "incoming": {
+            "stream_active": incoming_capture.stream_active,
+            "frames_received": incoming_capture.frames_received,
+            "native_callback_error_count": incoming_capture.callback_error_count,
+            "pcm_drop_count": incoming_capture.pcm_drop_count,
+            "speech_pipeline_blocker": sanitized(&incoming_capture.blocker),
+        },
+    });
+    let mut payload = json!({
         "schema": "translateit.support_bundle.v1",
         "created_unix_ms": unix_ms(),
         "app": {
@@ -217,6 +237,7 @@ pub fn export_diagnostic_support_bundle() -> DiagnosticSupportBundleResult {
         }
     });
 
+    payload["meeting"]["capture_health"] = capture_health;
     let directory = PathBuf::from(&paths.user_saved_dir).join("Diagnostics");
     if fs::create_dir_all(&directory).is_err() {
         return DiagnosticSupportBundleResult {
