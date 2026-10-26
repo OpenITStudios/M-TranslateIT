@@ -8,6 +8,7 @@ import importlib.util
 import math
 import re
 import statistics
+import sys
 
 from harness import (
     CORPUS,
@@ -20,7 +21,10 @@ from harness import (
     word_error_rate,
 )
 
-SOURCE_CHECK_NAMES = ("audio_contracts", "asr_evaluator", "translation_evaluator")
+sys.path.insert(0, str(ROOT / "tools/tts_quality"))
+from evaluate_tts_quality import word_error_rate as spoken_word_error_rate
+
+SOURCE_CHECK_NAMES = ("audio_contracts", "asr_evaluator", "translation_evaluator", "tts_evaluator")
 
 
 def source_admission_passed(report: dict | None, expected_sha: str) -> bool:
@@ -195,7 +199,12 @@ def grade_pipeline(report: dict, cases: dict, selection: set[str], rounds: int,
                     else:
                         spoken = " ".join(r["roundtrip_asr"]["transcript_text"] for r in group)
                         check["spoken_critical"] = evaluator.invariant_result(contracts[name], spoken)
-                        check["spoken_wer"] = word_error_rate(text, spoken)
+                        aliases = []
+                        for sequence in contracts[name].get("ordered_any", []):
+                            for cue in sequence:
+                                if isinstance(cue, list) and any(option.isdecimal() for option in cue) and cue not in aliases:
+                                    aliases.append(cue)
+                        check["spoken_wer"] = spoken_word_error_rate(text, spoken, number_aliases=aliases)
                         if not check["spoken_critical"]["critical_pass"]:
                             check.update(status="FAIL", first_wrong_stage="tts_critical_content")
                         elif check["spoken_wer"] != 0:

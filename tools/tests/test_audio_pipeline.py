@@ -50,7 +50,7 @@ class AudioPipelineTests(unittest.TestCase):
     def test_source_admission_requires_all_validators_and_same_revision(self):
         proof = {'source_identity': {'local_sha': '2' * 40}, 'verdict': 'PASS',
                  'checks': [{'name': name, 'status': 'PASS', 'exit_code': 0}
-                            for name in ('audio_contracts', 'asr_evaluator', 'translation_evaluator')]}
+                            for name in ('audio_contracts', 'asr_evaluator', 'translation_evaluator', 'tts_evaluator')]}
         self.assertTrue(source_admission_passed(proof, '2' * 40))
         self.assertFalse(source_admission_passed(proof, '3' * 40))
         self.assertFalse(source_admission_passed({**proof, 'checks': proof['checks'][:1]}, '2' * 40))
@@ -77,7 +77,7 @@ class AudioPipelineTests(unittest.TestCase):
     def test_named_cli_owns_coverage_and_current_vad(self):
         source = {'source_identity': {'local_sha': '2' * 40}, 'verdict': 'PASS',
                   'checks': [{'name': name, 'status': 'PASS', 'exit_code': 0}
-                             for name in ('audio_contracts', 'asr_evaluator', 'translation_evaluator')]}
+                             for name in ('audio_contracts', 'asr_evaluator', 'translation_evaluator', 'tts_evaluator')]}
         for profile, rounds in (('core', 2), ('endurance', 20)):
             with tempfile.TemporaryDirectory() as tmp:
                 output = Path(tmp) / 'new.json'
@@ -101,7 +101,7 @@ class AudioPipelineTests(unittest.TestCase):
     def test_vad_execution_failure_is_reported_without_worker(self):
         source = {'source_identity': {'local_sha': '2' * 40}, 'verdict': 'PASS',
                   'checks': [{'name': name, 'status': 'PASS', 'exit_code': 0}
-                             for name in ('audio_contracts', 'asr_evaluator', 'translation_evaluator')]}
+                             for name in ('audio_contracts', 'asr_evaluator', 'translation_evaluator', 'tts_evaluator')]}
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / 'new.json'
             args = ['worker_runner', '--profile', 'core', '--fixtures', 'fixtures', '--python', 'python',
@@ -129,7 +129,7 @@ class AudioPipelineTests(unittest.TestCase):
                      'I mean fifteen, not 50.', 'I mean 15, not fifty.'):
             self.assertTrue(evaluator.invariant_result(contracts['A04'], text)['critical_pass'], text)
         for text in ('I mean 50, not 15.', 'I mean 15 and 50.', 'I mean 16, not 50.',
-                     'I mean -15, not 50.', 'I mean 15.5, not 50.', 'I mean 115, not 50.'):
+                     'I mean -15, not 50.', 'I mean minus fifteen, not 50.', 'I mean −15, not 50.', 'I mean 15.5, not 50.', 'I mean 115, not 50.'):
             self.assertFalse(evaluator.invariant_result(contracts['A04'], text)['critical_pass'], text)
         self.assertFalse(evaluator.invariant_result(contracts['A34'], 'This version is ready for release.')['critical_pass'])
 
@@ -241,6 +241,11 @@ class AudioPipelineTests(unittest.TestCase):
                     missing_round = copy.deepcopy(result)
                     missing_round['results'] = [r for r in result['results'] if r['round'] == 1]
                     self.assertEqual(grade_pipeline(missing_round, by_id, selection, 2, contracts, evaluator)['verdict'], 'UNVERIFIED')
+                    numeral_variant = copy.deepcopy(result)
+                    row = next(r for r in numeral_variant['results'] if r['scenario_id'] == 'A04')
+                    row['translation']['translated_text'] = 'I meant fifteen rather than 50.'
+                    row['roundtrip_asr']['transcript_text'] = 'I meant 15 rather than fifty.'
+                    self.assertEqual(grade_pipeline(numeral_variant, by_id, selection, 2, contracts, evaluator)['verdict'], 'PASS')
                     unsupported = dict(contracts)
                     del unsupported['A03']
                     self.assertEqual(grade_pipeline(result, by_id, selection, 2, unsupported, evaluator)['verdict'], 'UNVERIFIED')

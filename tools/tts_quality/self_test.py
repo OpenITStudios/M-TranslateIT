@@ -35,6 +35,11 @@ def main() -> int:
     validation = evaluator.validate_corpus(corpus)
     assert validation["ok"], validation
     assert validation["case_count"] == 30
+    aliases = [['15', 'fifteen'], ['50', 'fifty']]
+    assert evaluator.word_error_rate('I mean fifteen, not 50.', 'I mean 15, not fifty.', number_aliases=aliases) == 0
+    assert evaluator.word_error_rate('I mean 15, not 50.', 'I mean 50, not 15.', number_aliases=aliases) > 0
+    assert evaluator.word_error_rate('125', '125th', number_aliases=[['125', 'one hundred and twenty-five']]) > 0
+    assert evaluator.word_error_rate('15', '-15', number_aliases=aliases) > 0
     assert {
         "meeting_core",
         "technical",

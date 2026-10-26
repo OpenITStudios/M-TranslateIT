@@ -145,7 +145,8 @@ def declared_cue_present(normalized_text: str, cue: str) -> bool:
 
 def ordered_cue_pattern(cue: str | list[str]) -> str:
     options = cue if isinstance(cue, list) else [cue]
-    return "(?:" + "|".join(
+    unsigned = r"(?<!minus )(?<!negative )(?<!plus )(?<!positive )" if any(option.isdecimal() for option in options) else ""
+    return unsigned + "(?:" + "|".join(
         (r"(?<![\w.+-])" if option[0].isdecimal() else r"(?<!\w)")
         + re.escape(re.sub(r"[^\w\s]", " ", normalize(option)))
         + (r"(?!\w|\.[0-9])" if option[-1].isdecimal() else r"(?!\w)")
@@ -161,7 +162,7 @@ def invariant_result(case: dict, translated: str) -> dict:
         if not any(declared_cue_present(norm, option) for option in group)
     ]
     forbidden_hits = [item for item in case["forbidden"] if declared_cue_present(norm, item)]
-    ordered_text = re.sub(r"(?<=[a-z])-(?=[a-z])", " ", norm)
+    ordered_text = re.sub(r"(?<=[a-z])-(?=[a-z])", " ", norm.replace("−", "-"))
     ordered_text = re.sub(r"[^\w\s.+-]", " ", ordered_text)
     ordered_text = re.sub(r"\s+", " ", ordered_text)
     ordered_match = True

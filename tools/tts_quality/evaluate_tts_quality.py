@@ -37,9 +37,23 @@ def edit_distance(reference: list[str], hypothesis: list[str]) -> int:
     return previous[-1]
 
 
-def word_error_rate(reference: str, hypothesis: str) -> float:
-    ref = normalize(reference).split()
-    hyp = normalize(hypothesis).split()
+def word_error_rate(reference: str, hypothesis: str, *, number_aliases: list[list[str]] | None = None) -> float:
+    def spoken_words(text: str) -> list[str]:
+        text = unicodedata.normalize("NFKC", text).replace("−", "-")
+        text = re.sub(r"(?<!\w)-(?=[0-9])", "minus ", text)
+        text = re.sub(r"(?<!\w)\+(?=[0-9])", "plus ", text)
+        text = normalize(text)
+        for aliases in number_aliases or ():
+            digits = [option for option in aliases if re.fullmatch(r"[0-9]+", option)]
+            if len(digits) != 1:
+                raise ValueError("spoken numeric aliases require one declared digit value")
+            alternatives = sorted({normalize(option) for option in aliases}, key=len, reverse=True)
+            pattern = r"(?<!\w)(?:" + "|".join(re.escape(option) for option in alternatives) + r")(?!\w)"
+            text = re.sub(pattern, digits[0], text)
+        return text.split()
+
+    ref = spoken_words(reference)
+    hyp = spoken_words(hypothesis)
     if not ref:
         return 0.0 if not hyp else 1.0
     return edit_distance(ref, hyp) / len(ref)

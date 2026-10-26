@@ -525,6 +525,7 @@ def run_source_checks(expected_sha: str) -> dict:
                             "tools.tests.test_audio_fault_runner"]),
         ("asr_evaluator", [sys.executable, "tools/asr_quality/self_test.py"]),
         ("translation_evaluator", [sys.executable, "tools/translation_quality/self_test.py"]),
+        ("tts_evaluator", [sys.executable, "tools/tts_quality/self_test.py"]),
     ]
     checks = []
     for name, command in commands:
