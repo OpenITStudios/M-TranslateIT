@@ -62,13 +62,27 @@ it does not erase or replace the failed full-suite admission result. This
 independent helper/scheduler test boundary requires its own bounded diagnosis;
 no scheduler/runtime change was made under the audio repair.
 
+**Separately authorized test-isolation repair — 2026-10-27:** candidate based on
+`e9ba443c567304e5acb77a15566f6d6746067a8a` removes the scheduler tests' private
+mutex and delegates their guard to the existing `runtime_test_guard` used by
+bridge contracts. The shared process-global scheduler now has one test isolation
+boundary; production scheduler admission, priority, deadlines and audio are
+unchanged (`cfg(test)` code only). The ordinary parallel Rust suite passed
+339/one opt-in ignored; the helper subset passed 32 with `--test-threads=32`.
+No assertions were weakened, no global serial runner was imposed, and no tests
+were added merely to assert source shape. Private logs:
+`.workspace/reports/scheduler-isolation-fixed-rust.log` and
+`scheduler-isolation-fixed-helper-parallel.log`. The earlier full-suite failure
+remains historical evidence; the repair is not native proof.
+
 Private exact-source logs: `.workspace/reports/pcm-status-native-ce2beb57-build.log`,
 `pcm-status-ce2beb57-rust.log`, `pcm-status-ce2beb57-frontend.log` and
 `pcm-status-ce2beb57-helper-serial.log`. Developer launch succeeded, but the user
 stopped Computer Use before Start and requested work without PC control. No
 native capture/export/Stop outcome was collected for this source. Further UI
 interaction is deferred under that instruction; no microphone action or manual
-user testing is requested. Goal completion remains unproved.
+user testing is requested. Goal completion remains unproved after the source-test
+repair: native capture/export/Stop acceptance is still outstanding.
 
 ### Controlled status/callback contention reproduction — 2026-10-26
 

@@ -226,13 +226,9 @@ mod scheduler_policy_tests {
     use std::sync::mpsc;
     use std::thread;
 
-    static SCHEDULER_TEST_SERIAL: OnceLock<Mutex<()>> = OnceLock::new();
-
     fn scheduler_test_guard() -> std::sync::MutexGuard<'static, ()> {
-        SCHEDULER_TEST_SERIAL
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        // Bridge contract fixtures use the same process-wide scheduler.
+        crate::engine::runtime_state::runtime_test_guard()
     }
 
     fn reset_scheduler() {

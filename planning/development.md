@@ -2,16 +2,16 @@
 
 ## Current Status
 
-**Goal validation limited to background work (2026-10-26).** User requested no
-PC/UI control while working. Clean `ce2beb57` passed the locked build and frontend
-408 checks; its native app launched but Computer Use was stopped before Start,
-so capture/Diagnostics/Stop remain unexecuted. A fresh parallel Rust run returned
-335 passed/4 failed/one ignored: first scheduler deadline assertion saw one
-incoming waiter; later scheduler/bridge failures followed lock poisoning. The
-helper subset passed 32 tests serially, supporting an independent test-isolation
-investigation without upgrading full-suite admission to PASS. No scheduler or
-runtime edit was made. The audio fixture proof remains bounded and native goal
-completion is not established. Current Validation owns exact evidence.
+**Background source-test admission repaired (2026-10-27).** With explicit owner
+approval, scheduler tests now share the existing runtime test guard with bridge
+contracts instead of owning an independent mutex. Ordinary parallel Rust passed
+339/one opt-in ignored, and helper tests passed 32 with 32 runner threads; only
+test code changed. The earlier 335/4 failed result and lock-poison cascade remain
+recorded in Current Validation. Clean audio source `ce2beb57` passed locked build
+and frontend 408 checks; its native app launched but Computer Use stopped before
+Start. The user's no-PC-control instruction still applies, so capture/Diagnostics/
+Stop acceptance remains unexecuted and the goal is not complete. No production
+scheduler, model, audio queue or runtime policy changed.
 
 **Status/callback coupling repaired at source (2026-10-26).** The same ingress
 owner now uses a standard-library read/write lock: callback and status can read
@@ -250,7 +250,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Resolve the independent scheduler/bridge test-isolation admission finding through a bounded handoff before claiming a fully passing source gate. Preserve the audio repair and existing fixture evidence; keep native capture/Diagnostics/Stop deferred while the user's no-PC-control instruction applies. Do not repeatedly rerun tests to seek a green result or claim native completion. Historical native drops, incoming error and uncontrolled phrases remain unattributed. No CI, model/context/style/glossary change, incoming toggle, queue enlargement, blind retry or corrective translation layer is authorized.
+When PC-control authorization is available again, finish the existing integrated native capture/status/Diagnostics/Stop check on the pinned repaired candidate. Until then retain the goal as incomplete; source and fixture work is finished for this bounded outcome, so do not repeat checks or invent adjacent work while waiting. Historical native drops, incoming error and uncontrolled phrases remain unattributed. No CI, model/context/style/glossary change, incoming toggle, queue enlargement, blind retry or corrective translation layer is authorized.
 
 ## Retained My Voice source candidate (paused)
 
