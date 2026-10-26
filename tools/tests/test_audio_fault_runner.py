@@ -19,6 +19,8 @@ class OfflineAudioFaultContracts(unittest.TestCase):
         self.assertEqual(result["counts"]["NOT_EXECUTED"], 28)
 
     def test_actual_offline_injectors_run_and_record_partial_scope(self):
+        self.assertFalse(set(RUNNERS) - {row["slug"] for row in matrix_cases()},
+                         "registered injectors must bind to a canonical matrix scenario")
         selected = {row["id"] for row in matrix_cases() if row["slug"] in RUNNERS}
         self.assertEqual(len(selected), 11)
         report = execute(selected)
@@ -27,6 +29,11 @@ class OfflineAudioFaultContracts(unittest.TestCase):
         self.assertEqual(report["counts"]["NOT_EXECUTED"], 17)
         self.assertTrue(all(r["proof"] == "OFFLINE_CONTRACT_ONLY_NOT_NATIVE"
                             for r in report["cases"] if r["status"] == "PASS"))
+        context = next(row for row in report["cases"] if row["id"] == "F09")
+        self.assertEqual(context["status"], "PASS")
+        self.assertEqual(context["observed"]["owner"], "milmmt_translation_provider.build_prompt")
+        self.assertEqual(context["observed"]["boundary"],
+                         "REAL_CANONICAL_PROMPT_BUILDER_NO_MODEL_OR_SESSION_INFERENCE")
 
     def test_refuse_invalid_worker_reply(self):
         for raw in (None, b"", b"bad\n", b'{"ok":"true"}\n',

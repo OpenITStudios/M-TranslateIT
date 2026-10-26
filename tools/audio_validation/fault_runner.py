@@ -253,7 +253,7 @@ RUNNERS = {
     "rate_channel_mismatch": test_wav_format_rejection,
     "missing_eos": test_translation_missing_eos,
     "silent_tts_wrong_actor": test_tts_silent_or_wrong_actor,
-    "translation_context_leak": test_translation_context_isolation,
+    "context_isolation": test_translation_context_isolation,
 }
 
 
