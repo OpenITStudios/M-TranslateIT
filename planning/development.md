@@ -2,6 +2,17 @@
 
 ## Current Status
 
+**No-speech Start/Stop exercised (2026-10-26).** Native candidate
+`535a3daab89f61985abb4b9bfdc27ec83de86362` launched with Built-in Male and
+reached Live, but the required-microphone callback warning reproduced with no
+recognized phrases. Normal UI Stop returned to Ready; the empty archive finalized,
+normal app exit succeeded and no matching canonical worker remained. Capture is
+not accepted; the callback cause remains UNKNOWN. The current application has a
+Meeting Sound device selector but no Off control, so incoming remained active and
+this is not an outbound-only baseline. No control/configuration/engine was added
+or changed. Current Validation owns this bounded native evidence; the runbook now
+removes the unsupported instruction to switch incoming off.
+
 **Source gate passed; first native run inconclusive (2026-10-26).** Candidate
 `71a731efef24d255fb77dac00257adb8a1abf8b1` passed 407 frontend tests, worker
 compile/static checks, 326 worker tests (two POSIX-only skips), four audio source
@@ -178,7 +189,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-In the admitted integrated Windows phase, isolate the first native audio observation: use supported application controls to disable optional incoming and establish an audio environment without unrelated speaker playback, then observe physical capture, built-in Start and confirmed Stop on one pinned candidate. Resolve through the Windows audio owner only if callback errors reproduce; do not infer that YouTube caused the callbacks or repair MiLMMT. This is continuation of the same native phase, not incremental user-PC testing or permission to inject fixtures into production capture. Retain exact revision-scoped source proof, two REVIEW and six owner-accepted FAIL diagnostics; no CI, model/context/style/glossary change or corrective layer is authorized.
+Diagnose the reproduced required-microphone callback warning at the existing Windows capture/health owner, using the underlying native error and per-session capture observations to separate real stream failure from stale/misclassified health evidence. Do not blame YouTube, modify MiLMMT, add an incoming toggle or invent an outbound-only result. Continue within the admitted integrated phase without requiring user speech or new incremental PC tests. Retain the successful normal Stop observation, exact revision-scoped source proof, two REVIEW and six owner-accepted FAIL diagnostics; no CI, fixture injection or model/context/style/glossary/corrective layer is authorized.
 
 ## Retained My Voice source candidate (paused)
 

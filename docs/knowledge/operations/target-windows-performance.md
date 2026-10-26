@@ -85,12 +85,18 @@ the same public sample set across applicable observations. App restart belongs
 to the final flow. The detailed timing, device and lifecycle sections below are
 reference procedures, not instructions to repeat the same evidence collection.
 
+**Current isolation limit:** Meeting Sound has a device selector, not an Off
+control; eligible native sessions schedule optional incoming automatically. Record
+its actual state, keep unrelated speaker playback stopped, and do not label a
+no-speech Start/Stop check as outbound-only. Do not change hidden settings, select
+an invalid device or add a feature to manufacture isolation for this procedure.
+
 | Flow / existing claims | Action in the admitted session | Required observation / failure boundary |
 |---|---|---|
-| 1. Open → Ready → Start · C0, A1–A3/A8, B1/B5, D1/D3/D6 | Select a built-in voice and verified physical microphone/virtual route, leaving incoming off. Check persisted setup and Start once; distinguish cold from subsequent warm Start | Real capture advances and actual selected runtime/voice becomes ready without My Voice training. Start reaches truthful Live or an explicit blocker; file presence, preview playback and a compile check alone cannot pass. Record which built-in voice was used; do not claim both without exercising both |
+| 1. Open → Ready → Start · C0, A1–A3/A8, B1/B5, D1/D3/D6 | Select a built-in voice and verified physical microphone/virtual route; record incoming's actual state under the isolation limit above. Check persisted setup and Start once; distinguish cold from subsequent warm Start | Real capture advances and actual selected runtime/voice becomes ready without My Voice training. Start reaches truthful Live or an explicit blocker; file presence, preview playback and a compile check alone cannot pass. Record which built-in voice was used; do not claim both without exercising both |
 | 2. Speech → translation → receiver · B2/B3, C1/C2/C7/C8 | Reuse public normal, brief, negation, correction and mixed-language utterances represented by core A01/A02/A03/A04/A06. Include pauses/silence. Observe source text, translation, selected voice and a separate actual meeting receiver; collect existing timing/counters during these same turns | Source appears before translation; intended message remains understandable. Receiver actually hears the intended translated speech once, with intelligible voice and no unintended raw-mic leakage in TranslateIT mode. Missing/duplicate speech, material new meaning changes or fabricated receiver/timing evidence fail. Local playback and roundtrip-ASR content checks alone do not prove receiver delivery or naturalness |
 | 3. Source, Mute, Stop and restart · C1A/C1B/C1C/C4/C5, D3/D13/D15/D16 | At stopped state select Original and Start without AI readiness as a dependency. Switch Original → TranslateIT → Original with the calling-app microphone unchanged. Mute/unmute in each source and Stop both idle and during processing. Reuse the existing repeated-session procedure for the same observations | Original uses no ASR/MT/TTS; TranslateIT uses the selected voice. One audio owner/endpoint, no overlapping sources or stale translated speech; Mute sends silence without accumulating audio to play on Unmute. Stop revokes output and releases ownership; cleanup uncertainty blocks new Start until verified recovery. An unavailable-worker fault, if needed for C1A, uses controlled disposable state only, never removal of real models/user assets |
-| 4. Incoming alongside outbound · A5, C3/C6, B4 | After outbound succeeds, enable the intended Meeting Sound and have the separated receiver supply public English speech, reusing the intent of core A12. Speak outbound while incoming is active; observe suppression and bounded work. Exercise existing device-mutation locks during Live | Incoming EN→ID is visible without breaking required outbound; the app's own TTS is not retranslated, no false speaker identity, silent device swap or stale backlog. If incoming cannot be exercised, mark it NOT EXECUTED and limit the claim to outbound; do not mark complete Meeting acceptance |
+| 4. Incoming alongside outbound · A5, C3/C6, B4 | After baseline capture/outbound succeeds, verify Meeting Sound is listening on the intended output and have the separated receiver supply public English speech, reusing the intent of core A12. Speak outbound while incoming is active; observe suppression and bounded work. Exercise existing device-mutation locks during Live | Incoming EN→ID is visible without breaking required outbound; the app's own TTS is not retranslated, no false speaker identity, silent device swap or stale backlog. If incoming cannot be exercised, mark it NOT EXECUTED and limit the claim to verified outbound observations; do not mark complete Meeting acceptance |
 | 5. Transcript → Stop → export → reopen · C8, D8–D11/D18 | Use the same public session. Observe source-first/pending/failed states, Stop and export offline HTML only after writer ownership releases. Restart the app, reopen the saved transcript, then create a distinct new session. If deletion is tested, delete only this disposable test archive | Retention is disclosed; source/translation and session identity remain truthful after restart. Preview and finished export are readable with correct bilingual modes; no script dependency or false participant/delivery claims. New sessions do not merge; deleting the test archive leaves finished HTML intact. Interrupted storage/completeness remains explicit, never an invented complete archive |
 
 For flow 2, use existing core membership in
@@ -136,7 +142,7 @@ The above adds no new recurring test job or separate harness; include the condit
 - Start with a built-in Meeting voice so My Voice training is not a prerequisite.
 - Use the actual physical microphone intended for normal use.
 - Configure the exact TranslateIT Meeting Microphone / supported virtual route used by the meeting application.
-- Keep optional incoming Meeting Sound **off for the first outbound baseline**.
+- Keep unrelated speaker playback stopped and record whether optional incoming is active. The current UI has no incoming Off control; do not claim an outbound-only baseline or infer silence from missing transcripts.
 - Close unrelated GPU/CPU-heavy applications where practical, but keep the actual meeting application running for the end-to-end pass.
 - Do not tune VAD, remove safety checks, unload models, or replace WAV transport before the first baseline is recorded.
 
@@ -157,7 +163,7 @@ Record these once with the baseline:
 | Meeting application | |
 | Meeting microphone endpoint | |
 | Selected TranslateIT voice | |
-| Incoming Meeting Sound enabled? | No for baseline |
+| Incoming Meeting Sound state | Record actual listening/degraded/inactive state; current UI has no Off control |
 
 Do not record private conversation text, raw recordings, credentials, or unredacted private paths as evidence.
 
@@ -399,7 +405,7 @@ by this source-only investigation.
 
 ### 6. Optional incoming isolation
 
-After the outbound-only baseline is healthy, enable the intended Meeting Sound source and repeat several outbound utterances while English incoming speech is present.
+After baseline capture/outbound is healthy, verify the automatically attempted Meeting Sound lane is listening on the intended output, then repeat several outbound utterances while controlled English incoming speech is present. The current UI has no incoming Off/On switch; this compares controlled audio conditions, not an implemented lane-toggle feature.
 
 Confirm:
 

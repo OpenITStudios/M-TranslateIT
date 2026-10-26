@@ -21,6 +21,38 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### No-speech native Start/Stop observation — 2026-10-26
+
+Executed on clean Local `535a3daab89f61985abb4b9bfdc27ec83de86362`; only
+documentation differs from the earlier `71a731ef` source gate. `manage.cmd run`
+launched the native development app. The owner was explicitly told that no speech
+was required. Built-in Male was verified selected; one Start reached Live, but
+the required-microphone native callback warning reappeared before any recognized
+phrase. The visible transcript remained empty. This reproduces the capture-health
+symptom without a spoken translation task; it does not identify the native error
+cause or prove the speaker environment was physically silent.
+
+Stop was invoked through the real Meeting UI. The app returned to Ready to
+translate with Start available, no active transcript, and the empty session's
+archive marked Finalized (entry count checked). The stopped app then closed
+normally; `manage.cmd run` exited zero and no matching canonical worker process
+remained in the process query. No force termination was needed. These are bounded
+native lifecycle observations, not long-duration stability, receiver delivery,
+voice naturalness or proof that capture was healthy. Start-to-Live and Stop times
+were not precisely measured. Capture acceptance remains **FAIL/UNKNOWN cause**;
+normal UI Stop and app exit were observed successfully in this run.
+
+**Correction to the isolation plan:** Settings currently offers a Meeting Sound
+device selector, not an Off control (`Settings.svelte`); the native incoming
+activation is automatically scheduled for eligible sessions
+(`meeting_session/incoming_activation.rs`). No supported Off action was performed,
+no hidden configuration was written, and incoming remained active. Therefore this
+is a no-speech Start/Stop test, **not an outbound-only baseline**. The runbook and
+continuation now reflect that limitation instead of requiring a nonexistent
+control. No toggle, fixture injection, threshold change, model/prompt patch or
+context mechanism was added. Diagnose the callback symptom at its existing
+Windows capture/health owner before further Meeting quality claims.
+
 ### Integrated candidate source gate and first native observation — 2026-10-26
 
 Executed candidate: clean Local `71a731efef24d255fb77dac00257adb8a1abf8b1`.
@@ -58,9 +90,10 @@ speaker sound can also reach the microphone; uncontrolled incoming transcripts
 are not fixture/model-quality evidence. UI reported native callback errors first
 for optional Meeting Sound and later for the required microphone. The underlying
 device/callback cause is **UNKNOWN**; playback alone does not establish that cause
-or a source defect. First separating evidence is a controlled outbound-only run
-with optional incoming disabled through supported application controls and an
-isolated input/output environment. Preserve the existing engine and thresholds.
+or a source defect. The proposed outbound-only follow-up assumed a supported
+incoming Off control; the later no-speech observation above corrects that
+assumption. Preserve the existing engine and thresholds while separating the
+native callback cause from unrelated speaker playback.
 
 Normal Meeting Stop remains **NOT VERIFIED**: UI automation reported stale state
 and concurrent user input, preventing confirmed Stop. Emergency cleanup terminated
