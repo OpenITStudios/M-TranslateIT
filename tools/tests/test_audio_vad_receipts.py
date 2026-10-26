@@ -11,10 +11,26 @@ HERE = Path(__file__).resolve().parents[1] / "audio_validation"
 sys.path.insert(0, str(HERE))
 import harness
 import vad_runner
-from worker_runner import finalized_asr_outcome
+from worker_runner import finalized_asr_outcome, grade_finalized_asr
 
 
 class AudioVadReceiptTests(unittest.TestCase):
+    def test_probe_requires_real_control_and_preserves_negation_failure(self):
+        cases = {r["id"]: r for r in harness.specs()[0]}
+        report = {"results": [
+            {"scenario_id": "A03", "outcome": "SPEECH_TRANSCRIBED",
+             "asr": {"transcript_text": cases["A03"]["reference"]}},
+            {"scenario_id": "A14", "outcome": "ASR_REJECTED_EMPTY"},
+        ]}
+        self.assertEqual(grade_finalized_asr(report, cases, {"A03", "A14"})["verdict"], "PASS")
+        # Low aggregate WER cannot hide dropping the critical negation.
+        report["results"][0]["asr"]["transcript_text"] = "Saya setuju dengan perubahan itu."
+        self.assertEqual(grade_finalized_asr(report, cases, {"A03", "A14"})["verdict"], "FAIL")
+        report["results"] = [{"scenario_id": "A14", "outcome": "UNVERIFIED_ASR_FAILURE"}]
+        result = grade_finalized_asr(report, cases, {"A03", "A14"})
+        self.assertEqual(result["verdict"], "UNVERIFIED")
+        self.assertEqual(result["counts"]["PASS"], 0)
+
     def test_exported_writer_wav_is_bound_and_original_substitution_is_rejected(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

@@ -18,7 +18,18 @@ import threading
 import time
 from pathlib import Path
 
-from harness import RESULT_SCHEMA, ROOT, fingerprint, inspect, metrics, specs
+from harness import (
+    CORPUS,
+    RESULT_SCHEMA,
+    ROOT,
+    fingerprint,
+    inspect,
+    invariant_result,
+    load_corpus,
+    metrics,
+    specs,
+    word_error_rate,
+)
 
 WORKER = ROOT / "EngineData/Backend/LocalWorker/WorkerRuntime/realtime_local_worker.py"
 MAX_FRAME = 1_000_000
@@ -151,6 +162,7 @@ def stage_result(response: dict, name: str) -> dict:
               "elapsed_ms": response.get("elapsed_ms")}
     if name == "asr":
         result["transcript_text"] = str(response.get("transcript_text", ""))[:4000]
+        result["note"] = str(response.get("note", ""))[:1000]
     elif name == "translation":
         result.update({
             "direction_pair": response.get("direction_pair"),
@@ -172,6 +184,33 @@ def finalized_asr_outcome(response: dict, *, non_speech: bool) -> str:
         return "UNVERIFIED_ASR_FAILURE"
     return ("SPEECH_TRANSCRIBED" if response.get("ok") is True
             and isinstance(text, str) and text.strip() else "SPEECH_ASR_FAILED")
+
+
+def grade_finalized_asr(report: dict, cases: dict, selection: set[str]) -> dict:
+    """Use canonical ASR reference/invariant scoring; failed controls cannot pass."""
+    corpus = {r["id"]: r for r in load_corpus(CORPUS)["cases"]}
+    checks = []
+    for name in sorted(selection):
+        case = cases[name]
+        rows = [r for r in report["results"] if r["scenario_id"] == name]
+        outcomes = [r["outcome"] for r in rows]
+        check = {"scenario_id": name, "status": "UNVERIFIED"}
+        if any(r in ("SPEECH_ASR_FAILED", "NON_SPEECH_TRANSCRIPT") for r in outcomes):
+            check["status"] = "FAIL"
+        elif rows and all(r == "ASR_REJECTED_EMPTY" for r in outcomes) and case["kind"] != "speech":
+            check["status"] = "PASS"
+        elif rows and all(r == "SPEECH_TRANSCRIBED" for r in outcomes) and case["kind"] == "speech":
+            transcript = " ".join(r["asr"]["transcript_text"].strip() for r in rows)
+            wer = word_error_rate(case["reference"], transcript)
+            critical = (invariant_result(corpus[case["case_id"]], transcript)
+                        if case.get("case_id") else {"critical_pass": True})
+            check.update({"wer": wer, "critical": critical,
+                          "status": "PASS" if wer <= case["max_wer"] and critical["critical_pass"] else "FAIL"})
+        checks.append(check)
+    counts = {name: sum(r["status"] == name for r in checks) for name in ("PASS", "FAIL", "UNVERIFIED")}
+    verdict = ("FAIL" if counts["FAIL"] else "UNVERIFIED"
+               if counts["UNVERIFIED"] or report.get("transport_error") else "PASS")
+    return {"verdict": verdict, "counts": counts, "checks": checks}
 
 
 def run_finalized(fixtures: Path, python: Path, expected_sha: str, selection: set[str],
@@ -267,6 +306,7 @@ def run_finalized(fixtures: Path, python: Path, expected_sha: str, selection: se
     if verify_segments(segments_dir, observed) != segment_id:
         raise ValueError("exported finalized segments changed during ASR")
     pinned_source(expected_sha)
+    report.update(grade_finalized_asr(report, cases, selection))
     result_path.parent.mkdir(parents=True, exist_ok=True)
     with result_path.open("x", encoding="utf-8") as output:
         json.dump(report, output, ensure_ascii=False, indent=2)
@@ -421,8 +461,8 @@ def main() -> int:
         result = run(args.fixtures, args.python, args.source_sha,
                      set(args.ids), args.output, args.include_voice, args.timeout)
     print(json.dumps({"cases": len(result["results"]), "proof": result["proof"],
-                      "output": str(args.output)}, indent=2))
-    return 0
+                      "output": str(args.output), "verdict": result.get("verdict", "NOT_GRADED")}, indent=2))
+    return 2 if args.vad_observations is not None and result["verdict"] != "PASS" else 0
 
 
 if __name__ == "__main__":

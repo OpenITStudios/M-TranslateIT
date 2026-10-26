@@ -57,6 +57,8 @@ This is a bounded diagnostic of the first noise failure with a positive speech c
 
 The separate `translateit.finalized_asr_probe.v1` receipt distinguishes actual non-speech transcription, an explicit `asr:empty_transcript` rejection and other ASR/transport failures. It is a diagnostic receipt, not a replacement product DTO or canonical 48-case score. Full outbound status can remain blocked by an unavailable voice; only successful executed ASR preload admits this ASR-only probe. No translation, TTS, native session, receiver or production suppression is claimed. Do not use `--include-voice` with this probe. Generated public segments remain local for reproduction; private user recordings are never inputs.
 
+The finalized probe now emits `verdict`, per-case `checks` and `PASS/FAIL/UNVERIFIED` counts. Speech is graded by the existing canonical ASR WER limit **and critical-word invariants** over chronological segment transcripts. Noise passes only an explicit empty-transcript rejection; model/transport failures or missing controls remain unverified/failed. The command exits **0 only for PASS**, otherwise **2**, so automation need not treat successful JSON publication as successful recognition. Bounded ASR error notes are retained in the private receipt to identify decoder/dependency failures. This exit contract applies to the finalized probe; the older direct-worker output remains observation-only.
+
 Compare results from an identical fixture set:
 
 ```powershell

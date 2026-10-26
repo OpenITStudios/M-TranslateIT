@@ -4,6 +4,8 @@ version = "0.0.0"
 description = "Internal Python runtime for the TranslateIT desktop application."
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    # faster-whisper 1.2.1 passes metadata_errors, removed by PyAV 19.
+    "av>=11,<19",
     "cn2an",
     "ctranslate2==4.8.3",
     "fast-langdetect>=0.3.1",
