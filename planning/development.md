@@ -12,8 +12,32 @@ Swap were observed. EN→ID completed but added a construction purpose:
 `The budget is fifteen million rupiah.` became
 `Anggaran pembangunannya adalah lima belas juta rupiah.`
 This fails PR-041 semantic fidelity; review hints do not make it accepted.
-The failure is located in the translation lane; the internal request/provider/model
-cause has not yet been separated. No rerun or phrase-specific repair was applied.
+Local diagnosis on `ec5c1df3716eba359535525e68b5b948b846f00b` reproduced the
+same addition directly from the pinned canonical model, including the raw
+Meeting-kind provider path without the standalone wrapper. The exact input fits
+one chunk. No prior-turn context or user preference is needed to trigger it;
+this separates the observed error from the retired context-memory feature.
+No model, prompt, decoding policy or phrase replacement has been promoted.
+
+**Retired context/hint surface removed (2026-10-26).** The current repair removes
+stored style/terminology/spoken-term fields and the unused Rust hotword builder,
+projects only active frontend settings, and retires the worker's still-working
+ASR hotwords input. Settings schema 12 reads older files and drops retired fields
+on ordinary save while preserving active preferences; actual UserData was not
+rewritten. Stale skill/routing instructions that demanded last-three-pairs
+injection are reconciled with current foundation. Negative compatibility tests
+and immutable historical benchmark metadata remain as regression evidence.
+
+Proof on the repair working tree: 418 frontend tests, strict typecheck and source
+contracts passed; 75 affected worker tests, six Rust settings tests and 15 agent
+corpus/scorer tests passed; repository verification passed. Twelve real local
+model requests (six matched pairs, both directions across Text and both Meeting
+lane markers) produced identical output with/without malicious legacy context,
+style, terminology, alternative and system-prompt keys. This is controlled
+worker integration proof, not native Meeting acceptance. The model still adds
+construction purpose in the original English input, so semantic quality remains
+**FAIL / OPEN**. Historical 190-case real-model baseline is retained; its 59
+invariant flags include matcher false positives and are not 59 adjudicated errors.
 
 The run stopped before microphone capture, Meeting Start, independent receiver,
 Mute/source switching, repeated sessions and transcript/export. The app was
@@ -68,13 +92,13 @@ owns cleanup/retention rules. No source-root or installed-app path migration occ
 
 ## Active Boundary
 
-The delivered regression package covers the fixed 13 vital scenarios, not all 48 downstream scenarios or all 28 planned faults. Perceptual naturalness, FemaleVoice, adaptive pace, Meeting history/context, native Stop, physical capture, installed-app and independent receiver acceptance remain separate. Short repeated runs and allocator samples do not prove leak-free long-duration behavior or native end-to-end latency.
+The delivered regression package covers the fixed 13 vital scenarios, not all 48 downstream scenarios or all 28 planned faults. Perceptual naturalness, FemaleVoice, adaptive pace, native Stop, physical capture, installed-app and independent receiver acceptance remain separate. Short repeated runs and allocator samples do not prove leak-free long-duration behavior or native end-to-end latency.
 
 Earlier Text/runtime and paused My Voice source-candidate evidence retains its own revision/scope. Do not restore private archived data or resume training automatically. No incremental user-PC testing, cloud inference, CI re-enable, main promotion or release follows from this completed goal. CI remains paused; Local remains the only development branch.
 
 ## Next Step
 
-Diagnose the captured EN→ID semantic addition using the preserved acceptance receipt: separate the exact Text request/chunk/prompt from raw canonical model output, then repair only the proven owner with quality-regression evidence before resuming the integrated acceptance flow. Do not hide the addition with a phrase replacement, model swap, generic warning or repeated inference until PASS. Meeting, updater, My Voice training and legacy-cache cleanup do not resume automatically.
+Address the now-reproduced canonical model fidelity failure: compare one evidence-backed inference change against the preserved 190-case same-model baseline, inspect semantic regressions rather than accepting matcher scores alone, and use the frozen held-out corpus only after a candidate is fixed. If the pinned model cannot meet fidelity, present a separate model decision before replacement. Never restore context memory, style/glossary/ASR hints, phrase replacement, generic warnings or repeated inference until PASS. Resume the integrated native acceptance only after quality acceptance; Meeting, updater, My Voice training and legacy-cache cleanup do not resume automatically.
 
 ## Retained My Voice source candidate (paused)
 

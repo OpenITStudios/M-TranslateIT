@@ -1,5 +1,5 @@
 // A Text result can be reused only when it still belongs to the current input
-// and translation settings. This controls copy, alternative wording, feedback
+// and translation settings. This controls copy, feedback
 // and floating captions; it does not store translation history.
 export type TextResultState = "idle" | "translating" | "success" | "review" | "edited" | "stale" | "error";
 

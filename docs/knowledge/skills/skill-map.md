@@ -54,7 +54,7 @@ Current Svelte/Tailwind/tokens/Bits UI/Lucide visual hierarchy, layout, componen
 
 ### local-ai-runtime-development
 
-Canonical Python worker, ASR, Indonesian↔English translation, bounded outbound context, context-free incoming translation, GPT-SoVITS voice inference, built-in voice runtime and My Voice training/inference.
+Canonical Python worker, ASR, Indonesian↔English translation, current-source-only outbound, incoming and Text translation, GPT-SoVITS voice inference, built-in voice runtime and My Voice training/inference.
 
 ### windows-audio-runtime-development
 

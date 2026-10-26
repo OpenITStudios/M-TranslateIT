@@ -3,28 +3,22 @@ import test from "node:test";
 
 import { cloneSettings, defaultSettings } from "../../src/app/shared/state.ts";
 
-test("runtime settings default spoken terms to an empty list", () => {
+test("settings defaults and cloning discard retired AI preferences", () => {
   const settings = defaultSettings();
-  assert.equal(settings.schema_version, 11);
-  assert.deepEqual(settings.spoken_terms, []);
-});
-
-test("cloning runtime settings deep-clones spoken term aliases", () => {
-  const settings = defaultSettings();
-  settings.spoken_terms = [{ term: "MIVUBI", aliases: ["mi vu bi"] }];
-  const cloned = cloneSettings(settings);
-  cloned.spoken_terms[0].aliases[0] = "changed";
-  assert.equal(settings.spoken_terms[0].aliases[0], "mi vu bi");
-});
-
-
-test("runtime settings default translation style to natural", () => {
-  const settings = defaultSettings();
-  assert.equal(settings.translation_style, "natural");
-});
-
-
-test("runtime settings default noise suppression to auto", () => {
-  const settings = defaultSettings();
+  const legacy = {
+    ...settings,
+    translation_style: "formal",
+    terminology: [{ indonesian: "arsip", english: "UNTRUSTED_TERM" }],
+    spoken_terms: [{ term: "UNTRUSTED_HOTWORD", aliases: [] }],
+    context_pairs: [["OLD_SOURCE", "OLD_TARGET"]],
+  };
+  const cloned = cloneSettings(legacy);
+  for (const retired of ["translation_style", "terminology", "spoken_terms", "context_pairs"]) {
+    assert.equal(Object.hasOwn(settings, retired), false);
+    assert.equal(Object.hasOwn(cloned, retired), false);
+  }
+  assert.equal(settings.schema_version, 12);
+  assert.deepEqual(cloned, settings);
+  cloned.audio.noise_suppression = "off";
   assert.equal(settings.audio.noise_suppression, "auto");
 });

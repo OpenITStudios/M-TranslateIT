@@ -147,7 +147,7 @@
     },
     {
       "id": "ai-context-en",
-      "prompt": "Adjust the bounded ID to EN translation context to use exactly the last three committed pairs.",
+      "prompt": "Remove retired context memory from ID to EN translation and prove previous committed pairs cannot enter inference.",
       "expectedMode": "standard-development",
       "expectedSpecialist": "local-ai-runtime-development",
       "forbiddenSpecialists": [

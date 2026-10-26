@@ -15,7 +15,6 @@ ASR_RUNTIME: Any | None = None
 ASR_RUNTIME_DEVICE = "not_loaded"
 ASR_RUNTIME_COMPUTE = "not_loaded"
 ASR_RUNTIME_MODEL_ID = "not_loaded"
-MAX_ASR_HOTWORDS_CHARS = 1024
 # Source-evidence probe only. Never enabled by Meeting production requests.
 MAX_ALIGNMENT_PROBE_WORDS = 512
 MAX_ALIGNMENT_PROBE_WORD_TEXT_BYTES = 16 * 1024
@@ -266,7 +265,6 @@ def handle_transcribe(payload: dict[str, Any]) -> dict[str, Any]:
         }
     try:
         model = get_asr_runtime(payload)
-        hotwords = common.compact_runtime_text(payload.get("hotwords", ""), MAX_ASR_HOTWORDS_CHARS)
         segments, info = model.transcribe(
             str(audio_path),
             language=common.normalize_language(payload.get("language", "id"), "id"),
@@ -277,7 +275,6 @@ def handle_transcribe(payload: dict[str, Any]) -> dict[str, Any]:
             vad_filter=bool(payload.get("vad_filter", True)),
             without_timestamps=True,
             word_timestamps=alignment_probe,
-            hotwords=hotwords or None,
         )
         if alignment_probe:
             # Only the opt-in probe iterates twice, for text/word concordance.
@@ -305,7 +302,6 @@ def handle_transcribe(payload: dict[str, Any]) -> dict[str, Any]:
             "device": ASR_RUNTIME_DEVICE,
             "compute_type": ASR_RUNTIME_COMPUTE,
             "model_id": ASR_RUNTIME_MODEL_ID,
-            "hotwords_applied": bool(hotwords),
             "elapsed_ms": common.now_ms() - started,
             "blocker": "" if text else "asr:empty_transcript",
         }

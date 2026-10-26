@@ -1,6 +1,6 @@
 ---
 name: local-ai-runtime-development
-description: TranslateIT specialist for the canonical local AI worker: ASR, Indonesian↔English translation, bounded outbound Meeting context, context-free incoming translation, GPT-SoVITS voice inference, built-in voice behavior, My Voice build/inference, model lifecycle and CUDA/CPU capability truth. Do not use for microphone/device routing, desktop presentation or packaging delivery.
+description: TranslateIT specialist for the canonical local AI worker: ASR, Indonesian↔English translation, current-source-only Meeting and Text translation, GPT-SoVITS voice inference, built-in voice behavior, My Voice build/inference, model lifecycle and CUDA/CPU capability truth. Do not use for microphone/device routing, desktop presentation or packaging delivery.
 ---
 
 # Local AI Runtime Development
@@ -19,7 +19,7 @@ There are no user-facing Realtime/Quality translation modes.
 Meeting context:
 
 ```text
-outbound → last 3 committed own-voice ID→EN pairs from same session
+outbound → current finalized Indonesian utterance only
 incoming → context-free
 Text     → standalone, no Meeting-context reuse
 ```
@@ -36,7 +36,7 @@ My Voice → optional trained GPT-SoVITS V2ProPlus actor after explicit approval
 - worker orchestration and request/response contract;
 - ASR inference;
 - bidirectional translation inference;
-- outbound context injection and incoming context exclusion;
+- exclusion of prior turns, saved terminology, style instructions and ASR hotwords;
 - model/provider load/readiness;
 - GPT-SoVITS synthesis;
 - built-in voice runtime contract;
@@ -54,7 +54,9 @@ Physical mic/VAD/device routing; Meeting output endpoint; desktop navigation/rea
 - Cloud inference and any cloud fallback are prohibited; local model/provider execution only.
 - Source/model presence does not prove model load/output quality/performance.
 - Translation must be complete or explicitly fail; no silent truncation.
-- Context metadata must reach the actual outbound inference request before contextual translation is claimed.
+- Only the current source text and language direction may determine translation content. Never inject prior pairs, transcript history, saved terminology, style instructions or alternative wording.
+- ASR must not use user hotwords, initial prompts, prefixes or previous-text conditioning.
+- Session IDs and timing metadata establish ownership and scheduling only; they never supply model content.
 - Incoming must never consume outbound/participant history.
 - My Voice training is bounded and mutually exclusive with active Meeting inference.
 - Built-in voice readiness and trained My Voice readiness share one selected-Meeting-voice product contract rather than two competing TTS owners.
@@ -67,7 +69,7 @@ Use `uv`, Ruff, pytest, benchmark/profiling tools or type checking only when the
 
 1. Pin current canonical worker and expected ASR/translation/TTS or My Voice product contract.
 2. Identify the first incorrect worker/provider/request owner and trace the exact caller and output envelope.
-3. Preserve outbound last-three-committed-pairs context, context-free incoming, one translation pipeline and selected-voice authority.
+3. Preserve current-source-only outbound, incoming and Text translation, one pipeline and selected-voice authority; legacy request/settings keys must not reactivate retired context or hints.
 4. Repair the smallest correct worker/provider owner; never create silent cloud/alternate-engine fallbacks.
 5. Check relevant unit/protocol fixtures, model identity and affected frontend/Rust consumers without widening unrelated layers.
 6. Distinguish source contract, model-load, CUDA/CPU performance and perceptual voice/translation quality proof.

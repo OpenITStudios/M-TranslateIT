@@ -15,7 +15,7 @@ def load_worker_module():
     return module
 
 
-def test_asr_passes_bounded_hotwords_to_faster_whisper(tmp_path: Path, monkeypatch) -> None:
+def test_retired_asr_hints_cannot_bias_faster_whisper(tmp_path: Path, monkeypatch) -> None:
     worker = load_worker_module()
     audio = tmp_path / "speech.wav"
     audio.write_bytes(b"RIFF" + b"0" * 64)
@@ -37,13 +37,18 @@ def test_asr_passes_bounded_hotwords_to_faster_whisper(tmp_path: Path, monkeypat
         {
             "audio_path": str(audio),
             "language": "id",
-            "hotwords": "  MIVUBI   mi vu bi   Vredeburg  ",
+            "hotwords": "UNTRUSTED_HOTWORDS",
+            "initial_prompt": "UNTRUSTED_PROMPT",
+            "prefix": "UNTRUSTED_PREFIX",
+            "condition_on_previous_text": True,
         }
     )
 
     assert result["ok"] is True
-    assert result["hotwords_applied"] is True
-    assert captured["hotwords"] == "MIVUBI mi vu bi Vredeburg"
+    assert "hotwords_applied" not in result
+    for retired in ("hotwords", "initial_prompt", "prefix"):
+        assert captured.get(retired) is None
+    assert captured["condition_on_previous_text"] is False
 
 
 def test_asr_refuses_truncated_transcript_before_translation(tmp_path: Path, monkeypatch) -> None:
@@ -89,5 +94,5 @@ def test_asr_omits_empty_hotwords(tmp_path: Path, monkeypatch) -> None:
     result = worker.handle_transcribe({"audio_path": str(audio), "hotwords": ""})
 
     assert result["ok"] is True
-    assert result["hotwords_applied"] is False
-    assert captured["hotwords"] is None
+    assert "hotwords_applied" not in result
+    assert captured.get("hotwords") is None

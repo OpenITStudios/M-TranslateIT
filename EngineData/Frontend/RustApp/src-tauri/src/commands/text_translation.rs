@@ -335,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn alternatives_require_verified_generation_and_direction() {
+    fn translation_requires_verified_generation_and_direction() {
         let valid = json!({
             "ok": true, "stage": "translate",
             "translation_contract": "canonical_bidirectional_id_en",

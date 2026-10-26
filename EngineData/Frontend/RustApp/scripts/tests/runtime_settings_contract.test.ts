@@ -47,7 +47,6 @@ test("core RuntimeSettings defaults remain aligned", () => {
   for (const [field, value] of [
     ["source_language", "id"],
     ["target_language", "en"],
-    ["translation_style", "natural"],
     ["meeting_listen_source_language", "en"],
     ["meeting_listen_target_language", "id"],
     ["meeting_setup_state", "new"],
@@ -95,7 +94,6 @@ test("Settings and ApplicationRuntime block device rebind during no-session Meet
 });
 
 test("settings sanitizers keep product enum-like values bounded", () => {
-  assert.match(rust, /"formal" => "formal"/);
   assert.match(rust, /"off" => "off"/);
   assert.match(rust, /"deferred" => "deferred"/);
   assert.match(rust, /"completed" => "completed"/);

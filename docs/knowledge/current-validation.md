@@ -21,6 +21,65 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Retired context and hint removal — 2026-10-26
+
+The current Local repair removes the dormant `translation_style`, `terminology`
+and `spoken_terms` settings/DTO/default/sanitizer surface and unused Rust ASR
+hotword builder. Schema 12 accepts legacy JSON, retains active preferences and
+omits retired keys on ordinary save; frontend cloning projects the active shape
+rather than retaining unknown top-level keys. The worker's ASR `hotwords` path
+was still callable even though production Meeting sent none: it is now removed,
+along with its response capability flag. Initial-prompt/prefix payloads remain
+ignored and previous-text conditioning stays false. Actual UserData was not
+read or rewritten for migration testing.
+
+Production Text, outbound and incoming payloads and the canonical prompt were
+inspected: only the current source and language direction provide translation
+content. Transcript/export retention, session/timing metadata and neighboring
+sentences within the current Text input are not prior-turn memory. No automatic
+rewrite/alternative-generation pass was found. Negative legacy-input tests and
+immutable historical corpus metadata deliberately retain forbidden terms; they
+are not active features. The local-AI skill and its routing/procedure examples,
+skill map and activation matrix no longer instruct last-three-pairs injection.
+
+Executed on this repair working tree: strict Svelte check (zero errors/warnings),
+418 frontend tests and source-contract validators passed; 75 affected ASR,
+translation and worker tests passed, including malicious legacy ASR hints;
+six Rust settings tests passed, including legacy-file load/save and active
+preference preservation; 15 agent-corpus/scorer tests and repository verification
+passed. Removing obsolete positive feature tests explains lower total test
+counts than the earlier complete-suite receipt. Initial red controls failed on
+retained defaults/cloning and active ASR hints. A pytest temp-root permission
+error and an absent private report/temp parent were execution-setup failures;
+using fresh workspace temp paths resolved them. The final affected worker run
+has no failures/errors/skips. This is **EXECUTED_SOURCE**, not a new full-suite
+or installed-app acceptance claim.
+
+Twelve real pinned local MiLMMT requests form six matched request pairs: both
+language directions with standalone Text, outgoing and incoming lane markers.
+Each pair produced identical output with and without legacy context, style,
+glossary, spoken-term, alternative, system-prompt and conversation-history keys.
+The private receipt `.workspace/reports/context-removal-model.json`, SHA-256
+`0ca85f1ae6cf1515a39ee350dca554407b57cff8203aebba850ffb0a79769d39`, binds the
+base SHA, modified source-file hashes, complete requests/responses and outcomes.
+The owned diagnostic worker was intentionally terminated by the existing runner
+(exit code 1 on Windows); this is not native application Stop/Close proof.
+This is **INTEGRATION_FIXTURE** context-isolation proof only.
+
+Semantic fidelity remains **FAIL / OPEN**. On clean base
+`ec5c1df3716eba359535525e68b5b948b846f00b`, the original EN→ID addition was
+reproduced with the exact standalone request and raw provider path; the original
+input occupies one chunk and repeated deterministic inference returns the same
+construction-purpose addition without history. The repair's matched-pair model
+probe retains that error. A real-model 190-case baseline was also retained in
+`.workspace/reports/translation-fidelity-ec5c1df3/`; all responses completed, but
+59 declared-invariant flags include false positives such as numeric punctuation
+and valid synonymous wording. Those flags are not adjudicated mistranslation
+counts. No candidate decoding/model/prompt change or real-model held-out run
+has been accepted. Removing external hints cannot guarantee that a generative
+model never invents meaning; quality work and the remaining integrated native
+flows stay open.
+
 ### Integrated developer acceptance — stopped 2026-10-26
 
 Pinned clean candidate: `8582fc2a34f9bc277d792ad39471c1cd6e8777da`, branch

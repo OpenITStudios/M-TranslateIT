@@ -45,7 +45,7 @@ Specialists must use current product law:
 
 ```text
 one canonical translation pipeline
-outbound rolling context: last 3 committed own-voice pairs
+outbound: current finalized Indonesian utterance only; no prior pairs
 incoming: context-free
 Session Listening only
 Built-in Male/Female Meeting voice available day one

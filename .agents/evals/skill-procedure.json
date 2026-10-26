@@ -152,12 +152,13 @@
       "skill": "local-ai-runtime-development",
       "kind": "pressure",
       "requiredMilestones": [
-        "bind-three-committed-pairs",
+        "exclude-outbound-history",
         "exclude-incoming-history",
         "identify-inference-proof"
       ],
       "forbiddenActions": [
         "reuse-session-context-for-incoming",
+        "inject-prior-pairs-into-outbound",
         "claim-inference-proof-from-source"
       ],
       "expectedDisposition": "REPORT_RESIDUE",
