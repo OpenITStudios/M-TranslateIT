@@ -41,9 +41,27 @@ Diagnostics privacy/source-contract tests passed. The audio subset passed 95/one
 ignored. Tests exercise actual ingress rejection, each queue loss reason, Stop
 exclusion, session reset and the numeric serialization whitelist. These source
 results do not identify the cause of the historical two microphone drops.
-Native observation of the new breakdown is **NOT EXECUTED**; the next separating
-evidence is the existing explicit Diagnostics export during bounded Start/Stop
-in the admitted integrated native phase. No transport-policy fix is claimed.
+**LIVE_RUNTIME at clean `c0f962902a2f77380401957d53b365e5cc97d038`:** locked
+frontend/Rust build passed and the frontend quick suite passed 408. Developer
+Start with Built-in Male reached Live; explicit Diagnostics exported the new
+breakdown. Microphone reported 10,965,120 received frames, zero native errors,
+zero PCM drops, zero ingress rejections and zero in every handoff reason. Incoming
+reported an active stream but zero received frames/observations; its zero error
+and drop counters do not prove incoming audio reception or a stalled device.
+Both speech-pipeline blockers were empty. The current device guard was healthy;
+the displayed last incoming-error incident was historical, not a current error.
+
+Normal UI Stop returned Ready, the empty archive finalized, normal app exit was
+zero and no canonical worker remained. No controlled speech or recognized phrase
+was observed. This verifies export/lifecycle behavior, not acoustic isolation,
+translation quality, receiver delivery, or loss-free sustained Meeting use.
+The historical two drops did not recur and still have no proved cause; no
+transport-policy fix or retrospective attribution is claimed.
+
+Private exact-source evidence: `.workspace/reports/pcm-drop-native-c0f96290.json`
+SHA-256 `5d3ca128b3eeebf0da0750918705eed1586a35e9c711679c1c1910222495f8bf`.
+The adjacent `.receipt.json` records numeric observations, source/build-log
+identity and normal cleanup; no transcript/audio body is retained in the receipt.
 
 ### Capture-health separation source repair — 2026-10-26
 

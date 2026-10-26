@@ -7,9 +7,13 @@ existing Diagnostics export now separates ingress rejection from handoff lock
 contention, full buffer, oversized chunks and poisoned lock. Only numeric
 observations were added; capture/discontinuity/Stop, queue capacity, VAD and engine
 behavior remain unchanged. Rust 339 passed/one ignored and six Diagnostics
-privacy/source contracts passed on the delivery candidate. The historical two
-microphone drops still have no proved cause; the new breakdown has not yet been
-observed in native execution. Current Validation owns interpretation and limits.
+privacy/source contracts passed on the delivery candidate. Clean `c0f96290` then
+passed the locked build and frontend 408 checks. Native Start reached Live;
+Diagnostics reported microphone zero native errors/PCM drops and zero in all
+new reason counters. Incoming was active with zero received frames, so incoming
+reception was not proved. Normal Stop, empty archive finalization and app exit
+succeeded; no worker remained. The historical two drops did not recur and still
+have no proved cause. Current Validation owns interpretation and limits.
 
 **Capture-health classification repaired at source (2026-10-26).** Native callback
 errors, PCM drop counts and speech-pipeline blockers are now separate in the
@@ -215,7 +219,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-During the admitted integrated native phase, observe the new per-lane PCM drop breakdown through the existing explicit Diagnostics export in one bounded Start/Stop, without requiring user speech. Distinguish ingress rejection from handoff loss before changing transport policy; do not retrospectively attribute the historical two drops. Preserve normal Stop, exact-source identity and privacy. The incoming native error and uncontrolled recognized phrases remain separate unresolved evidence. No CI, model/context/style/glossary change, incoming toggle, queue enlargement, blind retry or corrective translation layer is authorized.
+Use the existing synthetic WAV/PCM fixture path to attempt a controlled callback-to-Silero loss reproduction with concurrent status observation and CPU draining. Require a repeatable nonzero reason counter before changing transport policy; do not treat the latest zero-drop native snapshot as a fix or repeatedly wait for an unexplained native failure. The historical incoming error and uncontrolled recognized phrases remain separate unresolved evidence. No CI, model/context/style/glossary change, incoming toggle, queue enlargement, blind retry or corrective translation layer is authorized.
 
 ## Retained My Voice source candidate (paused)
 
