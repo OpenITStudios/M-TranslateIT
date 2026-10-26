@@ -6,7 +6,6 @@ This exercises direct worker ASR/translation/optional selected voice only.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import os
 import queue
@@ -20,18 +19,21 @@ import time
 from pathlib import Path
 
 from harness import (
-    CORPUS,
     RESULT_SCHEMA,
     ROOT,
     fingerprint,
     inspect,
-    invariant_result,
-    load_corpus,
     metrics,
+    regression_profile,
     specs,
     translation_receipt_complete,
-    voice_receipt_valid,
-    word_error_rate,
+)
+from pipeline_checks import (
+    finalized_asr_outcome,
+    grade_finalized_asr,
+    pipeline_contracts,
+    score_pipeline,
+    source_admission_passed,
 )
 
 WORKER = ROOT / "EngineData/Backend/LocalWorker/WorkerRuntime/realtime_local_worker.py"
@@ -164,9 +166,14 @@ def stage_result(response: dict, name: str) -> dict:
     result = {"ok": response["ok"], "blocker": str(response.get("blocker", ""))[:160],
               "elapsed_ms": response.get("elapsed_ms")}
     if name == "asr":
-        result["transcript_text"] = str(response.get("transcript_text", ""))[:4000]
+        if not isinstance(response.get("transcript_text", ""), str):
+            raise WorkerTransportError("worker:non_text_asr_result")
+        result["transcript_text"] = response.get("transcript_text", "")
         result["note"] = str(response.get("note", ""))[:1000]
+        result.update({key: response.get(key) for key in ("model_id", "device", "compute_type")})
     elif name == "translation":
+        if not isinstance(response.get("translated_text", ""), str):
+            raise WorkerTransportError("worker:non_text_translation_result")
         result.update({
             "model_id": response.get("model_id"),
             "model_revision": response.get("model_revision"),
@@ -174,135 +181,16 @@ def stage_result(response: dict, name: str) -> dict:
             "direction_pair": response.get("direction_pair"),
             "complete": response.get("complete") is True,
             "finished_with_eos": response.get("finished_with_eos") is True,
-            "translated_text": str(response.get("translated_text", ""))[:4000],
+            "translated_text": response.get("translated_text", ""),
         })
     return result
-
-
-def finalized_asr_outcome(response: dict, *, non_speech: bool) -> str:
-    text = response.get("transcript_text", "")
-    if non_speech:
-        if response.get("ok") is True and isinstance(text, str) and text.strip():
-            return "NON_SPEECH_TRANSCRIPT"
-        if (response.get("ok") is False and not text
-                and response.get("blocker") == "asr:empty_transcript"):
-            return "ASR_REJECTED_EMPTY"
-        return "UNVERIFIED_ASR_FAILURE"
-    return ("SPEECH_TRANSCRIBED" if response.get("ok") is True
-            and isinstance(text, str) and text.strip() else "SPEECH_ASR_FAILED")
-
-
-def grade_finalized_asr(report: dict, cases: dict, selection: set[str]) -> dict:
-    """Use canonical ASR reference/invariant scoring; failed controls cannot pass."""
-    corpus = {r["id"]: r for r in load_corpus(CORPUS)["cases"]}
-    checks = []
-    for name in sorted(selection):
-        case = cases[name]
-        rows = [r for r in report["results"] if r["scenario_id"] == name]
-        outcomes = [r["outcome"] for r in rows]
-        check = {"scenario_id": name, "status": "UNVERIFIED"}
-        if any(r in ("SPEECH_ASR_FAILED", "NON_SPEECH_TRANSCRIPT") for r in outcomes):
-            check["status"] = "FAIL"
-        elif (case["kind"] != "speech" and len(rows) == 1
-              and outcomes == ["VAD_REJECTED_NON_SPEECH"]
-              and rows[0].get("asr_executed") is False and not rows[0].get("asr")
-              and rows[0].get("vad") == {"ok": True, "finalized_count": 0, "overflow_count": 0}):
-            check.update({"status": "PASS", "proof": "CANONICAL_VAD_REJECTED_BEFORE_ASR"})
-        elif rows and all(r == "ASR_REJECTED_EMPTY" for r in outcomes) and case["kind"] != "speech":
-            check["status"] = "PASS"
-        elif rows and all(r == "SPEECH_TRANSCRIBED" for r in outcomes) and case["kind"] == "speech":
-            transcript = " ".join(r["asr"]["transcript_text"].strip() for r in rows)
-            wer = word_error_rate(case["reference"], transcript)
-            critical = (invariant_result(corpus[case["case_id"]], transcript)
-                        if case.get("case_id") else {"critical_pass": True})
-            check.update({"wer": wer, "critical": critical,
-                          "status": "PASS" if wer <= case["max_wer"] and critical["critical_pass"] else "FAIL"})
-        checks.append(check)
-    counts = {name: sum(r["status"] == name for r in checks) for name in ("PASS", "FAIL", "UNVERIFIED")}
-    verdict = ("FAIL" if counts["FAIL"] else "UNVERIFIED"
-               if counts["UNVERIFIED"] or report.get("transport_error") else "PASS")
-    return {"verdict": verdict, "counts": counts, "checks": checks}
-
-
-def pipeline_contracts(cases: dict) -> tuple[dict, object, str]:
-    """Semantic expectations remain in the canonical translation corpus."""
-    root = ROOT / "tools/translation_quality"
-    spec = importlib.util.spec_from_file_location("pipeline_translation_quality", root / "evaluate_translation_quality.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    corpus = module.load_corpus(root / "corpus/translation_quality_v1.json")
-    contracts = {}
-    for item in corpus["cases"]:
-        name = item.get("audio_scenario_id")
-        if name is None:
-            continue
-        if (name not in cases or name in contracts or item["source"] != cases[name]["reference"]
-                or item["direction"] != ("id-en" if cases[name]["language"] == "id" else "en-id")):
-            raise ValueError("translation contract differs from canonical audio scenario")
-        contracts[name] = item
-    return contracts, module, module.corpus_fingerprint(corpus)
-
-
-def grade_pipeline(report: dict, cases: dict, selection: set[str], rounds: int,
-                   contracts: dict, evaluator: object) -> dict:
-    checks = []
-    for iteration in range(1, rounds + 1):
-        rows = [r for r in report["results"] if r.get("round") == iteration]
-        asr = grade_finalized_asr({"results": rows}, cases, selection)
-        for first in asr["checks"]:
-            name = first["scenario_id"]
-            group = [r for r in rows if r["scenario_id"] == name]
-            check = {**first, "round": iteration, "first_wrong_stage": "asr" if first["status"] != "PASS" else None}
-            if check["status"] != "PASS":
-                checks.append(check)
-                continue
-            if cases[name]["kind"] != "speech":
-                if (len(group) != 1 or group[0].get("outcome") != "VAD_REJECTED_NON_SPEECH"
-                        or any(key in group[0] for key in ("translation", "tts", "roundtrip_asr"))):
-                    check.update(status="FAIL", first_wrong_stage="vad_suppression")
-                checks.append(check)
-                continue
-            translated = [r.get("translation", {}) for r in group]
-            direction = "id->en" if cases[name]["language"] == "id" else "en->id"
-            if not all(translation_receipt_complete(r, direction) for r in translated):
-                check.update(status="FAIL", first_wrong_stage="translation_envelope")
-            elif name not in contracts:
-                check.update(status="UNVERIFIED", first_wrong_stage="translation_contract_missing")
-            else:
-                text = " ".join(r["translated_text"] for r in translated)
-                check["translation_critical"] = evaluator.invariant_result(contracts[name], text)
-                if not check["translation_critical"]["critical_pass"]:
-                    check.update(status="FAIL", first_wrong_stage="translation_critical")
-                elif cases[name]["language"] == "id":
-                    if not all(voice_receipt_valid(r.get("tts", {}), report.get("voice_preflight"))
-                               and r["tts"].get("actor_identity_match") is True
-                               and r["tts"].get("output_identity_match") is True for r in group):
-                        check.update(status="FAIL", first_wrong_stage="tts_identity_or_audio")
-                    elif not all(r.get("roundtrip_asr", {}).get("ok") is True for r in group):
-                        check.update(status="FAIL", first_wrong_stage="tts_roundtrip_asr")
-                    else:
-                        spoken = " ".join(r["roundtrip_asr"]["transcript_text"] for r in group)
-                        check["spoken_critical"] = evaluator.invariant_result(contracts[name], spoken)
-                        check["spoken_wer"] = word_error_rate(text, spoken)
-                        if not check["spoken_critical"]["critical_pass"]:
-                            check.update(status="FAIL", first_wrong_stage="tts_critical_content")
-                        elif check["spoken_wer"] != 0:
-                            check.update(status="UNVERIFIED", first_wrong_stage="tts_content_difference")
-                elif any("tts" in r or "roundtrip_asr" in r for r in group):
-                    check.update(status="FAIL", first_wrong_stage="incoming_unexpected_tts")
-            checks.append(check)
-    counts = {status: sum(c["status"] == status for c in checks) for status in ("PASS", "FAIL", "UNVERIFIED")}
-    if report.get("preload_blockers"):
-        checks = [{**c, "status": "FAIL", "first_wrong_stage": "worker_preload"} for c in checks]
-        counts = {"PASS": 0, "FAIL": len(checks), "UNVERIFIED": 0}
-    verdict = "FAIL" if counts["FAIL"] else "UNVERIFIED" if counts["UNVERIFIED"] or report.get("transport_error") else "PASS"
-    return {"checks": checks, "counts": counts, "verdict": verdict}
 
 
 def run_finalized(fixtures: Path, python: Path, expected_sha: str, selection: set[str],
                   result_path: Path, timeout: float, vad_observations: Path,
                   segments_dir: Path, *, pipeline: bool = False, rounds: int = 1,
-                  vad_source_sha: str | None = None) -> dict:
+                  vad_source_sha: str | None = None, profile: str | None = None,
+                  source_checks: dict | None = None, artifacts_dir: Path | None = None) -> dict:
     """Diagnostic ASR on actual exported Rust segments, not app acceptance."""
     from vad_runner import CLAIM, verify_segments
 
@@ -310,6 +198,8 @@ def run_finalized(fixtures: Path, python: Path, expected_sha: str, selection: se
     if type(rounds) is not int or not 1 <= rounds <= 20 or (not pipeline and (rounds != 1 or vad_source_sha is not None)):
         raise ValueError("repeated/retained inputs require finalized pipeline; rounds must be 1–20")
     input_sha = vad_source_sha or expected_sha
+    if profile and input_sha != expected_sha:
+        raise ValueError("named regression profiles require fresh same-source VAD; use custom IDs for retained replay")
     if not re.fullmatch(r"[a-f0-9]{40}", input_sha):
         raise ValueError("exact finalized VAD source SHA required")
     manifest = inspect(fixtures)
@@ -317,6 +207,10 @@ def run_finalized(fixtures: Path, python: Path, expected_sha: str, selection: se
     cases = {r["id"]: r for r in suite}
     if not selection or not selection.issubset(cases):
         raise ValueError("select known finalized scenario IDs")
+    execution_profile = regression_profile(profile) if profile else None
+    if execution_profile and (not pipeline or selection != set(execution_profile["scenario_ids"])
+            or rounds != execution_profile["rounds"] or not source_admission_passed(source_checks, expected_sha)):
+        raise ValueError("named profile requires its complete coverage and matching source admission")
     if result_path.exists() or result_path.is_symlink():
         raise ValueError("finalized ASR result already exists")
     vad_receipt_hash = fingerprint(vad_observations)
@@ -354,15 +248,26 @@ def run_finalized(fixtures: Path, python: Path, expected_sha: str, selection: se
               "downstream": "TRANSLATION_TTS_MEETING_NOT_EXECUTED",
               "proof": "FINALIZED_ASR_PROBE_NOT_EXECUTED"}
     if pipeline:
-        contracts, evaluator, contract_id = pipeline_contracts(cases)
+        contracts, _evaluator, contract_id = pipeline_contracts(cases)
+        if execution_profile and any(cases[name]["kind"] == "speech" and name not in contracts for name in selection):
+            raise ValueError("named regression profile lacks a speech semantic contract")
         report["source_identity"]["context"] = "LOCAL_CODE_RETAINED_FINALIZED_WAV_TO_WORKER_PIPELINE"
-        report.update(schema="translateit.finalized_pipeline.v1", rounds=rounds,
+        report.update(schema="translateit.finalized_pipeline.v2", rounds=rounds,
+                      selection=sorted(selection), execution_profile=execution_profile,
+                      source_checks=source_checks,
+                      expected_segments={name: observed[name]["segments"] for name in selection},
+                      current_vad_required=bool(execution_profile),
+                      vad_stage_results={name: {key: observed[name].get(key) for key in
+                          ("ok", "finalized_count", "writer_valid", "overflow_count")} for name in selection},
                       input_source_identity=prior["source_identity"],
                       vad_receipt_sha256=vad_receipt_hash,
                       translation_contract_fingerprint=contract_id,
                       acceptance_scope="DECLARED_PUBLIC_FIXTURE_CRITICALS_AND_SPOKEN_CONTENT_PROXY_NOT_GENERAL_SEMANTIC_OR_NATURALNESS_ACCEPTANCE",
                       downstream="TRANSLATION_SELECTED_ENGLISH_VOICE_CONTENT_PROXY_NOT_MEETING",
                       proof="CURRENT_WORKER_ON_HASH_VERIFIED_FINALIZED_INPUTS_NOT_FRESH_VAD_OR_MEETING")
+        if execution_profile:
+            report["proof"] = "FRESH_CANONICAL_VAD_AND_WORKER_PIPELINE_NOT_NATIVE_MEETING"
+            report["source_identity"]["context"] = "LOCAL_CODE_CURRENT_VAD_TO_WORKER_PIPELINE"
     # The canonical worker accepts CacheData/LogData inputs only. Stage a verified
     # byte-identical copy there; do not widen its allowed paths for test tooling.
     cache = ROOT / "UserData/CacheData"
@@ -433,7 +338,8 @@ def run_finalized(fixtures: Path, python: Path, expected_sha: str, selection: se
                                 produced = worker.invoke("voice_actor_synthesize", text=trans["translated_text"],
                                     output_path=str(output), expected_actor_token=preflight.get("actor_token", ""))
                                 tts = stage_result(produced, "tts")
-                                tts.update(actor_token=produced.get("actor_token"), output_path=produced.get("output_path"))
+                                tts.update(actor_token=produced.get("actor_token"), output_path=produced.get("output_path"),
+                                           expected_output_path=str(output))
                                 row["tts"] = tts
                                 tts["actor_identity_match"] = bool(preflight.get("actor_token")) and produced.get("actor_token") == preflight["actor_token"]
                                 tts["output_identity_match"] = produced.get("output_path") == str(output)
@@ -444,27 +350,43 @@ def run_finalized(fixtures: Path, python: Path, expected_sha: str, selection: se
                                         language="en", beam_size=1, vad_filter=False), "asr")
                                     if fingerprint(output) != tts["wav_sha256"]:
                                         raise ValueError("synthesized output changed during content check")
-                    if pipeline:
+                    last = next(c["id"] for c in (reversed(suite) if iteration % 2 else suite) if c["id"] in selection)
+                    if pipeline and name == last:
                         report["snapshots"].append({"round": iteration, "scenario_id": name,
                                                     "status": worker.invoke("status")})
+                        print(f"audio-regression: round {iteration}/{rounds} completed", file=sys.stderr, flush=True)
         except WorkerTransportError as exc:
             report["transport_error"] = str(exc)
         finally:
             worker.close()
             if pipeline:
                 report["fixture_worker_terminated"] = worker.child.poll() is not None
+        if pipeline:
+            report.update(score_pipeline(report, cases, suite_id, manifest["audio_fingerprint"]))
+            failed = {(c["scenario_id"], c["round"]) for c in report["checks"] if c["status"] != "PASS"}
+            for row in report["results"]:
+                if (row["scenario_id"], row["round"]) not in failed or not row.get("tts", {}).get("wav_sha256"):
+                    continue
+                tts = row["tts"]
+                original = Path(tts["expected_output_path"])
+                if not original.resolve().is_relative_to(Path(work).resolve()) or fingerprint(original) != tts["wav_sha256"]:
+                    raise ValueError("failed output artifact identity differs")
+                retained = (artifacts_dir or result_path.with_suffix(result_path.suffix + ".artifacts")) / "failed_audio" / original.name
+                retained.parent.mkdir(parents=True, exist_ok=True)
+                with original.open("rb") as source, retained.open("xb") as target:
+                    shutil.copyfileobj(source, target)
+                if fingerprint(retained) != tts["wav_sha256"]:
+                    raise ValueError("retained failure audio identity differs")
+                tts["retained_output_path"] = str(retained)
     # Original exports remain available for reproducibility after worker cleanup.
     if verify_segments(segments_dir, observed) != segment_id:
         raise ValueError("exported finalized segments changed during ASR")
     if fingerprint(vad_observations) != vad_receipt_hash:
         raise ValueError("finalized VAD receipt changed during execution")
     pinned_source(expected_sha)
-    report.update(grade_pipeline(report, cases, selection, rounds, contracts, evaluator)
-                  if pipeline else grade_finalized_asr(report, cases, selection))
-    result_path.parent.mkdir(parents=True, exist_ok=True)
-    with result_path.open("x", encoding="utf-8") as output:
-        json.dump(report, output, ensure_ascii=False, indent=2)
-        output.write("\n")
+    if not pipeline:
+        report.update(grade_finalized_asr(report, cases, selection))
+    publish_report(result_path, report)
     return report
 
 
@@ -594,34 +516,138 @@ def run(fixtures: Path, python: Path, expected_sha: str,
     return output
 
 
+def run_source_checks(expected_sha: str) -> dict:
+    """Bounded existing validators; no model imports, downloads or native capture."""
+    pinned_source(expected_sha)
+    commands = [
+        ("audio_contracts", [sys.executable, "-m", "unittest", "tools.tests.test_audio_validation",
+                            "tools.tests.test_audio_vad_receipts", "tools.tests.test_audio_pipeline",
+                            "tools.tests.test_audio_fault_runner"]),
+        ("asr_evaluator", [sys.executable, "tools/asr_quality/self_test.py"]),
+        ("translation_evaluator", [sys.executable, "tools/translation_quality/self_test.py"]),
+    ]
+    checks = []
+    for name, command in commands:
+        started = time.monotonic()
+        try:
+            result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, encoding="utf-8",
+                                    timeout=120, env={**os.environ, "PYTHONUTF8": "1"}, check=False)
+            check = {"name": name, "status": "PASS" if result.returncode == 0 else "FAIL",
+                     "expected": "validator exit 0", "exit_code": result.returncode,
+                     "stdout": result.stdout, "stderr": result.stderr}
+        except subprocess.TimeoutExpired:
+            check = {"name": name, "status": "FAIL", "expected": "validator completes within 120 seconds",
+                     "error": "source_validator_deadline_exceeded"}
+        check["elapsed_ms"] = round((time.monotonic() - started) * 1000)
+        checks.append(check)
+    pinned_source(expected_sha)
+    counts = {state: sum(c["status"] == state for c in checks) for state in ("PASS", "FAIL", "UNVERIFIED")}
+    return {"schema": "translateit.audio_source_checks.v1", "source_identity": {"local_sha": expected_sha},
+            "checks": checks, "counts": counts, "verdict": "FAIL" if counts["FAIL"] else "PASS",
+            "proof": "EXECUTED_SOURCE_VALIDATORS_NOT_MODEL_OR_NATIVE_ACCEPTANCE"}
+
+
+def publish_report(path: Path, report: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x", encoding="utf-8") as handle:
+        json.dump(report, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+
+
+def report_summary(report: dict, output: Path) -> dict:
+    failed = [c for c in report.get("checks", []) if c.get("status") != "PASS"]
+    return {"profile": report.get("execution_profile", {}).get("name") if report.get("execution_profile") else "custom",
+            "verdict": report.get("verdict", "NOT_GRADED"), "counts": report.get("counts"),
+            "proof": report["proof"], "output": str(output), "failures": failed[:5],
+            "additional_failures_in_report": max(0, len(failed) - 5),
+            "execution_error": report.get("transport_error") or report.get("source_admission_error")}
+
+
+def admission_failure(profile: dict, source_sha: str, source_checks: dict, stage: str, error: str) -> dict:
+    checks = [{"scenario_id": name, "round": iteration, "status": "UNVERIFIED", "first_wrong_stage": stage,
+               "expected": "source validators and current canonical VAD complete before worker inference",
+               "actual": error, "evidence": ["#/source_checks"]}
+              for iteration in range(1, profile["rounds"] + 1) for name in profile["scenario_ids"]]
+    return {"schema": "translateit.finalized_pipeline.v2", "execution_profile": profile,
+            "source_identity": {"local_sha": source_sha}, "source_checks": source_checks,
+            "verdict": "FAIL", "counts": {"PASS": 0, "FAIL": 0, "UNVERIFIED": len(checks)}, "checks": checks,
+            "source_admission_error": error, "proof": "ADMISSION_FAILED_PIPELINE_NOT_EXECUTED"}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Explicit local AI worker audio smoke; never CI")
-    parser.add_argument("--fixtures", type=Path, required=True)
-    parser.add_argument("--python", type=Path, required=True)
+    parser.add_argument("--fixtures", type=Path)
+    parser.add_argument("--python", type=Path)
     parser.add_argument("--source-sha", required=True)
-    parser.add_argument("--ids", nargs="+", required=True)
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--ids", nargs="+")
+    selection.add_argument("--profile", choices=("source", "core", "endurance"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=120)
+    parser.add_argument("--vad-timeout", type=int, default=600)
     parser.add_argument("--include-voice", action="store_true")
     parser.add_argument("--vad-observations", type=Path)
     parser.add_argument("--segments-dir", type=Path)
     parser.add_argument("--finalized-pipeline", action="store_true")
-    parser.add_argument("--rounds", type=int, default=1)
+    parser.add_argument("--rounds", type=int)
     parser.add_argument("--vad-source-sha", help="Explicit retained VAD source; never current VAD proof")
     args = parser.parse_args()
+    if args.output.exists() or args.output.is_symlink():
+        parser.error("output must be a new report; previous evidence is immutable")
+    if args.profile and args.rounds is not None:
+        parser.error("named profiles own their round count; --rounds is for custom --ids only")
+    source_checks = None
+    if args.profile == "source":
+        if any((args.fixtures, args.python, args.vad_observations, args.segments_dir, args.include_voice,
+                args.finalized_pipeline, args.vad_source_sha)):
+            parser.error("source profile accepts no model/audio arguments")
+        result = run_source_checks(args.source_sha)
+        result["execution_profile"] = {"name": "source"}
+        publish_report(args.output, result)
+        print(json.dumps(report_summary(result, args.output), ensure_ascii=False, indent=2))
+        return 0 if result["verdict"] == "PASS" else 2
+    if args.fixtures is None or args.python is None:
+        parser.error("model execution requires --fixtures and --python")
+    profile = regression_profile(args.profile) if args.profile else None
+    rounds = profile["rounds"] if profile else (args.rounds if args.rounds is not None else 1)
+    ids = set(profile["scenario_ids"] if profile else args.ids)
+    if profile:
+        if any((args.vad_observations, args.segments_dir, args.include_voice, args.vad_source_sha)):
+            parser.error("core/endurance run fresh VAD themselves; retained inputs require custom --ids")
+        artifacts = args.output.with_suffix(args.output.suffix + ".artifacts")
+        if artifacts.exists() or artifacts.is_symlink():
+            parser.error("regression artifacts must use a new destination")
+        source_checks = run_source_checks(args.source_sha)
+        if not source_admission_passed(source_checks, args.source_sha):
+            result = admission_failure(profile, args.source_sha, source_checks, "source_admission", "source validators failed; no models started")
+            publish_report(args.output, result)
+            print(json.dumps(report_summary(result, args.output), ensure_ascii=False, indent=2))
+            return 2
+        from vad_runner import run as run_vad
+
+        args.vad_observations = artifacts / "vad.json"
+        args.segments_dir = artifacts / "segments"
+        print("audio-regression: source admission passed; running canonical VAD", file=sys.stderr, flush=True)
+        try:
+            run_vad(args.fixtures, args.source_sha, args.vad_observations, args.vad_timeout, segments_dir=args.segments_dir)
+        except (OSError, ValueError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as error:
+            result = admission_failure(profile, args.source_sha, source_checks, "vad_execution", str(error))
+            publish_report(args.output, result)
+            print(json.dumps(report_summary(result, args.output), ensure_ascii=False, indent=2))
+            return 2
     if args.vad_observations is not None or args.segments_dir is not None:
         if args.vad_observations is None or args.segments_dir is None or args.include_voice:
             parser.error("finalized input requires both VAD arguments; use --finalized-pipeline for selected voice")
-        result = run_finalized(args.fixtures, args.python, args.source_sha, set(args.ids),
+        result = run_finalized(args.fixtures, args.python, args.source_sha, ids,
                                args.output, args.timeout, args.vad_observations, args.segments_dir,
-                               pipeline=args.finalized_pipeline, rounds=args.rounds, vad_source_sha=args.vad_source_sha)
+                               pipeline=args.finalized_pipeline or bool(profile), rounds=rounds, vad_source_sha=args.vad_source_sha,
+                               profile=args.profile, source_checks=source_checks, artifacts_dir=artifacts if profile else None)
     else:
-        if args.finalized_pipeline or args.rounds != 1 or args.vad_source_sha:
+        if args.finalized_pipeline or rounds != 1 or args.vad_source_sha:
             parser.error("finalized pipeline options require finalized VAD/WAV inputs")
         result = run(args.fixtures, args.python, args.source_sha,
-                     set(args.ids), args.output, args.include_voice, args.timeout)
-    print(json.dumps({"cases": len(result["results"]), "proof": result["proof"],
-                      "output": str(args.output), "verdict": result.get("verdict", "NOT_GRADED")}, indent=2))
+                     ids, args.output, args.include_voice, args.timeout)
+    print(json.dumps(report_summary(result, args.output), ensure_ascii=False, indent=2))
     return 2 if args.vad_observations is not None and result["verdict"] != "PASS" else 0
 
 

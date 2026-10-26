@@ -35,16 +35,18 @@ A gate may advance **only** after all mandatory cases have been executed on a ma
 | Windows Meeting route | F16–F22 | Stop generation, route, independent receiving app |
 | Persistence/performance/priority | F23–F28 | archive, device memory/timing, scheduler, retry |
 
-See [fault_matrix.json](fault_matrix.json) for machine-readable cases. F01–F05 have simulated timeout/EOF queue contract checks; F06/F07/F14 have offline protocol/WAV injectors (not executed on the target machine). The other 20 scenarios remain planned without executable injectors; **all are unverified until execution**. Do not set synthetic fault results to PASS without running those exact owners and capturing receipts.
+See [fault_matrix.json](fault_matrix.json) for machine-readable planned faults. Actual injector selection is derived from exact matrix/runner bindings at execution; absent injectors remain NOT_EXECUTED. Queue/protocol/source-function checks never prove actual model/device recovery. Revision-scoped results belong to Current Validation, not this specification.
 
 ## Final manual workload
 
 Once G0–G4 have *actually passed*, a user only needs a short integrated acceptance: launch and confirm Ready, speak one Indonesian negation+number sentence, verify English speech arrives at a **separate receiver**, verify one incoming English phrase appears as Indonesian text, press Stop and check audio immediately stops. Optionally rate voice intelligibility. Reserve more manual testing for proven device-specific gaps rather than repeating every synthetic case.
 
-## Current limitation
+## Maintained regression contract
 
-The 48 cases are **specifications**, not 48 newly generated/accepted WAVs. The earlier 16 WAV preview is separate from the repository. The fault matrix includes eight offline queue/protocol/WAV injectors via `fault_runner.py`; they do not prove actual worker/model/device fault handling. The remaining 20 cases are implementation plans, not executed tests. GitHub Actions remains disabled.
+The single developer entry point is `worker_runner.py --profile source|core|endurance`; see [the command and maintenance boundaries](README.md#official-regression-entry-point). The core package and execution policy are owned by `scenarios.json` → `regression`, independent of acoustic fixture identity. Source admission runs existing negative-proof/protocol/evaluator checks. Named model profiles execute fresh canonical VAD at the same source, then one persistent worker; custom retained-WAV diagnostics explicitly retain older input-source identity.
 
-## Latest offline fault execution coverage
+`pipeline_checks.py` owns the decision path used by execution and offline scoring. Canonical ASR/translation evaluators remain semantic owners. Mandatory segment coverage/order/hash, EOS/direction, correction/negation, actor/output, silence rejection and absent downstream work on noise are checked. Missing evidence is UNVERIFIED; no mandatory failure or unknown may pass. Reports contain expected/actual/evidence and retain failed synthesized audio. Tests of protocol changes must not require changing stable scenario expectations.
 
-F09 tests the canonical prompt builder deterministically by invoking the existing MiLMMT Python function, without model weights or a Meeting session. F02 uses an intentionally disposable Python child process to establish a real child EOF, while the other worker-exit cases remain queue-only simulations. This does not establish translation quality, real GPU recovery, or stale-output prevention. Current authored offline coverage is 11/28; the remaining 17 are pending executors, and no exact-SHA runtime proof is implied by the code's presence.
+Version-one system delivery is complete when one core command covers the fixed vital package, all its mandatory checks and negative controls execute, failures identify the first wrong stage, offline regrading agrees, and maintenance boundaries explain which owner changes while fixtures remain stable. This does not require claiming all 48 downstream scenarios, all planned faults or G4/G5 acceptance. Expanding coverage requires a product-risk gap or observed failure, not test-count growth.
+
+Audio is generated separately and reused by immutable hashes. Synthetic fixture quality is not human accent/meeting-compression/perceptual proof. Current executed evidence lives in `docs/knowledge/current-validation.md`; source presence or this planned matrix never creates PASS. Naturalness, real capture/route/receiver and installed-product gates remain explicit and separate. CI remains paused.

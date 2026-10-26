@@ -411,5 +411,30 @@
       "expect": "asr_mt_tts",
       "max_wer": 0.45
     }
-  ]
+  ],
+  "regression": {
+    "scenario_ids": [
+      "A01",
+      "A02",
+      "A03",
+      "A04",
+      "A06",
+      "A09",
+      "A10",
+      "A11",
+      "A12",
+      "A13",
+      "A14",
+      "A15",
+      "A34"
+    ],
+    "profiles": {
+      "core": {
+        "rounds": 2
+      },
+      "endurance": {
+        "rounds": 20
+      }
+    }
+  }
 }

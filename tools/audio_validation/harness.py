@@ -117,6 +117,23 @@ def specs(suite_path: Path = SUITE, corpus_path: Path = CORPUS) -> tuple[list[di
     return items, digest({"cases": items, "corpus": corpus_fingerprint(corpus)})
 
 
+def regression_profile(name: str, suite_path: Path = SUITE) -> dict:
+    """Execution policy has its own identity; audio specifications stay unchanged."""
+    cases, _ = specs(suite_path)
+    policy = json_file(suite_path).get("regression", {})
+    ids = policy.get("scenario_ids")
+    profiles = policy.get("profiles", {})
+    if (not isinstance(ids, list) or not ids or not all(isinstance(x, str) for x in ids)
+            or len(set(ids)) != len(ids) or not set(ids).issubset({c["id"] for c in cases})
+            or name not in profiles):
+        raise ValueError("invalid regression selection/profile")
+    rounds = profiles[name].get("rounds")
+    if type(rounds) is not int or not 1 <= rounds <= 20:
+        raise ValueError("regression profile rounds must be 1–20")
+    return {"name": name, "scenario_ids": ids, "rounds": rounds,
+            "fingerprint": digest({"scenario_ids": ids, "rounds": rounds})}
+
+
 def decode_wave(path: Path) -> tuple[list[int], int]:
     if path.is_symlink() or not path.is_file() or path.stat().st_size > RATE*LIMIT_S*12:
         raise ValueError("WAV missing, linked, or too large")
@@ -351,6 +368,10 @@ def score(target: Path, observations: Path, suite_path: Path = SUITE,
     cases, suite_hash = specs(suite_path, corpus_path)
     corpus = {x["id"]: x for x in load_corpus(corpus_path)["cases"]}
     proof = json_file(observations)
+    if proof.get("schema") == "translateit.finalized_pipeline.v2":
+        from pipeline_checks import score_pipeline
+
+        return score_pipeline(proof, {c["id"]: c for c in cases}, suite_hash, fixture["audio_fingerprint"])
     identity = proof.get("source_identity")
     if (proof.get("schema") != RESULT_SCHEMA or proof.get("scenario_fingerprint") != suite_hash
             or proof.get("audio_fingerprint") != fixture["audio_fingerprint"]
@@ -512,6 +533,6 @@ def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (ValueError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+    except (ValueError, TypeError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         print(f"audio-fixtures: {type(exc).__name__}: {exc}", file=sys.stderr)
         raise SystemExit(2) from None

@@ -12,6 +12,36 @@
 
 ## Workflow
 
+### Official regression entry point
+
+The maintained acceptance entry point is `worker_runner.py --profile source|core|endurance`. It uses existing validators and the canonical VAD/worker; it never installs dependencies, regenerates audio, uses cloud inference or triggers CI. Run it from the prepared local development shell with the existing Python/Cargo/model prerequisites. Reports and their `.json.artifacts/` directories must be new; original evidence is never overwritten.
+
+```powershell
+python tools/audio_validation/worker_runner.py --profile source --source-sha <clean-Local-SHA> --output <new-source-report.json>
+python tools/audio_validation/worker_runner.py --profile core --source-sha <clean-Local-SHA> --fixtures <immutable-fixtures> --python <existing-worker-python> --output <new-core-report.json>
+python tools/audio_validation/worker_runner.py --profile endurance --source-sha <clean-Local-SHA> --fixtures <immutable-fixtures> --python <existing-worker-python> --output <new-endurance-report.json>
+```
+
+`source` runs the existing audio contract/fault tests and ASR/translation evaluator self-tests without loading models. `core` first requires that admission, then runs fresh canonical Rust VAD/WAV export at the exact same source and two opposite-order worker rounds over the fixed 13-scenario package. `endurance` uses the same package for 20 rounds. The existing VAD verifier reads all 48 inputs; the named regression verdict covers only the explicitly listed core package, not all 48 downstream scenarios. Missing prerequisites fail with a report before worker inference; there is no automatic fallback to old VAD results. Custom retained-input diagnostics remain available below and are explicitly labeled as replay.
+
+Package membership and round policy have one owner: `scenarios.json` → `regression`. Their fingerprint is independent of the acoustic scenario/audio identity, so execution-policy changes do not force WAV regeneration. Named profiles cannot be reduced by `--ids` or `--rounds`. Current downstream contracts cover every speech member of the package. `pipeline_checks.py` owns pipeline acceptance; both execution and `harness.py score` call its same decision function. V2 receipts explicitly bind expected segment coverage/order/hashes, current VAD requirements, semantic corpus and source admission; older V1 diagnostics remain historical and are not silently migrated.
+
+PASS requires every mandatory selected check in every round. FAIL is a violated contract; UNVERIFIED is missing evidence or unresolved content difference. Both exit 2. Each unsuccessful check includes expected behavior, actual stages and JSON evidence pointers; the terminal shows the first five plus the full report path. Failed synthesized WAVs are retained with hash-bound paths; successful temporary outputs are removed. Current VAD receipt and finalized exports remain in the report's artifact directory. Per-stage p50/p95/max worker elapsed times (nearest-rank p95) and per-round allocator samples are observations, never native latency or leak-free acceptance. Child termination is fixture cleanup, not product Stop proof.
+
+Maintenance boundaries:
+
+| Change | Owner to update | Stable inputs |
+|---|---|---|
+| Audio condition / package membership | `scenarios.json`, fixture generator when acoustic inputs change | Unaffected scenarios and semantic contracts |
+| Expected ASR / translated meaning | Existing ASR / translation corpus and evaluator | Audio and worker protocol |
+| Worker protocol or stage invocation | `worker_runner.py` transport/stage adapter | Scenarios, audio and meaning |
+| Pipeline evidence / decision | `pipeline_checks.py` and its negative controls | Model implementation |
+| Fixture schema or identity | `harness.py`; existing `vad_runner.py` for exported WAV evidence | Product inference semantics |
+
+Only change scenarios when product requirements or a demonstrated test-contract defect requires it. Model/dependency upgrades do not authorize replacing reference text, regenerating fixtures or accepting a new baseline automatically. Source/model/audio/contract identities must remain explicit. Naturalness, real devices, installed app, Meeting context and independent receiver acceptance retain their separate gates.
+
+### Fixture preparation and diagnostics
+
 For natural Indonesian input, use the owner-accepted M1/F1 profiles through the existing [local neural fixture workflow](NATURAL_VOICES.md#current-selected-method-local-neural-listening-preview). The listening preview preserves 44.1-kHz originals; the canonical generator publishes separate hashed 16-kHz fixtures using the same synthesis. Profile acceptance does not certify every sentence or any ASR/VAD/Meeting result. The eSpeak route below remains mechanical smoke tooling.
 
 From repository root, with Python 3.12 and an installed offline eSpeak-compatible synthesizer:
@@ -56,7 +86,7 @@ When explicitly reusing older finalized WAVs, add `--vad-source-sha <exact-origi
 
 Semantic contracts live in the existing translation-quality corpus, linked by `audio_scenario_id` and checked against the canonical audio source text/direction. Its independent fingerprint is recorded in the pipeline receipt: changing semantic checks does not regenerate audio. Missing contracts stay UNVERIFIED. Ten public speech scenarios currently have declared contracts; these check concepts, negation and ordered numeric-correction cues without requiring the exact previous translation. The canonical translation evaluator validates optional `ordered_any` critical cue sequences. Different valid forms such as `15 rather than 50` can pass; reversed values cannot. These are bounded declared invariants, not proof of arbitrary semantic equivalence. New accepted linguistic forms require a reviewed contract change, never automatic baseline replacement.
 
-Each selected scenario/round receives PASS/FAIL/UNVERIFIED and `first_wrong_stage`. Missing rounds, failed envelopes, wrong actor/output, invalid/silent audio and critical meaning regressions cannot pass. Noise must be rejected before ASR with no downstream stage. TTS content is compared with its actual translation input; differing noncritical wording in roundtrip ASR stays UNVERIFIED rather than silently passing. Overall exit is 0 only for all selected checks PASS, otherwise 2. Unselected scenarios are outside that verdict; it never means all 48 scenarios or the full application passed. Full translated/spoken text and actual model IDs/revisions, preflight, snapshots and hashes are retained in the private receipt. Temporary staged/synthesized WAVs are removed after cleanup; original finalized exports remain unchanged. The fixture terminates its child on cleanup; this does not test product Meeting Stop. No naturalness, native audio, sustained latency or receiver acceptance is implied.
+Each selected scenario/round receives PASS/FAIL/UNVERIFIED and `first_wrong_stage`. Missing rounds, failed envelopes, wrong actor/output, invalid/silent audio and critical meaning regressions cannot pass. Noise must be rejected before ASR with no downstream stage. TTS content is compared with its actual translation input; differing noncritical wording in roundtrip ASR stays UNVERIFIED rather than silently passing. Overall exit is 0 only for all selected checks PASS, otherwise 2. Unselected scenarios are outside that verdict; it never means all 48 scenarios or the full application passed. Full translated/spoken text and actual model IDs/revisions, preflight, snapshots and hashes are retained in the private receipt. Successful temporary WAVs are removed after cleanup; failed synthesized WAVs are retained with hash-bound paths beside the report, and original finalized exports remain unchanged. The fixture terminates its child on cleanup; this does not test product Meeting Stop. No naturalness, native audio, sustained latency or receiver acceptance is implied.
 
 ### Explicit finalized-WAV → ASR diagnostic
 
@@ -94,7 +124,7 @@ A change of generator, WAV bytes, corpus or scenario version blocks a direct com
 | L4 | Windows virtual route → separate actual meeting-app receiver | NOT IMPLEMENTED / NOT EXECUTED in harness |
 | L5 | Real physical microphone and ambient conditions | Native/manual acceptance still required |
 
-Numeric 61-second tone A15 tests a buffer/overflow **boundary only**, never natural continuous-speech ASR quality. ASR TTS synthesized read speech does not prove human accents or spontaneous Meeting comprehension. No green source test overrides these distinctions.
+A15 is a 61-second non-speech tone-rejection scenario; explicitly classified source fixtures separately exercise overflow safety. Neither proves natural long-speech ASR quality. ASR TTS synthesized read speech does not prove human accents or spontaneous Meeting comprehension. No green source test overrides these distinctions.
 
 ## Extension rules
 
@@ -131,6 +161,6 @@ F09 now invokes the *actual pinned MiLMMT source prompt builder* on reordered pu
 
 The Python worker dispatcher emits `stage=worker_error` on a raised handler exception and retains the original request ID. The harness now classifies this envelope as an explicit unsuccessful stage (with a `worker:handler_failed:...` blocker), not as corrupt transport, while still refusing a forged successful `worker_error`. This behavior is source-derived and protected by an authored regression; no model or Windows host test has been performed.
 
-**Preflight boundaries before any user testing:** the local host must have an exact clean Local checkout, pinned Python/Cargo, real model assets and permitted output paths. A source-only contract result cannot certify native Meeting reception. The 48-case WAV suite is not yet generated as the canonical fixture set; the preview ZIP of 16 WAVs is not automatically imported. Actual latency, power, device ownership and receiver results remain unknown until executable evidence exists.
+**Preflight boundaries before any user testing:** the local host must have an exact clean Local checkout, pinned Python/Cargo, real model assets and permitted output paths. A source-only contract result cannot certify native Meeting reception. The canonical fixture manifest/hash identity is required; a preview ZIP of 16 WAVs cannot substitute for the 48-case fixture set. Actual latency, power, device ownership and receiver results remain unknown until executable evidence exists.
 
 **Generation hardening:** `generate` now enforces the doctor gate automatically (an explicit separate doctor command is useful for diagnosis, but not required for safety). The required ID/EN voices must exist; existing fixture outputs are immutable and no partial synthesis directory is published as accepted.
