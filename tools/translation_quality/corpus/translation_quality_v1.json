@@ -4763,6 +4763,390 @@
         "negation",
         "meaning"
       ]
+    },
+    {
+      "id": "audio-a01",
+      "audio_scenario_id": "A01",
+      "direction": "id-en",
+      "category": "audio_pipeline",
+      "source": "Tolong mulai presentasinya sekarang.",
+      "references": [
+        "Please start the presentation now."
+      ],
+      "preserve": [],
+      "required_any": [
+        [
+          "start",
+          "begin"
+        ],
+        [
+          "presentation"
+        ],
+        [
+          "now"
+        ]
+      ],
+      "forbidden": [],
+      "risk_tags": [
+        "meaning",
+        "omission"
+      ]
+    },
+    {
+      "id": "audio-a02",
+      "audio_scenario_id": "A02",
+      "direction": "id-en",
+      "category": "audio_pipeline",
+      "source": "Ya, saya setuju.",
+      "references": [
+        "Yes, I agree."
+      ],
+      "preserve": [],
+      "required_any": [
+        [
+          "agree"
+        ]
+      ],
+      "forbidden": [
+        "disagree",
+        "not agree",
+        "don't agree",
+        "do not agree",
+        "can't agree",
+        "cannot agree",
+        "never agree"
+      ],
+      "risk_tags": [
+        "meaning",
+        "omission"
+      ]
+    },
+    {
+      "id": "audio-a03",
+      "audio_scenario_id": "A03",
+      "direction": "id-en",
+      "category": "audio_pipeline",
+      "source": "Saya tidak setuju dengan perubahan itu.",
+      "references": [
+        "I do not agree with that change."
+      ],
+      "preserve": [],
+      "required_any": [
+        [
+          "not agree",
+          "disagree"
+        ],
+        [
+          "change"
+        ]
+      ],
+      "forbidden": [
+        "I agree with",
+        "don't disagree",
+        "do not disagree",
+        "can't disagree",
+        "cannot disagree",
+        "not disagree"
+      ],
+      "risk_tags": [
+        "meaning",
+        "negation"
+      ]
+    },
+    {
+      "id": "audio-a04",
+      "audio_scenario_id": "A04",
+      "direction": "id-en",
+      "category": "audio_pipeline",
+      "source": "Maksud saya lima belas, bukan lima puluh.",
+      "references": [
+        "I mean 15, not 50."
+      ],
+      "preserve": [],
+      "required_any": [
+        [
+          "15",
+          "fifteen"
+        ],
+        [
+          "50",
+          "fifty"
+        ],
+        [
+          "not",
+          "rather than",
+          "instead of"
+        ]
+      ],
+      "forbidden": [],
+      "risk_tags": [
+        "meaning",
+        "number",
+        "negation"
+      ],
+      "ordered_any": [
+        [
+          [
+            "15",
+            "fifteen"
+          ],
+          [
+            "not",
+            "rather than",
+            "instead of"
+          ],
+          [
+            "50",
+            "fifty"
+          ]
+        ],
+        [
+          "not",
+          [
+            "50",
+            "fifty"
+          ],
+          "but",
+          [
+            "15",
+            "fifteen"
+          ]
+        ]
+      ]
+    },
+    {
+      "id": "audio-a06",
+      "audio_scenario_id": "A06",
+      "direction": "id-en",
+      "category": "audio_pipeline",
+      "source": "Tolong cek final build tapi jangan merge dulu.",
+      "references": [
+        "Please check the final build, but don't merge it yet."
+      ],
+      "preserve": [],
+      "required_any": [
+        [
+          "check",
+          "review"
+        ],
+        [
+          "final build"
+        ],
+        [
+          "don't merge",
+          "do not merge",
+          "not merge"
+        ],
+        [
+          "yet"
+        ]
+      ],
+      "forbidden": [],
+      "risk_tags": [
+        "meaning",
+        "negation"
+      ]
+    },
+    {
+      "id": "audio-a09",
+      "audio_scenario_id": "A09",
+      "direction": "id-en",
+      "category": "audio_pipeline",
+      "source": "Bisa dengar suara saya dengan jelas?",
+      "references": [
+        "Can you hear my voice clearly?"
+      ],
+      "preserve": [],
+      "required_any": [
+        [
+          "hear"
+        ],
+        [
+          "voice",
+          "me"
+        ],
+        [
+          "clearly"
+        ]
+      ],
+      "forbidden": [],
+      "risk_tags": [
+        "meaning",
+        "omission"
+      ]
+    },
+    {
+      "id": "audio-a10",
+      "audio_scenario_id": "A10",
+      "direction": "id-en",
+      "category": "audio_pipeline",
+      "source": "Tolong kirim file revisinya setelah meeting selesai.",
+      "references": [
+        "Please send the revised file after the meeting is over."
+      ],
+      "preserve": [],
+      "required_any": [
+        [
+          "send"
+        ],
+        [
+          "revised",
+          "revision"
+        ],
+        [
+          "file"
+        ],
+        [
+          "after"
+        ],
+        [
+          "meeting"
+        ]
+      ],
+      "forbidden": [],
+      "risk_tags": [
+        "meaning",
+        "omission"
+      ]
+    },
+    {
+      "id": "audio-a11",
+      "audio_scenario_id": "A11",
+      "direction": "id-en",
+      "category": "audio_pipeline",
+      "source": "Angka yang benar seratus dua puluh lima, bukan seratus lima puluh.",
+      "references": [
+        "The correct number is 125. Not 150."
+      ],
+      "preserve": [],
+      "required_any": [
+        [
+          "125",
+          "one hundred twenty-five",
+          "one hundred and twenty-five"
+        ],
+        [
+          "150",
+          "one hundred fifty",
+          "one hundred and fifty"
+        ],
+        [
+          "not"
+        ]
+      ],
+      "forbidden": [],
+      "risk_tags": [
+        "meaning",
+        "number",
+        "negation"
+      ],
+      "ordered_any": [
+        [
+          [
+            "125",
+            "one hundred twenty-five",
+            "one hundred and twenty-five"
+          ],
+          [
+            "not",
+            "rather than",
+            "instead of"
+          ],
+          [
+            "150",
+            "one hundred fifty",
+            "one hundred and fifty"
+          ]
+        ],
+        [
+          "not",
+          [
+            "150",
+            "one hundred fifty",
+            "one hundred and fifty"
+          ],
+          "but",
+          [
+            "125",
+            "one hundred twenty-five",
+            "one hundred and twenty-five"
+          ]
+        ]
+      ]
+    },
+    {
+      "id": "audio-a12",
+      "audio_scenario_id": "A12",
+      "direction": "en-id",
+      "category": "audio_pipeline",
+      "source": "Please check the latest project update before the meeting ends.",
+      "references": [
+        "Silakan periksa update proyek terbaru sebelum rapat berakhir."
+      ],
+      "preserve": [],
+      "required_any": [
+        [
+          "periksa",
+          "cek",
+          "tinjau"
+        ],
+        [
+          "update",
+          "pembaruan",
+          "perkembangan"
+        ],
+        [
+          "proyek"
+        ],
+        [
+          "terbaru"
+        ],
+        [
+          "sebelum"
+        ],
+        [
+          "rapat",
+          "meeting"
+        ]
+      ],
+      "forbidden": [],
+      "risk_tags": [
+        "meaning",
+        "omission"
+      ]
+    },
+    {
+      "id": "audio-a34",
+      "audio_scenario_id": "A34",
+      "direction": "id-en",
+      "category": "audio_pipeline",
+      "source": "Versi ini belum siap untuk dirilis.",
+      "references": [
+        "This version is not ready for release yet."
+      ],
+      "preserve": [],
+      "required_any": [
+        [
+          "version"
+        ],
+        [
+          "not ready"
+        ],
+        [
+          "release",
+          "released"
+        ],
+        [
+          "yet"
+        ]
+      ],
+      "forbidden": [
+        "is ready for release"
+      ],
+      "risk_tags": [
+        "meaning",
+        "negation"
+      ]
     }
   ]
 }

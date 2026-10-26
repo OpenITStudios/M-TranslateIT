@@ -77,6 +77,14 @@ def load_corpus(path: Path) -> dict:
             if field not in case:
                 raise ValueError(f"{case_id}: missing {field}")
         risk_tags = case.get("risk_tags", [])
+        ordered = case.get("ordered_any")
+        if ordered is not None and (not isinstance(ordered, list) or not ordered or any(
+            not isinstance(sequence, list) or len(sequence) < 2
+            or not all(all(isinstance(option, str) and option.strip() for option in (cue if isinstance(cue, list) else [cue]))
+                       and bool(cue) for cue in sequence)
+            for sequence in ordered
+        )):
+            raise ValueError(f"{case_id}: invalid ordered critical cues")
         if (
             not isinstance(risk_tags, list)
             or not risk_tags
@@ -135,6 +143,16 @@ def declared_cue_present(normalized_text: str, cue: str) -> bool:
     return False
 
 
+def ordered_cue_pattern(cue: str | list[str]) -> str:
+    options = cue if isinstance(cue, list) else [cue]
+    return "(?:" + "|".join(
+        (r"(?<![\w.+-])" if option[0].isdecimal() else r"(?<!\w)")
+        + re.escape(re.sub(r"[^\w\s]", " ", normalize(option)))
+        + (r"(?!\w|\.[0-9])" if option[-1].isdecimal() else r"(?!\w)")
+        for option in options
+    ) + ")"
+
+
 def invariant_result(case: dict, translated: str) -> dict:
     norm = normalize(translated)
     missing_literals = [item for item in case["preserve"] if not declared_cue_present(norm, item)]
@@ -143,19 +161,29 @@ def invariant_result(case: dict, translated: str) -> dict:
         if not any(declared_cue_present(norm, option) for option in group)
     ]
     forbidden_hits = [item for item in case["forbidden"] if declared_cue_present(norm, item)]
+    ordered_text = re.sub(r"(?<=[a-z])-(?=[a-z])", " ", norm)
+    ordered_text = re.sub(r"[^\w\s.+-]", " ", ordered_text)
+    ordered_text = re.sub(r"\s+", " ", ordered_text)
+    ordered_match = True
+    if case.get("ordered_any"):
+        ordered_match = any(re.search(
+            r".*?".join(ordered_cue_pattern(cue) for cue in sequence), ordered_text
+        ) is not None for sequence in case["ordered_any"])
     return {
         "missing_literals": missing_literals,
         "missing_concepts": missing_concepts,
         "forbidden_hits": forbidden_hits,
+        "ordered_match": ordered_match,
         "critical_issue_types": [
             name for name, present in (
                 ("literal_omission", bool(missing_literals)),
                 ("meaning_cue_omission", bool(missing_concepts)),
                 ("forbidden_meaning", bool(forbidden_hits)),
+                ("critical_order", not ordered_match),
             )
             if present
         ],
-        "critical_pass": not missing_literals and not missing_concepts and not forbidden_hits,
+        "critical_pass": not missing_literals and not missing_concepts and not forbidden_hits and ordered_match,
     }
 
 
