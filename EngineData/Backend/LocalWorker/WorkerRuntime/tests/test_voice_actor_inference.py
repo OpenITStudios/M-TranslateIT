@@ -12,6 +12,23 @@ def load_provider_module():
     return load_worker_module().io_runtime.voice_actor_provider
 
 
+@pytest.mark.parametrize(('text', 'spoken'), [
+    ('The correct number is 125. Not 150.',
+     'The correct number is one hundred and twenty-five. Not 150.'),
+    ('Use 125.5. Not 150.', 'Use one hundred and twenty-five point five. Not 150.'),
+    ('Use 1,125. Not 150.', 'Use one thousand, one hundred and twenty-five. Not 150.'),
+    ('Use -125. Not 150.', 'Use minus one hundred and twenty-five. Not 150.'),
+    ('Use 00125. Not 150.', 'Use zero zero one two five. Not 150.'),
+    ('Use the 125th item. Not 150th.', 'Use the 125th item. Not 150th.'),
+    ('Use 125, not 150.', 'Use 125, not 150.'),
+    ('Version 1.2.3. Not ID125.', 'Version 1.2.3. Not ID125.'),
+])
+def test_english_tts_preserves_sentence_cardinals(text: str, spoken: str) -> None:
+    inputs = load_provider_module().english_tts_inputs(text, Path('reference.wav'), text)
+    assert inputs['text'] == spoken
+    assert inputs['prompt_text'] == spoken
+
+
 def write_reference_wav(path: Path, duration_ms: int = 4_000) -> None:
     sample_rate = 32_000
     frames = sample_rate * duration_ms // 1_000

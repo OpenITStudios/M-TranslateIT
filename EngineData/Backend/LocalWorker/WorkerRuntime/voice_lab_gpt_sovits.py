@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import struct
 import wave
 from contextlib import contextmanager
@@ -374,6 +375,21 @@ def create_tts_runtime(
     }
 
 
+def english_sentence_cardinals(text: str) -> str:
+    # Upstream treats any "125. " as a list ordinal, even at a sentence end.
+    pattern = r"(?<![\w.,:/+\-])([+-]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?)(?=\.\s)"
+
+    def render(match: re.Match[str]) -> str:
+        import inflect
+
+        number = match[0]
+        if re.fullmatch(r"0[0-9]+", number):
+            return ' '.join(inflect.engine().number_to_words(digit) for digit in number)
+        return inflect.engine().number_to_words(number)
+
+    return re.sub(pattern, render, text)
+
+
 def english_tts_inputs(
     text: str,
     reference_wav: Path,
@@ -381,10 +397,10 @@ def english_tts_inputs(
     speed_factor: float = 1.0,
 ) -> dict[str, Any]:
     return {
-        "text": text,
+        "text": english_sentence_cardinals(text),
         "text_lang": "en",
         "ref_audio_path": str(reference_wav),
-        "prompt_text": reference_text,
+        "prompt_text": english_sentence_cardinals(reference_text),
         "prompt_lang": "en",
         "batch_size": 1,
         "parallel_infer": False,
