@@ -43,9 +43,41 @@ Pre-delivery source evidence: Rust suite 338 passed/one ignored; frontend suite
 408 passed; source/bridge/privacy contracts and Svelte typecheck passed. Tests cover
 native versus PCM separation for both lanes, simultaneous native/fault/loss
 priority, explicit pipeline-fault recovery, inactive reports and privacy fields.
-This is **EXECUTED_SOURCE**, not proof that the real previous warnings were only
-PCM loss. Clean-candidate native counter observation remains to be executed in the
-same integrated acceptance phase; unrelated worker/model inference is not rerun.
+The same checks and locked frontend/Rust compile gate then passed on clean repair
+commit `ba84abf18e0a155e0f7708a8d4ce4d1ceae7e05b`. These are **EXECUTED_SOURCE**
+results; unrelated worker/model-quality suites were not rerun.
+
+**Native separating evidence at that exact commit:** Built-in Male Start reached
+Live. Explicit existing Diagnostics export reported:
+
+| Lane | Native callback errors | Internal PCM drops | Frames received | Speech-pipeline blocker |
+|---|---:|---:|---:|---|
+| Microphone | 0 | 2 | 15,102,720 | empty |
+| Incoming Meeting Sound | 1 | 0 | 3,006,240 | empty |
+
+The health guard correctly retained `device_loss:meeting_sound_callback_error`,
+with optional-device-loss true, required-device-loss false and no required action.
+This proves native error evidence is not suppressed by the repair. Microphone PCM
+loss remains independently observable; it is not counted as a native failure.
+One snapshot's nonzero frames are not a sustained-progress or loss-free claim.
+Old unseparated warnings cannot be retrospectively attributed from this new run.
+
+Normal UI Stop returned to Ready, the local archive finalized, normal application
+exit returned zero, and the matching canonical worker process query returned zero.
+No controlled utterance was supplied; two recognized phrases nevertheless appeared.
+Their input origin is unresolved and is not model-quality/receiver evidence. No
+transcript body or audio is included in these diagnostic artifacts or this record.
+Incoming remained automatic, so outbound-only acceptance is not claimed.
+
+| Private exact-source native evidence | SHA-256 |
+|---|---|
+| `.workspace/reports/capture-health-native-ba84abf1.json` — original redacted support bytes | `a04e3e4b111a68cd76447da35269ae8aebc36ecc9e6d4a02c6944afa79855e25` |
+| `.workspace/reports/capture-health-native-ba84abf1.receipt.json` — source/log hashes and bounded observations | `02ee75ba7d12e3b3900d10372903c919b53b3a703989ab9eeb072d6e69848ec3` |
+
+Proof ceiling: **LIVE_RUNTIME capture-health separation**, not full Meeting,
+physical speech quality or installed-product acceptance. The two PCM drops and
+actual optional native error still require owning capture diagnosis; no retries,
+queue enlargement, VAD change or engine intervention follows automatically.
 
 ### No-speech native Start/Stop observation — 2026-10-26
 

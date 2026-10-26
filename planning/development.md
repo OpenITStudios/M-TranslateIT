@@ -10,8 +10,13 @@ monitor surfaces degraded capture, incoming preserves pipeline-failure evidence,
 and explicit Diagnostics export includes per-lane numeric counts without raw
 callback text/device identity. Two production status-projection tests reproduced
 the old conflation before repair. Rust tests passed 338/one ignored, frontend 408,
-with source contracts and typechecking passing. Native cause remains unverified
-until the separated counters are observed on a clean candidate; no PCM transport,
+with source contracts and typechecking passing. Clean repair commit
+`ba84abf18e0a155e0f7708a8d4ce4d1ceae7e05b` then passed those checks and the
+locked compile gate. Native Diagnostics separated microphone 0 native errors /
+2 PCM drops from incoming 1 native error / 0 PCM drops; the real incoming failure
+remained visible. Normal UI Stop, finalized archive and normal app exit succeeded;
+no matching canonical worker remained. Two phrases appeared without controlled
+test speech; their origin is unresolved and not quality evidence. No PCM transport,
 VAD threshold, engine/model/prompt, incoming toggle or retry behavior changed.
 
 **No-speech Start/Stop exercised (2026-10-26).** Native candidate
@@ -201,7 +206,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-On the clean repaired candidate in the admitted integrated phase, run one no-speech Built-in Male Start/Stop and explicit Diagnostics export; inspect the separate native-error and PCM-drop counts to identify the actual callback-warning source. Preserve normal Stop, session identity and privacy. Incoming remains automatic; no outbound-only or translation-quality claim follows. No CI, model/context/style/glossary change, incoming toggle or corrective translation layer is authorized.
+Diagnose the two observed microphone PCM drops at the existing callback-to-Silero transport owner, separating ingress-lock rejection from bounded-queue loss before changing any transport policy. Keep the incoming native error and uncontrolled recognized phrases as separate unresolved evidence; do not infer a broken microphone, quality PASS or precise cause from the new counters. Preserve normal Stop and exact-source privacy-bound proof. No CI, model/context/style/glossary change, incoming toggle, queue enlargement, blind retry or corrective translation layer is authorized.
 
 ## Retained My Voice source candidate (paused)
 
