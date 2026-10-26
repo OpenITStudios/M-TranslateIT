@@ -21,6 +21,34 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Fresh worker execution exposed host-encoding defect — 2026-10-26
+
+Clean `d7007e4b2b60319220ae30ac53e8e1f76ff5a2ce` passed all four existing
+source-profile validators. The actual 28-case fast invocation produced eleven
+complete outputs before the Unicode case returned
+`translation:input_token_count_unavailable`; 8 checks passed, 4 failed (three
+quality checks and one envelope failure), 16 remained unverified. Fixture wall
+time was 10,171 ms, process 21288 was terminated and execution_complete is false.
+This is a correctly rejected incomplete run, not current model-quality acceptance.
+
+The first separating probe used the actual canonical interpreter with a disposable
+stdin/stdout child, not model inference. Inherited cp1252 decoded the Unicode
+source differently and introduced a surrogate; explicit UTF-8 preserved exact
+source. A naive echo control initially passed because symmetric decode/encode
+errors canceled on the wire. The persistent transport test now asserts Unicode
+code points computed inside the child; it failed before repair and passed after
+the existing Worker pinned PYTHONUTF8/PYTHONIOENCODING. This changes test transport
+only. All 38 source-contract tests and runner/test Ruff pass; no production
+provider or model code changed. A fresh run on the corrected clean source remains
+required. The initial failed inference receipt is preserved unchanged.
+
+Private receipts: `.workspace/reports/quality-system-source-d7007e4b.json`,
+`.workspace/reports/quality-system-fast-d7007e4b.json`,
+`.workspace/reports/quality-worker-unicode-d7007e4b.json`;
+corrected source controls: `.workspace/reports/quality-worker-utf8-source.log`.
+Proof is **EXECUTED_SOURCE**, real disposable-child transport, and an explicitly
+incomplete model fixture. No native/perceptual or full linguistic PASS is implied.
+
 ### Direct fast/full worker source candidate — 2026-10-26
 
 Parent Local `034be0df31d599c776fdf4ce3869d5085a8aa922`. Existing worker runner

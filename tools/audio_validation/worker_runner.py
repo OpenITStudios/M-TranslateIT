@@ -108,6 +108,7 @@ class Worker:
         env = os.environ.copy()
         env.update({"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
                     "HF_DATASETS_OFFLINE": "1", "TOKENIZERS_PARALLELISM": "false",
+                    "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
                     "PYTHONDONTWRITEBYTECODE": "1"})
         self.child = subprocess.Popen(
             [str(python), "-u", str(WORKER)], cwd=WORKER.parent,

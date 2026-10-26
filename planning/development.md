@@ -23,6 +23,17 @@ changed runner/tests passed Ruff. Existing evaluator TRY004 findings are unchang
 This candidate has not yet executed real model inference; that is the remaining
 proof step for the lean-system goal, with known model quality failures retained.
 
+**First real fast run separated a harness encoding defect.** Clean `d7007e4b`
+source admission passed all four validators. Real inference completed eleven
+responses, then stopped at the Unicode case with
+`translation:input_token_count_unavailable`; report is incomplete and child
+termination is confirmed. A real disposable-child probe proved inherited cp1252
+changes source code points, including a surrogate, before tokenization. The
+existing Worker now pins UTF-8 for stdin/stdout. Its real transport control
+compares code points inside the child, not just an echo that can hide symmetric
+encoding errors. All 38 source contract tests and changed-file Ruff pass.
+This correction changes only test transport; the app/model remain unchanged.
+
 **Fast translation selection implemented (2026-10-26).** Existing corpus metadata
 selects 28 cases (16 ID→EN, 12 EN→ID), each with a risk reason. It covers the
 declared 16 common risk tags in each direction and retains observed action,

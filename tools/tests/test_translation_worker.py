@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -23,6 +24,26 @@ SHA = "a" * 40
 
 
 class TranslationWorkerTests(unittest.TestCase):
+    def test_real_transport_preserves_unicode_under_legacy_host_encoding(self):
+        with tempfile.TemporaryDirectory() as folder:
+            entry = Path(folder) / "echo.py"
+            entry.write_text(
+                "import sys,json\nfor raw in sys.stdin:\n"
+                " v=json.loads(raw)\n"
+                " print(json.dumps(dict(ok=True,stage=v['command'],request_id=v['request_id'],text=v['text'],points=list(map(ord,v['text']))),ensure_ascii=False),flush=True)\n",
+                encoding="utf-8",
+            )
+            with patch.object(worker_runner, "WORKER", entry), patch.dict(os.environ, {"PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"}):
+                worker = worker_runner.Worker(Path(sys.executable), 5)
+                try:
+                    text = "Rencana—Final_v2.1 © 2026 日本語"
+                    response = worker.invoke("ping", text=text)
+                    self.assertEqual(response["points"], list(map(ord, text)))
+                    self.assertEqual(response["text"], text)
+                finally:
+                    worker.close()
+                self.assertIsNotNone(worker.child.poll())
+
     def worker(self, suite="fast", change=None):
         cases = iter(quality.select_suite(CORPUS, suite)["cases"])
         worker = Mock()
