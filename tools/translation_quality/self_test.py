@@ -87,6 +87,28 @@ def main() -> int:
     assert evaluator.invariant_result(numeric_case, "2021 notebook")["critical_pass"] is False
     assert evaluator.invariant_result(numeric_case, "21 not ready")["critical_pass"] is True
 
+    money = next(case for case in corpus["cases"] if case["id"] == "id-en-number-001")
+    for accepted, rejected in (("Rp2.750.000", "Rp2.570.000"), ("Rp2,750,000", "Rp2,570,000")):
+        for valid in (f"The budget is {accepted}, not {rejected}.", f"Not {rejected}, but {accepted}."):
+            assert evaluator.invariant_result(money, valid)["critical_pass"], valid
+        for wrong in (f"The budget is {rejected}, not {accepted}.",
+                      f"Not {accepted}, but {rejected}.",
+                      f"The budget is -{accepted}, not {rejected}.",
+                      f"The budget is minus {accepted}, not {rejected}.",
+                      f"The budget is {accepted}5, not {rejected}.",
+                      f"The budget is {accepted},50, not {rejected}.",
+                      f"The budget is {accepted}.50, not {rejected}."):
+            assert not evaluator.invariant_result(money, wrong)["critical_pass"], wrong
+
+    incoming_correction = next(case for case in corpus["cases"] if case["id"] == "en-id-correction-001")
+    for valid in ("Saya bilang lima belas, bukan lima puluh.", "Bukan lima puluh, melainkan lima belas."):
+        assert evaluator.invariant_result(incoming_correction, valid)["critical_pass"], valid
+    for reversed_meaning in ("Saya bilang lima puluh, bukan lima belas.", "Bukan lima belas, melainkan lima puluh."):
+        assert not evaluator.invariant_result(incoming_correction, reversed_meaning)["critical_pass"], reversed_meaning
+    spoken_number = next(case for case in corpus["cases"] if case["id"] == "audio-a11")
+    assert evaluator.invariant_result(spoken_number, "The correct number is one hundred and twenty-five, not one hundred and fifty.")["critical_pass"]
+    assert not evaluator.invariant_result(spoken_number, "The correct number is one hundred and fifty, not one hundred and twenty-five.")["critical_pass"]
+
     correction = next(case for case in corpus["cases"] if case["id"] == "id-en-correction-001")
     for valid in ("I mean Thursday, not Tuesday.", "Not Tuesday, but Thursday."):
         assert evaluator.invariant_result(correction, valid)["critical_pass"], valid

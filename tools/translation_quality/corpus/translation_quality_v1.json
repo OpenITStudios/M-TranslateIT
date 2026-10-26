@@ -66,16 +66,17 @@
       "references": [
         "The budget is Rp2.750.000, not Rp2.570.000."
       ],
-      "preserve": [
-        "2.750.000",
-        "2.570.000"
-      ],
+      "preserve": [],
       "required_any": [
         [
           "not"
         ]
       ],
       "forbidden": [],
+      "ordered_any": [
+        [["Rp2.750.000", "Rp2,750,000"], "not", ["Rp2.570.000", "Rp2,570,000"]],
+        ["not", ["Rp2.570.000", "Rp2,570,000"], ["Rp2.750.000", "Rp2,750,000"]]
+      ],
       "risk_tags": [
         "number",
         "literal"
@@ -263,6 +264,10 @@
         ]
       ],
       "forbidden": [],
+      "ordered_any": [
+        ["lima belas", "bukan", "lima puluh"],
+        ["bukan", "lima puluh", "lima belas"]
+      ],
       "risk_tags": [
         "meaning",
         "omission"

@@ -11,35 +11,24 @@ runtime dependency. Complete this goal only after the risk-based fast selection
 and broader quality gates are explicit and exercised within their actual proof
 ceilings; do not equate source controls with linguistic/native acceptance.
 
-**Negated forbidden-phrase calibration delivered (2026-10-26).** An explicit
-case-local phrase exception prevents `send it now` matching inside declared
-negative phrases. Controls preserve rejection of a separate positive occurrence
-in either order, unknown exception keys, blanket cue exemptions and forbidden
-facts without an exception. No global negation heuristic was added. Evaluator
-self-tests and ten pipeline source tests pass; all 191 worker requests remain
-identical. Retained-output regrading changes only one case's false forbidden hit;
-its missing temporary-deferral cue remains, so all 60 flags remain. This does not
-prove that the translation is wrong or correct overall. No inference, model,
-application or held-out change occurred. Receipt identity is in current validation.
+**Quality-test calibration delivered through numeric roles (2026-10-26).**
+AI-assisted desk review of the original 60 flags provisionally found 32 checker
+mismatches, 17 meaning errors and 11 unresolved cases; this is not independent
+bilingual acceptance or an overall error rate. Existing contracts now reject
+reversed day corrections, reversed incoming fifteen/fifty roles and reversed
+budget amounts. The budget contract accepts its declared dot/comma thousands
+forms while rejecting sign, extra-digit and fractional changes. Case-local
+negative-phrase exceptions preserve independent positive forbidden occurrences;
+there is no global negation or number-inference heuristic.
 
-**Quality-test calibration, first bounded stage delivered (2026-10-26).** The
-owner prioritizes discriminating quality evidence over test count. AI-assisted
-desk review of the retained 191-case MiLMMT baseline's 60 flagged cases provisionally
-classifies 32 checker mismatches, 17 meaning errors and 11 unresolved cases, with
-per-case source/output/reasons in the private evidence receipt. This is not an
-independent bilingual review or an overall error rate; passing outputs are not
-adjudicated. No aliases were relaxed to clear those flags.
-
-A new negative control reproduced a real false pass: Tuesday/not Thursday passed
-the Thursday/not Tuesday correction contract. The existing case now uses existing
-ordered-cue support, accepting both faithful clause orders and rejecting both
-reversed variants. Corpus size remains 191; held-out content and production
-inference are unchanged. Evaluator self-tests and ten audio-pipeline source tests
-passed. Explicit regrading proves all 191 worker requests unchanged and no existing
-grade changed; all 60 baseline flags remain. Original receipts/fingerprints remain
-intact. This is source/retained-output proof, not new model or native acceptance.
-The maintained triage procedure is in `tools/translation_quality/HUMAN_EVALUATION.md`;
-`current-validation.md` owns receipt identity and limitations.
+Evaluator self-tests and ten audio-pipeline source tests pass. Retained-output
+regrading proves all 191 worker requests unchanged: numeric calibration removes
+one demonstrated formatting false alarm (60 to 59 flags); other grades are
+identical to the parent. The earlier negative-phrase correction changed only
+failure detail. Corpus membership, held-out content, MiLMMT and application
+behavior remain unchanged; no new inference or native acceptance is claimed.
+`tools/translation_quality/HUMAN_EVALUATION.md` owns triage procedure and
+`current-validation.md` owns receipt identities and proof limits.
 
 **Standalone Text removed from the application (2026-10-26).** The owner has
 chosen Meeting voice translation as the product focus and retained MiLMMT;
@@ -132,7 +121,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Calibrate number/correction-role preservation next, distinguishing localized numeric formatting from changed values or reversed roles, with faithful and wrong-meaning controls in the existing evaluator. Then select the smallest justified fast package by distinct risks in both directions and measure its actual cost; do not delete unreviewed coverage to reduce counts. Keep mixed/ambiguous outputs unresolved, use retained evidence only for unchanged requests, retain MiLMMT and current application behavior. Model-quality and integrated speech-to-Meeting acceptance remain open; no model download, updater work or My Voice training follows automatically.
+Select and implement the smallest justified fast quality package by distinct risks in both directions, preserving observed real failures and measuring actual selection/grading cost separately from model inference cost. Reuse the existing corpus/evaluator and keep broader regression/held-out gates explicit; do not delete unreviewed coverage to reduce counts or claim tag coverage proves semantics. Keep mixed/ambiguous outputs unresolved, retain MiLMMT and current application behavior. Model-quality and integrated speech-to-Meeting acceptance remain open; no model download, updater work or My Voice training follows automatically.
 
 ## Retained My Voice source candidate (paused)
 

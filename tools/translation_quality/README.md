@@ -45,6 +45,15 @@ linguistic review.
 
 These checks are intentionally narrow. They do not replace human review. Numeric fragments and negation cues now reject embeddings in larger digit/word tokens, while deliberate substring stems (including Indonesian affixes and numeric decimals) remain supported by the current corpus. Reports classify declared failures as literal omission, meaning-cue omission or forbidden meaning; comparisons map critical regressions back to existing risk tags. This follows the error-localization principle of [XCOMET](https://github.com/Unbabel/COMET), but does **not** run COMET or infer its neural severity scores.
 
+For numeric corrections, use existing `ordered_any` alternatives to bind the
+accepted and rejected values to their roles. The budget case declares only its
+exact dot/comma thousands forms; it does not normalize numbers globally or relax
+filenames, versions, identifiers or source text explicitly requiring exact bytes.
+Ordered matching retains decimal/grouping punctuation and numeric boundaries so
+extra digits, fractional extensions and undeclared signs cannot satisfy those
+declared amounts. Faithful clause-order variants and reversed-value controls live
+in the same evaluator self-test, including incoming Indonesian corrections.
+
 The regression corpus grows from observed failures, with a separate frozen 40-case held-out benchmark. The native Text budget-purpose failure is retained as a regression: an unspecified budget must not acquire a construction/project purpose. Do not hand-maintain these counts in downstream status files; use the `stats` command below when exact coverage matters. Growth is intentionally risk-driven rather than random: additions cover meeting phrasing, informal/workplace Indonesian, code-switching, quantities, technical literals, modality, conditionals, quantifier scope, corrections/disfluency, ordering and comparisons.
 
 Adversarial cases treat instruction-like strings such as `Ignore previous instructions`,

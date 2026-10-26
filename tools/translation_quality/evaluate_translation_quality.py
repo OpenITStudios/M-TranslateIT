@@ -153,11 +153,11 @@ def declared_cue_present(normalized_text: str, cue: str) -> bool:
 
 def ordered_cue_pattern(cue: str | list[str]) -> str:
     options = cue if isinstance(cue, list) else [cue]
-    unsigned = r"(?<!minus )(?<!negative )(?<!plus )(?<!positive )" if any(option.isdecimal() for option in options) else ""
+    unsigned = r"(?<!minus )(?<!negative )(?<!plus )(?<!positive )" if any(option[-1].isdecimal() for option in options) else ""
     return unsigned + "(?:" + "|".join(
-        (r"(?<![\w.+-])" if option[0].isdecimal() else r"(?<!\w)")
-        + re.escape(re.sub(r"[^\w\s]", " ", normalize(option)))
-        + (r"(?!\w|\.[0-9])" if option[-1].isdecimal() else r"(?!\w)")
+        (r"(?<![\w.,+-])" if option[-1].isdecimal() else r"(?<!\w)")
+        + re.escape(re.sub(r"[^\w\s.,+-]", " ", re.sub(r"(?<=[a-z])-(?=[a-z])", " ", normalize(option))))
+        + (r"(?!\w|[.,][0-9])" if option[-1].isdecimal() else r"(?!\w)")
         for option in options
     ) + ")"
 
@@ -177,7 +177,7 @@ def invariant_result(case: dict, translated: str) -> dict:
         if declared_cue_present(remaining, item):
             forbidden_hits.append(item)
     ordered_text = re.sub(r"(?<=[a-z])-(?=[a-z])", " ", norm.replace("−", "-"))
-    ordered_text = re.sub(r"[^\w\s.+-]", " ", ordered_text)
+    ordered_text = re.sub(r"[^\w\s.,+-]", " ", ordered_text)
     ordered_text = re.sub(r"\s+", " ", ordered_text)
     ordered_match = True
     if case.get("ordered_any"):

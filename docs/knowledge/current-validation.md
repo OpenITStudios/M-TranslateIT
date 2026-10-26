@@ -21,6 +21,41 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Numeric correction roles and declared formats — 2026-10-26
+
+Parent Local `2eeaf46c9568fc89dfc5de760cc11f096413de37`. Executable controls
+first reproduced a false pass for reversed budget values and, separately, for
+incoming `lima puluh, bukan lima belas`. Existing cases now bind accepted/rejected
+roles with existing ordered-cue alternatives. The budget case replaces redundant
+exact-punctuation literal checks with explicit Rp dot/comma thousands forms in
+those sequences; arbitrary number normalization is not introduced. Ordered cue
+and output matching preserve grouping/decimal punctuation, signs and numeric
+boundaries, including currency-prefixed amounts. Word-hyphen normalization stays
+aligned for the existing `one hundred and twenty-five` audio case.
+
+Executed source controls accept both declared currency formats and both faithful
+clause orders, reject reversed roles, minus signs/words, extra digits and decimal
+extensions, and protect incoming and hyphenated spoken-number roles. Regression
+and held-out evaluator self-tests (191/40) and ten audio-pipeline source tests pass.
+An initial retained-output audit exposed an unintended hyphen-normalization
+regression in A11; it was corrected and protected before final regrading.
+
+Final explicit regrading proves all 191 worker requests unchanged relative to
+parent and original captured corpus. Only `id-en-number-001` changes grade: the
+faithful English thousands format passes. Flags fall from 60 to 59 due to repaired
+measurement, not better model output. Every other grade detail is unchanged.
+Original model bundle is immutable and remains `723fc247` canonical greedy BF16;
+there was no model execution, held-out content change or production change.
+New contract fingerprint:
+`83ef2acd612d6c818fe1dbf74239ad7c1651474042327213eb5d1d2b5e71aea1`.
+
+Private receipt `.workspace/reports/quality-numbers-2eeaf46c.json`, SHA-256
+`08bf07fff112a089efd0dbdfbdefa9f3e5d419d1c3dbb3ba164bbabdb574c460`,
+binds old/new contract fingerprints, source hashes, original result hash and the
+single changed grade. Pipeline source-test log:
+`.workspace/reports/quality-numbers-pipeline.log`. Proof is **EXECUTED_SOURCE**
+plus historical-output analysis; overall linguistic quality is still **FAIL / OPEN**.
+
 ### Case-local forbidden-phrase calibration — 2026-10-26
 
 Parent Local `e62c2e4a0e336876017b5fb040addf6acc7f4323`. A faithful controlled
