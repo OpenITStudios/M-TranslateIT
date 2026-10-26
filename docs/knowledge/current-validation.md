@@ -21,6 +21,35 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Maintained automatic regression system — accepted 2026-10-26
+
+The requested modular, maintainable regression-system delivery is complete for the agreed vital package, with executable proof on clean `0d571fb472741df02179cdb739ea5379070ec6ef`. This closes the test-system goal, not full-product/native acceptance. `worker_runner.py --profile source|core|endurance` is the single maintained entry point; `scenarios.json` owns independent package/round policy, `harness.py` fixture identity, `worker_runner.py` execution/transport, and `pipeline_checks.py` the decision path shared with offline `harness.py score`. Canonical ASR/translation/TTS evaluators retain their semantic owners. No new runtime engine, dependency, cloud service, CI or parallel test framework was introduced.
+
+Completion was audited against the original delivery criteria:
+
+| Requirement | Authoritative evidence |
+|---|---|
+| One repeatable core command | Actual CLI source/core/endurance runs all exited 0. Source ran four validators; core ran fresh same-source VAD and 13 scenarios × 2 rounds, all 26 PASS. |
+| Stable scenarios with complete mandatory coverage | Profile membership is a fixed 13-case data contract; ten speech contracts cover all speech members. Profiles cannot accept custom IDs/rounds. Unit proof changes execution metadata without changing acoustic identity. Original immutable fixtures were reused; named profiles regenerate only the canonical VAD exports at the current SHA. |
+| Meaningful positive/negative gates | 31 audio contract/fault/pipeline tests plus four subtests passed. Actual offline score CLI controls accepted fifteen/15 equivalence and rejected reversed numbers, missing negation, missing EOS, wrong actor and 125th ordinal substitution; missing segment evidence stayed UNVERIFIED. PASS exited 0; FAIL/UNVERIFIED exited 2. Controls are synthetic receipt mutations, not fabricated model failures. |
+| Actionable reports and one grading decision | Execution and offline regrading produced identical checks/counts/verdicts for core and endurance. Non-PASS checks carry first wrong stage, expected/actual and JSON evidence pointers. Real temporary-WAV orchestration tests proved hash-bound failed-audio retention and successful-output cleanup, using a simulated worker rather than claiming model fault injection. |
+| Modular maintenance without replacing scenarios | Execution and checks are separate modules; protocol adapters preserve full returned text and reject nontext data. Canonical TTS grading consumes explicitly declared numeric aliases from existing contracts, while signs/ordinals remain distinct. README maintenance boundaries and source ownership identify which owner changes for protocol, semantic, fixture or execution-policy changes. |
+
+The final `source` profile passed existing audio checks plus 60-case ASR, 190-regression/40-held-out translation and 30-case TTS evaluator self-tests. New checker/runner/pipeline/VAD test modules passed Ruff. Existing harness and canonical quality-evaluator lint findings remained unchanged against baseline; this is not an all-repository lint claim. An earlier completion probe exposed false UNVERIFIED for a declared fifteen/15 variant; final canonical TTS normalization now accepts that variant without changing audio, scenario text or corpus expectations. Another completion correction made offline score failures return nonzero, matching execution rather than merely printing a failed JSON verdict.
+
+Fresh core and endurance VAD replays each passed all 48 VAD expectations at the exact executable source. Downstream scope remains the selected 13-case package. Core executed 22 input-ASR, 22 translation, 20 TTS and 20 spoken-content ASR calls; six non-speech observations invoked none of those stages. Endurance executed 220 input-ASR, 220 translation, 200 TTS and 200 content-ASR calls over 20 rounds, plus 60 suppressed non-speech observations; all 260 scenario/round checks passed. One worker per profile remained alive with ASR, both translation directions and selected MaleVoice on CUDA; cleanup confirmed child termination. Endurance allocator observations ranged 2,663–2,666 MiB allocated and 2,812–2,814 MiB reserved. Worker timing p95 was 382 ms input ASR, 317 ms translation, 532 ms TTS and 385 ms content ASR. These are bounded worker samples, not native latency, device-accounting ownership, naturalness or proof of no long-term leak.
+
+Private exact receipts:
+
+| Receipt | SHA-256 |
+|---|---|
+| `.workspace/reports/regression-source-final.json` | `3b80653c63722c0e3bc8cfc7fdde54dc602946f912eee292243411ec56b10996` |
+| `.workspace/reports/regression-core-final.json` | `1bb6904d756e0c19685d366e1c0c7aa278ac2e3c62a0f7657dfbf2262e2f70b9` |
+| `.workspace/reports/regression-endurance-final.json` | `d12abbf79cdf8d8ebd8a8daf0d333f2d767fe9e3c8a90cacf8d97a86fb5fbd56` |
+| `.workspace/reports/regression-final-controls.json` | `913575cb1f931c8a820f1c47e059c942954a17adda50f2eb27219416975e03e0` |
+
+Core/endurance sidecar `.json.artifacts/` directories retain actual current-source VAD receipts and hash-verified finalized WAVs. Corresponding `*-rescore.json` files contain the independently invoked offline decisions; the control receipt binds each explicit mutation to the original core report. All originals remained unchanged. V2 pipeline receipts bind expected segment coverage/order/hashes, profile/semantic identities and complete source admission; older V1 receipts stay historical rather than being silently upgraded. The immutable acoustic scenario/audio identity is unchanged by execution-profile metadata. Scope remains `EXECUTED_SOURCE` and `INTEGRATION_FIXTURE`: all 48 downstream cases, the remaining planned fault injectors, perceptual naturalness, FemaleVoice, adaptive pace, Meeting context/native Stop, installed app, physical capture and independent receiver are not accepted by this delivery. Documentation-only continuation commits do not create fresh runtime proof. No further test work is automatically scheduled for this completed goal.
+
 Use the latest completed matching verifier for the exact `Local` SHA and changed domain. Ancestor proof applies only to unchanged domains. Queued/running/skipped/cancelled/unrelated jobs are not PASS.
 
 Do not preserve mutable “latest PASS” snapshots here. Historic GitHub Actions runs are not proof of the current `Local` commit.
