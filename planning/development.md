@@ -2,6 +2,15 @@
 
 ## Current Status
 
+**Integrated Meeting runbook aligned (2026-10-26).** The existing
+`docs/knowledge/operations/target-windows-performance.md` now groups the next
+native baseline into five flows: readiness/Start, outbound receiver delivery,
+source/Mute/Stop/restart, optional incoming coexistence, and transcript/export/app
+restart. It links existing scenarios/fixtures, separates source compile checks
+from actual app launch, removes retired Text testing and stale CI authorization,
+and keeps My Voice/install/extended fault checks conditional. This is procedure
+repair only; no native flow was executed and no engine/test implementation changed.
+
 **Owner accepts the six discussed translation limitations for continued development
 (2026-10-26).** Keep MiLMMT and its natural current-source translation behavior.
 Do not pursue these six outputs with phrase substitutions, added prompt rules,
@@ -155,7 +164,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Map the existing 13 core audio scenarios and their retained evidence to the canonical Meeting acceptance scenarios to identify the smallest remaining end-to-end proof. Keep the two lexical REVIEW signals and six owner-accepted FAIL diagnostics visible; do not rerun unchanged translation inference or repair the engine merely to clear them. Native/install/receiver proof remains separate and unexecuted until its admitted integrated phase; no incremental user-PC testing, model replacement, context saver or corrective translation layer is authorized.
+Perform candidate admission for the five-flow Meeting baseline in the existing target-Windows runbook: pin one clean Local SHA, establish locked build/runtime/device/receiver prerequisites and identify any source blocker before entering the coordinated local phase. The retained core receipt covers 13 scenarios × 2 rounds at its recorded source, not current native application acceptance. Keep the two REVIEW and six owner-accepted FAIL diagnostics visible; no repeated unchanged translation inference, incremental user-PC testing, CI execution, model replacement, context saver or corrective translation layer follows from this runbook repair.
 
 ## Retained My Voice source candidate (paused)
 

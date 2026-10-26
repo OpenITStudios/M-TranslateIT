@@ -31,12 +31,12 @@ physical microphone
 
 The baseline must distinguish speech-boundary delay, CPU/audio preparation, AI stages, output delivery, and hardware pressure. Do not infer any target result from CI/source presence.
 
-## Candidate admission — before any user-PC test request
+## Candidate admission — before the integrated Windows phase
 
-This is a **read-only admission review**, not proof of native behavior or release approval. Require all of the following before inviting a single planned Windows acceptance session:
+This is a **read-only admission review**, not proof of native behavior or release approval. Require all of the following before entering a single planned Windows acceptance session; do not request incremental user-PC tests:
 
-1. **Integrated scope:** the intended Meeting (outbound and optional incoming), Text, selected built-in/My Voice behavior, Settings, and application lifecycle paths are implemented and reconciled against `docs/foundation/03-acceptance-scenarios.md`. Do not call an isolated feature or partial source patch an install-ready product.
-2. **Source/integration admission:** resolve known static/source-contract blockers on one pinned `Local` SHA. The temporarily owner-approved Windows hosted source/contract workflow may automatically test every `Local` push before the grouped local build, but cannot prove actual target-PC behavior. Record native compiler and live integration checks as `NOT EXECUTED` until performed on their required host; do not mislabel hosted checks as native PASS.
+1. **Integrated scope:** the intended Meeting (outbound and optional incoming), selected built-in voice, Settings, and application lifecycle paths are implemented and reconciled against `docs/foundation/03-acceptance-scenarios.md`. My Voice is a separate conditional scope, never a prerequisite for the built-in baseline. Direct text translation is internal verification only; D6 requires the standalone Text application surface to remain absent. Do not call an isolated feature or partial source patch an install-ready product.
+2. **Source/integration admission:** resolve known static/source-contract blockers on one pinned `Local` SHA. All GitHub Actions CI is paused under root `GITHUB_RULES.md`; do not dispatch, retry or rely on automatic push execution. Record native compiler and live integration checks as `NOT EXECUTED` until performed on their required host; historical hosted checks cannot establish current source or native PASS.
 3. **Developer build candidate:** ensure locked toolchains, local worker/model readiness inputs, and an exact clean `Local` source identity are prepared. A development app is not an installed release. **Only if release/install claims (E2–E6) are in scope**, separately prepare controlled Setup/payload sources, notices and signing requirements. Never treat signing material as a prerequisite merely to inspect the developer UI.
 4. **One bounded plan:** pin source SHA and record the local toolchain/build commands, required development model/device inputs, native-only questions, safe diagnostics and STOP criteria. Run compiler/build checks first; on failure STOP and report source evidence. After source build PASS, native developer-mode functional tests may proceed; package/install tests proceed only after a genuine signed package PASS.
 
@@ -44,11 +44,11 @@ If source admission is not met, continue GitHub repository work and keep executi
 
 ## U4 — integrated desktop UI/UX acceptance (U1–U3)
 
-**Execution context:** source inspection may establish only `REMOTE_GITHUB` admission; this section records no actual run results. Conduct the UI checks **within** the single planned locked-SHA Windows session below, after its existing compilation/source admission succeeds. Use only the temporary owner-approved Windows source CI; do not create a second UI verification framework or ask for incremental user-PC tests. The existing [acceptance scenarios](../../foundation/03-acceptance-scenarios.md) remain authoritative for D1–D5, A9, B1/B5 and Meeting C0/C4/C5. Keep Q4 packaging separately gated by the existing candidate admission decisions.
+**Execution context:** source inspection may establish only `REMOTE_GITHUB` admission; this section records no actual run results. Conduct relevant UI checks **within** the single planned locked-SHA Windows session below, after its existing compilation/source admission succeeds. CI remains paused; do not create a second UI verification framework or ask for incremental user-PC tests. Use the five Meeting flows below as the baseline order. This matrix supplies detailed checks for the selected scope; My Voice, fault injection and expanded display coverage are conditional, not extra mandatory baseline cycles. Unexecuted areas remain unverified. The existing [acceptance scenarios](../../foundation/03-acceptance-scenarios.md) remain authoritative. Keep packaging separately gated by candidate admission.
 
 | Area and existing scenario | Exact interaction to observe | Failure/STOP signal |
 | --- | --- | --- |
-| U1 Text · D5/D6 | Type/paste and translate Indonesian→English and English→Indonesian; Swap with an untranslated draft and with editable source/result present; during a controlled delayed settings save, edit either textarea after pressing Swap and verify the direction changes but both newer user edits remain; verify failed settings save keeps the prior direction and both drafts; Copy the current translation; Clear both panes; use Ctrl+Enter; edit source or translated text while a translation is pending and navigate away/back | Lost source/draft on Swap without intent, delayed Swap overwriting newer typing or falsely claiming direction persistence, an outdated result copied as current, a late response overwriting newer edits, unclear translation failure, inaccessible Copy/Translate, or reappearance of retired More options/Undo Clear |
+| Internal-only translation · D5/D6 | Verify navigation, First Setup and Settings expose no standalone Text workspace or shortcut; source/application admission confirms no standalone native Text command. Both translation directions remain testable through existing internal worker fixtures | A standalone Text surface or native command reappears, or internal fixtures require restoring it |
 | U2 First Setup · D1/D3/D5 | Change microphone without saving: Continue stays blocked; save/check new selection; revisit an unavailable device; verify 4-step resume and deferred setup after relaunch | Continue enabled for an unsaved/unverified selected microphone, silent device fallback, checkpoint loss, unavailable recovery |
 | U2 Meeting · D3/B5/C0/C4/D9/D10 | At Ready one Start action; active Meeting shows chronological You/right and combined Meeting audio/left (no diarized participant identity), and only Stop; verify accurate status and navigation to Settings → Voice & Audio; open browser Meet with separated receiver, confirm incoming captions do not overclaim speaker, after Stop verify the saved local transcript survives restart, inspect its retention notice, manually export HTML in a unique session folder and confirm archive Delete does not remove previously exported HTML. Simulate archive storage failure during either Original or TranslateIT Start and confirm native Start rejects Live; induce no-snapshot cleanup-incomplete in controlled disposable data and verify Retry Stop remains available while Settings device changes, Mic Test Start, My Voice recording and voice selection are disabled both in UI and via native commands; verify they recover only after confirmed cleanup. Inspect short/long transcript and scroll-follow. No presets, Quick Translate or Text captions. | False readiness, hidden Stop, unexpected route/device change, unverified speaker identity, silent dropped speech, undisclosed text retention or incomplete storage, false Live on archive failure, device or voice changes during incomplete Stop, a new microphone owner before resource release, unintended archive/HTML deletion, old session merge, or user-private data in diagnostics |
 | U3 built-in and My Voice · A9/D5 | Preview Built-in Male/Female including missing-audio recovery; select and restore an approved personal voice after using a built-in; in controlled disposable test data verify one valid interrupted active-actor backup can be recovered by the next selection, while invalid, multiple or ambiguous backups remain untouched and blocked; record, Replay/Retry/Accept, and retain samples. Simulate an unavailable bridge response during Start/Stop/get recording status and Built-in/Saved Voice selection: no synthetic idle, no navigation unlock or automatic mutation retry until verified native owner/voice selection is clear, and Retry status/Retry Stop remains accessible. Open the optional Create My Voice workspace and its Advanced temporary voice sample, cancel an active preview when available, listen to every evaluation sample and explicitly approve before use; while Meeting is Live, verify approval is disabled and native approval rejects a direct attempt without changing the current actor, then Stop Meeting and retry approval | Missing voice restoration, preview button locked, a failed bridge call presented as confirmed stopped, active audio owner bypassed by navigation, inaccessible recovery, lost sample, approval bypass or unintended switch |
@@ -66,16 +66,58 @@ If source admission is not met, continue GitHub repository work and keep executi
 
 ## One integrated candidate execution sequence
 
-This is an **execution plan**, not a request to use the user's PC now. The approved one-shot hosted Windows source workflow is a preliminary, optional evidence gate; it does not replace the integrated local build or create a release harness. Follow `docs/foundation/03-acceptance-scenarios.md` as the sole scenario authority.
+This is an **execution plan**, not a request to use the user's PC now. All hosted CI remains paused. The existing local commands below are the admission path, not a new harness or proof that any command has run. Follow `docs/foundation/03-acceptance-scenarios.md` as the sole scenario authority.
 
 1. **Pin one immutable candidate.** Record the 40-character `Local` SHA and require a clean tracked checkout. Set `TRANSLATEIT_EXPECTED_SHA` to that externally pinned SHA **before** invoking the canonical local Tauri compile check; do not derive the expected value from whatever happens to be checked out. Record the Node 24 / npm 12.2.1 / Rust 1.99.1+ / Python 3.12.10 / uv 0.13.5+ toolchain identities and confirm `package-lock.json`, `Cargo.lock`, and `uv.lock` are unchanged. On mismatch, STOP.
 2. **Source-level admission first.** From `EngineData/Frontend/RustApp`, use `npm ci`, `npm run validate:source-contracts`, `npm run typecheck`, and `npm run test:frontend-runtime` against that same SHA. Using the locked Python worker environment, run its existing pytest suite and the existing translation, ASR, and TTS quality evaluator self-tests; verify no corpus/model identity substitution or generated tracked-file edits. Source tests do not constitute model-quality or device proof. On first failure, STOP.
-3. **One consistent Rust/frontend build.** Run the existing `manage.cmd build` from the repository root (or its canonical `npm run check:tauri-rust-local` command) with `TRANSLATEIT_EXPECTED_SHA` set to the externally pinned SHA. Its existing helper rebuilds the frontend, checks clean source identity, and runs `cargo check --locked`. Record the executable result; STOP if either language fails.
-4. **One developer-mode local functional baseline before distribution.** With real local worker/models and audio already available, launch the existing Tauri development runtime via `manage.cmd run` after the source build gate. Exercise A1/A3/A4/A5/A6/A7, D1/D2/D3/D4 and the applicable B/C scenarios in this one Windows session: Text in both directions, incomplete/over-length responses, persisted audio settings, redacted Diagnostics, microphone capture, real Meet receiver delivery, incoming speech, manual per-session transcript export and repeated Start/Stop. Do not reinstate retired terminology, style, Meeting Presets, alternative wording or Quick Translate. Capture matched real ASR and MiLMMT outputs for the existing quality evaluators. Missing model/device evidence remains `UNKNOWN`; developer-mode PASS is never installed-app PASS.
+3. **One consistent Rust/frontend compile check.** Run the existing `manage.cmd build` from the repository root (or its canonical `npm run check:tauri-rust-local` command) with `TRANSLATEIT_EXPECTED_SHA` set to the externally pinned SHA. Its existing helper rebuilds the frontend, checks clean source identity, and runs `cargo check --locked`. Record command exit and source identity; this checks compilation but does not produce or prove a running desktop executable. STOP if either language fails.
+4. **One developer-mode local functional baseline before distribution.** With real local worker/models and audio already available, use `manage.cmd run` after source admission; its existing `tauri dev` path must actually build and launch the app successfully before native checks. Complete the five Meeting flows below in the same coordinated session. Internal worker fixtures cover A4/A5/A6/A7 separately; do not restore a Text page to exercise them. Preserve public source/ASR/translation observations privately for diagnosis, using existing evaluators when relevant. Missing model/device evidence remains `UNKNOWN`; developer-mode PASS is never installed-app PASS.
 5. **Controlled Setup + Payload only for release/install scope.** The existing `manage.cmd package "<quality-readiness-report.json>"` delegates to `scripts/build_release.ps1`, which requires genuine `-QualityReadinessEvidence`, a staged private Python/voice/model/driver payload, and updater signing credentials. This is a **hard release gate**, not an optional decoration. Do not create fake quality receipts, bypass signing, use another release script or claim an installer if those inputs are missing. Build the existing exact-SHA offline R3 pair only when the requested release/install scope and prerequisites justify it; publishing remains separately authorized. STOP on missing provenance, license, artifact hash, driver prerequisite, or signature.
 6. **Installed Windows acceptance only when release scope is admitted.** Only with a real signed build artifact and actual target device, repeat the necessary B/C/D checks through the **installed** app and carry out E3–E6. The earlier developer-mode evidence can diagnose failures, but cannot replace installed voice, driver, update, data-preservation or clean-machine proof. STOP at the first reproducible blocker; report its owning stage and preserve prior working behavior instead of adjusting multiple engines.
 
 Pass is **revision-scoped**: source and model identity must match the observed developer-mode run; for release claims, quality receipt, Setup/payload hashes, installed runtime and native measurements must additionally match the admitted release. A passing source check or Tauri dev run is not a passing installed application. This plan adds no normal user-PC testing steps to the ChatGPT/GitHub development loop.
+
+### Five Meeting flows — baseline order
+
+These rows group existing acceptance scenarios; they are not new scenario IDs or
+a second test registry. Reuse one app process, one calling-app input endpoint and
+the same public sample set across applicable observations. App restart belongs
+to the final flow. The detailed timing, device and lifecycle sections below are
+reference procedures, not instructions to repeat the same evidence collection.
+
+| Flow / existing claims | Action in the admitted session | Required observation / failure boundary |
+|---|---|---|
+| 1. Open → Ready → Start · C0, A1–A3/A8, B1/B5, D1/D3/D6 | Select a built-in voice and verified physical microphone/virtual route, leaving incoming off. Check persisted setup and Start once; distinguish cold from subsequent warm Start | Real capture advances and actual selected runtime/voice becomes ready without My Voice training. Start reaches truthful Live or an explicit blocker; file presence, preview playback and a compile check alone cannot pass. Record which built-in voice was used; do not claim both without exercising both |
+| 2. Speech → translation → receiver · B2/B3, C1/C2/C7/C8 | Reuse public normal, brief, negation, correction and mixed-language utterances represented by core A01/A02/A03/A04/A06. Include pauses/silence. Observe source text, translation, selected voice and a separate actual meeting receiver; collect existing timing/counters during these same turns | Source appears before translation; intended message remains understandable. Receiver actually hears the intended translated speech once, with intelligible voice and no unintended raw-mic leakage in TranslateIT mode. Missing/duplicate speech, material new meaning changes or fabricated receiver/timing evidence fail. Local playback and roundtrip-ASR content checks alone do not prove receiver delivery or naturalness |
+| 3. Source, Mute, Stop and restart · C1A/C1B/C1C/C4/C5, D3/D13/D15/D16 | At stopped state select Original and Start without AI readiness as a dependency. Switch Original → TranslateIT → Original with the calling-app microphone unchanged. Mute/unmute in each source and Stop both idle and during processing. Reuse the existing repeated-session procedure for the same observations | Original uses no ASR/MT/TTS; TranslateIT uses the selected voice. One audio owner/endpoint, no overlapping sources or stale translated speech; Mute sends silence without accumulating audio to play on Unmute. Stop revokes output and releases ownership; cleanup uncertainty blocks new Start until verified recovery. An unavailable-worker fault, if needed for C1A, uses controlled disposable state only, never removal of real models/user assets |
+| 4. Incoming alongside outbound · A5, C3/C6, B4 | After outbound succeeds, enable the intended Meeting Sound and have the separated receiver supply public English speech, reusing the intent of core A12. Speak outbound while incoming is active; observe suppression and bounded work. Exercise existing device-mutation locks during Live | Incoming EN→ID is visible without breaking required outbound; the app's own TTS is not retranslated, no false speaker identity, silent device swap or stale backlog. If incoming cannot be exercised, mark it NOT EXECUTED and limit the claim to outbound; do not mark complete Meeting acceptance |
+| 5. Transcript → Stop → export → reopen · C8, D8–D11/D18 | Use the same public session. Observe source-first/pending/failed states, Stop and export offline HTML only after writer ownership releases. Restart the app, reopen the saved transcript, then create a distinct new session. If deletion is tested, delete only this disposable test archive | Retention is disclosed; source/translation and session identity remain truthful after restart. Preview and finished export are readable with correct bilingual modes; no script dependency or false participant/delivery claims. New sessions do not merge; deleting the test archive leaves finished HTML intact. Interrupted storage/completeness remains explicit, never an invented complete archive |
+
+For flow 2, use existing core membership in
+[`scenarios.json`](../../../tools/audio_validation/scenarios.json) and linked
+ASR/translation corpora as sample owners; do not copy utterances into a new set.
+Soft/noisy/clipped fixtures and silence/noise/tone controls retain their offline
+role. Their replay is not physical-capture evidence, and the fixture harness must
+not inject audio into production capture. Rejection of the 61-second tone is not
+proof of long spoken-utterance translation; use the known long-speech procedure
+below when claiming that scope.
+
+Record one outcome per flow and its relevant existing scenario: **PASS / FAIL /
+UNKNOWN (NOT EXECUTED)**, expected versus observed behavior, exact SHA/model/voice,
+route/receiver identity, and an existing private evidence location. Do not create
+a new report service, telemetry process or acceptance database. A native FAIL
+stops the affected flow at its first wrong owner. Unobservable steps stay UNKNOWN;
+optional My Voice, extended fault/display checks and E2–E6 remain outside the
+baseline claim until separately exercised. These flows describe required host
+observations, not implemented automated receiver/UI coverage.
+
+Judge translation by clear retained meaning, not exact reference wording or
+preferred grammar. Keep the six owner-accepted development limitations and two
+REVIEW diagnostics visible under [Current Validation](../current-validation.md);
+they do not trigger phrase patches or inference reruns merely to clear flags.
+This disposition does not authorize release or accept new material errors. Keep
+MiLMMT, prompt, decoding and current-source isolation unchanged: no context saver,
+history/style/glossary injection or corrective translation layer.
 
 ### Meeting long-speech segment candidate — conditional admission in this same phase
 
@@ -119,7 +161,10 @@ Record these once with the baseline:
 
 Do not record private conversation text, raw recordings, credentials, or unredacted private paths as evidence.
 
-## Test order
+## Detailed observation procedures — reuse within the five flows
+
+Follow the five-flow order above. Collect these measurements during those flows;
+do not run a second baseline just to follow this reference section's numbering.
 
 ### 1. A2 / A3 — acceleration and ASR truth
 
@@ -417,13 +462,19 @@ source-only metrics or infer a successful native outcome.
 
 ## Completion
 
-This run is complete when one exact SHA has:
+The admitted Meeting baseline is complete when one exact SHA has recorded
+outcomes and evidence for the five flows above, including:
 
 1. real microphone/finalization/route evidence;
 2. real outbound stage timing;
 3. real CPU/RAM/GPU/VRAM observations;
-4. one clean Stop and repeated-session evidence;
-5. a named first bottleneck, or evidence that no additional source optimization is currently justified.
+4. source-switch/Mute, clean Stop and repeated-session evidence;
+5. truthful transcript/export/restart and in-scope incoming evidence;
+6. a named first bottleneck, or evidence that no additional source optimization is currently justified.
+
+UNKNOWN or a deliberately excluded flow limits the claim; it cannot become an
+overall full-Meeting PASS. My Voice and release/install results require their own
+conditional evidence. A completed runbook edit is not a completed baseline.
 
 Return only the measured first bottleneck to development. Do not reopen every previously considered optimization at once.
 
