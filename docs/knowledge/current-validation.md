@@ -21,6 +21,43 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Case-local forbidden-phrase calibration — 2026-10-26
+
+Parent Local `e62c2e4a0e336876017b5fb040addf6acc7f4323`. A faithful controlled
+`Maybe hold this one for now; don't send it now.` failed before repair because
+the forbidden cue matched inside its negation. The existing evaluator now accepts
+optional case-local `forbidden_exceptions`: only explicitly declared complete
+phrases are excluded from that cue's occurrence search. The disfluency case
+declares four negative forms, including the typographic apostrophe variant;
+other cases retain their original forbidden semantics.
+
+Executed controls accept those four faithful forms, reject an additional positive
+instruction before or after each, preserve forbidden `cloud` even inside a
+negative sentence when no exception is declared, and reject unknown-cue, bare-cue
+and malformed exception contracts. The 191-regression/40-held-out evaluator
+self-test and ten audio-pipeline source tests pass. This is bounded literal
+handling, not general understanding of negation, double negation, quotation or
+semantic scope. No corpus case was added and no runtime dependency was introduced.
+
+Retained-output regrading proves all 191 emitted requests unchanged relative to
+both parent and the original baseline corpus. Only `id-en-disfluency-001` changes:
+its false forbidden hit disappears; missing `yet`/`for now` remains. Before/after
+flags are both 60. Other case details are identical. Original output/source
+identity remains `723fc247` canonical greedy BF16; no fresh model inference or
+candidate promotion follows. Frozen held-out content and production behavior
+are unchanged. Corpus fingerprint:
+`ebdd84197d1500bae818140668f0291a67755ecd676c6019ae85bbb4ba2d60a7`.
+
+Private receipt `.workspace/reports/quality-negation-e62c2e4a.json`, SHA-256
+`3bfc7898b01eb83c9ec1819627ae6e7969b4bce4a70025ebdbff57ebdb2bc95e`,
+binds old/new fingerprints, source hashes, original bundle hash and changed
+case details. Pipeline source-test log is
+`.workspace/reports/quality-negation-pipeline.log`; simulated FAIL/UNVERIFIED
+outputs within it are intentional negative CLI/admission controls, not real
+model executions. Proof ceiling is **EXECUTED_SOURCE** plus historical-output
+analysis; linguistic quality remains **FAIL / OPEN**, and native/perceptual
+acceptance is not executed by this repair.
+
 ### Quality-test calibration, first bounded stage — 2026-10-26
 
 Source parent: Local `b9308d229ebef03613cb75ac617b9e3507a0c273`.

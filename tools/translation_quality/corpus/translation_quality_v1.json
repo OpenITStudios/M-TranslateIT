@@ -986,6 +986,7 @@
         [
           "do not send",
           "don't send",
+          "don’t send",
           "not send"
         ],
         [
@@ -996,6 +997,9 @@
       "forbidden": [
         "send it now"
       ],
+        "forbidden_exceptions": {
+          "send it now": ["don't send it now", "don’t send it now", "do not send it now", "not send it now"]
+        },
       "risk_tags": [
         "disfluency",
         "meaning"

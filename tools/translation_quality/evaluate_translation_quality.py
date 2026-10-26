@@ -75,6 +75,15 @@ def load_corpus(path: Path) -> dict:
         for field in ("preserve", "required_any", "forbidden"):
             if field not in case:
                 raise ValueError(f"{case_id}: missing {field}")
+        exceptions = case.get("forbidden_exceptions", {})
+        if not isinstance(exceptions, dict) or any(
+            cue not in case["forbidden"] or not isinstance(phrases, list) or not phrases
+            or any(not isinstance(phrase, str) or not normalize(cue)
+                   or normalize(cue) not in normalize(phrase)
+                   or normalize(cue) == normalize(phrase) for phrase in phrases)
+            for cue, phrases in exceptions.items()
+        ):
+            raise ValueError(f"{case_id}: invalid forbidden phrase exceptions")
         risk_tags = case.get("risk_tags", [])
         ordered = case.get("ordered_any")
         if ordered is not None and (not isinstance(ordered, list) or not ordered or any(
@@ -160,7 +169,13 @@ def invariant_result(case: dict, translated: str) -> dict:
         group for group in case["required_any"]
         if not any(declared_cue_present(norm, option) for option in group)
     ]
-    forbidden_hits = [item for item in case["forbidden"] if declared_cue_present(norm, item)]
+    forbidden_hits = []
+    for item in case["forbidden"]:
+        remaining = norm
+        for phrase in case.get("forbidden_exceptions", {}).get(item, []):
+            remaining = re.sub(r"(?<!\w)" + re.escape(normalize(phrase)) + r"(?!\w)", " ", remaining)
+        if declared_cue_present(remaining, item):
+            forbidden_hits.append(item)
     ordered_text = re.sub(r"(?<=[a-z])-(?=[a-z])", " ", norm.replace("−", "-"))
     ordered_text = re.sub(r"[^\w\s.+-]", " ", ordered_text)
     ordered_text = re.sub(r"\s+", " ", ordered_text)

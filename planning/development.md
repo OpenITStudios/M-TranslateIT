@@ -2,6 +2,26 @@
 
 ## Current Status
 
+**Active owner goal: efficient, effective and lean quality testing.** Success is
+measured by distinct product risks protected, faithful variants accepted,
+meaning-changing counterexamples rejected, actionable first-stage diagnosis and
+bounded execution cost, not case/assertion totals. Reuse existing evaluators,
+stable scenarios and valid captured evidence; no parallel framework or added
+runtime dependency. Complete this goal only after the risk-based fast selection
+and broader quality gates are explicit and exercised within their actual proof
+ceilings; do not equate source controls with linguistic/native acceptance.
+
+**Negated forbidden-phrase calibration delivered (2026-10-26).** An explicit
+case-local phrase exception prevents `send it now` matching inside declared
+negative phrases. Controls preserve rejection of a separate positive occurrence
+in either order, unknown exception keys, blanket cue exemptions and forbidden
+facts without an exception. No global negation heuristic was added. Evaluator
+self-tests and ten pipeline source tests pass; all 191 worker requests remain
+identical. Retained-output regrading changes only one case's false forbidden hit;
+its missing temporary-deferral cue remains, so all 60 flags remain. This does not
+prove that the translation is wrong or correct overall. No inference, model,
+application or held-out change occurred. Receipt identity is in current validation.
+
 **Quality-test calibration, first bounded stage delivered (2026-10-26).** The
 owner prioritizes discriminating quality evidence over test count. AI-assisted
 desk review of the retained 191-case MiLMMT baseline's 60 flagged cases provisionally
@@ -112,7 +132,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Calibrate the highest-risk checker defects identified by the provisional review, starting with negated forbidden-phrase matching and correction-role/number preservation. Require faithful alternatives and wrong-meaning controls before each bounded contract repair; keep mixed and ambiguous outputs unresolved instead of adding broad aliases. Use existing evaluators and retained outputs when requests are unchanged, then select a risk-complete fast package. Keep MiLMMT, no Text application feature, no context/style/glossary/ASR hints or phrase replacement. Model-quality and integrated speech-to-Meeting acceptance remain open; no model download, updater work or My Voice training follows automatically.
+Calibrate number/correction-role preservation next, distinguishing localized numeric formatting from changed values or reversed roles, with faithful and wrong-meaning controls in the existing evaluator. Then select the smallest justified fast package by distinct risks in both directions and measure its actual cost; do not delete unreviewed coverage to reduce counts. Keep mixed/ambiguous outputs unresolved, use retained evidence only for unchanged requests, retain MiLMMT and current application behavior. Model-quality and integrated speech-to-Meeting acceptance remain open; no model download, updater work or My Voice training follows automatically.
 
 ## Retained My Voice source candidate (paused)
 

@@ -33,6 +33,16 @@ Each case contains one or more references plus narrow invariants:
 - `required_any` — semantic cue groups where at least one form must appear;
 - `forbidden` — high-confidence meaning reversals or unsafe phrases.
 
+Optional `forbidden_exceptions` maps an existing forbidden cue to explicitly
+reviewed, complete phrases containing it. For example, `send it now` is not a
+positive instruction inside `do not send it now`. Exceptions are case-local and
+remove only their bounded phrase occurrences from that cue's search; a separate
+positive occurrence still fails. They do not suppress required meaning checks
+or forbidden facts in other cases. Every exception needs faithful and contrary
+controls in the existing self-test. This is literal phrase handling, not general
+negation, quotation or semantic-scope understanding; ambiguous scope still needs
+linguistic review.
+
 These checks are intentionally narrow. They do not replace human review. Numeric fragments and negation cues now reject embeddings in larger digit/word tokens, while deliberate substring stems (including Indonesian affixes and numeric decimals) remain supported by the current corpus. Reports classify declared failures as literal omission, meaning-cue omission or forbidden meaning; comparisons map critical regressions back to existing risk tags. This follows the error-localization principle of [XCOMET](https://github.com/Unbabel/COMET), but does **not** run COMET or infer its neural severity scores.
 
 The regression corpus grows from observed failures, with a separate frozen 40-case held-out benchmark. The native Text budget-purpose failure is retained as a regression: an unspecified budget must not acquire a construction/project purpose. Do not hand-maintain these counts in downstream status files; use the `stats` command below when exact coverage matters. Growth is intentionally risk-driven rather than random: additions cover meeting phrasing, informal/workplace Indonesian, code-switching, quantities, technical literals, modality, conditionals, quantifier scope, corrections/disfluency, ordering and comparisons.

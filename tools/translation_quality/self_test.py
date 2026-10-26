@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parent
 EVALUATOR = ROOT / "evaluate_translation_quality.py"
@@ -91,6 +92,27 @@ def main() -> int:
         assert evaluator.invariant_result(correction, valid)["critical_pass"], valid
     for reversed_meaning in ("I mean Tuesday, not Thursday.", "Not Thursday, but Tuesday."):
         assert not evaluator.invariant_result(correction, reversed_meaning)["critical_pass"], reversed_meaning
+
+    disfluency = next(case for case in corpus["cases"] if case["id"] == "id-en-disfluency-001")
+    for prohibition in ("don't", "do not", "not", "don’t"):
+        valid = f"Maybe hold this one for now; {prohibition} send it now."
+        assert evaluator.invariant_result(disfluency, valid)["critical_pass"], valid
+        for mixed in (f"{valid} Actually, send it now.", f"Send it now. {valid}"):
+            assert evaluator.invariant_result(disfluency, mixed)["forbidden_hits"] == ["send it now"], mixed
+    assert evaluator.invariant_result(disfluency, "Maybe hold this one for now; send it now.")["forbidden_hits"] == ["send it now"]
+    hallucination = {"preserve": [], "required_any": [], "forbidden": ["cloud"]}
+    assert evaluator.invariant_result(hallucination, "Do not upload it to the cloud.")["forbidden_hits"] == ["cloud"]
+    with TemporaryDirectory() as folder:
+        invalid_path = Path(folder) / "invalid.json"
+        for exceptions in ({"unknown cue": ["not unknown cue"]}, {"send it now": ["send it now"]}, {"send it now": "don't send it now"}):
+            invalid = {**corpus, "cases": [{**disfluency, "forbidden_exceptions": exceptions}]}
+            invalid_path.write_text(json.dumps(invalid), encoding="utf-8")
+            try:
+                evaluator.load_corpus(invalid_path)
+            except ValueError as error:
+                assert "invalid forbidden phrase exceptions" in str(error), error
+            else:
+                raise AssertionError(f"accepted unsafe exception contract: {exceptions}")
 
     candidate = dict(perfect)
     candidate["id-en-negation-001"] = "I will attend the meeting tomorrow."
