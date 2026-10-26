@@ -9,12 +9,55 @@ from collections import defaultdict
 from pathlib import Path
 
 SCHEMA = "translateit.asr_quality.v1"
+NORMALIZATION_POLICY = "id-standalone-cardinal-integers-v1"
 
 
 def normalize(text: str) -> str:
     text = unicodedata.normalize("NFKC", text).casefold()
     text = re.sub(r"[^\w\s]+", " ", text, flags=re.UNICODE)
     return re.sub(r"\s+", " ", text).strip()
+
+
+_SMALL_NUMBERS = ("nol", "satu", "dua", "tiga", "empat", "lima", "enam", "tujuh",
+                  "delapan", "sembilan", "sepuluh", "sebelas")
+_NUMBER_WORDS = set(_SMALL_NUMBERS) | {
+    "belas", "puluh", "seratus", "ratus", "seribu", "ribu", "juta", "miliar", "triliun",
+    "minus", "plus",
+}
+# Only standalone integers: do not reinterpret identifiers, padded digits,
+# decimal/grouped values, clock times or versions as equivalent cardinals.
+_INTEGER = re.compile(r"(?<![\w.,:/+\-])([+-]?)(0|[1-9][0-9]{0,14})(?![\w]|[.,:/][0-9])")
+
+
+def _integer_words(value: int) -> str:
+    if value < 12:
+        return _SMALL_NUMBERS[value]
+    if value < 20:
+        return _SMALL_NUMBERS[value - 10] + " belas"
+    if value < 100:
+        prefix, remainder = _SMALL_NUMBERS[value // 10] + " puluh", value % 10
+    elif value < 200:
+        prefix, remainder = "seratus", value - 100
+    elif value < 1000:
+        prefix, remainder = _SMALL_NUMBERS[value // 100] + " ratus", value % 100
+    elif value < 2000:
+        prefix, remainder = "seribu", value - 1000
+    else:
+        for scale, unit in ((10**12, "triliun"), (10**9, "miliar"), (10**6, "juta"), (1000, "ribu")):
+            if value >= scale:
+                prefix, remainder = _integer_words(value // scale) + " " + unit, value % scale
+                break
+    return prefix + (" " + _integer_words(remainder) if remainder else "")
+
+
+def normalize_for_scoring(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text).casefold().replace("−", "-")
+
+    def render(match: re.Match) -> str:
+        sign = {"-": "minus ", "+": "plus ", "": ""}[match[1]]
+        return sign + _integer_words(int(match[2]))
+
+    return normalize(_INTEGER.sub(render, text))
 
 
 def edit_distance(reference: list[str], hypothesis: list[str]) -> int:
@@ -35,17 +78,17 @@ def error_rate(reference: list[str], hypothesis: list[str]) -> float:
 
 
 def word_error_rate(reference: str, hypothesis: str) -> float:
-    return error_rate(normalize(reference).split(), normalize(hypothesis).split())
+    return error_rate(normalize_for_scoring(reference).split(), normalize_for_scoring(hypothesis).split())
 
 
 def char_error_rate(reference: str, hypothesis: str) -> float:
-    return error_rate(list(normalize(reference).replace(" ", "")), list(normalize(hypothesis).replace(" ", "")))
+    return error_rate(list(normalize_for_scoring(reference).replace(" ", "")), list(normalize_for_scoring(hypothesis).replace(" ", "")))
 
 
 def word_edit_operations(reference: str, hypothesis: str) -> dict[str, int]:
     """Deterministic JiWER-style error breakdown; no additional evaluator engine."""
-    expected = normalize(reference).split()
-    actual = normalize(hypothesis).split()
+    expected = normalize_for_scoring(reference).split()
+    actual = normalize_for_scoring(hypothesis).split()
     # (distance, substitutions, deletions, insertions).
     previous = [(j, 0, 0, j) for j in range(len(actual) + 1)]
     for i, source_word in enumerate(expected, start=1):
@@ -140,16 +183,25 @@ def declared_cue_present(normalized_text: str, cue: str) -> bool:
 
 
 def invariant_result(case: dict, transcript: str) -> dict:
-    norm = normalize(transcript)
-    missing_literals = [item for item in case["preserve"] if not declared_cue_present(norm, item)]
+    norm = normalize_for_scoring(transcript)
+    missing_literals = [item for item in case["preserve"] if not declared_cue_present(norm, normalize_for_scoring(item))]
     missing_concepts = [
         group for group in case["required_any"]
-        if not any(declared_cue_present(norm, option) for option in group)
+        if not any(declared_cue_present(norm, normalize_for_scoring(option)) for option in group)
     ]
+    reference = normalize_for_scoring(case["reference"]).split()
+    numeric_sequence_match = True
+    if any(token in _NUMBER_WORDS or token.isdecimal() for token in reference):
+        # Presence alone cannot distinguish "15, bukan 50" from the reverse.
+        critical_tokens = _NUMBER_WORDS | _POLARITY_TERMS
+        expected = [token for token in reference if token in critical_tokens or token.isdecimal()]
+        actual = [token for token in norm.split() if token in critical_tokens or token.isdecimal()]
+        numeric_sequence_match = expected == actual
     return {
         "missing_literals": missing_literals,
         "missing_concepts": missing_concepts,
-        "critical_pass": not missing_literals and not missing_concepts,
+        "numeric_sequence_match": numeric_sequence_match,
+        "critical_pass": not missing_literals and not missing_concepts and numeric_sequence_match,
     }
 
 
@@ -221,7 +273,7 @@ def evaluate(
     for case in corpus["cases"]:
         transcript = results.get(case["id"], "")
         operations = word_edit_operations(case["reference"], transcript)
-        reference_word_count += len(normalize(case["reference"]).split())
+        reference_word_count += len(normalize_for_scoring(case["reference"]).split())
         for operation, count in operations.items():
             edit_totals[operation] += count
         wer = word_error_rate(case["reference"], transcript)
@@ -250,6 +302,7 @@ def evaluate(
     )
     return {
         "schema": "translateit.asr_quality.report.v1",
+        "normalization_policy": NORMALIZATION_POLICY,
         "corpus_fingerprint": expected_fingerprint,
         "result_corpus_fingerprint": result_corpus_fingerprint or None,
         "source_identity": source_identity or None,

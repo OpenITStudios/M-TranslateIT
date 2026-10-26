@@ -34,6 +34,32 @@ def main() -> int:
     assert "teams_compressed" in validation["recording_profiles"]
     assert "long_utterance" in validation["recording_profiles"]
 
+    by_id = {case["id"]: case for case in corpus["cases"]}
+    for digits, words in (("0", "nol"), ("21", "dua puluh satu"), ("1001", "seribu satu"),
+                          ("2026", "dua ribu dua puluh enam"),
+                          ("2750000", "dua juta tujuh ratus lima puluh ribu")):
+        assert evaluator.word_error_rate(words, digits) == 0, (digits, words)
+    for case_id, transcript, bad_transcripts in (
+        ("asr-correction-001", "Maksud saya 15, bukan 50.", (
+            "Maksud saya 50, bukan 15.", "Maksud saya bukan 15, tetapi 50.",
+            "Maksud saya 15, 50.", "Maksud saya 16, bukan 50.",
+            "Maksud saya -15, bukan 50.", "Maksud saya 015, bukan 50.",
+            "Maksud saya 15.0, bukan 50.",
+        )),
+        ("asr-clipping-001", "Angka yang benar 125. Bukan 150.", (
+            "Angka yang benar 150, bukan 125.", "Angka yang benar bukan 125, tetapi 150.",
+            "Angka yang benar 125, 150.", "Angka yang benar 1125, bukan 150.",
+        )),
+    ):
+        case = by_id[case_id]
+        assert evaluator.word_error_rate(case["reference"], transcript) == 0, transcript
+        assert evaluator.char_error_rate(case["reference"], transcript) == 0, transcript
+        assert evaluator.word_edit_operations(case["reference"], transcript) == {
+            "substitutions": 0, "deletions": 0, "insertions": 0}
+        assert evaluator.invariant_result(case, transcript)["critical_pass"], transcript
+        for bad_transcript in bad_transcripts:
+            assert not evaluator.invariant_result(case, bad_transcript)["critical_pass"], bad_transcript
+
     fingerprint = evaluator.corpus_fingerprint(corpus)
     assert len(fingerprint) == 64
 

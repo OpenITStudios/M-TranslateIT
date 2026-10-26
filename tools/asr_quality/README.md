@@ -40,6 +40,10 @@ External benchmark direction: [Common Voice dataset metadata](https://github.com
 
 WER/CER are useful regression metrics, not a standalone user-quality verdict. A transcript can have a moderate WER yet still contain a critical reversal such as losing the word "tidak", so critical invariants are evaluated separately.
 
+Scoring uses the explicit `id-standalone-cardinal-integers-v1` normalization policy: standalone digit integers are rendered as standard Indonesian cardinal words before WER/CER/edit analysis and cue checks. Thus `15, bukan 50` is equivalent to `lima belas, bukan lima puluh`; stored reference/transcript text stays unchanged. Supported integers have at most 15 digits; leading zeros, embedded identifiers, grouped/decimal values, clock times and versions are not inferred as equivalent cardinals. Signs remain meaningful. This is a bounded Indonesian scoring rule, not a general numeric-language parser.
+
+For references containing numbers, `numeric_sequence_match` also checks the ordered number/polarity tokens. Merely containing both numbers and `bukan` cannot pass a reversed correction or move negation onto the other value. Incorrect, missing, extra or reordered numeric tokens remain critical failures even when aggregate WER is below the scenario limit. The report records its normalization policy; matched audio/model identities and evaluator source remain necessary when comparing earlier measurements.
+
 ## Commands
 
 Validate the corpus:
