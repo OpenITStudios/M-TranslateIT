@@ -1,9 +1,11 @@
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("help", "status", "prepare", "verify", "build", "run", "test", "package")]
+    [ValidateSet("help", "status", "prepare", "verify", "build", "run", "test", "package", "clean")]
     [string]$Command = "help",
     [Parameter(Position = 1)]
-    [string]$QualityReadinessEvidence
+    [string]$QualityReadinessEvidence,
+    [ValidateSet('build', 'cache')][string]$Profile = 'build',
+    [switch]$Apply
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,6 +15,7 @@ $Worker = Join-Path $Root "EngineData\Backend\LocalWorker\WorkerRuntime"
 Import-Module (Join-Path $PSScriptRoot "modules\Workspace.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "modules\Readiness.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "modules\PortableToolchain.psm1") -Force
+Import-Module (Join-Path $PSScriptRoot "modules\Cleanup.psm1") -Force
 # Load last: nested forced imports can remove its commands from this scope.
 Import-Module (Join-Path $PSScriptRoot "modules\Toolchain.psm1") -Force
 
@@ -42,6 +45,7 @@ function Show-Help {
     Write-Host "  manage.cmd build    Build frontend and compile-check Rust on one clean source SHA"
     Write-Host "  manage.cmd run      Start the local Tauri development app; no release signing"
     Write-Host "  manage.cmd test     Run frontend, Rust, and worker tests"
+    Write-Host "  manage.cmd clean [-Profile build|cache] [-Apply]  Preview cleanup; deletion requires -Apply"
     Write-Host '  manage.cmd package "<quality-evidence.json>"  Build controlled signed release only'
 }
 
@@ -99,8 +103,12 @@ function Assert-DevelopmentPrerequisites {
 }
 
 Set-Location $Root
+if ($Command -ne 'clean' -and ($Apply -or $PSBoundParameters.ContainsKey('Profile'))) {
+    throw '-Profile and -Apply are only valid for clean.'
+}
+if ($Command -eq 'clean' -and $QualityReadinessEvidence) { throw 'Clean does not accept arbitrary paths.' }
 # Generated caches are scoped to this process and child tools, never Windows-wide.
-if ($Command -notin @("help", "status")) {
+if ($Command -notin @("help", "status", "clean")) {
     $null = Set-TranslateITWorkspaceEnvironment -RepositoryRoot $Root
     if ($Command -eq 'prepare') {
         Install-TranslateITPortableToolchain -RepositoryRoot $Root
@@ -111,6 +119,7 @@ if ($Command -notin @("help", "status")) {
 switch ($Command) {
     "help" { Show-Help }
     "status" { Show-TranslateITReadiness -Readiness (Get-TranslateITReadiness -RepositoryRoot $Root) }
+    "clean" { Invoke-TranslateITCleanup -RepositoryRoot $Root -Profile $Profile -Apply:$Apply }
     "prepare" {
         Assert-DevelopmentPrerequisites
         Invoke-Step "Install locked frontend dependencies" { Set-Location $Frontend; npm ci }

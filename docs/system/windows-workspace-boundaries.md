@@ -74,6 +74,35 @@ The model download authority remains
 `EngineData/Backend/LocalWorker/WorkerRuntime/model_manifest.json` and
 `prepare_model_assets.py`. No duplicate provider/downloader is authorized.
 
+## Explicit development cleanup
+
+`manage.cmd clean` previews the `build` profile (Rust `src-tauri/target` and
+frontend `dist`). `manage.cmd clean -Profile cache` previews repository npm,
+uv, pip and root pytest/Ruff caches. Only `-Apply` permits deletion; there is
+no arbitrary-path cleanup. The implementation owner is
+`tooling/windows/modules/Cleanup.psm1` and its destructive-boundary regression
+is `tooling/windows/tests/Cleanup.Tests.ps1`.
+
+All candidates must remain inside the repository, ignored and untracked;
+reparse points and inaccessible content fail closed. Apply checks for active
+tools and validates the full plan before deletion. Keep tools stopped during
+cleanup: process checks do not provide a concurrency lock. A partial deletion
+on an I/O failure is reported as failure, never silently retried.
+
+Retain active developer environments/toolchains, all runtime models, verified
+downloads, release recovery markers, staging and UserData. Retain accepted
+synthetic fixtures and matching current-validation receipts/artifacts; old
+reports and stage copies require a separate reviewed list with known consumers
+and replacement evidence before removal. Ignored status or age alone is not
+proof of obsolescence. Do not delete `.workspace` or root `.cache` wholesale.
+
+New development caches/temp/reports use the existing `.workspace` locations.
+Legacy root `.cache` and staging remain explicit review candidates, not
+automatic cleanup targets. Root Git/service/configuration entrypoints and
+canonical source paths stay in place; installed release layout has a separate
+contract. Size reports describe logical bytes; measure disk free space before
+and after cleanup rather than treating hardlinked cache bytes as reclaimed.
+
 ## Exceptions and unfinished integration
 
 - Release staging now uses an isolated `UV_PROJECT_ENVIRONMENT` inside

@@ -24,6 +24,9 @@ and Python lockfiles. These are review/pin inputs, not download destinations.
 | `manage.cmd build` | Existing exact-SHA frontend and locked Tauri Rust compile gate |
 | `manage.cmd run` | Existing Tauri development app, needing real local models/audio |
 | `manage.cmd test` | Existing frontend, Rust and worker regression suites |
+| `manage.cmd clean` | Read-only preview of renewable Rust/frontend build outputs |
+| `manage.cmd clean -Profile cache` | Read-only preview of npm/uv/pip and root pytest/Ruff caches |
+| `manage.cmd clean -Profile build -Apply` | Explicitly delete the previewed build locations; the next build recompiles |
 | `manage.cmd package "<quality-report.json>"` | Controlled signed R3 release, separately gated; not a development setup shortcut |
 
 The `Toolchain.psm1` module selects complete existing workspace bundles (Node/npm, Git, Python, uv and Rust) before any modifying developer command; incomplete bundles fail closed and external fallback is reported explicitly. This module prefers the local bundles. The separate `PortableToolchain.psm1` provisions pinned Node, MinGit, uv-managed Python and Rust toolchains only on explicit `prepare`, verifies downloaded hashes and refuses incomplete installations; it never installs Windows drivers or MSVC automatically. All missing tool archives are hash-verified before the first live tool directory is published; a download-only failure frees the reservation for safe retry, while a failure after installation starts preserves its recovery lock. The single `Readiness.psm1` module owns the read-only toolchain/asset inventory. Its report is local diagnostic evidence only, never an automatically promoted release-readiness receipt or native acceptance proof.
@@ -45,3 +48,17 @@ staging flow still needs a separate safe environment/retry migration before
 [Workspace ownership](../docs/system/windows-workspace-boundaries.md) ·
 [Windows acceptance](../docs/knowledge/operations/target-windows-performance.md) ·
 [Repository tools](../tools/README.md).
+
+Cleanup does not initialize the workspace or select/install toolchains. Both
+profiles default to dry-run; `-Apply` is required for deletion. There is no
+arbitrary-path or whole-workspace cleanup option. Apply requires Git to confirm
+all targets are ignored and contain no tracked files, rejects reparse points
+in ancestors/contents and blocks active development/runtime processes. Close
+tools before applying and keep them closed throughout cleanup; this is not a
+filesystem transaction. Errors stop execution; already removed renewable files
+are not restored automatically.
+
+`cache -Apply` may require dependency downloads next time. uv cache and worker
+environments can share hardlinks, so logical sizes can overstate reclaimed
+space. Model/Hugging Face caches, installed tools, active `.venv`/`node_modules`,
+staging/recovery markers, reports/fixtures and all UserData are excluded.

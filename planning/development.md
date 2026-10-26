@@ -1,6 +1,24 @@
-# TranslateIT — maintainable automatic regression
+# TranslateIT — development workspace cleanup
 
-## Current Status
+## Current workspace outcome
+
+**First bounded cleanup delivered (2026-10-26).** `manage.cmd clean` now previews
+renewable build outputs; `-Profile cache` previews npm/uv/pip and root pytest/Ruff
+caches. Deletion requires `-Apply`. The Windows cleanup fixture passed dry-run,
+tracked/ignored checks, junction rejection, active-build blocking, protected-data
+and idempotence checks. Real build/cache cleanup reduced logical workspace size
+from 35.71 to 16.71 GiB; observed drive free space increased by 16.86 GiB.
+Protected path/size/mtime inventory fingerprints matched for UserData, runtime
+assets, the worker environment and reports; this is metadata evidence, not a
+new model/native acceptance claim. Models, active environments, accepted audio
+fixtures and proof artifacts remain in place. Root `.cache` and staging remain
+review candidates; one small failed-test fixture remains after an automatic
+approval-review rejection of its removal. Repository verification still reports
+three pre-existing planning-text contract failures; those are outside cleanup.
+The [workspace contract](../docs/system/windows-workspace-boundaries.md#explicit-development-cleanup)
+owns cleanup/retention rules. No source-root or installed-app path migration occurred.
+
+## Retained automatic-regression acceptance
 
 **The automatic-regression-system goal is complete (2026-10-26).** The existing audio harness now has one maintained entry point, `worker_runner.py --profile source|core|endurance`, with separate scenario/fixture, transport/execution and shared grading owners. Core membership and round policy live in `scenarios.json` independently of acoustic identity. ASR/translation/TTS expectations remain in their canonical evaluators/corpora; declared digit/word aliases do not require replacing fixtures or previous outputs. See [commands and maintenance boundaries](../tools/audio_validation/README.md#official-regression-entry-point).
 
@@ -14,7 +32,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Use the maintained regression entry point as the gate for the next explicitly scoped product change; do not create more test work merely to increase coverage counts. Native acceptance or additional scenarios require their own concrete product need and scope.
+Review the remaining root `.cache` and `.workspace/staging` against current consumers and verified replacements, producing one explicit obsolete-file list before any further deletion. Do not broaden cleanup to models, UserData, active tools/environments or accepted fixture/proof artifacts.
 
 ## Retained My Voice source candidate (paused)
 
