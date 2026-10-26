@@ -21,6 +21,33 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Controlled status/callback contention reproduction — 2026-10-26
+
+The candidate based on `4dae67517a7294339c268659f55779666895c4e0` extends the
+existing opt-in public WAV replay/lifecycle fixture only; production behavior is
+unchanged. A34's existing hash-verified natural synthetic PCM runs through real
+local Silero. The test holds its nested fault mutex, starts the actual
+`finalized_speech_fault(true)` observer, confirms that observer owns ingress, and
+invokes the actual finalized PCM callback entry. This deliberately forces one
+specific overlap; it does not measure ordinary status-lock hold time or natural
+failure frequency, and is not a reproduction of the historical native session.
+
+**INTEGRATION_FIXTURE:** one ingress rejection, all handoff reasons zero; the
+canonical CPU owner acknowledges discontinuity, then processes 105 Silero windows
+after paced fixture input. Stop joins, restart reports zero loss. The existing
+opt-in replay completed in 58.31 seconds with 47 input receipts; these receipts
+are replay evidence, not a new ASR/translation/TTS quality PASS. The existing
+lifecycle controls passed. **EXECUTED_SOURCE:** Rust 339 passed/one opt-in ignored
+in the ordinary suite. Private log: `.workspace/reports/pcm-status-contention-fixture.log`;
+its `PCM_CONTENTION_RECEIPT_JSON` contains numeric observations only.
+
+The shared ingress lock is a proved mechanism by which status observation can
+reject callback PCM independently of queue capacity or model speed. Queue lock
+contention and overflow remain separate mechanisms. The two historical microphone
+drops and previous incoming native error remain unattributed. This characterization
+probe expects the current defect and must become a no-loss acceptance assertion
+when its owning transport/status coupling is repaired; it is not product law.
+
 ### PCM loss cause observability — 2026-10-26
 
 The owner approved extending the existing Diagnostics export with numeric-only

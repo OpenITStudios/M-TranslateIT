@@ -528,6 +528,7 @@ pub(super) fn verify_silero_fixture_lifecycle(pcm: &[f32]) {
     }
     assert_eq!(finalized_speech_fault(true).as_deref(), Some("silero:capture_rate_changed"));
     assert!(clear_finalized_incoming_utterance_producer());
+    speech_ingress::verify_status_contention_fixture(pcm);
     clear_finalized_meeting_sequence();
 }
 

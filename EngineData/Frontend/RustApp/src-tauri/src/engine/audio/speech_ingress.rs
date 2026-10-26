@@ -194,6 +194,58 @@ impl SpeechIngress {
 }
 
 #[cfg(test)]
+pub(super) fn verify_status_contention_fixture(pcm: &[f32]) {
+    let sync = incoming_sync();
+    let session = "silero-status-contention";
+    start_finalized_incoming_silero(session, 16_000).unwrap();
+    let fault = Arc::clone(&sync.ingress.lock().unwrap().as_ref().unwrap().fault);
+    // Hold the nested fault read so the real status reader owns ingress at
+    // the callback boundary; no scheduler luck or artificial audio delay.
+    let blocked_fault = fault.lock().unwrap();
+    let observer = thread::spawn(|| finalized_speech_fault(true));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match sync.ingress.try_lock() {
+            Err(std::sync::TryLockError::WouldBlock) => break,
+            Err(_) => panic!("unexpected ingress poison"),
+            Ok(_) => {}
+        }
+        assert!(Instant::now() < deadline, "status reader did not enter ingress");
+        thread::yield_now();
+    }
+    observe_finalized_incoming_mono_f32_samples(&pcm[..320], 16_000);
+    drop(blocked_fault);
+    assert_eq!(observer.join().unwrap(), None);
+    let loss = pcm_drop_breakdown(sync);
+    assert_eq!(loss.ingress_rejected_callbacks, 1);
+    assert_eq!(loss.handoff, Some(super::super::pcm_handoff::PcmDropCounts::default()));
+    // The actual CPU owner must acknowledge the gap before paced offline input
+    // can establish new continuity. No old fragment may survive the reset.
+    while sync.state.lock().unwrap().as_ref().unwrap().capture_epoch == 1 {
+        assert!(Instant::now() < deadline, "CPU did not acknowledge ingress loss");
+        thread::yield_now();
+    }
+    for chunk in pcm.chunks(3_200) { enqueue_silero_fixture(chunk); }
+    let windows = wait_silero_fixture().len();
+    assert!(windows > 0, "real Silero must process PCM after the gap");
+    let loss = pcm_drop_breakdown(sync);
+    assert_eq!(loss.ingress_rejected_callbacks, 1);
+    assert_eq!(loss.handoff, Some(super::super::pcm_handoff::PcmDropCounts::default()));
+    assert!(clear_finalized_incoming_utterance_producer_for_session(session));
+    assert!(sync.ingress.lock().unwrap().is_none());
+    start_finalized_incoming_silero(session, 16_000).unwrap();
+    assert_eq!(pcm_drop_breakdown(sync).ingress_rejected_callbacks, 0);
+    assert_eq!(finalized_pcm_drop_count(true), 0);
+    assert!(clear_finalized_incoming_utterance_producer_for_session(session));
+    println!("PCM_CONTENTION_RECEIPT_JSON={}", serde_json::json!({
+        "controlled_status_overlap": true, "ingress_rejected_callbacks": 1,
+        "handoff": loss.handoff, "silero_windows_after_reset": windows,
+        "stop_joined": true, "restart_loss_count": 0,
+        "claim": "FORCED_STATUS_LOCK_OVERLAP_NOT_HISTORICAL_NATIVE_CAUSE",
+    }));
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

@@ -2,6 +2,15 @@
 
 ## Current Status
 
+**Controlled status/PCM contention reproduced (2026-10-26).** The existing opt-in
+WAV replay now includes a synchronized probe through the actual status reader,
+PCM callback and local Silero owner. Forced status overlap produces one ingress
+rejection with zero handoff losses; CPU reset, 105 later Silero windows, Stop join
+and zero-loss restart are observed. The opt-in replay completed with 47 input
+receipts; ordinary Rust suite 339 passed/one ignored. This proves a shared-lock
+loss mechanism, not the cause of historical native drops or normal failure rate.
+Only test code changed. Current Validation owns proof and limits.
+
 **PCM drop diagnosis prepared (2026-10-26).** With explicit owner approval, the
 existing Diagnostics export now separates ingress rejection from handoff lock
 contention, full buffer, oversized chunks and poisoned lock. Only numeric
@@ -219,7 +228,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Use the existing synthetic WAV/PCM fixture path to attempt a controlled callback-to-Silero loss reproduction with concurrent status observation and CPU draining. Require a repeatable nonzero reason counter before changing transport policy; do not treat the latest zero-drop native snapshot as a fix or repeatedly wait for an unexplained native failure. The historical incoming error and uncontrolled recognized phrases remain separate unresolved evidence. No CI, model/context/style/glossary change, incoming toggle, queue enlargement, blind retry or corrective translation layer is authorized.
+Resolve the proved status/PCM ingress-lock coupling at the existing audio owner: determine the smallest lifecycle-safe change that lets status observation coexist with callback admission, then convert the synchronized characterization probe into a no-loss acceptance check. Preserve bounded queue/drop accounting, discontinuity, generation/session identity and confirmed Stop join; avoid a partial fix that merely shortens one nested read while other status reads still reject PCM. Historical native attribution remains unknown. No CI, model/context/style/glossary change, incoming toggle, queue enlargement, blind retry or corrective translation layer is authorized.
 
 ## Retained My Voice source candidate (paused)
 
