@@ -455,6 +455,14 @@ pub fn finalized_pcm_drop_count(incoming: bool) -> u64 {
 }
 
 #[cfg(test)]
+pub(super) fn enqueue_silero_fixture(samples: &[f32]) {
+    let guard = incoming_sync().ingress.lock().unwrap();
+    let cpu = guard.as_ref().expect("offline fixture must start canonical Silero");
+    cpu.push_offline(samples);
+    cpu.wait_processed();
+}
+
+#[cfg(test)]
 pub(super) fn wait_silero_fixture() -> Vec<serde_json::Value> {
     let guard = incoming_sync().ingress.lock().unwrap();
     let cpu = guard.as_ref().expect("fixture must start canonical Silero");
@@ -469,8 +477,7 @@ pub(super) fn verify_silero_fixture_lifecycle(pcm: &[f32]) {
     reset_finalized_meeting_sequence(session);
     start_finalized_incoming_silero(session, 16_000).unwrap();
     for chunk in pcm[..pcm.len() / 2].chunks(3_200) {
-        observe_finalized_incoming_mono_f32_samples(chunk, 16_000);
-        wait_silero_fixture();
+        enqueue_silero_fixture(chunk);
     }
     let reset = reset_finalized_incoming_speech_boundary(session).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -480,12 +487,10 @@ pub(super) fn verify_silero_fixture_lifecycle(pcm: &[f32]) {
     }
     assert!(clear_finalized_incoming_utterance_producer_for_session("stale-session"));
     for chunk in pcm.chunks(3_200) {
-        observe_finalized_incoming_mono_f32_samples(chunk, 16_000);
-        wait_silero_fixture();
+        enqueue_silero_fixture(chunk);
     }
     for _ in 0..5 {
-        observe_finalized_incoming_mono_f32_samples(&vec![0.0; 3_200], 16_000);
-        wait_silero_fixture();
+        enqueue_silero_fixture(&vec![0.0; 3_200]);
     }
     let utterance = try_take_finalized_incoming_utterance(session).expect("speech after reset survives stale Stop");
     assert!(utterance.capture_provenance.unwrap().audio_epoch > reset);

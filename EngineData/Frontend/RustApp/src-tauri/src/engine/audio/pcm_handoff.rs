@@ -225,6 +225,10 @@ impl PcmHandoff {
                 return PcmPush::Dropped(PcmDropReason::Poisoned);
             }
         };
+        self.write_locked(samples, &mut ring)
+    }
+
+    fn write_locked(&self, samples: &[f32], ring: &mut PcmRing) -> PcmPush {
         if self.stopped.load(Ordering::Acquire) {
             return PcmPush::Dropped(PcmDropReason::Stopped);
         }
@@ -235,6 +239,14 @@ impl PcmHandoff {
         ring.write(samples);
         self.buffered_samples.store(ring.len, Ordering::Release);
         PcmPush::Accepted(samples.len())
+    }
+
+    /// Offline model fixtures own their input pacing, not a CPAL callback.
+    /// Reuse the exact bounded writer without fabricating a contention loss.
+    #[cfg(test)]
+    pub(super) fn push_offline(&self, samples: &[f32]) -> PcmPush {
+        let mut ring = self.ring.lock().expect("offline PCM ring");
+        self.write_locked(samples, &mut ring)
     }
 
     /// CPU worker call. `observed_loss_epoch` belongs to that worker and must

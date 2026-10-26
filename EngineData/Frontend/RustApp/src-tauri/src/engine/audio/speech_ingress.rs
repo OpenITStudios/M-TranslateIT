@@ -145,6 +145,12 @@ impl SpeechIngress {
     #[cfg(test)]
     pub fn observations(&self) -> Vec<serde_json::Value> { self.observations.lock().unwrap().clone() }
 
+    #[cfg(test)]
+    pub fn push_offline(&self, pcm: &[f32]) {
+        assert_eq!(self.queue.push_offline(pcm), crate::engine::audio::pcm_handoff::PcmPush::Accepted(pcm.len()));
+        self.submitted.fetch_add(pcm.len() as u64, Ordering::Release);
+    }
+
     pub fn fault(&self) -> Option<String> {
         self.fault.lock().map(|f| f.clone()).unwrap_or(Some("silero:fault_poisoned".to_string()))
     }
@@ -176,7 +182,8 @@ impl SpeechIngress {
         let deadline = Instant::now() + Duration::from_secs(5);
         while self.processed.load(Ordering::Acquire) < self.submitted.load(Ordering::Acquire) {
             assert!(self.fault().is_none(), "{:?}", self.fault());
-            assert!(Instant::now() < deadline, "canonical speech CPU drain timed out");
+            assert!(Instant::now() < deadline, "canonical speech CPU drain timed out: processed={}, submitted={}, queue={:?}",
+                self.processed.load(Ordering::Acquire), self.submitted.load(Ordering::Acquire), self.queue.metrics());
             thread::sleep(Duration::from_millis(1));
         }
     }

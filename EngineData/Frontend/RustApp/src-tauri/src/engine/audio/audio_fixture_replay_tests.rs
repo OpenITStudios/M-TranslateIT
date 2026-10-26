@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use super::finalized_utterance::{
     clear_finalized_incoming_utterance_producer, clear_finalized_meeting_sequence,
-    evicted_pending_utterance_count, observe_finalized_incoming_mono_f32_samples,
+    evicted_pending_utterance_count,
     overflow_dropped_utterance_count, reset_finalized_drop_counters,
     reset_finalized_meeting_sequence,
     try_take_finalized_incoming_utterance,
@@ -166,8 +166,7 @@ fn stage_for_case(
             "sample_count": frame.len(),
             "gate": gate,
         }));
-        observe_finalized_incoming_mono_f32_samples(frame, TARGET_SAMPLE_RATE_HZ);
-        super::finalized_utterance::wait_silero_fixture();
+        super::finalized_utterance::enqueue_silero_fixture(frame);
         collect();
     }
     // Keep the original non-speech tone intact; the disclosed tail closes speech.
@@ -176,8 +175,7 @@ fn stage_for_case(
     if added_quiet_ms > 0 {
         let silence = vec![0.0; FRAME_SAMPLES];
         for _ in 0..added_quiet_ms / 200 {
-            observe_finalized_incoming_mono_f32_samples(&silence, TARGET_SAMPLE_RATE_HZ);
-            super::finalized_utterance::wait_silero_fixture();
+            super::finalized_utterance::enqueue_silero_fixture(&silence);
             collect();
         }
     }
@@ -206,6 +204,7 @@ fn stage_for_case(
         "silero_windows": neural_windows,
         "detector": "silero-v6-cpu-native",
         "detector_sha256": super::silero::MODEL_SHA256,
+        "input_transport": "OFFLINE_PACED_SHARED_BOUNDED_PCM_WRITER_NOT_CPAL_CALLBACK",
         "test_added_quiet_ms": added_quiet_ms,
         "test_only": true,
         "blocker": latest_blocker,
