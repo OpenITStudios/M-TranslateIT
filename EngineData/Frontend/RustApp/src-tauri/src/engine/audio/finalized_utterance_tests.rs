@@ -1,5 +1,31 @@
 use super::*;
 
+#[test]
+fn ingress_rejection_is_separate_from_handoff_loss_and_exports_only_counts() {
+    let sync = FinalizedProducerSync {
+        ingress: Mutex::new(None),
+        transport_loss: AtomicU64::new(0),
+        state: Mutex::new(None),
+        ready: Condvar::new(),
+        callback_lock_observations: AtomicU64::new(0),
+        callback_lock_wait_max_ns: AtomicU64::new(0),
+    };
+    let ingress = sync.ingress.lock().unwrap();
+    observe_finalized_mono_samples(&sync, &[0.1; 16], 16_000);
+    drop(ingress);
+    let snapshot = serde_json::to_value(pcm_drop_breakdown(&sync)).unwrap();
+    assert_eq!(snapshot, serde_json::json!({
+        "ingress_rejected_callbacks": 1,
+        "handoff": null,
+    }));
+    let counts = serde_json::to_value(super::super::pcm_handoff::PcmDropCounts::default()).unwrap();
+    assert_eq!(counts, serde_json::json!({
+        "lock_busy": 0, "buffer_full": 0, "chunk_too_large": 0, "poisoned": 0,
+    }));
+    reset_producer(&sync, "new-diagnostic-session", None, LANE_INCOMING, 16_000);
+    assert_eq!(pcm_drop_breakdown(&sync).ingress_rejected_callbacks, 0);
+}
+
 // These scenarios run inside one test fn because the producer state lives in
 // process-wide statics; parallel unit tests would race on those mutexes.
 

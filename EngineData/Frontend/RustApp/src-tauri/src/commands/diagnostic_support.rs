@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::engine::audio::finalized_utterance::finalized_callback_lock_metrics;
+use crate::engine::audio::finalized_utterance::{finalized_callback_lock_metrics, finalized_pcm_drop_breakdown};
 use crate::engine::audio::live_capture::live_capture_status;
 use crate::engine::audio::meeting_sound_capture::meeting_sound_capture_status;
 use crate::engine::logging::sanitize_diagnostic_text;
@@ -67,6 +67,7 @@ pub fn export_diagnostic_support_bundle() -> DiagnosticSupportBundleResult {
             "frames_received": microphone_capture.frames_received,
             "native_callback_error_count": microphone_capture.callback_error_count,
             "pcm_drop_count": microphone_capture.pcm_drop_count,
+            "pcm_drop_breakdown": finalized_pcm_drop_breakdown(false),
             "speech_pipeline_blocker": sanitized(&microphone_capture.blocker),
         },
         "incoming": {
@@ -74,6 +75,7 @@ pub fn export_diagnostic_support_bundle() -> DiagnosticSupportBundleResult {
             "frames_received": incoming_capture.frames_received,
             "native_callback_error_count": incoming_capture.callback_error_count,
             "pcm_drop_count": incoming_capture.pcm_drop_count,
+            "pcm_drop_breakdown": finalized_pcm_drop_breakdown(true),
             "speech_pipeline_blocker": sanitized(&incoming_capture.blocker),
         },
     });

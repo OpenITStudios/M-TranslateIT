@@ -157,6 +157,10 @@ impl SpeechIngress {
 
     pub fn dropped_callbacks(&self) -> u64 { self.queue.metrics().dropped_callbacks }
 
+    pub fn drop_counts(&self) -> super::super::pcm_handoff::PcmDropCounts {
+        self.queue.drop_counts()
+    }
+
     pub fn stop(&mut self) -> bool {
         self.stop_with_budget(Duration::from_millis(750))
     }

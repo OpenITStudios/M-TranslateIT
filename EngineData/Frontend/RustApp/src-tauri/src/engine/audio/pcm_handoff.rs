@@ -39,6 +39,14 @@ pub enum PcmDrain {
 }
 
 /// Numeric-only observations; no user audio or transcript content.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct PcmDropCounts {
+    pub lock_busy: u64,
+    pub buffer_full: u64,
+    pub chunk_too_large: u64,
+    pub poisoned: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PcmHandoffMetrics {
     pub generation: u64,
@@ -118,6 +126,10 @@ pub struct PcmHandoff {
     buffered_samples: AtomicUsize,
     lost_callbacks: AtomicU64,
     lost_samples: AtomicU64,
+    lost_lock_busy: AtomicU64,
+    lost_buffer_full: AtomicU64,
+    lost_chunk_too_large: AtomicU64,
+    lost_poisoned: AtomicU64,
     loss_epoch: AtomicU64,
     stopped: AtomicBool,
     consumer_claimed: AtomicBool,
@@ -149,6 +161,10 @@ impl PcmHandoff {
             buffered_samples: AtomicUsize::new(0),
             lost_callbacks: AtomicU64::new(0),
             lost_samples: AtomicU64::new(0),
+            lost_lock_busy: AtomicU64::new(0),
+            lost_buffer_full: AtomicU64::new(0),
+            lost_chunk_too_large: AtomicU64::new(0),
+            lost_poisoned: AtomicU64::new(0),
             loss_epoch: AtomicU64::new(0),
             stopped: AtomicBool::new(false),
             consumer_claimed: AtomicBool::new(false),
@@ -193,7 +209,15 @@ impl PcmHandoff {
         self.consumer_claimed.store(false, Ordering::Release);
     }
 
-    fn record_loss(&self, samples: usize) {
+    fn record_loss(&self, samples: usize, reason: PcmDropReason) {
+        let counter = match reason {
+            PcmDropReason::LockBusy => &self.lost_lock_busy,
+            PcmDropReason::BufferFull => &self.lost_buffer_full,
+            PcmDropReason::ChunkTooLarge => &self.lost_chunk_too_large,
+            PcmDropReason::Poisoned => &self.lost_poisoned,
+            PcmDropReason::Stopped => return,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
         self.lost_callbacks.fetch_add(1, Ordering::Relaxed);
         self.lost_samples.fetch_add(samples as u64, Ordering::Relaxed);
         self.loss_epoch.fetch_add(1, Ordering::AcqRel);
@@ -211,17 +235,17 @@ impl PcmHandoff {
             return PcmPush::Accepted(0);
         }
         if samples.len() > self.capacity_samples {
-            self.record_loss(samples.len());
+            self.record_loss(samples.len(), PcmDropReason::ChunkTooLarge);
             return PcmPush::Dropped(PcmDropReason::ChunkTooLarge);
         }
         let mut ring = match self.ring.try_lock() {
             Ok(guard) => guard,
             Err(TryLockError::WouldBlock) => {
-                self.record_loss(samples.len());
+                self.record_loss(samples.len(), PcmDropReason::LockBusy);
                 return PcmPush::Dropped(PcmDropReason::LockBusy);
             }
             Err(TryLockError::Poisoned(_)) => {
-                self.record_loss(samples.len());
+                self.record_loss(samples.len(), PcmDropReason::Poisoned);
                 return PcmPush::Dropped(PcmDropReason::Poisoned);
             }
         };
@@ -233,7 +257,7 @@ impl PcmHandoff {
             return PcmPush::Dropped(PcmDropReason::Stopped);
         }
         if ring.len.saturating_add(samples.len()) > self.capacity_samples {
-            self.record_loss(samples.len());
+            self.record_loss(samples.len(), PcmDropReason::BufferFull);
             return PcmPush::Dropped(PcmDropReason::BufferFull);
         }
         ring.write(samples);
@@ -331,6 +355,15 @@ impl PcmHandoff {
             stopped: self.stopped.load(Ordering::Acquire),
         }
     }
+
+    pub fn drop_counts(&self) -> PcmDropCounts {
+        PcmDropCounts {
+            lock_busy: self.lost_lock_busy.load(Ordering::Relaxed),
+            buffer_full: self.lost_buffer_full.load(Ordering::Relaxed),
+            chunk_too_large: self.lost_chunk_too_large.load(Ordering::Relaxed),
+            poisoned: self.lost_poisoned.load(Ordering::Relaxed),
+        }
+    }
 }
 
 /// CPU-only drain driver. The caller owns the VAD reset on a gap; no new
@@ -373,7 +406,7 @@ impl PcmDrainCursor {
 
 #[cfg(test)]
 mod tests {
-    use super::{PcmDrain, PcmDrainCursor, PcmDropReason, PcmHandoff, PcmLane, PcmPush};
+    use super::{PcmDrain, PcmDrainCursor, PcmDropCounts, PcmDropReason, PcmHandoff, PcmLane, PcmPush};
 
     #[test]
     fn bounded_fifo_wraps_without_allocating_and_preserves_order() {
@@ -388,6 +421,7 @@ mod tests {
         assert_eq!(out, vec![0.4, 0.5, 0.6, 0.7, 0.8]);
         assert_eq!(q.metrics().buffered_samples, 0);
         assert_eq!(q.metrics().capacity_samples, 6);
+        assert_eq!(q.drop_counts(), PcmDropCounts::default());
     }
 
     #[test]
@@ -398,6 +432,7 @@ mod tests {
         assert_eq!(q.try_push(&[0.1, 0.2, 0.3]), PcmPush::Accepted(3));
         assert_eq!(q.try_push(&[0.4, 0.5]), PcmPush::Dropped(PcmDropReason::BufferFull));
         assert_eq!(q.metrics().dropped_samples, 2);
+        assert_eq!(q.drop_counts(), PcmDropCounts { buffer_full: 1, ..Default::default() });
         assert_eq!(q.metrics().discontinuity_epoch, 1);
         assert_eq!(q.drain_into(&mut out, 4, &mut seen), PcmDrain::Discontinuity);
         assert!(out.is_empty());
@@ -418,6 +453,7 @@ mod tests {
         drop(guard);
         assert_eq!(q.drain_into(&mut out, 4, &mut seen), PcmDrain::Discontinuity);
         assert_eq!(q.metrics().dropped_callbacks, 1);
+        assert_eq!(q.drop_counts(), PcmDropCounts { lock_busy: 1, ..Default::default() });
     }
 
     #[test]
@@ -429,6 +465,7 @@ mod tests {
         assert_eq!(q.drain_into(&mut out, 4, &mut seen), PcmDrain::Samples(4));
         assert_eq!(out, vec![0.0, 0.0, 1.0, -1.0]);
         assert_eq!(q.try_push(&[0.0; 5]), PcmPush::Dropped(PcmDropReason::ChunkTooLarge));
+        assert_eq!(q.drop_counts(), PcmDropCounts { chunk_too_large: 1, ..Default::default() });
         assert_eq!(q.drain_into(&mut out, 4, &mut seen), PcmDrain::Discontinuity);
     }
 
@@ -478,6 +515,8 @@ mod tests {
         assert_eq!(q.metrics().buffered_samples, 0);
         assert_eq!(q.metrics().generation, 51);
         assert!(q.metrics().stopped);
+        assert_eq!(q.metrics().dropped_callbacks, 0, "Stop rejection is not capture loss");
+        assert_eq!(q.drop_counts(), PcmDropCounts::default());
         assert!(PcmHandoff::new("pcm-test", PcmLane::You, 0, 8).is_err());
         assert!(PcmHandoff::new("pcm-test", PcmLane::You, 1, 0).is_err());
     }
@@ -514,11 +553,14 @@ mod tests {
             panic!("intentional mutex poison for Stop regression");
         }));
         assert!(poisoned.is_err());
+        assert_eq!(q.try_push(&[0.1]), PcmPush::Dropped(PcmDropReason::Poisoned));
+        assert_eq!(q.drop_counts(), PcmDropCounts { poisoned: 1, ..Default::default() });
         q.stop();
         let ring = q.ring.lock().unwrap_err().into_inner();
         assert!(ring.data.iter().all(|v| *v == 0.0));
         assert_eq!(q.metrics().buffered_samples, 0);
         assert_eq!(q.try_push(&[0.1]), PcmPush::Dropped(PcmDropReason::Stopped));
+        assert_eq!(q.metrics().dropped_callbacks, 1, "Stop must not add a loss");
     }
     #[test]
     fn poisoned_pcm_drain_invalidates_vad_once_without_replaying_audio() {

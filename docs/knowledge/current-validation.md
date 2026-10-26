@@ -21,6 +21,30 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### PCM loss cause observability — 2026-10-26
+
+The owner approved extending the existing Diagnostics export with numeric-only
+drop reasons. The candidate based on `41a0031cc40f050f5e194084744ea3186919921b`
+adds per-lane `pcm_drop_breakdown`: `ingress_rejected_callbacks` counts failed
+ingress-lock admission (busy or poisoned); `handoff` separates `lock_busy`,
+`buffer_full`, `chunk_too_large` and `poisoned`. A null handoff means its current
+owner is absent or unavailable, not proof of zero queue loss. Independent atomic
+reads are observations, not a transactional sum with `pcm_drop_count`.
+
+The existing loss decisions, discontinuity/reset, queue capacity, VAD, native
+error classification and engine remain unchanged. No audio, transcript, session
+identity or raw native error is added. Stop rejection remains excluded from loss;
+fresh session counters start at zero. No periodic diagnostic task is added.
+
+**EXECUTED_SOURCE:** Rust 339 passed/one existing opt-in test ignored; six existing
+Diagnostics privacy/source-contract tests passed. The audio subset passed 95/one
+ignored. Tests exercise actual ingress rejection, each queue loss reason, Stop
+exclusion, session reset and the numeric serialization whitelist. These source
+results do not identify the cause of the historical two microphone drops.
+Native observation of the new breakdown is **NOT EXECUTED**; the next separating
+evidence is the existing explicit Diagnostics export during bounded Start/Stop
+in the admitted integrated native phase. No transport-policy fix is claimed.
+
 ### Capture-health separation source repair — 2026-10-26
 
 Parent Local `25f9a96f2f3cbef2ecf4133d0e7e2a7b877403fc`. Both capture-status

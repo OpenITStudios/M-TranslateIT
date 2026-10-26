@@ -2,6 +2,15 @@
 
 ## Current Status
 
+**PCM drop diagnosis prepared (2026-10-26).** With explicit owner approval, the
+existing Diagnostics export now separates ingress rejection from handoff lock
+contention, full buffer, oversized chunks and poisoned lock. Only numeric
+observations were added; capture/discontinuity/Stop, queue capacity, VAD and engine
+behavior remain unchanged. Rust 339 passed/one ignored and six Diagnostics
+privacy/source contracts passed on the delivery candidate. The historical two
+microphone drops still have no proved cause; the new breakdown has not yet been
+observed in native execution. Current Validation owns interpretation and limits.
+
 **Capture-health classification repaired at source (2026-10-26).** Native callback
 errors, PCM drop counts and speech-pipeline blockers are now separate in the
 existing capture reports. Health keeps actual native-device failures actionable;
@@ -206,7 +215,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Diagnose the two observed microphone PCM drops at the existing callback-to-Silero transport owner, separating ingress-lock rejection from bounded-queue loss before changing any transport policy. Keep the incoming native error and uncontrolled recognized phrases as separate unresolved evidence; do not infer a broken microphone, quality PASS or precise cause from the new counters. Preserve normal Stop and exact-source privacy-bound proof. No CI, model/context/style/glossary change, incoming toggle, queue enlargement, blind retry or corrective translation layer is authorized.
+During the admitted integrated native phase, observe the new per-lane PCM drop breakdown through the existing explicit Diagnostics export in one bounded Start/Stop, without requiring user speech. Distinguish ingress rejection from handoff loss before changing transport policy; do not retrospectively attribute the historical two drops. Preserve normal Stop, exact-source identity and privacy. The incoming native error and uncontrolled recognized phrases remain separate unresolved evidence. No CI, model/context/style/glossary change, incoming toggle, queue enlargement, blind retry or corrective translation layer is authorized.
 
 ## Retained My Voice source candidate (paused)
 

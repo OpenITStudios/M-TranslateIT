@@ -454,6 +454,26 @@ pub fn finalized_pcm_drop_count(incoming: bool) -> u64 {
         sync.ingress.lock().ok().and_then(|i| i.as_ref().map(SpeechIngress::dropped_callbacks)).unwrap_or(0))
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct FinalizedPcmDropBreakdown {
+    pub ingress_rejected_callbacks: u64,
+    pub handoff: Option<super::pcm_handoff::PcmDropCounts>,
+}
+
+// Explicit diagnostic snapshot only; independent atomics are not a transactional total.
+pub fn finalized_pcm_drop_breakdown(incoming: bool) -> FinalizedPcmDropBreakdown {
+    let sync = if incoming { incoming_sync() } else { outbound_sync() };
+    pcm_drop_breakdown(sync)
+}
+
+fn pcm_drop_breakdown(sync: &FinalizedProducerSync) -> FinalizedPcmDropBreakdown {
+    FinalizedPcmDropBreakdown {
+        ingress_rejected_callbacks: sync.transport_loss.load(Ordering::Acquire),
+        handoff: sync.ingress.lock().ok()
+            .and_then(|ingress| ingress.as_ref().map(SpeechIngress::drop_counts)),
+    }
+}
+
 #[cfg(test)]
 pub(super) fn enqueue_silero_fixture(samples: &[f32]) {
     let guard = incoming_sync().ingress.lock().unwrap();
