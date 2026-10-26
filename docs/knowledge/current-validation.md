@@ -21,6 +21,34 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Status/callback ingress coexistence repair — 2026-10-26
+
+The candidate based on `c48b8bb6f2bc9cb00eea852e7f05ca64b17363f9` replaces the
+existing ingress mutex with a standard-library read/write lock. Status readers
+and callback admission share read access; Start/Stop retain exclusive write
+access to the same CPU lease. Callback admission remains nonblocking. No new
+state/cache/dependency, queue capacity, VAD/model/prompt or loss policy is added.
+An actual queue contention/overflow still invalidates continuity and stays counted.
+
+**Red → green INTEGRATION_FIXTURE:** the synchronized real-status/Silero probe
+was first changed to require zero ingress rejection and failed on the old mutex
+(one versus zero). After repair, the identical overlap produced zero ingress
+rejections, zero in all handoff reasons, no invented source discontinuity, and
+106 Silero windows. Stop joined and restart loss remained zero. The existing
+47-input WAV replay and lifecycle checks completed in 43.23 seconds; late PCM,
+source reset, stale Stop and explicit format-failure checks passed. This is not
+a new ASR/MT/TTS quality evaluation. Ordinary tests additionally verify a read
+guard permits callback admission while an exclusive lifecycle guard still rejects
+it without blocking.
+
+**EXECUTED_SOURCE:** Rust 339 passed/one opt-in ignored; frontend quick suite
+408 passed with source contracts/typecheck. Private logs:
+`.workspace/reports/pcm-status-repair-red.log`, `pcm-status-repair-green.log`,
+`pcm-status-repair-source-final.log` and `pcm-status-repair-frontend.log`.
+Changed native capture/status/Stop acceptance is **NOT EXECUTED** on this candidate.
+The two historical native drops remain unattributed, and the separate incoming
+native error/uncontrolled recognized phrases retain their earlier limits.
+
 ### Controlled status/callback contention reproduction — 2026-10-26
 
 The candidate based on `4dae67517a7294339c268659f55779666895c4e0` extends the
@@ -45,8 +73,8 @@ The shared ingress lock is a proved mechanism by which status observation can
 reject callback PCM independently of queue capacity or model speed. Queue lock
 contention and overflow remain separate mechanisms. The two historical microphone
 drops and previous incoming native error remain unattributed. This characterization
-probe expects the current defect and must become a no-loss acceptance assertion
-when its owning transport/status coupling is repaired; it is not product law.
+probe characterized the defect at that candidate; the repair above converts it
+to a no-ingress-loss acceptance assertion. Historical failure is not product law.
 
 ### PCM loss cause observability — 2026-10-26
 

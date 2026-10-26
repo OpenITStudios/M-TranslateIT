@@ -3,14 +3,19 @@ use super::*;
 #[test]
 fn ingress_rejection_is_separate_from_handoff_loss_and_exports_only_counts() {
     let sync = FinalizedProducerSync {
-        ingress: Mutex::new(None),
+        ingress: RwLock::new(None),
         transport_loss: AtomicU64::new(0),
         state: Mutex::new(None),
         ready: Condvar::new(),
         callback_lock_observations: AtomicU64::new(0),
         callback_lock_wait_max_ns: AtomicU64::new(0),
     };
-    let ingress = sync.ingress.lock().unwrap();
+    let status_reader = sync.ingress.read().unwrap();
+    observe_finalized_mono_samples(&sync, &[0.1; 16], 16_000);
+    assert_eq!(sync.transport_loss.load(Ordering::Acquire), 0,
+        "a concurrent status reader must allow callback admission");
+    drop(status_reader);
+    let ingress = sync.ingress.write().unwrap();
     observe_finalized_mono_samples(&sync, &[0.1; 16], 16_000);
     drop(ingress);
     let snapshot = serde_json::to_value(pcm_drop_breakdown(&sync)).unwrap();
@@ -296,7 +301,7 @@ fn quiet_speech_inside_an_utterance_is_retained_until_actual_silence() {
 #[test]
 fn incoming_bounded_wait_distinguishes_deferred_retry_from_stopped_producer() {
     let sync = FinalizedProducerSync {
-        ingress: Mutex::new(None),
+        ingress: RwLock::new(None),
         transport_loss: AtomicU64::new(0),
         state: Mutex::new(Some(FinalizedProducerState {
             session_id: "retry-session".to_string(),
@@ -382,7 +387,7 @@ fn scoped_producer_stop_rejects_stale_generation_or_session_atomically() {
     // Local instance rather than the global VAD producer: no test fixture
     // can interrupt production-like session state or parallel test cases.
     let sync = FinalizedProducerSync {
-        ingress: Mutex::new(None),
+        ingress: RwLock::new(None),
         transport_loss: AtomicU64::new(0),
         state: Mutex::new(Some(FinalizedProducerState {
             session_id: "new-meeting".to_string(),

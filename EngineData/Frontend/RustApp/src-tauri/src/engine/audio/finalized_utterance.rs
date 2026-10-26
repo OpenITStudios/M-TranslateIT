@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::evidence::AudioEvidenceReport;
@@ -122,7 +122,8 @@ struct FinalizedProducerState {
 }
 
 struct FinalizedProducerSync {
-    ingress: Mutex<Option<SpeechIngress>>,
+    // Callbacks and status share read access; only lifecycle mutates the CPU lease.
+    ingress: RwLock<Option<SpeechIngress>>,
     transport_loss: AtomicU64,
     state: Mutex<Option<FinalizedProducerState>>,
     ready: Condvar,
@@ -143,7 +144,7 @@ static FINALIZED_MEETING_SEQUENCE: OnceLock<Mutex<Option<MeetingSequenceState>>>
 
 fn outbound_sync() -> &'static FinalizedProducerSync {
     FINALIZED_OUTBOUND_PRODUCER.get_or_init(|| FinalizedProducerSync {
-        ingress: Mutex::new(None),
+        ingress: RwLock::new(None),
         transport_loss: AtomicU64::new(0),
         state: Mutex::new(None),
         ready: Condvar::new(),
@@ -154,7 +155,7 @@ fn outbound_sync() -> &'static FinalizedProducerSync {
 
 fn incoming_sync() -> &'static FinalizedProducerSync {
     FINALIZED_INCOMING_PRODUCER.get_or_init(|| FinalizedProducerSync {
-        ingress: Mutex::new(None),
+        ingress: RwLock::new(None),
         transport_loss: AtomicU64::new(0),
         state: Mutex::new(None),
         ready: Condvar::new(),
@@ -402,7 +403,7 @@ fn clear_producer_if(
     sync: &FinalizedProducerSync,
     belongs_to_request: impl FnOnce(&str, Option<u64>, &str) -> bool,
 ) -> bool {
-    let Ok(mut ingress) = sync.ingress.lock() else { return false };
+    let Ok(mut ingress) = sync.ingress.write() else { return false };
     let Ok(mut guard) = sync.state.lock() else { return false };
     let matches = if let Some(state) = guard.as_ref() {
         belongs_to_request(&state.session_id, state.generation, state.lane)
@@ -421,7 +422,7 @@ fn clear_producer_if(
 fn start_silero(sync: &'static FinalizedProducerSync, session: &str,
     generation: Option<u64>, lane: &'static str, rate: u32) -> Result<(), String> {
     if !clear_producer(sync) { return Err("silero:cleanup_pending".to_string()); }
-    let mut ingress = sync.ingress.lock().map_err(|_| "silero:ingress_poisoned")?;
+    let mut ingress = sync.ingress.write().map_err(|_| "silero:ingress_poisoned")?;
     reset_producer(sync, session, generation, lane, rate);
     match SpeechIngress::start(sync, session, generation, lane, rate) {
         Ok(cpu) => { *ingress = Some(cpu); Ok(()) }
@@ -442,7 +443,7 @@ pub fn start_finalized_incoming_silero(session: &str, rate: u32) -> Result<(), S
 
 pub fn finalized_speech_fault(incoming: bool) -> Option<String> {
     let sync = if incoming { incoming_sync() } else { outbound_sync() };
-    match sync.ingress.lock() {
+    match sync.ingress.read() {
         Ok(ingress) => ingress.as_ref().and_then(SpeechIngress::fault),
         Err(_) => Some("silero:ingress_poisoned".to_string()),
     }
@@ -451,7 +452,7 @@ pub fn finalized_speech_fault(incoming: bool) -> Option<String> {
 pub fn finalized_pcm_drop_count(incoming: bool) -> u64 {
     let sync = if incoming { incoming_sync() } else { outbound_sync() };
     sync.transport_loss.load(Ordering::Acquire).saturating_add(
-        sync.ingress.lock().ok().and_then(|i| i.as_ref().map(SpeechIngress::dropped_callbacks)).unwrap_or(0))
+        sync.ingress.read().ok().and_then(|i| i.as_ref().map(SpeechIngress::dropped_callbacks)).unwrap_or(0))
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -469,14 +470,14 @@ pub fn finalized_pcm_drop_breakdown(incoming: bool) -> FinalizedPcmDropBreakdown
 fn pcm_drop_breakdown(sync: &FinalizedProducerSync) -> FinalizedPcmDropBreakdown {
     FinalizedPcmDropBreakdown {
         ingress_rejected_callbacks: sync.transport_loss.load(Ordering::Acquire),
-        handoff: sync.ingress.lock().ok()
+        handoff: sync.ingress.read().ok()
             .and_then(|ingress| ingress.as_ref().map(SpeechIngress::drop_counts)),
     }
 }
 
 #[cfg(test)]
 pub(super) fn enqueue_silero_fixture(samples: &[f32]) {
-    let guard = incoming_sync().ingress.lock().unwrap();
+    let guard = incoming_sync().ingress.read().unwrap();
     let cpu = guard.as_ref().expect("offline fixture must start canonical Silero");
     cpu.push_offline(samples);
     cpu.wait_processed();
@@ -484,7 +485,7 @@ pub(super) fn enqueue_silero_fixture(samples: &[f32]) {
 
 #[cfg(test)]
 pub(super) fn wait_silero_fixture() -> Vec<serde_json::Value> {
-    let guard = incoming_sync().ingress.lock().unwrap();
+    let guard = incoming_sync().ingress.read().unwrap();
     let cpu = guard.as_ref().expect("fixture must start canonical Silero");
     cpu.wait_processed();
     cpu.observations()
@@ -516,7 +517,7 @@ pub(super) fn verify_silero_fixture_lifecycle(pcm: &[f32]) {
     assert!(utterance.capture_provenance.unwrap().audio_epoch > reset);
     assert!(try_take_finalized_incoming_utterance(session).is_none());
     assert!(clear_finalized_incoming_utterance_producer_for_session(session));
-    assert!(incoming_sync().ingress.lock().unwrap().is_none(), "CPU worker joined before releasing its lease");
+    assert!(incoming_sync().ingress.read().unwrap().is_none(), "CPU worker joined before releasing its lease");
     observe_finalized_incoming_mono_f32_samples(pcm, 16_000);
     assert!(try_take_finalized_incoming_utterance(session).is_none());
     start_finalized_incoming_silero(session, 16_000).unwrap();
@@ -629,7 +630,7 @@ fn observe_finalized_mono_samples(
     sample_rate_hz: u32,
 ) {
     let started = Instant::now();
-    let locked = sync.ingress.try_lock();
+    let locked = sync.ingress.try_read();
     sync.callback_lock_observations.fetch_add(1, Ordering::Relaxed);
     sync.callback_lock_wait_max_ns.fetch_max(started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64, Ordering::Relaxed);
     match locked {

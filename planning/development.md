@@ -2,6 +2,17 @@
 
 ## Current Status
 
+**Status/callback coupling repaired at source (2026-10-26).** The same ingress
+owner now uses a standard-library read/write lock: callback and status can read
+together; lifecycle mutation remains exclusive. The tightened real-status/Silero
+fixture failed before repair (one rejected block) and passed after repair with
+zero ingress/queue losses, 106 windows, no false discontinuity, Stop join and
+zero-loss restart. Existing 47-input replay/lifecycle checks passed; Rust 339
+passed/one opt-in ignored and frontend 408 passed. No new state, dependency,
+queue capacity, loss policy, model or prompt changed. Native acceptance of this
+repair is not executed; historical drops remain unattributed. Current Validation
+owns proof and limits.
+
 **Controlled status/PCM contention reproduced (2026-10-26).** The existing opt-in
 WAV replay now includes a synchronized probe through the actual status reader,
 PCM callback and local Silero owner. Forced status overlap produces one ingress
@@ -228,7 +239,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Resolve the proved status/PCM ingress-lock coupling at the existing audio owner: determine the smallest lifecycle-safe change that lets status observation coexist with callback admission, then convert the synchronized characterization probe into a no-loss acceptance check. Preserve bounded queue/drop accounting, discontinuity, generation/session identity and confirmed Stop join; avoid a partial fix that merely shortens one nested read while other status reads still reject PCM. Historical native attribution remains unknown. No CI, model/context/style/glossary change, incoming toggle, queue enlargement, blind retry or corrective translation layer is authorized.
+Within the existing integrated native phase, verify the repaired candidate's capture/status coexistence and normal Stop using the existing explicit Diagnostics export on a pinned clean source identity. Keep zero-drop observations bounded to that run; the historical native drops, incoming error and uncontrolled phrases remain unattributed. Preserve existing fixture proof without repeating unrelated model-quality inference. No CI, model/context/style/glossary change, incoming toggle, queue enlargement, blind retry or corrective translation layer is authorized.
 
 ## Retained My Voice source candidate (paused)
 
