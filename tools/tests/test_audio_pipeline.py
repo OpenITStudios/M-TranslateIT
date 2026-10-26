@@ -23,6 +23,13 @@ from pipeline_checks import (
 
 
 class AudioPipelineTests(unittest.TestCase):
+    def test_offline_score_cli_uses_the_same_failure_exit_contract(self):
+        for verdict, expected in (('PASS', 0), ('FAIL', 2), ('UNVERIFIED', 2)):
+            with patch.object(harness, 'score', return_value={'verdict': verdict}):
+                self.assertEqual(harness.main(['score', '--fixtures', 'fixture', '--observations', 'report.json']), expected)
+        with patch.object(harness, 'score', return_value={'counts': {'PASS': 0, 'FAIL': 0, 'UNVERIFIED': 1}}):
+            self.assertEqual(harness.main(['score', '--fixtures', 'fixture', '--observations', 'report.json']), 2)
+
     def test_named_profiles_keep_audio_identity_independent(self):
         cases, audio_id = harness.specs()
         core = harness.regression_profile('core')

@@ -527,6 +527,9 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("compare requires --baseline and --candidate")
         answer = compare(json_file(args.baseline), json_file(args.candidate))
     print(json.dumps(answer, ensure_ascii=False, indent=2))
+    if args.command == "score" and (answer.get("verdict") in ("FAIL", "UNVERIFIED")
+            or any(answer.get("counts", {}).get(status, 0) for status in ("FAIL", "UNVERIFIED"))):
+        return 2
     return 0
 
 
