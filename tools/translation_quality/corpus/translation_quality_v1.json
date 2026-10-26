@@ -49,6 +49,10 @@
         ]
       ],
       "forbidden": [],
+      "ordered_any": [
+        ["thursday", "not", "tuesday"],
+        ["not", "tuesday", "thursday"]
+      ],
       "risk_tags": [
         "meaning",
         "omission"

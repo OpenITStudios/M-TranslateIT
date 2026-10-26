@@ -23,6 +23,34 @@ Use a held-out bilingual set that is not used to tune the candidate. Include bot
 
 The regression corpus may seed risk discovery, and the 40-case held-out benchmark protects release comparison, but the final human review set should still contain unseen wording. Do not tune prompts or model selection against the held-out benchmark.
 
+## Efficient regression triage
+
+Before changing the runtime or expanding the corpus, review retained source/output
+pairs and the exact failed checks. Separate a demonstrated meaning error, a
+checker mismatch rejecting a faithful variant, and an unresolved interpretation.
+Record the reason and exact evidence identity. Mixed defects remain errors or
+unresolved: a valid synonym must not hide a different wrong action or added fact.
+AI-assisted desk review is provisional, not independent bilingual acceptance.
+Do not convert these classifications into an overall model error rate; review
+passing outputs too when assessing linguistic quality.
+
+Repair a checker only after a faithful alternative and a meaning-changing
+counterexample demonstrate the intended boundary. Exercise both through the
+existing evaluator self-test. Prefer the existing cue/order contracts; do not
+add broad aliases or phrase substitutions to match the current model. A passing
+cue check establishes only its declared invariant, not full semantic equivalence.
+
+Keep the same cases when they cover distinct risks. Add a case for an uncovered
+failure mode, not to increase the total. Merge or retire a redundant case only
+after identifying which retained case protects its risk. Fast-package selection
+must preserve those risks in both directions, rather than select only easy passes.
+
+Reuse captured output for contract-only regrading when every emitted worker
+request is proven identical. Keep the original result bundle/fingerprint intact;
+record old/new contract fingerprints and the request-equivalence proof separately.
+This avoids unnecessary inference but is not fresh runtime or candidate-promotion
+evidence. Held-out output must not be used to tune contracts or runtime behavior.
+
 ## Blind review
 
 Reviewers must not be told which output is baseline or candidate. Randomize output order per item.

@@ -94,6 +94,14 @@ The report includes overall and per-group critical-invariant pass rates, risk-ta
 
 ## Promotion rule
 
+For efficient iteration, follow [regression triage](HUMAN_EVALUATION.md#efficient-regression-triage)
+before adding cases or rerunning inference. Evaluator/corpus-only changes use
+source self-tests and, where worker requests are unchanged, explicitly labeled
+retained-output regrading. Runtime changes that can alter language output require
+fresh matched inference; lifecycle/resource endurance is a separate check and
+does not expand linguistic coverage by repeating the same sentences. Independent
+held-out review follows only after the candidate clears development checks.
+
 Do not change the model, prompt, current-utterance isolation, decoding policy, or text segmentation based on one anecdotal sentence. Capture a baseline from the current canonical model, compare the candidate on the same corpus, inspect every critical failure, and then add a new case when a real recurring failure mode is discovered.
 
 Do not tune the corpus to make a candidate look better.

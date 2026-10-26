@@ -86,6 +86,12 @@ def main() -> int:
     assert evaluator.invariant_result(numeric_case, "2021 notebook")["critical_pass"] is False
     assert evaluator.invariant_result(numeric_case, "21 not ready")["critical_pass"] is True
 
+    correction = next(case for case in corpus["cases"] if case["id"] == "id-en-correction-001")
+    for valid in ("I mean Thursday, not Tuesday.", "Not Tuesday, but Thursday."):
+        assert evaluator.invariant_result(correction, valid)["critical_pass"], valid
+    for reversed_meaning in ("I mean Tuesday, not Thursday.", "Not Thursday, but Tuesday."):
+        assert not evaluator.invariant_result(correction, reversed_meaning)["critical_pass"], reversed_meaning
+
     candidate = dict(perfect)
     candidate["id-en-negation-001"] = "I will attend the meeting tomorrow."
     comparison = evaluator.compare_reports(

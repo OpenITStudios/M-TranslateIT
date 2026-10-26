@@ -2,6 +2,25 @@
 
 ## Current Status
 
+**Quality-test calibration, first bounded stage delivered (2026-10-26).** The
+owner prioritizes discriminating quality evidence over test count. AI-assisted
+desk review of the retained 191-case MiLMMT baseline's 60 flagged cases provisionally
+classifies 32 checker mismatches, 17 meaning errors and 11 unresolved cases, with
+per-case source/output/reasons in the private evidence receipt. This is not an
+independent bilingual review or an overall error rate; passing outputs are not
+adjudicated. No aliases were relaxed to clear those flags.
+
+A new negative control reproduced a real false pass: Tuesday/not Thursday passed
+the Thursday/not Tuesday correction contract. The existing case now uses existing
+ordered-cue support, accepting both faithful clause orders and rejecting both
+reversed variants. Corpus size remains 191; held-out content and production
+inference are unchanged. Evaluator self-tests and ten audio-pipeline source tests
+passed. Explicit regrading proves all 191 worker requests unchanged and no existing
+grade changed; all 60 baseline flags remain. Original receipts/fingerprints remain
+intact. This is source/retained-output proof, not new model or native acceptance.
+The maintained triage procedure is in `tools/translation_quality/HUMAN_EVALUATION.md`;
+`current-validation.md` owns receipt identity and limitations.
+
 **Standalone Text removed from the application (2026-10-26).** The owner has
 chosen Meeting voice translation as the product focus and retained MiLMMT;
 model-replacement research/download is no longer the active continuation.
@@ -93,7 +112,7 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Continue MiLMMT semantic-fidelity work through the existing internal worker fixtures for the actual Meeting translation stage, using the retained budget-purpose failure and reference-regression evidence. Keep the current model, no Text application feature, no context/style/glossary/ASR hints and no phrase replacement or inference-until-PASS. Resume the integrated speech-to-Meeting acceptance only after the quality gate is accepted; no replacement-model download, updater work or My Voice training follows automatically.
+Calibrate the highest-risk checker defects identified by the provisional review, starting with negated forbidden-phrase matching and correction-role/number preservation. Require faithful alternatives and wrong-meaning controls before each bounded contract repair; keep mixed and ambiguous outputs unresolved instead of adding broad aliases. Use existing evaluators and retained outputs when requests are unchanged, then select a risk-complete fast package. Keep MiLMMT, no Text application feature, no context/style/glossary/ASR hints or phrase replacement. Model-quality and integrated speech-to-Meeting acceptance remain open; no model download, updater work or My Voice training follows automatically.
 
 ## Retained My Voice source candidate (paused)
 

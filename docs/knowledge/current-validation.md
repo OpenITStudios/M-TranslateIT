@@ -21,6 +21,46 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Quality-test calibration, first bounded stage — 2026-10-26
+
+Source parent: Local `b9308d229ebef03613cb75ac617b9e3507a0c273`.
+The retained 191-case model bundle belongs to `723fc247` and is not fresh inference.
+AI-assisted source/output desk review covers exactly its 60 flagged cases:
+32 provisional checker mismatches, 17 provisional meaning errors and 11 unresolved
+interpretations. Each entry records the original flag, source, output and reason.
+These classifications are not independent bilingual acceptance, a complete review
+of the 191 outputs, or a measured model error rate. Mixed errors were not accepted
+merely because one missing cue was a valid synonym. No flagged-case contract was
+relaxed in this stage.
+
+An executable negative control failed before repair because `I mean Tuesday, not
+Thursday.` passed the existing Thursday/not Tuesday correction case. That same
+case now declares two valid ordered-cue sequences using existing evaluator support.
+The self-test accepts both faithful clause orders and rejects both reversed
+variants. No case was added, no evaluator runtime was duplicated and no model,
+prompt, inference setting, audio, dependency or held-out content changed.
+
+Executed source proof: translation evaluator self-tests passed for 191 regression
+and 40 held-out cases; all ten `tools.tests.test_audio_pipeline` source tests passed
+(their simulated admission/CLI controls are not model execution). Explicit
+retained-output regrading verified all 191 emitted worker requests identical to
+the parent corpus and every existing grade unchanged, with 60 flags still present.
+The new corpus fingerprint is
+`dbc40e730d270932bd5136824580f4db72e2fd1e646ec968ff51c3f094fb2401`;
+the original model bundle/fingerprint was not rewritten or relabeled. Regrading
+is contract-only evidence, not fresh inference or candidate-promotion evidence.
+
+| Private evidence receipt | SHA-256 |
+|---|---|
+| `.workspace/reports/quality-triage-b9308d22.json` | `deaa4fd9096f7b63d35988725fc7340faf3dad521e2429ec22f5e7d33f74db83` |
+| `.workspace/reports/quality-contract-regrade-b9308d22.json` | `6881f5d344b6a1afe78d77435865a0806c1ad35359a0a36fea3d50b2d2b23849` |
+
+Proof ceiling: **EXECUTED_SOURCE** plus historical-output analysis. General
+semantic quality, newly executed held-out inference, perceptual voice quality and
+native/receiver acceptance remain unproved; the known MiLMMT quality gate remains
+**FAIL / OPEN**. The triage/regrading procedure is maintained in the existing
+`tools/translation_quality/HUMAN_EVALUATION.md`, not a new status system.
+
 ### Standalone Text application removal — 2026-10-26
 
 Owner decision: retain MiLMMT and focus the application on Meeting voice
