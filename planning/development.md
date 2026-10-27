@@ -2,6 +2,32 @@
 
 ## Current Status
 
+**VoiceLab interrupted Draft discovery and opt-in review recovery (2026-10-27).**
+Orphaned guided WAVs were intentionally protected by the prior Draft write
+guard, but their unowned on-disk state was invisible to My Voice after an
+application interruption. The existing GuidedRecordingState now reports
+bounded generated Draft candidates, distinguishing apparently complete pairs
+from unfinished or unsafe stages without reading their contents or deleting
+anything. The My Voice page surfaces these candidates and offers explicit
+"Recover for review" only when both final files appear present and the user
+confirms voice authorization. The new native recovery command rechecks
+PendingDraft and idle runtime ownership, rejects unfinished .wav.tmp,
+non-regular files and malformed/oversized PCM16, verifies native rate and
+32 kHz durations, compares resampled native audio against review samples,
+and reuses the canonical guided quality/advice evaluator. A new guided
+recording checks both destination and staging paths before claiming its
+microphone generation, so an orphaned Draft never wastes a newly captured
+take or gets overwritten even when Start is invoked outside the UI.
+Recovery registers only PendingDraft; it does NOT accept/archive/train/save the take or
+automatically erase partial files. An original WAV or fragment that fails
+verification remains preserved with an actionable warning rather than a
+false "recovered" state. Normal recording and recovery now serialize their
+initial admission at the same draft mutex before the microphone session
+claim. Existing Rust fixtures and My Voice UI/bridge source contract were
+extended; all are AUTHORED / NOT EXECUTED. REMOTE_GITHUB source review only:
+Rust/TS build, native WAV playback, model, GPU, Windows and CI NOT EXECUTED.
+This is a bounded review restoration, not proof of target-PC restore quality.
+
 **VoiceLab guided Draft pair cleanup ownership — source repair (2026-10-27).**
 Guided Stop previously called the shared WAV writer twice, then unconditionally
 deleted both deterministic Draft paths on either write failure or on a failed
@@ -423,9 +449,13 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Continue the bounded GitHub source audit of Meeting Start/Stop ownership and
-cleanup, repairing only reproduced source defects. Native capture/status/
-Diagnostics/Stop remains deferred until the user explicitly authorizes PC control.
+Review the explicit interrupted-Draft recovery integration for any remaining
+source-level ownership or loss-of-data defects; do not infer success from
+unexecuted Rust/TypeScript tests. Incomplete, malformed or otherwise
+unverifiable orphan WAVs remain preserved for a separately authorized
+recovery decision; do not auto-delete or auto-accept them. Native Meeting/
+My Voice/filesystem acceptance remains deferred until the user explicitly
+authorizes an integrated PC phase.
 When PC-control authorization is available again, finish the existing integrated native capture/status/Diagnostics/Stop check on the pinned repaired candidate. Until then retain the goal as incomplete; source and fixture work is finished for this bounded outcome, so do not repeat checks or invent adjacent work while waiting. Historical native drops, incoming error and uncontrolled phrases remain unattributed. No CI, model/context/style/glossary change, incoming toggle, queue enlargement, blind retry or corrective translation layer is authorized.
 
 ## Retained My Voice source candidate (paused)

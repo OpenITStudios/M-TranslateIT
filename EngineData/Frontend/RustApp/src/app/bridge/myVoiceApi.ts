@@ -16,9 +16,17 @@ export type GuidedLineStatus = {
   coverage: "conversation" | "intonation" | "natural" | "details" | "explanations";
 };
 
+export type OrphanedGuidedDraft = {
+  line_id: number;
+  pair_present: boolean;
+  note: string;
+};
+
 export type GuidedRecordingState = {
   recording_line_id: number | null;
   pending_review: GuidedTakeReview | null;
+  orphaned_drafts: OrphanedGuidedDraft[];
+  draft_recovery_error: string | null;
   lines: GuidedLineStatus[];
 };
 
@@ -131,6 +139,13 @@ export const myVoiceApi = {
   async stopTake(lineId: number): Promise<GuidedRecordingActionResult> {
     const action = await runCommand<GuidedRecordingActionResult>("stop_product_voice_recording", { lineId });
     return action ? normalizeAction(action) : unavailableAction("My Voice could not stop recording safely.");
+  },
+
+  async recoverTake(lineId: number, authorizedVoiceConfirmed: boolean): Promise<GuidedRecordingActionResult> {
+    const action = await runCommand<GuidedRecordingActionResult>(
+      "recover_voice_lab_guided_take", { lineId, authorizedVoiceConfirmed },
+    );
+    return action ? normalizeAction(action) : unavailableAction("My Voice could not confirm Draft recovery.");
   },
 
   async retryTake(lineId: number): Promise<GuidedRecordingActionResult> {

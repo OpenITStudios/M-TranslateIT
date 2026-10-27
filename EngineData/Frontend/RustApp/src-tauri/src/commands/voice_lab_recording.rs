@@ -25,7 +25,10 @@ use guided_lines::{guided_lines, prompt_metadata};
 pub(crate) use guided_lines::RecordingSuggestion;
 use storage_transaction::{
     accept_review_take_with_native_rate, discard_review_take, write_guided_review_draft_pair,
+    find_orphaned_guided_drafts, recover_guided_draft_pair,
+    ensure_new_guided_draft_paths_are_free,
 };
+pub use storage_transaction::OrphanedGuidedDraft;
 
 const MAX_REPLAY_WAV_BYTES: u64 = 8 * 1024 * 1024;
 
@@ -43,6 +46,8 @@ pub struct GuidedLineStatus {
 pub struct GuidedRecordingState {
     pub recording_line_id: Option<u32>,
     pub pending_review: Option<GuidedTakeReview>,
+    pub orphaned_drafts: Vec<OrphanedGuidedDraft>,
+    pub draft_recovery_error: Option<String>,
     pub lines: Vec<GuidedLineStatus>,
 }
 
@@ -121,9 +126,23 @@ fn current_state() -> GuidedRecordingState {
         .lock()
         .ok()
         .and_then(|guard| guard.as_ref().map(|draft| draft.review.clone()));
+    // Status only discovers generated Draft filenames; it never promotes or
+    // deletes audio from an interrupted session. Recovery revalidates both
+    // WAVs after explicit user action.
+    let (orphaned_drafts, draft_recovery_error) = match find_orphaned_guided_drafts(
+        &storage_paths().cache_root.join("Draft"),
+        |line| guided_text(line).is_some(),
+    ) {
+        Ok(found) => (found.into_iter().filter(|draft| {
+            pending_review.as_ref().is_none_or(|review| review.line_id != draft.line_id)
+        }).collect(), None),
+        Err(error) => (Vec::new(), Some(error)),
+    };
     GuidedRecordingState {
         recording_line_id: active_guided_take_line_id(),
         pending_review,
+        orphaned_drafts,
+        draft_recovery_error,
         lines: guided_lines()
             .iter()
             .map(|(line_id, text)| GuidedLineStatus {
@@ -218,27 +237,39 @@ pub fn start_voice_lab_guided_take(
     if current_voice_lab_build_snapshot().active {
         return result(false, "build_active", "Finish or cancel the current VoiceLab build before recording more lines.");
     }
-    // A poisoned pending-draft owner is unknown, not permission to overwrite
-    // the last recording while its review state cannot be verified.
-    let has_pending = match draft_store().lock() {
-        Ok(guard) => guard.is_some(),
+    // Serialize the draft admission with explicit orphan recovery until this
+    // recording has claimed its own runtime generation.
+    let draft_owner = match draft_store().lock() {
+        Ok(guard) => guard,
         Err(poisoned) => {
             drop(poisoned.into_inner());
             return result(false, "draft_state_unavailable",
                 "VoiceLab cannot verify pending review ownership. No new recording was opened.");
         }
     };
-    if has_pending {
+    if draft_owner.is_some() {
+        drop(draft_owner);
         return result(false, "review_pending", "Replay, retry, or accept the current take before recording another line.");
+    }
+    // Fail before opening the microphone when a prior interrupted attempt
+    // left either WAV or .wav.tmp behind. A later failed Draft write should
+    // not cost the user a full newly recorded line.
+    if let Err(error) = ensure_new_guided_draft_paths_are_free(
+        &draft_path(line_id), &draft_native_rate_path(line_id),
+    ) {
+        drop(draft_owner);
+        return result(false, "draft_recovery_required", error);
     }
 
     // A missing runtime session snapshot does not prove Meeting audio cleanup
     // released the physical microphone. The user must finish Retry Stop first.
     if super::meeting_session::meeting_stop_cleanup_pending() {
+        drop(draft_owner);
         return result(false, "meeting_cleanup_incomplete",
             "Retry Stop Meeting before recording a My Voice line.");
     }
     let session = begin_voice_recording_session();
+    drop(draft_owner);
     let Some(snapshot) = session.snapshot.as_ref() else {
         return result(false, "runtime_unavailable", "VoiceLab cannot verify microphone ownership right now.");
     };
@@ -356,6 +387,79 @@ pub fn stop_voice_lab_guided_take(line_id: u32) -> GuidedRecordingActionResult {
     });
     drop(guard);
     result(true, "needs_review", "Recording stopped. Replay the take, then accept it or retry the line.")
+}
+
+
+#[tauri::command]
+pub fn recover_voice_lab_guided_take(
+    line_id: u32,
+    authorized_voice_confirmed: bool,
+) -> GuidedRecordingActionResult {
+    if !authorized_voice_confirmed {
+        return result(false, "authorization_required",
+            "Confirm ownership or authorization before recovering a voice recording.");
+    }
+    if guided_text(line_id).is_none() {
+        return result(false, "invalid_line", "This is not a current guided reading line.");
+    }
+    if voice_backup_active() || current_voice_lab_build_snapshot().active {
+        return result(false, "build_active",
+            "Finish My Voice creation or backup before recovering an unfinished recording.");
+    }
+    if super::meeting_session::meeting_stop_cleanup_pending() {
+        return result(false, "meeting_cleanup_incomplete",
+            "Complete Meeting cleanup before recovering a voice recording.");
+    }
+    let mut guard = match draft_store().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            drop(poisoned.into_inner());
+            return result(false, "draft_state_unavailable",
+                "Review ownership is unavailable; saved Draft bytes were preserved.");
+        }
+    };
+    if guard.is_some() {
+        drop(guard);
+        return result(false, "review_pending",
+            "Review the current recording before recovering another Draft.");
+    }
+    let current = latest_runtime_session_state();
+    if current.has_active_session || current.snapshot.is_some()
+        || current.blocker != "runtime_session:no_active_session"
+        || active_guided_take_line_id().is_some()
+    {
+        drop(guard);
+        return result(false, "microphone_in_use",
+            "Finish the active microphone or Meeting operation before recovering Draft audio.");
+    }
+    let review_path = draft_path(line_id);
+    let native_path = draft_native_rate_path(line_id);
+    let reviewed = recover_guided_draft_pair(&review_path, &native_path, line_id);
+    let Ok(review) = reviewed else {
+        let error = reviewed.err().unwrap_or_else(|| "voice_lab:recovery:unverified".to_string());
+        drop(guard);
+        return result(false, "recovery_unavailable",
+            format!("Saved Draft audio could not be verified ({error}). Original files were preserved."));
+    };
+    let latest = latest_runtime_session_state();
+    if latest.has_active_session || latest.snapshot.is_some()
+        || latest.blocker != "runtime_session:no_active_session"
+    {
+        drop(guard);
+        return result(false, "microphone_in_use",
+            "Another audio operation started during verification. No recovered review was published.");
+    }
+    // Recovery only restores the existing unaccepted review owner.
+    // It never changes accepted recordings, archived samples or models.
+    *guard = Some(PendingDraft {
+        line_id,
+        path: review_path,
+        native_rate_path: native_path,
+        review,
+    });
+    drop(guard);
+    result(true, "needs_review",
+        "Recovered the Draft for review only. Replay and explicitly Save or Record again; accepted recordings were not changed.")
 }
 
 #[tauri::command]

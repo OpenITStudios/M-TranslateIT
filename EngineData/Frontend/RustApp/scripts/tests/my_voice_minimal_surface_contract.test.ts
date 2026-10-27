@@ -6,6 +6,10 @@ const root = new URL("../../", import.meta.url);
 const source = (path: string) => readFileSync(new URL(path, root), "utf8");
 const page = source("src/pages/MyVoice.svelte");
 const build = source("src/components/my-voice/MyVoiceBuild.svelte");
+const voiceApi = source("src/app/bridge/myVoiceApi.ts");
+const registry = source("src-tauri/src/commands/registry.rs");
+const recording = source("src-tauri/src/commands/voice_lab_recording.rs");
+const storage = source("src-tauri/src/commands/voice_lab_recording/storage_transaction.rs");
 
 test("normal My Voice opens with a ready-to-use voice picker before optional creation", () => {
   assert.match(page, /<BuiltinVoicePicker/);
@@ -56,4 +60,35 @@ test("training hardware internals and nonselectable quick preview are disclosed 
   assert.match(build, /onPlay=\{playQuickPreview\}/);
   assert.match(build, /computeStatus\?\.admission_state === "admitted"/);
   assert.match(build, /Recheck hardware/);
+});
+
+test("orphan Draft recovery is explicitly user initiated and never auto-accepts a recovered WAV", () => {
+  assert.match(voiceApi, /orphaned_drafts: OrphanedGuidedDraft\[\]/);
+  assert.match(voiceApi, /draft_recovery_error: string \| null/);
+  assert.match(voiceApi, /recover_voice_lab_guided_take/);
+  assert.match(registry, /crate::commands::voice_lab_recording::recover_voice_lab_guided_take/);
+  assert.match(recording, /pub fn recover_voice_lab_guided_take\(/);
+  assert.match(recording, /recover_guided_draft_pair\(&review_path, &native_path, line_id\)/);
+  assert.match(recording, /authorized_voice_confirmed/);
+  assert.match(recording, /ensure_new_guided_draft_paths_are_free(/);
+  assert.match(storage, /fn ensure_new_guided_draft_paths_are_free(/);
+  assert.match(storage, /path.with_extension("wav.tmp")/);
+  assert.match(recording, /let current = latest_runtime_session_state\(\)/);
+  assert.match(recording, /let latest = latest_runtime_session_state\(\)/);
+  assert.match(page, /Recover for review/);
+  assert.match(page, /onClick|onclick=\{\(\) => void recoverTake\(\)\}/);
+  assert.match(page, /myVoiceApi\.recoverTake\(selectedLineId, authorized\)/);
+  assert.match(page, /selectedOrphanDraft !== null/);
+  assert.match(page, /This Draft was recovered from disk/);
+  assert.match(storage, /fn checked_recovery_pcm16\(/);
+  assert.match(storage, /fn recover_guided_draft_pair\(/);
+  assert.match(storage, /resample_guided_native_for_review/);
+  assert.match(storage, /voice_lab:recovery:draft_audio_mismatch/);
+  const recover = recording.slice(
+    recording.indexOf("pub fn recover_voice_lab_guided_take("),
+    recording.indexOf("pub fn retry_voice_lab_guided_take("),
+  );
+  assert.doesNotMatch(recover, /accept_review_take|archive_guided_take|fs::remove_file/,
+    "recovery must not publish training take, archive bytes or delete old audio");
+  assert.match(recover, /\*guard = Some\(PendingDraft \{/);
 });

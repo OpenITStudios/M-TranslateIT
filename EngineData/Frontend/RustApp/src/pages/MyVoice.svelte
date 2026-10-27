@@ -31,7 +31,10 @@
     voiceChangesLocked?: boolean;
   } = $props();
 
-  let recordingState = $state<GuidedRecordingState>({ recording_line_id: null, pending_review: null, lines: [] });
+  let recordingState = $state<GuidedRecordingState>({
+    recording_line_id: null, pending_review: null, orphaned_drafts: [],
+    draft_recovery_error: null, lines: [],
+  });
   let selectedLineId = $state<number | null>(null);
   let authorized = $state(false);
   let busy = $state(false);
@@ -102,9 +105,12 @@
   // Declare recording ownership before derivations that consume it.
   const isRecording = $derived(recordingState.recording_line_id !== null);
   const pendingLineId = $derived(recordingState.pending_review?.line_id ?? null);
+  const selectedOrphanDraft = $derived(
+    recordingState.orphaned_drafts.find((draft) => draft.line_id === selectedLineId) ?? null,
+  );
 
   const activeStage = $derived(
-    recordingStatusUnknown || isRecording || pendingLineId !== null
+    recordingStatusUnknown || isRecording || pendingLineId !== null || recordingState.orphaned_drafts.length > 0
       ? "record"
       : buildStatusUnavailable || buildSnapshot?.active || buildSnapshot?.preview_active
         ? "create"
@@ -307,7 +313,7 @@
   const currentLine = $derived(recordingState.lines.find((line) => line.line_id === selectedLineId) ?? null);
   // Keep the creator mounted while hidden: its build status owns Stop/Review recovery.
   const creatorNeedsAttention = $derived(Boolean(
-    recordingStatusUnknown || isRecording || pendingLineId !== null
+    recordingStatusUnknown || isRecording || pendingLineId !== null || recordingState.orphaned_drafts.length > 0
     || improvementStarting || buildStatusUnavailable || buildSnapshot?.active || buildSnapshot?.preview_active
     || buildSnapshot?.evaluation_ready,
   ));
@@ -445,7 +451,11 @@
       return;
     }
     if (selectedLineId !== null && next.lines.some((line) => line.line_id === selectedLineId)) return;
-    selectedLineId = next.lines.find((line) => !line.accepted)?.line_id ?? next.lines[0]?.line_id ?? null;
+    // Show a preserved orphan first on initial navigation without stealing a
+    // line the user deliberately selected during a later status refresh.
+    selectedLineId = next.orphaned_drafts[0]?.line_id
+      ?? next.lines.find((line) => !line.accepted)?.line_id
+      ?? next.lines[0]?.line_id ?? null;
   }
 
   function applyState(next: GuidedRecordingState): void {
@@ -501,6 +511,8 @@
 
   function recordingReviewAdvice(code: string): string {
     switch (code) {
+      case "voice_lab:review:recovered_from_disk":
+        return "This Draft was recovered from disk. Replay the entire line and verify the words before choosing Save.";
       case "voice_lab:review:possible_clipping":
         return "Some peaks may sound distorted. Replay the recording; if it sounds harsh, lower the microphone level and retry.";
       case "voice_lab:review:verify_all_words":
@@ -519,7 +531,9 @@
       case "recording":
         return "Recording started. Read the line naturally, then press Stop.";
       case "needs_review":
-        return "Recording stopped. Replay it, then accept it or try the line again.";
+        return result.message.includes("Recovered")
+          ? result.message
+          : "Recording stopped. Replay it, then accept it or try the line again.";
       case "accepted":
         return "Recording accepted.";
       case "ready":
@@ -543,6 +557,9 @@
         return "My Voice couldn't stop the microphone cleanly. Try again.";
       case "take_unusable":
         return "This recording isn't usable yet. Record the line again.";
+      case "recovery_unavailable":
+      case "draft_recovery_required":
+        return result.message;
       case "draft_write_failed":
       case "draft_state_unavailable":
       case "save_failed":
@@ -618,6 +635,10 @@
 
   async function startRecording(): Promise<void> {
     if (busy || voiceChangesLocked || buildStatusUnavailable || buildSnapshot?.active || buildSnapshot?.preview_active || recordingStatusUnknown || selectedLineId === null) return;
+    if (selectedOrphanDraft) {
+      onNotice("An unfinished Draft already exists for this line. Recover it for review before recording over anything.");
+      return;
+    }
     microphoneCheck = "idle";
     microphoneCheckMessage = "";
     if (!authorized) {
@@ -652,6 +673,30 @@
     } catch {
       await reconcileUncertainRecordingAction(
         "Couldn't confirm whether recording stopped. Checking recording status.",
+      );
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function recoverTake(): Promise<void> {
+    if (busy || replaying || recordingStatusUnknown || selectedLineId === null
+      || isRecording || pendingLineId !== null || !selectedOrphanDraft?.pair_present
+      || buildStatusUnavailable || buildSnapshot?.active || buildSnapshot?.preview_active
+      || voiceChangesLocked || !authorized) return;
+    stopReplay();
+    busy = true;
+    try {
+      const recovered = await myVoiceApi.recoverTake(selectedLineId, authorized);
+      await applyResult(recovered);
+      if (recovered.ok && recovered.recording?.pending_review) {
+        busy = false;
+        await tick();
+        if (!disposed) reviewReplayButton?.focus();
+      }
+    } catch {
+      await reconcileUncertainRecordingAction(
+        "Couldn't verify Draft recovery. Checking current review ownership before another action.",
       );
     } finally {
       busy = false;
@@ -904,6 +949,30 @@
               </div>
               <p class="mb-0 mt-4 text-[20px] font-medium leading-8 tracking-[-0.015em]">{currentLine.text}</p>
             </div>
+            {#if recordingState.draft_recovery_error}
+              <p role="alert" class="mt-4 text-sm text-[var(--ti-warning)]">
+                Couldn't verify unfinished Draft files: {recordingState.draft_recovery_error}
+              </p>
+            {/if}
+            {#if selectedOrphanDraft && !recordingState.pending_review}
+              <div class="mt-4 rounded-[var(--ti-radius-md)] border border-[var(--ti-warning)] p-4">
+                <strong class="text-sm font-semibold">
+                  {selectedOrphanDraft.pair_present ? "Unfinished recording found" : "Unfinished Draft needs attention"}
+                </strong>
+                <p class="mt-1 text-sm text-[var(--ti-text-muted)]">{selectedOrphanDraft.note}</p>
+                {#if selectedOrphanDraft.pair_present}
+                  <button type="button" class="ti-button ti-button-secondary mt-3"
+                    disabled={busy || recordingStatusUnknown || isRecording || voiceChangesLocked || !authorized
+                      || buildStatusUnavailable || buildSnapshot?.active === true || buildSnapshot?.preview_active === true}
+                    onclick={() => void recoverTake()}>
+                    <RotateCcw size={15} /><span>Recover for review</span>
+                  </button>
+                  <p class="mt-2 text-xs text-[var(--ti-text-muted)]">
+                    Recovery verifies both WAVs. It does not save or train a voice automatically.
+                  </p>
+                {/if}
+              </div>
+            {/if}
             {#if recordingState.pending_review && pendingLineId === currentLine.line_id}
               <div class={recordingState.pending_review.quality_blocker
                 ? "mt-4 rounded-[var(--ti-radius-md)] border border-[var(--ti-danger-border)] p-4"
@@ -940,7 +1009,7 @@
                   </button>
                 {/if}
               {:else}
-                <button type="button" class="ti-button" bind:this={recordActionButton} disabled={busy || voiceChangesLocked || buildStatusUnavailable || buildSnapshot?.active === true || buildSnapshot?.preview_active === true || recordingStatusUnknown || !authorized} onclick={() => void startRecording()}>
+                <button type="button" class="ti-button" bind:this={recordActionButton} disabled={busy || voiceChangesLocked || buildStatusUnavailable || buildSnapshot?.active === true || buildSnapshot?.preview_active === true || recordingStatusUnknown || !authorized || selectedOrphanDraft !== null} onclick={() => void startRecording()}>
                   <Mic size={15} /><span>{currentLine.accepted ? "Record again" : "Record"}</span>
                 </button>
                 <button type="button" class="ti-button ti-button-secondary" disabled={busy || recordingStatusUnknown || replaying} onclick={() => void skipLine()}>

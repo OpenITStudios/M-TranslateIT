@@ -169,24 +169,7 @@ pub fn take_guided_audio() -> Result<(CapturedGuidedTake, GuidedTakeReview), Str
         source_rate,
         GUIDED_TAKE_SAMPLE_RATE_HZ,
     )?;
-    let evidence = AudioEvidenceReport::from_samples(&samples_mono);
-    let quality_blocker = guided_take_quality_blocker(&samples_mono, &evidence);
-    // A little clipping can be audible even below the existing hard 5% gate.
-    // Offer replay guidance without changing the accepted-audio contract.
-    let mut review_advice = Vec::new();
-    if quality_blocker.is_empty() {
-        if evidence.clipping_ratio >= 0.01 {
-            review_advice.push("voice_lab:review:possible_clipping".to_string());
-        }
-        // These are replay hints, never calibrated noise scores or new blockers.
-        recording_environment_hints(&samples_mono, &mut review_advice);
-    }
-    let review = GuidedTakeReview {
-        line_id: take.line_id,
-        duration_ms: samples_mono.len() as u64 * 1_000 / u64::from(GUIDED_TAKE_SAMPLE_RATE_HZ),
-        quality_blocker,
-        review_advice,
-    };
+    let review = review_guided_samples(take.line_id, &samples_mono);
     Ok((
         CapturedGuidedTake {
             line_id: take.line_id,
@@ -196,6 +179,33 @@ pub fn take_guided_audio() -> Result<(CapturedGuidedTake, GuidedTakeReview), Str
         },
         review,
     ))
+}
+
+// Re-evaluate verified, recovered 32 kHz PCM16 with the same source-owned
+// quality thresholds as a newly stopped recording. A reopened draft is NOT
+// auto-accepted and must still be replayed and explicitly saved by its owner.
+pub(crate) fn review_guided_samples(line_id: u32, samples: &[f32]) -> GuidedTakeReview {
+    let evidence = AudioEvidenceReport::from_samples(samples);
+    let quality_blocker = guided_take_quality_blocker(samples, &evidence);
+    let mut review_advice = Vec::new();
+    if quality_blocker.is_empty() {
+        if evidence.clipping_ratio >= 0.01 {
+            review_advice.push("voice_lab:review:possible_clipping".to_string());
+        }
+        recording_environment_hints(samples, &mut review_advice);
+    }
+    GuidedTakeReview {
+        line_id,
+        duration_ms: samples.len() as u64 * 1_000 / u64::from(GUIDED_TAKE_SAMPLE_RATE_HZ),
+        quality_blocker,
+        review_advice,
+    }
+}
+
+// This canonical resampler is also used to compare two recovered WAV files.
+// Do not build a second decoder/resampler with unrelated audio assumptions.
+pub(crate) fn resample_guided_native_for_review(samples: &[f32], sample_rate: u32) -> Result<Vec<f32>, String> {
+    resample_mono_fft(samples, sample_rate, GUIDED_TAKE_SAMPLE_RATE_HZ)
 }
 
 fn guided_take_quality_blocker(samples: &[f32], evidence: &AudioEvidenceReport) -> String {
