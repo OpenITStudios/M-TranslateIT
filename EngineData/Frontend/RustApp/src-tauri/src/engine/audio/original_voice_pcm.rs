@@ -156,6 +156,15 @@ pub fn set_output_muted(generation: u64, muted: bool) -> Result<(), &'static str
 pub fn is_original_active(generation: u64) -> bool {
     ACTIVE.load(Ordering::Acquire) && GENERATION.load(Ordering::Acquire) == generation
 }
+
+// Unlike is_original_active, this distinguishes an explicitly registered
+// TranslateIT source from an absent/stale source. Mute never changes selection.
+pub fn live_source_matches(generation: u64, requested_original: bool) -> bool {
+    generation != 0
+        && GENERATION.load(Ordering::Acquire) == generation
+        && SOURCE_EPOCH.load(Ordering::Acquire) != 0
+        && ACTIVE.load(Ordering::Acquire) == requested_original
+}
 pub fn translated_epoch(generation: u64) -> Option<u64> {
     if GENERATION.load(Ordering::Acquire) != generation
         || ACTIVE.load(Ordering::Acquire) || MUTED.load(Ordering::Acquire)
@@ -312,24 +321,33 @@ mod tests {
     fn source_epoch_blocks_stale_tts_across_mode_round_trip() {
         const GENERATION: u64 = 880_012;
         super::register_translated(GENERATION).expect("translation epoch initialized");
+        assert!(super::live_source_matches(GENERATION, false));
+        assert!(!super::live_source_matches(GENERATION, true));
+        assert!(!super::live_source_matches(GENERATION + 1, false));
         let before = super::translated_epoch(GENERATION).expect("translated");
         assert!(super::translated_epoch_matches(GENERATION, before));
         let original_epoch = super::next_original_epoch(GENERATION).expect("next epoch");
         super::begin(GENERATION, original_epoch).expect("switch to original");
         assert!(super::is_original_active(GENERATION));
+        assert!(super::live_source_matches(GENERATION, true));
+        assert!(!super::live_source_matches(GENERATION, false));
         assert!(!super::translated_epoch_matches(GENERATION, before));
         super::set_output_muted(GENERATION, true).expect("raw mute");
         assert!(super::is_output_muted(GENERATION));
+        assert!(super::live_source_matches(GENERATION, true));
         let mut silent = [1.0_f32; 8];
         super::try_render_native(&mut silent, 48_000, 1, GENERATION, original_epoch, 0.0, |x| x);
         assert_eq!(silent, [0.0; 8]);
         super::set_output_muted(GENERATION, false).expect("raw unmute");
         assert!(!super::is_output_muted(GENERATION));
         super::stop(GENERATION);
+        assert!(super::live_source_matches(GENERATION, false));
+        assert!(!super::live_source_matches(GENERATION, true));
         let resumed = super::translated_epoch(GENERATION).expect("translated again");
         assert!(resumed > original_epoch);
         assert!(!super::translated_epoch_matches(GENERATION, before));
         super::set_output_muted(GENERATION, true).expect("translated mute");
+        assert!(super::live_source_matches(GENERATION, false));
         assert!(super::translated_epoch(GENERATION).is_none());
         super::set_output_muted(GENERATION, false).expect("translated unmute");
         assert!(super::translated_epoch(GENERATION).unwrap() > resumed);

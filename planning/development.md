@@ -2,6 +2,15 @@
 
 ## Current Status
 
+**Duplicate Meeting Start source truth (2026-10-27).** A Live source received
+an idempotent success even when the requested Start mode differed. The Start
+fast path now requires the matching registered generation and Original/
+TranslateIT source; a conflict returns a failure directing users to the
+existing Switch Source mechanism. The existing source-epoch regression
+covers matched/mismatched identities, both modes and independent Mute.
+No extra source owner, model call or audio process was added. GitHub source
+review only; Rust execution/native behavior NOT EXECUTED.
+
 **Idle Meeting Stop cleanup ownership (2026-10-27).** The no-snapshot Stop
 path previously called a second unchecked unscoped incoming producer clear
 after Meeting Sound Stop. The canonical sound-capture Stop already clears

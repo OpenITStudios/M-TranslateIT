@@ -254,11 +254,27 @@ fn start_meeting_impl(original_requested: bool) -> MeetingSessionActionResult {
             && snapshot.authority_active
             && snapshot.phase == "live"
         {
+            // Start is idempotent only for the selected source. A caller
+            // asking for Original while TranslateIT is Live (or vice versa)
+            // must use the existing source-switch path, not receive a false
+            // "already_live" success for a mode that did not start.
+            if !original_voice_pcm::live_source_matches(snapshot.generation, original_requested) {
+                return MeetingSessionActionResult {
+                    ok: false,
+                    state: "active_session_conflict".to_string(),
+                    message: "Meeting is already Live, but the requested microphone source does not match the registered active source. Use Switch Source instead of Start."
+                        .to_string(),
+                    status: status_from_report(current, build_preflight()),
+                };
+            }
             return MeetingSessionActionResult {
                 ok: true,
                 state: "already_live".to_string(),
-                message: "Translation is already live. Duplicate Start did not create another Meeting session."
-                    .to_string(),
+                message: if original_requested {
+                    "Original Microphone is already Live. Duplicate Start did not create another Meeting session."
+                } else {
+                    "Translation is already Live. Duplicate Start did not create another Meeting session."
+                }.to_string(),
                 status: status_from_report(current, build_preflight()),
             };
         }
