@@ -1,6 +1,6 @@
 use serde::Serialize;
-use std::fs;
-use std::io;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
 use std::path::PathBuf;
 
 use super::evidence::AudioEvidenceReport;
@@ -314,60 +314,69 @@ pub(crate) fn write_pcm16_wav(
     channels: u16,
     samples: &[f32],
 ) -> io::Result<()> {
+    write_pcm16_wav_with_promotion(
+        path, sample_rate_hz, channels, samples, |staged, destination| {
+            fs::rename(staged, destination)
+        },
+    )
+}
+
+// The small promotion seam makes rename-failure behavior testable on any OS.
+// It is still the filesystem's native atomic rename in production.
+fn write_pcm16_wav_with_promotion(
+    path: &PathBuf,
+    sample_rate_hz: u32,
+    channels: u16,
+    samples: &[f32],
+    promote: impl FnOnce(&PathBuf, &PathBuf) -> io::Result<()>,
+) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let temp_path = path.with_extension("wav.tmp");
-    let write_result = (|| -> io::Result<()> {
-        let bits_per_sample = 16u16;
-        let bytes_per_sample = bits_per_sample / 8;
-        let block_align = channels * bytes_per_sample;
-        let byte_rate = sample_rate_hz * u32::from(block_align);
-        let data_size = (samples.len() * usize::from(bytes_per_sample)) as u32;
-        let riff_size = 36u32.saturating_add(data_size);
+    // Assemble the complete, bounded WAV payload before reserving staging.
+    // A pre-existing stage is owned by another attempt or a crashed writer:
+    // never truncate or delete it in response to an admission failure.
+    let bits_per_sample = 16u16;
+    let bytes_per_sample = bits_per_sample / 8;
+    let block_align = channels * bytes_per_sample;
+    let byte_rate = sample_rate_hz * u32::from(block_align);
+    let data_size = (samples.len() * usize::from(bytes_per_sample)) as u32;
+    let riff_size = 36u32.saturating_add(data_size);
+    // Keep one buffered PCM16 write, never thousands of tiny sample writes.
+    let mut wav = Vec::with_capacity(44usize.saturating_add(data_size as usize));
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&riff_size.to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&channels.to_le_bytes());
+    wav.extend_from_slice(&sample_rate_hz.to_le_bytes());
+    wav.extend_from_slice(&byte_rate.to_le_bytes());
+    wav.extend_from_slice(&block_align.to_le_bytes());
+    wav.extend_from_slice(&bits_per_sample.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_size.to_le_bytes());
 
-        // Build the bounded PCM16 payload in memory and promote it with one file
-        // write. The previous implementation issued one unbuffered write_all call
-        // per two-byte sample, which put thousands of tiny writes on the finalized
-        // utterance critical path before ASR could begin.
-        let mut wav = Vec::with_capacity(44usize.saturating_add(data_size as usize));
-        wav.extend_from_slice(b"RIFF");
-        wav.extend_from_slice(&riff_size.to_le_bytes());
-        wav.extend_from_slice(b"WAVE");
-        wav.extend_from_slice(b"fmt ");
-        wav.extend_from_slice(&16u32.to_le_bytes());
-        wav.extend_from_slice(&1u16.to_le_bytes());
-        wav.extend_from_slice(&channels.to_le_bytes());
-        wav.extend_from_slice(&sample_rate_hz.to_le_bytes());
-        wav.extend_from_slice(&byte_rate.to_le_bytes());
-        wav.extend_from_slice(&block_align.to_le_bytes());
-        wav.extend_from_slice(&bits_per_sample.to_le_bytes());
-        wav.extend_from_slice(b"data");
-        wav.extend_from_slice(&data_size.to_le_bytes());
-
-        for sample in samples {
-            let value = (safe_sample(*sample) * i16::MAX as f32).round() as i16;
-            wav.extend_from_slice(&value.to_le_bytes());
-        }
-        fs::write(&temp_path, &wav)?;
-
-        match fs::rename(&temp_path, path) {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                if path.exists() {
-                    fs::remove_file(path)?;
-                    fs::rename(&temp_path, path)
-                } else {
-                    Err(error)
-                }
-            }
-        }
-    })();
-
-    if write_result.is_err() {
+    for sample in samples {
+        let value = (safe_sample(*sample) * i16::MAX as f32).round() as i16;
+        wav.extend_from_slice(&value.to_le_bytes());
+    }
+    // Exclusive creation prevents two writers from truncating the same
+    // deterministic .wav.tmp. Failing to reserve leaves the existing stage
+    // untouched, and must NOT remove its owner's staged bytes.
+    let mut staged = OpenOptions::new().write(true).create_new(true).open(&temp_path)?;
+    let written = staged.write_all(&wav);
+    // Close the write handle before promotion, including on write failure.
+    drop(staged);
+    let promoted = written.and_then(|()| promote(&temp_path, path));
+    if promoted.is_err() {
+        // Only this call's exclusively created stage may be removed. An
+        // unsuccessful rename must not delete an existing valid destination.
         let _ = fs::remove_file(&temp_path);
     }
-    write_result
+    promoted
 }
 
 fn suppress_low_level_noise(samples: &[f32]) -> Option<Vec<f32>> {
@@ -500,6 +509,66 @@ mod tests {
             &root, "UserData/CacheData/audio_segments/not-a-final-wav.tmp",
         ), "an invalid path cannot count as successful cleanup");
         fs::remove_dir_all(root).expect("remove isolated test root");
+    }
+
+    #[test]
+    fn successful_promotion_still_replaces_a_completed_draft() {
+        let root = unique_test_root("wav-replace-success");
+        fs::create_dir_all(&root).expect("create isolated WAV test root");
+        let destination = root.join("draft.wav");
+        write_pcm16_wav(&destination, TARGET_SAMPLE_RATE_HZ, 1, &[0.2, -0.2])
+            .expect("publish first complete draft");
+        let first = fs::read(&destination).unwrap();
+        write_pcm16_wav(&destination, TARGET_SAMPLE_RATE_HZ, 1, &[0.7, -0.7])
+            .expect("native rename should replace a complete draft");
+        let second = fs::read(&destination).unwrap();
+        assert_ne!(first, second, "the complete retake replaces the old draft");
+        assert_eq!(&second[..4], b"RIFF");
+        assert!(!destination.with_extension("wav.tmp").exists());
+        fs::remove_dir_all(root).expect("remove isolated WAV test root");
+    }
+
+    #[test]
+    fn failed_rename_preserves_valid_destination_and_cleans_owned_stage() {
+        let root = unique_test_root("wav-rename-failure");
+        fs::create_dir_all(&root).expect("create isolated WAV test root");
+        let destination = root.join("preserved.wav");
+        write_pcm16_wav(&destination, TARGET_SAMPLE_RATE_HZ, 1, &[0.25, -0.25])
+            .expect("publish first valid WAV");
+        let previous = fs::read(&destination).expect("read original WAV");
+        let failed = write_pcm16_wav_with_promotion(
+            &destination,
+            TARGET_SAMPLE_RATE_HZ, 1, &[0.75, -0.75],
+            |staged, target| {
+                assert!(staged.is_file(), "complete staging WAV exists before promotion");
+                assert_eq!(fs::read(target).unwrap(), previous);
+                Err(io::Error::from(io::ErrorKind::PermissionDenied))
+            },
+        );
+        assert_eq!(failed.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(fs::read(&destination).unwrap(), previous,
+            "a failed rename must never remove an already-valid WAV");
+        assert!(!destination.with_extension("wav.tmp").exists(),
+            "only this writer's failed stage may be removed");
+        fs::remove_dir_all(root).expect("remove isolated WAV test root");
+    }
+
+    #[test]
+    fn occupied_staging_file_remains_unchanged_and_blocks_competing_writer() {
+        let root = unique_test_root("wav-stage-collision");
+        fs::create_dir_all(&root).expect("create isolated WAV test root");
+        let destination = root.join("owned.wav");
+        write_pcm16_wav(&destination, TARGET_SAMPLE_RATE_HZ, 1, &[0.2, -0.2])
+            .expect("publish original WAV");
+        let previous = fs::read(&destination).unwrap();
+        let stage = destination.with_extension("wav.tmp");
+        fs::write(&stage, b"staging-from-another-writer").expect("create foreign stage");
+        let attempted = write_pcm16_wav(&destination, TARGET_SAMPLE_RATE_HZ, 1, &[0.8, -0.8]);
+        assert_eq!(attempted.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&destination).unwrap(), previous);
+        assert_eq!(fs::read(&stage).unwrap(), b"staging-from-another-writer",
+            "occupied staging must not be truncated or deleted");
+        fs::remove_dir_all(root).expect("remove isolated WAV test root");
     }
 
     #[test]

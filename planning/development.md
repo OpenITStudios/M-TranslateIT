@@ -2,6 +2,24 @@
 
 ## Current Status
 
+**PCM16 WAV promotion preserves destination on filesystem failure (2026-10-27).**
+The shared writer used by finalized Meeting segments and VoiceLab drafts
+previously retried a failed native rename by deleting the destination WAV,
+which could destroy a previously valid file if the second rename also failed.
+It also wrote to deterministic .wav.tmp using truncating fs::write, which
+could corrupt staging owned by an overlapping request. The writer now builds
+the bounded PCM16 bytes before atomically claiming staging with create_new,
+closes its handle after writing, and attempts native rename exactly once.
+Promotion failure leaves an existing destination intact; only staging
+exclusively created by this call is cleaned. If .wav.tmp is already present
+the writer fails without modifying or deleting it. Successful native
+replacement behavior remains unchanged for consumers that deliberately
+replace their destination; higher-level VoiceLab failure recovery remains
+a separate owner and is not newly certified by this fix. Existing Rust
+writer tests were extended with injected rename failure and occupied-stage
+regressions. REMOTE_GITHUB static source/staged-tree proof only: tests,
+compilation, Windows filesystem behavior, and CI are NOT EXECUTED.
+
 **Temporary WAV Stop sequencing — source repair (2026-10-27).**
 Canonical Stop and failed-Start rollback previously swept session audio files
 even when bounded consumer, helper or playback cleanup was unconfirmed. An
