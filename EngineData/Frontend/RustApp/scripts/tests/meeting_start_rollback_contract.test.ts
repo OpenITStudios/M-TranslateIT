@@ -18,6 +18,24 @@ test("pre-Live rollback has one complete resource owner", () => {
   assert.match(lifecycle, /clear_runtime_session_if_generation\(generation\)/);
 });
 
+test("Start prepares output only after winning session and route ownership", () => {
+  const start = lifecycle.indexOf("fn start_meeting_impl(");
+  const claim = lifecycle.indexOf("let starting = begin_application_meeting_session();", start);
+  const bound = lifecycle.indexOf("bind_prepared_virtual_mic_route_to_generation(generation)", claim);
+  const reset = lifecycle.indexOf("clear_all_start_preflight();", bound);
+  const prepare = lifecycle.indexOf("if let Err(blocker) = prepare_meeting_output_device(output_device)", reset);
+  const source = lifecycle.indexOf("original_voice_pcm::register_translated(generation)", prepare);
+  assert.ok(start > 0 && claim > start && bound > claim && reset > bound
+    && prepare > reset && source > prepare, "session claim precedes every shared output mutation");
+  const unowned = lifecycle.slice(start, bound);
+  assert.doesNotMatch(unowned, /clear_all_start_preflight\(\)|clear_prepared_meeting_output_device\(\)|prepare_meeting_output_device\(output_device\)/,
+    "a rejected Start must not mutate another Start's shared resources");
+  const failure = lifecycle.slice(prepare, source);
+  assert.match(failure, /revoke_runtime_session_authority\(/);
+  assert.match(failure, /rollback_starting_meeting_resources\(generation, &session_id\)/);
+  assert.match(failure, /rollback_completion_state\(\)/);
+});
+
 test("Live commit failure uses the canonical rollback instead of a partial cleanup copy", () => {
   const start = lifecycle.lastIndexOf("let committed = commit_application_meeting_session_live");
   const end = lifecycle.indexOf("update_outbound_status(", start);

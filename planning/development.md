@@ -2,6 +2,17 @@
 
 ## Current Status
 
+**Concurrent Meeting Start output-cache ownership — source repair (2026-10-27).**
+The Start path previously cleared preflight and prepared output before claiming
+a generation. A rejected overlapping Start could therefore clear a winning
+Start's shared device and reset its readiness snapshot. Only the successfully
+claimed and route-bound generation now resets Start preflight and prepares
+native output; failures under ownership revoke authority and use the existing
+complete rollback. The maintained source-contract file now checks this exact
+ownership ordering and failure fence. REMOTE_GITHUB static review only:
+Rust/Node compilation and test execution, real parallel Start/Stop, installed
+audio and receiver behavior remain NOT EXECUTED. CI stays paused.
+
 **Duplicate Meeting Start source truth (2026-10-27).** A Live source received
 an idempotent success even when the requested Start mode differed. The Start
 fast path now requires the matching registered generation and Original/

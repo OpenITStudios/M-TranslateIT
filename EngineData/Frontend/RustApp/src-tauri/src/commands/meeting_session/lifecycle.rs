@@ -292,9 +292,6 @@ fn start_meeting_impl(original_requested: bool) -> MeetingSessionActionResult {
         );
     }
 
-    clear_all_start_preflight();
-    clear_prepared_meeting_output_device();
-
     if !original_requested {
     if let Err(message) = recover_helper_after_meeting_stop_if_needed() {
         return blocked_result(
@@ -341,18 +338,11 @@ fn start_meeting_impl(original_requested: bool) -> MeetingSessionActionResult {
                 .to_string(),
         );
     };
-    if let Err(blocker) = prepare_meeting_output_device(output_device) {
-        return blocked_result(
-            "meeting_output_prepare_failed",
-            format!(
-                "Start Translation couldn't prepare TranslateIT Meeting Microphone. Check Setup or Diagnostics and try again. Native output detail: {blocker}"
-            ),
-        );
-    }
-
+    // Output preparation belongs to a claimed Meeting generation. Otherwise,
+    // a rejected overlapping Start could clear the winning Start's device.
     let starting = begin_application_meeting_session();
     if !starting.blocker.is_empty() {
-        clear_prepared_meeting_output_device();
+        // This rejected request never owned the prepared output cache.
         return MeetingSessionActionResult {
             ok: false,
             state: "start_authority_conflict".to_string(),
@@ -362,7 +352,6 @@ fn start_meeting_impl(original_requested: bool) -> MeetingSessionActionResult {
         };
     }
     let Some(start_snapshot) = starting.snapshot.as_ref() else {
-        clear_prepared_meeting_output_device();
         return blocked_result(
             "start_authority_failed",
             "Start Translation could not establish application-level Meeting authority. No Meeting resources were opened."
@@ -370,7 +359,6 @@ fn start_meeting_impl(original_requested: bool) -> MeetingSessionActionResult {
         );
     };
     if start_snapshot.owner_id != APPLICATION_MEETING_OWNER_ID || !start_snapshot.authority_active {
-        clear_prepared_meeting_output_device();
         return blocked_result(
             "start_authority_conflict",
             "Start Translation did not receive the expected Meeting session authority. No additional resources were opened."
@@ -385,12 +373,28 @@ fn start_meeting_impl(original_requested: bool) -> MeetingSessionActionResult {
             generation,
             "Prepared Meeting route could not bind to the new generation. Authority was revoked before opening Meeting resources.",
         );
-        clear_prepared_meeting_output_device();
+        // Native output preparation has not started for this generation.
         let _ = clear_runtime_session_if_generation(generation);
         return blocked_result(
             "meeting_route_bind_failed",
             format!(
                 "Start Translation couldn't bind the prepared Meeting microphone route to this session: {blocker}"
+            ),
+        );
+    }
+    // Only the claimed and route-bound generation may replace Start caches.
+    clear_all_start_preflight();
+    clear_prepared_meeting_output_device();
+    if let Err(blocker) = prepare_meeting_output_device(output_device) {
+        let _ = revoke_runtime_session_authority(
+            generation,
+            "Meeting output preparation failed after Starting authority was established.",
+        );
+        let (_, cleanup) = rollback_starting_meeting_resources(generation, &session_id);
+        return blocked_result(
+            rollback_completion_state(),
+            format!(
+                "Start Translation couldn't prepare TranslateIT Meeting Microphone: {blocker}. Rollback: {cleanup}"
             ),
         );
     }
