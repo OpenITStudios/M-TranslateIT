@@ -2,6 +2,27 @@
 
 ## Current Status
 
+**My Voice Accept pair preflight and rollback ordering — source repair (2026-10-27).**
+The accepted WAV transaction previously deleted a canonical `.wav.previous`
+backup whenever the active destination also existed. That backup could be the
+only surviving copy from an interrupted Save, and its deletion happened after
+the native-rate pair had already begun moving. Canonical and native accepted
+destinations, including their previous backups, are now preflighted as a pair
+before any file is moved. An existing or unverified `.wav.previous`, a
+nonregular/symlinked accepted destination, or an unknown filesystem status
+blocks new Accept without deleting or implicitly restoring old files.
+Canonical Accept itself applies the same fail-closed preflight. If a later
+canonical move fails, the newly promoted native WAV must FIRST return to its
+vacant Draft path before the previous native backup can be restored. If
+rollback cannot restore the new Draft, the new accepted WAV and old backup
+remain preserved; the prior backup is never renamed over an occupied
+destination. Existing direct Rust fixture cases were expanded for early
+backup rejection, safe restoration, correct native rollback order and
+blocked rollback. This is a bounded source repair, NOT a verified crash-safe
+multi-file transaction or a new automatic accepted-take recovery workflow.
+REMOTE_GITHUB static source and staged-tree inspection only; Rust tests,
+target filesystem, native recording and CI are NOT EXECUTED.
+
 **Recovered Draft byte ownership through Replay/Save/Retry (2026-10-27).**
 Previously interrupted-Draft recovery verified the WAV pair once, then only
 kept paths and a quality review in PendingDraft. External modification or
@@ -471,13 +492,14 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Review the explicit interrupted-Draft recovery integration for any remaining
-source-level ownership or loss-of-data defects; do not infer success from
-unexecuted Rust/TypeScript tests. Incomplete, malformed or otherwise
-unverifiable orphan WAVs remain preserved for a separately authorized
-recovery decision; do not auto-delete or auto-accept them. Native Meeting/
-My Voice/filesystem acceptance remains deferred until the user explicitly
-authorizes an integrated PC phase.
+Review any remaining source-level failure paths in Accept that could
+separate canonical/native accepted WAVs or their immutable archive evidence,
+without automatically deleting or promoting ambiguous `.wav.previous`
+files. A partially completed accepted-take Save requires an explicit,
+verified recovery decision and is not solved by retrying the rename blindly.
+Keep existing Rust regression tests as NOT EXECUTED until authorized
+integrated validation; native Windows/Meeting/My Voice acceptance stays
+deferred.
 When PC-control authorization is available again, finish the existing integrated native capture/status/Diagnostics/Stop check on the pinned repaired candidate. Until then retain the goal as incomplete; source and fixture work is finished for this bounded outcome, so do not repeat checks or invent adjacent work while waiting. Historical native drops, incoming error and uncontrolled phrases remain unattributed. No CI, model/context/style/glossary change, incoming toggle, queue enlargement, blind retry or corrective translation layer is authorized.
 
 ## Retained My Voice source candidate (paused)

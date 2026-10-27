@@ -332,51 +332,100 @@ pub(super) fn discard_review_take(path: &Path) -> Result<(), String> {
         .map_err(|error| format!("VoiceLab could not remove the review take safely: {error}"))
 }
 
+// Accept must treat an existing *.wav.previous as a recovery obligation,
+// not a disposable stale artifact. That backup may be the last valid copy
+// after an interrupted previous Save; the caller has already archived any
+// verified old take, but this transaction must not guess about its identity.
+fn ensure_accept_backup_absent(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => Err("VoiceLab found an earlier accepted-take backup. The existing and new recordings were preserved; resolve the interrupted Save before trying again.".to_string()),
+        Err(error) => Err(format!(
+            "VoiceLab could not verify accepted-take backup state: {error}. No recording was replaced."
+        )),
+    }
+}
+
+fn accepted_regular_file_present(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => Ok(true),
+        Ok(_) => Err("VoiceLab found an accepted-take destination that is not a regular file. Nothing was replaced.".to_string()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!(
+            "VoiceLab could not verify accepted-take destination: {error}. No recording was replaced."
+        )),
+    }
+}
+
+// Never restore over an occupied destination, even on operating systems
+// where fs::rename would silently replace the target file. Retain backup
+// ownership and report an incomplete rollback instead of destroying newer
+// bytes by guessing which file should win.
+fn restore_previous_to_vacant_target(previous: &Path, target: &Path) -> Result<(), String> {
+    if accepted_regular_file_present(target)? {
+        return Err("VoiceLab rollback destination is occupied. Previous backup was preserved.".to_string());
+    }
+    fs::rename(previous, target)
+        .map_err(|error| format!("VoiceLab could not restore the previous accepted take: {error}. Its backup was preserved."))
+}
+
+// If the canonical WAV Save failed, first put the just-promoted native WAV
+// back into Draft. Restoring the old native backup BEFORE that succeeds can
+// overwrite/destroy the new native recording on POSIX and fail on Windows.
+// A newly occupied native Draft path blocks rollback instead of being clobbered.
+fn undo_native_promotion_after_canonical_failure(
+    native_draft: &Path,
+    native_target: &Path,
+    previous: &Path,
+    had_previous: bool,
+) -> Result<(), String> {
+    if accepted_regular_file_present(native_draft)? {
+        return Err("VoiceLab native-rate Draft was occupied during rollback. New accepted audio and the previous backup were preserved for recovery.".to_string());
+    }
+    fs::rename(native_target, native_draft).map_err(|error| format!(
+        "VoiceLab could not return the newly promoted native-rate take to Draft: {error}. Previous backup was NOT restored over the new take."
+    ))?;
+    if had_previous {
+        restore_previous_to_vacant_target(previous, native_target)?;
+    }
+    Ok(())
+}
+
 pub(super) fn accept_review_take(draft: &Path, target: &Path) -> Result<(), String> {
+    if !draft.is_file() {
+        return Err("VoiceLab cannot accept a missing or non-file review Draft.".to_string());
+    }
     let previous = target.with_extension("wav.previous");
-
-    if previous.exists() && !target.exists() {
-        fs::rename(&previous, target).map_err(|error| {
-            format!(
-                "VoiceLab found an interrupted previous-take backup but could not restore it safely: {error}"
-            )
-        })?;
-    }
-
-    if previous.exists() && target.exists() {
-        fs::remove_file(&previous).map_err(|error| {
-            format!("VoiceLab could not clear the stale previous-take backup safely: {error}")
-        })?;
-    }
-
-    if target.exists() {
+    ensure_accept_backup_absent(&previous)?;
+    let had_previous = accepted_regular_file_present(target)?;
+    if had_previous {
         fs::rename(target, &previous).map_err(|error| {
             format!("VoiceLab could not preserve the previous accepted take: {error}")
         })?;
     }
-
     if let Err(error) = fs::rename(draft, target) {
-        if previous.exists() && !target.exists() {
-            if let Err(rollback_error) = fs::rename(&previous, target) {
-                return Err(format!(
+        if had_previous {
+            restore_previous_to_vacant_target(&previous, target).map_err(|rollback_error| {
+                format!(
                     "VoiceLab could not accept this take: {error}; previous accepted take rollback also failed: {rollback_error}"
-                ));
-            }
+                )
+            })?;
         }
         return Err(format!("VoiceLab could not accept this take: {error}"));
     }
-
-    if previous.exists() {
+    if had_previous {
+        // Success already has a verified immutable archive of the old take.
+        // A failed backup unlink is not a reason to undo a successful Save;
+        // the remaining backup blocks future replacements until reconciled.
         let _ = fs::remove_file(previous);
     }
     Ok(())
 }
 
-
 /// Preserve a device-native-rate mono sidecar alongside the canonical 32 kHz
-/// take. GPT-SoVITS continues to consume ONLY the canonical take. This helper
-/// rolls back ordinary file-operation failures; interrupted power-loss pairs
-/// must be integrity-checked before any future enhancement reads the sidecar.
+/// take. GPT-SoVITS continues to consume ONLY the canonical take. The caller
+/// archives both old and new sources before permitting these moves; interrupted
+/// filesystem state is never interpreted as permission to delete a backup.
 pub(super) fn accept_review_take_with_native_rate(
     draft: &Path,
     target: &Path,
@@ -386,26 +435,19 @@ pub(super) fn accept_review_take_with_native_rate(
     if !draft.is_file() || !native_draft.is_file() {
         return Err("VoiceLab cannot accept the take without both review and native-rate drafts.".to_string());
     }
+    let canonical_previous = target.with_extension("wav.previous");
+    let previous = native_target.with_extension("wav.previous");
+
+    // Full-pair preflight BEFORE the first rename: a stale canonical backup
+    // must not make us stage a native replacement only to fail later.
+    ensure_accept_backup_absent(&canonical_previous)?;
+    ensure_accept_backup_absent(&previous)?;
+    let _canonical_exists = accepted_regular_file_present(target)?;
+    let had_previous = accepted_regular_file_present(native_target)?;
+
     let parent = native_target.parent().ok_or("VoiceLab native-rate take directory is invalid.")?;
     fs::create_dir_all(parent)
         .map_err(|error| format!("VoiceLab could not prepare native-rate take storage: {error}"))?;
-
-    let previous = native_target.with_extension("wav.previous");
-    if previous.exists() && !native_target.exists() {
-        fs::rename(&previous, native_target).map_err(|error| {
-            format!("VoiceLab could not recover an interrupted native-rate backup: {error}")
-        })?;
-    }
-    // Never delete an ambiguous backup: it may be the only remaining source
-    // after an interrupted accept. Canonical training remains unaffected.
-    if previous.exists() {
-        return Err("VoiceLab native-rate backup needs recovery before replacing this take.".to_string());
-    }
-    if native_target.exists() && !native_target.is_file() {
-        return Err("VoiceLab native-rate destination is not a file.".to_string());
-    }
-
-    let had_previous = native_target.is_file();
     if had_previous {
         fs::rename(native_target, &previous).map_err(|error| {
             format!("VoiceLab could not preserve the previous native-rate take: {error}")
@@ -413,33 +455,28 @@ pub(super) fn accept_review_take_with_native_rate(
     }
     if let Err(error) = fs::rename(native_draft, native_target) {
         if had_previous {
-            fs::rename(&previous, native_target).map_err(|restore| {
-                format!(
+            restore_previous_to_vacant_target(&previous, native_target)
+                .map_err(|restore| format!(
                     "VoiceLab could not save the native-rate take: {error}; previous native-rate rollback failed: {restore}"
-                )
-            })?;
+                ))?;
         }
         return Err(format!("VoiceLab could not save the native-rate take: {error}"));
     }
+
     if let Err(error) = accept_review_take(draft, target) {
-        let draft_restored = fs::rename(native_target, native_draft);
-        let previous_restored = if had_previous {
-            fs::rename(&previous, native_target)
-        } else {
-            Ok(())
-        };
-        if draft_restored.is_err() || previous_restored.is_err() {
+        if let Err(rollback) = undo_native_promotion_after_canonical_failure(
+            native_draft, native_target, &previous, had_previous,
+        ) {
             return Err(format!(
-                "{error}; native-rate rollback incomplete (draft={}, previous={}).",
-                draft_restored.is_ok(),
-                previous_restored.is_ok(),
+                "{error}; native-rate rollback incomplete: {rollback}. Do not retry Save until the preserved files are reconciled."
             ));
         }
         return Err(error);
     }
     if had_previous {
-        // Same best-effort stale-backup cleanup as the canonical take owner.
-        // The new canonical/native pair has already been accepted.
+        // Native output was accepted after the canonical WAV was promoted.
+        // Failed backup removal leaves an explicit recovery obligation for
+        // the next Save, never permission to erase it opportunistically.
         let _ = fs::remove_file(previous);
     }
     Ok(())
@@ -715,6 +752,113 @@ mod native_rate_take_tests {
     }
 
     #[test]
+    fn canonical_previous_backup_never_deleted_by_a_new_accept() {
+        let root = fixture("canonical_backup_preserved");
+        let draft = root.join("draft.wav");
+        let target = root.join("accepted.wav");
+        let previous = target.with_extension("wav.previous");
+        let native_draft = root.join("native_draft.wav");
+        let native_target = root.join("NativeRate").join("accepted.wav");
+        fs::create_dir_all(native_target.parent().unwrap()).unwrap();
+        fs::write(&draft, b"new review").unwrap();
+        fs::write(&target, b"accepted canonical").unwrap();
+        fs::write(&previous, b"critical older backup").unwrap();
+        fs::write(&native_draft, b"new native").unwrap();
+        fs::write(&native_target, b"accepted native").unwrap();
+
+        let blocked = accept_review_take_with_native_rate(
+            &draft, &target, &native_draft, &native_target,
+        ).unwrap_err();
+        assert!(blocked.contains("earlier accepted-take backup"));
+        assert_eq!(fs::read(&previous).unwrap(), b"critical older backup");
+        assert_eq!(fs::read(&target).unwrap(), b"accepted canonical");
+        assert_eq!(fs::read(&native_target).unwrap(), b"accepted native");
+        assert_eq!(fs::read(&draft).unwrap(), b"new review");
+        assert_eq!(fs::read(&native_draft).unwrap(), b"new native");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn orphan_native_previous_backup_is_not_automatically_restored_or_replaced() {
+        let root = fixture("native_backup_preserved");
+        let draft = root.join("draft.wav");
+        let target = root.join("accepted.wav");
+        let native_draft = root.join("native_draft.wav");
+        let native_target = root.join("NativeRate").join("accepted.wav");
+        let previous = native_target.with_extension("wav.previous");
+        fs::create_dir_all(native_target.parent().unwrap()).unwrap();
+        fs::write(&draft, b"new review").unwrap();
+        fs::write(&target, b"accepted canonical").unwrap();
+        fs::write(&native_draft, b"new native").unwrap();
+        fs::write(&previous, b"orphan previous native").unwrap();
+        let blocked = accept_review_take_with_native_rate(
+            &draft, &target, &native_draft, &native_target,
+        ).unwrap_err();
+        assert!(blocked.contains("earlier accepted-take backup"));
+        assert_eq!(fs::read(&previous).unwrap(), b"orphan previous native");
+        assert!(!native_target.exists(), "recovery requires a separate explicit decision");
+        assert_eq!(fs::read(&target).unwrap(), b"accepted canonical");
+        assert!(native_draft.exists() && draft.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rollback_never_restores_previous_over_an_occupied_destination() {
+        let root = fixture("no_clobber_restore");
+        let target = root.join("accepted.wav");
+        let previous = target.with_extension("wav.previous");
+        fs::write(&target, b"new accepted content").unwrap();
+        fs::write(&previous, b"older accepted content").unwrap();
+        assert!(restore_previous_to_vacant_target(&previous, &target).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"new accepted content");
+        assert_eq!(fs::read(&previous).unwrap(), b"older accepted content");
+        fs::remove_file(&target).unwrap();
+        restore_previous_to_vacant_target(&previous, &target).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"older accepted content");
+        assert!(!previous.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_rollback_restores_draft_before_previous_accepted_audio() {
+        let root = fixture("ordered_native_rollback");
+        let native_draft = root.join("NativeRate").join("draft.wav");
+        let native_target = root.join("NativeRate").join("accepted.wav");
+        let previous = native_target.with_extension("wav.previous");
+        fs::create_dir_all(native_target.parent().unwrap()).unwrap();
+        fs::write(&native_target, b"new native staged as accepted").unwrap();
+        fs::write(&previous, b"old native accepted").unwrap();
+
+        undo_native_promotion_after_canonical_failure(
+            &native_draft, &native_target, &previous, true,
+        ).unwrap();
+        assert_eq!(fs::read(&native_draft).unwrap(), b"new native staged as accepted");
+        assert_eq!(fs::read(&native_target).unwrap(), b"old native accepted");
+        assert!(!previous.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_native_draft_rollback_keeps_new_accepted_and_old_backup_intact() {
+        let root = fixture("blocked_native_rollback");
+        let native_draft = root.join("NativeRate").join("draft.wav");
+        let native_target = root.join("NativeRate").join("accepted.wav");
+        let previous = native_target.with_extension("wav.previous");
+        fs::create_dir_all(native_target.parent().unwrap()).unwrap();
+        fs::write(&native_draft, b"new content unexpectedly occupied Draft").unwrap();
+        fs::write(&native_target, b"new native accepted").unwrap();
+        fs::write(&previous, b"old native accepted").unwrap();
+        let error = undo_native_promotion_after_canonical_failure(
+            &native_draft, &native_target, &previous, true,
+        ).unwrap_err();
+        assert!(error.contains("occupied"));
+        assert_eq!(fs::read(&native_draft).unwrap(), b"new content unexpectedly occupied Draft");
+        assert_eq!(fs::read(&native_target).unwrap(), b"new native accepted");
+        assert_eq!(fs::read(&previous).unwrap(), b"old native accepted");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn accepts_both_sources_and_replaces_a_previous_pair() {
         let root = fixture("accept");
         let draft = root.join("draft.wav");
@@ -764,8 +908,8 @@ mod native_rate_take_tests {
         fs::write(&target, b"old canonical").unwrap();
         fs::create_dir_all(native_target.parent().unwrap()).unwrap();
         fs::write(&native_target, b"old native").unwrap();
-        // A directory at the canonical rollback-file path makes the existing
-        // atomic canonical accept fail after staging the native replacement.
+        // A directory at the canonical backup location must block the whole
+        // pair before staging native replacement; preserve both accepted WAVs.
         fs::create_dir(target.with_extension("wav.previous")).unwrap();
         assert!(accept_review_take_with_native_rate(
             &draft, &target, &native_draft, &native_target
