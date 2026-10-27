@@ -2,6 +2,23 @@
 
 ## Current Status
 
+**Deferred WAV cleanup truth and Retry Stop retention (2026-10-27).**
+Previously every deferred cleanup reported success after discarding queued
+jobs even if a per-event WAV unlink failed: the shared WAV delete helper
+ignored filesystem errors. In particular, a no-snapshot Stop had no session
+identity for a later session-wide WAV sweep, so an inaccessible deferred WAV
+could become orphaned while Stop returned already_stopped. The per-WAV
+deletion helper now reports success/failure (NotFound remains idempotent).
+Both scoped and unscoped deferred Stop cleanup keep only failed NeedsAsr
+jobs in the existing bounded queue for Retry Stop and report an explicit
+cleanup failure. Transcript-only deferred jobs are still finalized after
+releasing the queue lock; unrelated session FIFO remains untouched. Existing
+isolated WAV and deferred queue tests were extended with deletion-failure
+and retry-retention cases. REMOTE_GITHUB source/staged-tree review only:
+Rust/Node tests, native filesystem, helper/ASR, CI and Windows acceptance
+NOT EXECUTED. Normal deferred eviction remains best-effort until canonical
+session Stop's broader WAV cleanup.
+
 **Late ASR/translation/status after Stop — source repair (2026-10-27).**
 The finalized-turn facade previously read Live ownership before locking the
 committed-turn store. Stop could revoke authority and finish interruption

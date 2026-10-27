@@ -168,15 +168,28 @@ fn invalid_lane_report(
     }
 }
 
-pub fn remove_finalized_meeting_utterance_wav(audio_path: &str) {
-    let Some(filename) = finalized_audio_filename(audio_path) else {
-        return;
-    };
+// Stop and optional incoming disable must distinguish a removed/missing WAV
+// from a failed filesystem deletion. A bool keeps existing best-effort event
+// callers compatible while allowing the deferred queue to retain failed work.
+pub fn remove_finalized_meeting_utterance_wav(audio_path: &str) -> bool {
     let project_paths = ProjectPaths::discover();
-    let path = PathBuf::from(project_paths.user_cache_dir)
-        .join("audio_segments")
-        .join(filename);
-    let _ = fs::remove_file(path);
+    let audio_dir = PathBuf::from(project_paths.user_cache_dir).join("audio_segments");
+    remove_finalized_meeting_utterance_wav_in_dir(&audio_dir, audio_path)
+}
+
+fn remove_finalized_meeting_utterance_wav_in_dir(
+    audio_dir: &PathBuf,
+    audio_path: &str,
+) -> bool {
+    let Some(filename) = finalized_audio_filename(audio_path) else {
+        return false;
+    };
+    match fs::remove_file(audio_dir.join(filename)) {
+        Ok(()) => true,
+        // A completed or duplicate cleanup is idempotent; no file remains.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => true,
+        Err(_) => false,
+    }
 }
 
 pub fn cleanup_finalized_meeting_session_wavs(session_id: &str) -> Result<usize, String> {
@@ -465,6 +478,28 @@ mod tests {
         assert!(root.join("final_session-a_directory.wav").is_dir());
 
         fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    #[test]
+    fn per_wav_cleanup_reports_failure_and_accepts_already_missing_file() {
+        let root = unique_test_root("per-wav-deferred-cleanup");
+        fs::create_dir_all(&root).expect("create isolated wav cleanup root");
+        let owned = "UserData/CacheData/audio_segments/final_session-a_s1_incoming_u1.wav";
+        let path = root.join("final_session-a_s1_incoming_u1.wav");
+        assert!(remove_finalized_meeting_utterance_wav_in_dir(&root, owned),
+            "an already-absent per-event WAV is clean");
+        fs::create_dir_all(&path).expect("block file removal with a directory");
+        assert!(!remove_finalized_meeting_utterance_wav_in_dir(&root, owned),
+            "failed removal must remain observable for Retry Stop");
+        assert!(path.is_dir());
+        fs::remove_dir(&path).expect("release directory blocker");
+        fs::write(&path, b"wav").expect("create owned WAV");
+        assert!(remove_finalized_meeting_utterance_wav_in_dir(&root, owned));
+        assert!(!path.exists());
+        assert!(!remove_finalized_meeting_utterance_wav_in_dir(
+            &root, "UserData/CacheData/audio_segments/not-a-final-wav.tmp",
+        ), "an invalid path cannot count as successful cleanup");
+        fs::remove_dir_all(root).expect("remove isolated test root");
     }
 
     #[test]

@@ -230,6 +230,48 @@ fn drain_session_jobs(
     removed
 }
 
+// Stop must not claim successful deferred cleanup if an owned ASR WAV could
+// not be removed. Failed NeedsAsr jobs remain in the same bounded queue as
+// Retry Stop obligations. Hold the existing queue mutex only for the few
+// file-removal checks; finalize transcript-only jobs after unlock to avoid
+// taking transcript/writer locks under the deferred queue mutex.
+fn retain_failed_wav_cleanup(
+    pending: &mut VecDeque<DeferredIncomingJob>,
+    removed: Vec<DeferredIncomingJob>,
+    mut remove_wav: impl FnMut(&str) -> bool,
+) -> (Vec<DeferredIncomingJob>, bool) {
+    let mut transcription_done = Vec::new();
+    let mut cleanup_failed = false;
+    for job in removed {
+        match &job.stage {
+            DeferredIncomingStage::NeedsAsr { audio_path, .. } => {
+                if !remove_wav(audio_path) {
+                    pending.push_back(job);
+                    cleanup_failed = true;
+                }
+            }
+            DeferredIncomingStage::NeedsTranslation { .. } => {
+                transcription_done.push(job);
+            }
+        }
+    }
+    (transcription_done, cleanup_failed)
+}
+
+fn finish_deferred_clear(
+    transcript_jobs: Vec<DeferredIncomingJob>,
+    wav_cleanup_failed: bool,
+) -> Result<(), String> {
+    for job in transcript_jobs {
+        cleanup_deferred_incoming_job(job);
+    }
+    if wav_cleanup_failed {
+        Err("meeting_incoming:deferred_wav_cleanup_failed".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 pub(super) fn clear_deferred_incoming_queue_for_session(session_id: &str) -> Result<(), String> {
     if session_id.is_empty() {
         return Err("meeting_incoming:deferred_queue_session_missing".to_string());
@@ -238,23 +280,21 @@ pub(super) fn clear_deferred_incoming_queue_for_session(session_id: &str) -> Res
         .lock()
         .map_err(|_| "meeting_incoming:deferred_queue_lock_failed".to_string())?;
     let removed = drain_session_jobs(&mut guard, session_id);
+    let (transcript_jobs, wav_cleanup_failed) =
+        retain_failed_wav_cleanup(&mut guard, removed, remove_finalized_meeting_utterance_wav);
     drop(guard);
-    for job in removed {
-        cleanup_deferred_incoming_job(job);
-    }
-    Ok(())
+    finish_deferred_clear(transcript_jobs, wav_cleanup_failed)
 }
 
 pub(super) fn clear_deferred_incoming_queue() -> Result<(), String> {
     let mut guard = deferred_incoming_queue()
         .lock()
         .map_err(|_| "meeting_incoming:deferred_queue_lock_failed".to_string())?;
-    let jobs: Vec<_> = guard.drain(..).collect();
+    let removed: Vec<_> = guard.drain(..).collect();
+    let (transcript_jobs, wav_cleanup_failed) =
+        retain_failed_wav_cleanup(&mut guard, removed, remove_finalized_meeting_utterance_wav);
     drop(guard);
-    for job in jobs {
-        cleanup_deferred_incoming_job(job);
-    }
-    Ok(())
+    finish_deferred_clear(transcript_jobs, wav_cleanup_failed)
 }
 
 #[cfg(test)]
@@ -308,6 +348,41 @@ mod tests {
         assert_eq!(pending.len(), 2, "retry Stop must be idempotent");
         assert!(drain_session_jobs(&mut pending, "absent").is_empty());
         assert_eq!(pending.len(), 2);
+
+        // Stop may not discard ownership of a WAV it failed to remove.
+        // The failed record is kept for Retry Stop; foreign-session FIFO and
+        // transcript-only cleanup are unaffected. No actual model/device IO.
+        let mut retry_queue = VecDeque::from([
+            job("new", 10, "keep next session", 100),
+            DeferredIncomingJob {
+                session_id: "old".to_string(),
+                event_sequence: 11,
+                utterance_id: 11,
+                stage: DeferredIncomingStage::NeedsAsr {
+                    audio_path: "owned.wav".to_string(),
+                    source_language: "en".to_string(),
+                    target_language: "id".to_string(),
+                },
+                enqueued_unix_ms: 101,
+            },
+            job("old", 12, "source-first translation pending", 102),
+        ]);
+        let removed = drain_session_jobs(&mut retry_queue, "old");
+        let (translated, failed) =
+            retain_failed_wav_cleanup(&mut retry_queue, removed, |path| path != "owned.wav");
+        assert!(failed);
+        assert_eq!(translated.len(), 1, "translation finalization is returned for post-unlock cleanup");
+        assert_eq!(translated[0].event_sequence, 12);
+        assert_eq!(retry_queue.len(), 2);
+        assert_eq!(retry_queue[0].session_id, "new");
+        assert_eq!(retry_queue[1].event_sequence, 11);
+        let retry = drain_session_jobs(&mut retry_queue, "old");
+        let (translated, failed) =
+            retain_failed_wav_cleanup(&mut retry_queue, retry, |_| true);
+        assert!(!failed);
+        assert!(translated.is_empty());
+        assert_eq!(retry_queue.len(), 1);
+        assert_eq!(retry_queue[0].session_id, "new");
     }
 
     #[test]
