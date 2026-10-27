@@ -2,6 +2,26 @@
 
 ## Current Status
 
+**VoiceLab guided Draft pair cleanup ownership — source repair (2026-10-27).**
+Guided Stop previously called the shared WAV writer twice, then unconditionally
+deleted both deterministic Draft paths on either write failure or on a failed
+PendingDraft mutex acquisition. That could remove a previously valid review or
+leave mismatched native/review pairs when the second write failed. The caller
+now locks PendingDraft before relinquishing microphone ownership and holds it
+through paired draft writes and registration; a poisoned or already-owned
+review state fails closed. The canonical Draft transaction first confirms
+neither path already exists on disk, preserving unowned recordings instead of
+silently overwriting them. A successful native-rate write belongs to this
+attempt and is the ONLY published file eligible for rollback if the second
+review WAV write fails; failed cleanup is reported rather than claimed
+successful. Both files are exposed for Review only after complete success.
+The existing storage-transaction fixture now covers prior-review preservation,
+first and second write outcomes, rollback failure and successful pairs.
+REMOTE_GITHUB static/source review only; Rust tests, native filesystem,
+audio capture, My Voice evaluation and CI NOT EXECUTED. An orphaned disk
+Draft is preserved fail-closed, not silently recovered; explicit recovery is
+a separate, unproven workflow.
+
 **PCM16 WAV promotion preserves destination on filesystem failure (2026-10-27).**
 The shared writer used by finalized Meeting segments and VoiceLab drafts
 previously retried a failed native rename by deleting the destination WAV,

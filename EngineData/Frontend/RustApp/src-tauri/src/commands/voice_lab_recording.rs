@@ -23,7 +23,9 @@ mod storage_transaction;
 
 use guided_lines::{guided_lines, prompt_metadata};
 pub(crate) use guided_lines::RecordingSuggestion;
-use storage_transaction::{accept_review_take_with_native_rate, discard_review_take};
+use storage_transaction::{
+    accept_review_take_with_native_rate, discard_review_take, write_guided_review_draft_pair,
+};
 
 const MAX_REPLAY_WAV_BYTES: u64 = 8 * 1024 * 1024;
 
@@ -216,7 +218,17 @@ pub fn start_voice_lab_guided_take(
     if current_voice_lab_build_snapshot().active {
         return result(false, "build_active", "Finish or cancel the current VoiceLab build before recording more lines.");
     }
-    if draft_store().lock().ok().and_then(|guard| guard.as_ref().map(|draft| draft.line_id)).is_some() {
+    // A poisoned pending-draft owner is unknown, not permission to overwrite
+    // the last recording while its review state cannot be verified.
+    let has_pending = match draft_store().lock() {
+        Ok(guard) => guard.is_some(),
+        Err(poisoned) => {
+            drop(poisoned.into_inner());
+            return result(false, "draft_state_unavailable",
+                "VoiceLab cannot verify pending review ownership. No new recording was opened.");
+        }
+    };
+    if has_pending {
         return result(false, "review_pending", "Replay, retry, or accept the current take before recording another line.");
     }
 
@@ -279,14 +291,34 @@ pub fn stop_voice_lab_guided_take(line_id: u32) -> GuidedRecordingActionResult {
         return result(false, "stop_failed", stopped.message);
     }
     let captured = take_guided_audio();
+    // Lock review ownership before releasing the microphone generation. A
+    // concurrent Start/Retry/Accept cannot publish another draft between
+    // the session release, the two WAV writes and PendingDraft registration.
+    let draft_owner = draft_store().lock();
     let cleared = clear_runtime_session_if_generation(generation);
     if cleared.has_active_session || cleared.snapshot.is_some() {
+        drop(draft_owner);
         return result(false, "cleanup_unverified", "The microphone stopped, but VoiceLab could not confirm that recording ownership was cleared.");
     }
+    let mut guard = match draft_owner {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            drop(poisoned.into_inner());
+            return result(false, "draft_state_unavailable",
+                "VoiceLab could not verify review ownership. Existing draft audio was preserved.");
+        }
+    };
+    if guard.is_some() {
+        drop(guard);
+        return result(false, "review_pending",
+            "A pending review already owns Draft storage. The new recording did not replace it.");
+    }
     let Ok((captured, mut review)) = captured else {
+        drop(guard);
         return result(false, "take_unusable", captured.err().unwrap_or_else(|| "voice_lab:take_unusable".to_string()));
     };
     if captured.line_id != line_id {
+        drop(guard);
         return result(false, "line_mismatch", "The recorded audio does not belong to the requested guided line.");
     }
     if review.quality_blocker.is_empty() && unusually_short_for_line(line_id, review.duration_ms) {
@@ -294,40 +326,28 @@ pub fn stop_voice_lab_guided_take(line_id: u32) -> GuidedRecordingActionResult {
     }
     let draft = draft_path(line_id);
     let native_rate_draft = draft_native_rate_path(line_id);
-    // Write native-rate mono PCM16 before the canonical 32 kHz review WAV.
-    // Both live in disposable Draft storage until explicit acceptance.
-    if let Err(error) = write_pcm16_wav(
-        &native_rate_draft,
-        captured.source_sample_rate_hz,
-        GUIDED_TAKE_CHANNELS,
-        &captured.native_rate_samples_mono,
-    ) {
-        let _ = fs::remove_file(&native_rate_draft);
-        let _ = fs::remove_file(&draft);
-        return result(false, "draft_write_failed", format!("VoiceLab could not save the native-rate take: {error}"));
-    }
-    if let Err(error) = write_pcm16_wav(
+    // Both draft WAVs must be new, owned by this Stop and complete before
+    // the review becomes visible. A failed second write may remove only the
+    // native WAV successfully created by this exact attempt.
+    if let Err(error) = write_guided_review_draft_pair(
         &draft,
-        GUIDED_TAKE_SAMPLE_RATE_HZ,
-        GUIDED_TAKE_CHANNELS,
-        &captured.samples_mono,
+        &native_rate_draft,
+        |path| write_pcm16_wav(
+            &path.to_path_buf(),
+            captured.source_sample_rate_hz,
+            GUIDED_TAKE_CHANNELS,
+            &captured.native_rate_samples_mono,
+        ),
+        |path| write_pcm16_wav(
+            &path.to_path_buf(),
+            GUIDED_TAKE_SAMPLE_RATE_HZ,
+            GUIDED_TAKE_CHANNELS,
+            &captured.samples_mono,
+        ),
     ) {
-        let _ = fs::remove_file(&native_rate_draft);
-        let _ = fs::remove_file(&draft);
-        return result(false, "draft_write_failed", format!("VoiceLab could not save the review take: {error}"));
+        drop(guard);
+        return result(false, "draft_write_failed", error);
     }
-    let mut guard = match draft_store().lock() {
-        Ok(guard) => guard,
-        Err(_) => {
-            let _ = fs::remove_file(&native_rate_draft);
-            let _ = fs::remove_file(&draft);
-            return result(
-                false,
-                "draft_state_unavailable",
-                "VoiceLab could not retain the review take state; the unowned review audio was removed.",
-            );
-        }
-    };
     *guard = Some(PendingDraft {
         line_id,
         path: draft,
@@ -342,7 +362,11 @@ pub fn stop_voice_lab_guided_take(line_id: u32) -> GuidedRecordingActionResult {
 pub fn retry_voice_lab_guided_take(line_id: u32) -> GuidedRecordingActionResult {
     let mut guard = match draft_store().lock() {
         Ok(guard) => guard,
-        Err(_) => return result(false, "draft_state_unavailable", "VoiceLab cannot access the pending review take."),
+        Err(poisoned) => {
+            drop(poisoned.into_inner());
+            return result(false, "draft_state_unavailable",
+                "VoiceLab cannot access the pending review take.");
+        }
     };
     let Some(draft) = guard.as_ref() else {
         drop(guard);
@@ -377,7 +401,11 @@ pub fn accept_voice_lab_guided_take(line_id: u32) -> GuidedRecordingActionResult
     }
     let mut guard = match draft_store().lock() {
         Ok(guard) => guard,
-        Err(_) => return result(false, "draft_state_unavailable", "VoiceLab cannot access the pending review take."),
+        Err(poisoned) => {
+            drop(poisoned.into_inner());
+            return result(false, "draft_state_unavailable",
+                "VoiceLab cannot access the pending review take.");
+        }
     };
     let Some(draft) = guard.as_ref() else {
         drop(guard);
