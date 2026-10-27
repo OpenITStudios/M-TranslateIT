@@ -2,6 +2,22 @@
 
 ## Current Status
 
+**Start/Stop full transaction ownership — source repair (2026-10-27).**
+The earlier shared lifecycle gate protected only Start's generation claim,
+while Stop held the same gate across full cleanup. Thus Stop could revoke
+and clean globally shared resources after the brief claim lock was released,
+while the ongoing Start still opened microphone/voice/worker state or later
+rolled back. The one existing guard now covers the full Start transaction,
+including preflight-side effects and every failed-Start rollback, and Stop
+continues to own its full cleanup. A competing operation is rejected
+without mutating the other transaction. This matches the existing UI rule
+that Stop is unavailable during Starting; an app-close request cannot treat
+in-progress Start as clean exit. Source-contract assertions were revised
+to check full-lifetime ownership. REMOTE_GITHUB source inspection and
+staged-tree checking only: Rust/Node tests, builds, installed Windows,
+real capture/receiver and CI were NOT EXECUTED. No new owner, background
+worker, model/PCM policy or second lifecycle system was introduced.
+
 **Concurrent Meeting Stop and new Start claim fence — source repair (2026-10-27).**
 Canonical Stop now owns a nonblocking lifecycle transition guard from its
 first runtime snapshot through cleanup result, so duplicate Stop/Retry Stop

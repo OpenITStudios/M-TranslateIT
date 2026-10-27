@@ -64,11 +64,10 @@ use super::{
 // Keep that native fact visible to preflight and the UI until Stop succeeds.
 static STOP_CLEANUP_PENDING: AtomicBool = AtomicBool::new(false);
 
-// Serializes canonical Stop (including the idle cleanup path) with the exact
-// point at which Start claims a new Meeting generation. A duplicate Stop must
-// return immediately instead of executing its old cleanup after a newer Start.
-// This is not a long-running Start lock: Stop may still revoke an in-progress
-// Starting generation through the existing runtime authority.
+// Serializes the whole Start transaction (including its failed-Start rollback)
+// with canonical Stop (including idle cleanup). Duplicate Start/Stop requests
+// fail closed rather than tearing down shared resources while their owner is
+// still opening or releasing them. The GUI does not expose Stop during Starting.
 static MEETING_LIFECYCLE_GATE: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn meeting_lifecycle_gate() -> &'static Mutex<()> {
@@ -305,6 +304,26 @@ pub(super) fn start_meeting_original_impl() -> MeetingSessionActionResult {
 }
 
 fn start_meeting_impl(original_requested: bool) -> MeetingSessionActionResult {
+    // Keep Start's full transaction (including failed-Start rollback) under
+    // the same nonblocking ownership guard as Stop. Claim-only locking allowed
+    // Stop to release shared capture/cache while Start was still creating it.
+    // The UI already blocks Stop during Starting; shutdown fails closed instead
+    // of tearing down an in-flight Start from another thread.
+    let _transition = match meeting_lifecycle_gate().try_lock() {
+        Ok(guard) => guard,
+        Err(TryLockError::WouldBlock) => {
+            return blocked_result(
+                "meeting_transition_in_progress",
+                "A Meeting Start or Stop transaction is in progress. No new Meeting resources were opened.".to_string(),
+            );
+        }
+        Err(TryLockError::Poisoned(_)) => {
+            return blocked_result(
+                "meeting_transition_unavailable",
+                "Meeting transition state is unavailable. Start did not claim any new resources.".to_string(),
+            );
+        }
+    };
     let current = latest_runtime_session_state();
     if current.has_active_session && current.snapshot.is_none() {
         return MeetingSessionActionResult {
@@ -406,27 +425,9 @@ fn start_meeting_impl(original_requested: bool) -> MeetingSessionActionResult {
     };
     // Output preparation belongs to a claimed Meeting generation. Otherwise,
     // a rejected overlapping Start could clear the winning Start's device.
-    let starting = {
-        // Stop holds this same guard across all cleanup, so an idle/old Stop
-        // cannot remove globally shared audio state after this new claim.
-        let _transition = match meeting_lifecycle_gate().try_lock() {
-            Ok(guard) => guard,
-            Err(TryLockError::WouldBlock) => {
-                return blocked_result(
-                    "meeting_transition_in_progress",
-                    "Meeting Stop or another session claim is in progress. Retry Start after the transition finishes.".to_string(),
-                );
-            }
-            Err(TryLockError::Poisoned(_)) => {
-                return blocked_result(
-                    "meeting_transition_unavailable",
-                    "Meeting transition state is unavailable. Start did not claim any new resources.".to_string(),
-                );
-            }
-        };
-        let starting = begin_application_meeting_session();
-        starting
-    };
+    // The outer _transition stays alive through activation and rollback.
+    // A concurrent Stop must not revoke/clean an incompletely started session.
+    let starting = begin_application_meeting_session();
     if !starting.blocker.is_empty() {
         // This rejected request never owned the prepared output cache.
         return MeetingSessionActionResult {
@@ -737,15 +738,15 @@ fn start_meeting_impl(original_requested: bool) -> MeetingSessionActionResult {
 }
 
 pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
-    // Duplicate Stop/Retry Stop calls must never run the same teardown twice.
-    // Keep the guard until Stop has verified release or recorded incomplete
-    // cleanup; do not queue a stale second Stop against a later generation.
+    // Duplicate Stop/Retry Stop must not run teardown twice; nor may Stop
+    // clean resources while the existing Start still owns their construction.
+    // Keep the guard until Stop verifies release or records incomplete cleanup.
     let _transition = match meeting_lifecycle_gate().try_lock() {
         Ok(guard) => guard,
         Err(TryLockError::WouldBlock) => {
             return blocked_result(
                 "meeting_stop_in_progress",
-                "A Meeting lifecycle transition is still in progress. No second cleanup was started.".to_string(),
+                "A Meeting Start or Stop transaction is still in progress. No overlapping cleanup was started.".to_string(),
             );
         }
         Err(TryLockError::Poisoned(_)) => {

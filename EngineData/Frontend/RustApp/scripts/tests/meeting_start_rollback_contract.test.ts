@@ -36,16 +36,24 @@ test("Start prepares output only after winning session and route ownership", () 
   assert.match(failure, /rollback_completion_state\(\)/);
 });
 
-test("Meeting Stop and new Start claim share one fail-closed lifecycle gate", () => {
+test("Start retains lifecycle ownership through activation and rollback before Stop", () => {
   const start = lifecycle.indexOf("fn start_meeting_impl(");
   const claim = lifecycle.indexOf("let starting = begin_application_meeting_session();", start);
-  const stop = lifecycle.indexOf("pub(super) fn stop_meeting_translation_impl()");
-  const revoke = lifecycle.indexOf("let revoked = revoke_runtime_session_authority(", stop);
-  const cleanup = lifecycle.indexOf("original_voice_pcm::stop(generation);", revoke);
-  assert.ok(start >= 0 && claim > start && stop > claim && revoke > stop && cleanup > revoke);
-  assert.match(lifecycle.slice(start, claim), /meeting_lifecycle_gate\(\)\.try_lock\(\)/);
-  assert.match(lifecycle.slice(stop, revoke), /meeting_lifecycle_gate\(\)\.try_lock\(\)/);
-  assert.match(lifecycle.slice(revoke, cleanup), /stop_revoked_own_generation\(&revoked, generation, &session_id\)/);
+  const commit = lifecycle.indexOf("let committed = commit_application_meeting_session_live(", claim);
+  const finish = lifecycle.indexOf("pub(super) fn stop_meeting_translation_impl()", commit);
+  const stopRevoke = lifecycle.indexOf("let revoked = revoke_runtime_session_authority(", finish);
+  const cleanup = lifecycle.indexOf("original_voice_pcm::stop(generation);", stopRevoke);
+  assert.ok(start > 0 && claim > start && commit > claim && finish > commit
+    && stopRevoke > finish && cleanup > stopRevoke);
+  const opening = lifecycle.slice(start, claim);
+  assert.match(opening, /let _transition = match meeting_lifecycle_gate\(\)\.try_lock\(\)/);
+  assert.ok(opening.indexOf("let _transition =") < opening.indexOf("let current = latest_runtime_session_state();"),
+    "the transaction guard must precede all readiness and helper mutations");
+  assert.doesNotMatch(lifecycle.slice(claim, finish), /let _transition =/,
+    "a shadowed claim-only guard would release lifecycle ownership prematurely");
+  assert.match(lifecycle.slice(claim, finish), /rollback_starting_meeting_resources\(generation, &session_id\)/);
+  assert.match(lifecycle.slice(finish, stopRevoke), /meeting_lifecycle_gate\(\)\.try_lock\(\)/);
+  assert.match(lifecycle.slice(stopRevoke, cleanup), /stop_revoked_own_generation\(&revoked, generation, &session_id\)/);
 });
 
 test("Live commit failure uses the canonical rollback instead of a partial cleanup copy", () => {
