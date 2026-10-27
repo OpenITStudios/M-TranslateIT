@@ -2,6 +2,27 @@
 
 ## Current Status
 
+**Interrupted Accept cannot silently contaminate a new My Voice dataset (2026-10-27).**
+The legacy current-Takes dataset owner formerly checked only whether the
+32 kHz canonical WAV looked valid, then removed/recreated the frozen Build
+dataset and copied any native-rate file it happened to find. After a
+partially completed Accept, native and canonical recordings can belong to
+different generations while `.wav.previous` or a staged backup survives.
+That path could publish a misleading new frozen archive/snapshot or drop a
+previously required native sidecar without flagging the inconsistency.
+Before any Build dataset mutation, the owner now rejects canonical/native
+`.wav.previous` backups, unknown or untrusted native directories/files,
+and paired native recordings without an exact published immutable archive
+binding. The preflight pins which takes require a native-rate sidecar;
+the actual frozen native/canonical copies must still match a published
+archive receipt before a new dataset manifest or immutable snapshot is
+written. Legacy canonical-only takes remain supported, and explicit
+build-from-saved-archive selection remains unchanged. This check is not an
+automatic recovery/rename, nor proof that a migrated historical archive
+represents the same originally captured performance. Three Rust regression
+fixtures and a bounded existing TS source contract were authored; Rust/TS
+execution, model, Windows filesystem, CI and local PC are NOT EXECUTED.
+
 **Read-only interrupted Accept archive evidence (2026-10-27).**
 An interrupted Save can leave canonical and native-rate WAVs divided among
 Accepted, `.wav.previous` and Draft paths. Filename-based guesses would
@@ -514,14 +535,15 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Keep interrupted accepted-take recovery fail-closed. Consider only an
-explicitly authorized recovery mutation if immutable archive evidence
-unambiguously identifies the source pair, all affected destinations and
-backups remain verified, and a reversible on-disk transaction can be
-reasoned about; otherwise preserve the files and report attention.
-The read-only inspector is not an automatic repair. Target-Windows native
-build, filesystem, capture, and acceptance remain NOT EXECUTED until the
-owner authorizes the single integrated validation phase.
+Keep interrupted Accepted/Previous/Draft WAVs fail-closed and intact.
+A verified immutable archive ID provides provenance for stored bytes but
+does not independently establish which physical file is the intended
+active take, especially after partial multi-file Accept or legacy migration.
+Do not auto-promote, auto-delete, or invent chronological ownership.
+The read-only Inspector and source-level dataset admission fence are now
+the bounded available safeguards. Integrated build/test and Windows
+filesystem/Meeting/My Voice acceptance remain NOT EXECUTED pending explicit
+owner authorization.
 When PC-control authorization is available again, finish the existing integrated native capture/status/Diagnostics/Stop check on the pinned repaired candidate. Until then retain the goal as incomplete; source and fixture work is finished for this bounded outcome, so do not repeat checks or invent adjacent work while waiting. Historical native drops, incoming error and uncontrolled phrases remain unattributed. No CI, model/context/style/glossary change, incoming toggle, queue enlargement, blind retry or corrective translation layer is authorized.
 
 ## Retained My Voice source candidate (paused)

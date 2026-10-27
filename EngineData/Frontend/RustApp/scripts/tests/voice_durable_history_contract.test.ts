@@ -49,3 +49,22 @@ test("new durable history is independent of active engine and no restore is adve
   assert.match(versions, /No deletion, no activation/);
   assert.match(data, /Existing|worker continues reading the exact existing dataset/);
 });
+
+test("interrupted current-take Accept blocks new training before frozen dataset deletion", () => {
+  const source = rust("voice_lab/storage.rs");
+  const gate = source.indexOf("fn ensure_accepted_take_sources_safe(");
+  const entry = source.indexOf("pub(super) fn prepare_guided_dataset_at(");
+  const checked = source.indexOf("let native_required = ensure_accepted_take_sources_safe(storage, manifest)?;", entry);
+  const deletion = source.indexOf("fs::remove_dir_all(&storage.build_dataset_dir)", entry);
+  const freeze = source.indexOf("for (take, native_is_required) in manifest.takes.iter().zip(native_required)", entry);
+  assert.ok(gate >= 0 && entry > gate && checked > entry && deletion > checked && freeze > deletion,
+    "read-only Take-source admission must happen before destructive dataset replacement");
+  assert.match(source.slice(gate, entry), /accepted_take_interrupted_save_recovery_required/);
+  assert.match(source.slice(gate, entry), /canonical\.with_extension\("wav\.previous"\)/);
+  assert.match(source.slice(gate, entry), /native\.with_extension\("wav\.previous"\)/);
+  assert.match(source.slice(gate, entry), /recording_archive::guided_take_is_archived/);
+  assert.match(source.slice(freeze), /voice_lab:frozen_native_pair_archive_unverified/);
+  assert.match(source, /mod interrupted_accepted_dataset_admission_tests/);
+  assert.match(source, /canonical_only_legacy_take_keeps_its_existing_source_contract/);
+  assert.match(source, /either_interrupted_previous_backup_blocks_before_dataset_mutation/);
+});

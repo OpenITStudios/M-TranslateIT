@@ -452,17 +452,78 @@ pub(super) fn validate_guided_dataset_manifest(manifest: &GuidedDatasetManifest)
     Ok(())
 }
 
+// The legacy current-Takes dataset path is mutable even when its future
+// saved archive will be immutable. An interrupted Save may have moved only
+// one side of its canonical/native pair. Reject unresolved previous backups
+// and require a published exact native-pair archive BEFORE touching the
+// existing frozen Dataset workspace.
+fn ensure_accepted_take_backup_absent(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => Err("voice_lab:accepted_take_interrupted_save_recovery_required".to_string()),
+        Err(_) => Err("voice_lab:accepted_take_backup_state_unavailable".to_string()),
+    }
+}
+
+fn ensure_accepted_take_sources_safe(
+    storage: &VoiceLabStoragePaths,
+    manifest: &GuidedDatasetManifest,
+) -> Result<Vec<bool>, String> {
+    let native_root = storage.takes_dir.join("NativeRate");
+    let native_root_available = match fs::symlink_metadata(&native_root) {
+        Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => true,
+        Ok(_) => return Err("voice_lab:accepted_native_directory_untrusted".to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => return Err("voice_lab:accepted_native_directory_unknown".to_string()),
+    };
+
+    let mut native_required = Vec::with_capacity(manifest.takes.len());
+    for take in &manifest.takes {
+        let canonical = storage.takes_dir.join(&take.wav_file);
+        let native = native_root.join(&take.wav_file);
+        // A `.wav.previous` in either location is direct evidence that a
+        // Save may be unfinished. Even the valid canonical WAV cannot be
+        // assumed to belong to the same take as the native-rate sidecar.
+        ensure_accepted_take_backup_absent(&canonical.with_extension("wav.previous"))?;
+        ensure_accepted_take_backup_absent(&native.with_extension("wav.previous"))?;
+        inspect_canonical_wav(&canonical)?;
+
+        let native_present = if native_root_available {
+            match fs::symlink_metadata(&native) {
+                Ok(meta) if meta.file_type().is_file()
+                    && (44..=MAX_NATIVE_RATE_SNAPSHOT_BYTES).contains(&meta.len()) => true,
+                Ok(_) => return Err("voice_lab:accepted_native_file_untrusted".to_string()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(_) => return Err("voice_lab:accepted_native_file_unknown".to_string()),
+            }
+        } else {
+            false
+        };
+
+        // New paired recordings were archived before Accept replaced Takes.
+        // A mismatched/currently-unpublished pair must not be frozen into a
+        // new dataset receipt. Genuine legacy canonical-only takes remain
+        // supported, as they predate the native-rate sidecar contract.
+        if native_present && !recording_archive::guided_take_is_archived(
+            storage, take.line_id, &take.exact_text, &canonical, Some(&native),
+        )? {
+            return Err("voice_lab:accepted_native_pair_archive_unverified".to_string());
+        }
+        native_required.push(native_present);
+    }
+    Ok(native_required)
+}
+
 pub(super) fn prepare_guided_dataset_at(
     storage: &VoiceLabStoragePaths,
     manifest: &GuidedDatasetManifest,
 ) -> Result<PathBuf, String> {
     validate_guided_dataset_manifest(manifest)?;
+    // This preflight is read-only and runs BEFORE dataset deletion and copying;
+    // on failure preserve the existing Build snapshot and all Takes files.
+    let native_required = ensure_accepted_take_sources_safe(storage, manifest)?;
     fs::create_dir_all(&storage.takes_dir)
         .map_err(|error| format!("voice_lab:takes_directory_unavailable:{error}"))?;
-
-    for take in &manifest.takes {
-        inspect_canonical_wav(&storage.takes_dir.join(&take.wav_file))?;
-    }
 
     if storage.build_dataset_dir.exists() {
         fs::remove_dir_all(&storage.build_dataset_dir)
@@ -471,34 +532,34 @@ pub(super) fn prepare_guided_dataset_at(
     fs::create_dir_all(&storage.build_dataset_dir)
         .map_err(|error| format!("voice_lab:build_dataset_create_failed:{error}"))?;
 
-    // Retain only bounded regular native-rate files in this frozen build,
-    // without changing canonical GPT-SoVITS input or blocking legacy takes.
+    // Preserve canonical GPT-SoVITS input and legacy canonical-only support.
+    // A native-rate sidecar admitted before the build snapshot was reset is
+    // REQUIRED to survive copying; disappearing/changed sidecars fail closed.
+    // Otherwise a mixed Accept state could be silently frozen without its
+    // native half and published as if it were a complete training take.
     let native_source_root = storage.takes_dir.join("NativeRate");
-    let native_root_valid = fs::symlink_metadata(&native_source_root)
-        .map(|meta| meta.is_dir() && !meta.file_type().is_symlink())
-        .unwrap_or(false);
     let native_dataset_root = storage.build_dataset_dir.join("NativeRate");
-    for take in &manifest.takes {
+    for (take, native_is_required) in manifest.takes.iter().zip(native_required) {
         let source = storage.takes_dir.join(&take.wav_file);
         let target = storage.build_dataset_dir.join(&take.wav_file);
         fs::copy(&source, &target)
             .map_err(|error| format!("voice_lab:build_take_copy_failed:{error}"))?;
         inspect_canonical_wav(&target)?;
 
-        if native_root_valid {
+        if native_is_required {
             let native = native_source_root.join(&take.wav_file);
-            let native_valid = fs::symlink_metadata(&native)
-                .map(|meta| {
-                    meta.is_file()
-                        && !meta.file_type().is_symlink()
-                        && (44..=MAX_NATIVE_RATE_SNAPSHOT_BYTES).contains(&meta.len())
-                })
-                .unwrap_or(false);
-            if native_valid {
-                fs::create_dir_all(&native_dataset_root)
-                    .map_err(|error| format!("voice_lab:native_dataset_dir_failed:{error}"))?;
-                fs::copy(&native, native_dataset_root.join(&take.wav_file))
-                    .map_err(|error| format!("voice_lab:native_dataset_copy_failed:{error}"))?;
+            let frozen_native = native_dataset_root.join(&take.wav_file);
+            fs::create_dir_all(&native_dataset_root)
+                .map_err(|error| format!("voice_lab:native_dataset_dir_failed:{error}"))?;
+            fs::copy(&native, &frozen_native)
+                .map_err(|error| format!("voice_lab:native_dataset_copy_failed:{error}"))?;
+            // Copy completion does not prove the two files still match the
+            // preflight-approved immutable pair. Re-verify the actual frozen
+            // bytes before they become a source for a new archive receipt.
+            if !recording_archive::guided_take_is_archived(
+                storage, take.line_id, &take.exact_text, &target, Some(&frozen_native),
+            )? {
+                return Err("voice_lab:frozen_native_pair_archive_unverified".to_string());
             }
         }
     }
@@ -809,4 +870,116 @@ pub(super) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), Str
         return Err("voice_lab:manifest_size_invalid".to_string());
     }
     fs::write(path, bytes).map_err(|error| format!("voice_lab:manifest_write_failed:{error}"))
+}
+
+
+#[cfg(test)]
+mod interrupted_accepted_dataset_admission_tests {
+    use super::*;
+    use crate::commands::voice_lab::{GuidedEvaluationLineContract, GuidedTakeContract};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static CASE: AtomicU64 = AtomicU64::new(0);
+
+    fn isolated_storage(label: &str) -> (PathBuf, VoiceLabStoragePaths) {
+        let token = CASE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "translateit_dataset_admission_{label}_{}_{}",
+            std::process::id(), token
+        ));
+        let storage = VoiceLabStoragePaths::from_roots(
+            &root.join("cache"), &root.join("saved"),
+        );
+        fs::create_dir_all(&storage.takes_dir).unwrap();
+        (root, storage)
+    }
+
+    fn canonical_wav() -> Vec<u8> {
+        let pcm = vec![0x20_u8; 64_000];
+        let mut bytes = Vec::with_capacity(44 + pcm.len());
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36_u32 + pcm.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16_u32.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&32_000_u32.to_le_bytes());
+        bytes.extend_from_slice(&64_000_u32.to_le_bytes());
+        bytes.extend_from_slice(&2_u16.to_le_bytes());
+        bytes.extend_from_slice(&16_u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&pcm);
+        bytes
+    }
+
+    fn manifest() -> GuidedDatasetManifest {
+        GuidedDatasetManifest {
+            schema_version: VOICE_LAB_SCHEMA_VERSION,
+            authorized_voice_confirmed: true,
+            takes: vec![GuidedTakeContract {
+                line_id: 1,
+                exact_text: "Good morning, everyone.".to_string(),
+                wav_file: "take_0001.wav".to_string(),
+            }],
+            held_out_lines: vec![GuidedEvaluationLineContract {
+                line_id: 2,
+                exact_text: "This line is reserved for held-out evaluation.".to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn canonical_only_legacy_take_keeps_its_existing_source_contract() {
+        let (root, storage) = isolated_storage("legacy_canonical_only");
+        fs::write(storage.takes_dir.join("take_0001.wav"), canonical_wav()).unwrap();
+        let required = ensure_accepted_take_sources_safe(&storage, &manifest()).unwrap();
+        assert_eq!(required, vec![false]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn either_interrupted_previous_backup_blocks_before_dataset_mutation() {
+        let (root, storage) = isolated_storage("interrupted_previous");
+        let canonical = storage.takes_dir.join("take_0001.wav");
+        fs::write(&canonical, canonical_wav()).unwrap();
+        fs::create_dir_all(&storage.build_dataset_dir).unwrap();
+        let checkpoint = storage.build_dataset_dir.join("keep_previous_dataset.txt");
+        fs::write(&checkpoint, b"do not destroy unfinished training material").unwrap();
+
+        for previous in [
+            canonical.with_extension("wav.previous"),
+            storage.takes_dir.join("NativeRate/take_0001.wav.previous"),
+        ] {
+            fs::create_dir_all(previous.parent().unwrap()).unwrap();
+            fs::write(&previous, b"unresolved previous take").unwrap();
+            let result = prepare_guided_dataset_at(&storage, &manifest()).unwrap_err();
+            assert_eq!(result, "voice_lab:accepted_take_interrupted_save_recovery_required");
+            assert_eq!(fs::read(&checkpoint).unwrap(), b"do not destroy unfinished training material");
+            assert_eq!(fs::read(&previous).unwrap(), b"unresolved previous take");
+            fs::remove_file(previous).unwrap();
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unexpected_native_sidecar_never_becomes_silent_canonical_only() {
+        let (root, storage) = isolated_storage("invalid_native");
+        fs::write(storage.takes_dir.join("take_0001.wav"), canonical_wav()).unwrap();
+        let native = storage.takes_dir.join("NativeRate/take_0001.wav");
+        fs::create_dir_all(native.parent().unwrap()).unwrap();
+        fs::create_dir(&native).unwrap();
+        assert_eq!(
+            ensure_accepted_take_sources_safe(&storage, &manifest()).unwrap_err(),
+            "voice_lab:accepted_native_file_untrusted"
+        );
+        fs::remove_dir(&native).unwrap();
+
+        // A regular native WAV with no published matching immutable receipt
+        // is still unverified, and must not become a new training binding.
+        fs::write(&native, canonical_wav()).unwrap();
+        assert!(ensure_accepted_take_sources_safe(&storage, &manifest()).is_err());
+        assert!(native.is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
 }
