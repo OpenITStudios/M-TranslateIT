@@ -56,6 +56,29 @@ test("Start retains lifecycle ownership through activation and rollback before S
   assert.match(lifecycle.slice(stopRevoke, cleanup), /stop_revoked_own_generation\(&revoked, generation, &session_id\)/);
 });
 
+test("Retry Stop owns WAV sweeping until consumers and playback have exited", () => {
+  const rollback = lifecycle.slice(
+    lifecycle.indexOf("fn rollback_starting_meeting_resources("),
+    lifecycle.indexOf("fn clear_transcript_only_after_retention("),
+  );
+  assert.match(rollback, /let wav_ok = outbound\.ok\s*&& cleanup_finalized_meeting_session_wavs\(session_id\)\.is_ok\(\)/);
+  assert.match(rollback, /let tts_ok = output_cancelled && helper\.ok && outbound\.ok && playback\.ok\s*&& cleanup_meeting_tts_for_session\(session_id, generation\)\.is_ok\(\)/);
+
+  const stop = lifecycle.slice(
+    lifecycle.indexOf("pub(super) fn stop_meeting_translation_impl()"),
+    lifecycle.indexOf("pub(super) fn meeting_cleanup_complete("),
+  );
+  const consumers = stop.indexOf("let incoming_cleanup = stop_meeting_incoming_consumer(&session_id);");
+  const finalized = stop.indexOf("let finalized_audio_cleanup = if outbound_cleanup.ok && incoming_cleanup.ok");
+  const tts = stop.indexOf("let tts_cache_cleanup = if output_cancelled && helper_cancel.ok");
+  assert.ok(consumers > 0 && finalized > consumers && tts > finalized,
+    "all file sweeps must follow bounded consumer Stop checks");
+  assert.match(stop.slice(finalized, tts), /finalized_utterance_cleanup:consumer_exit_unconfirmed/);
+  assert.match(stop.slice(tts), /meeting_tts_cleanup:producer_or_playback_exit_unconfirmed/);
+  assert.match(stop.slice(tts), /finalized_audio_cleanup\.is_ok\(\) && tts_cache_cleanup\.is_ok\(\)/,
+    "skipped file cleanup must mark Stop incomplete");
+});
+
 test("Live commit failure uses the canonical rollback instead of a partial cleanup copy", () => {
   const start = lifecycle.lastIndexOf("let committed = commit_application_meeting_session_live");
   const end = lifecycle.indexOf("update_outbound_status(", start);

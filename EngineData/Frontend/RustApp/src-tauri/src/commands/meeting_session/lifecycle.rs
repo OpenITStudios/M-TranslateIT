@@ -140,8 +140,15 @@ fn rollback_starting_meeting_resources(
     clear_finalized_meeting_sequence();
     let suppression_ok = clear_self_output_suppression_for_session(session_id);
     let transcript_ok = clear_committed_turns_for_session(session_id);
-    let wav_ok = cleanup_finalized_meeting_session_wavs(session_id).is_ok();
-    let tts_ok = cleanup_meeting_tts_for_session(session_id, generation).is_ok();
+    // A failed bounded consumer Stop still owns its thread and may be
+    // writing a temporary ASR WAV. Do not sweep a file before its writer
+    // has exited: reserve the session for Retry Stop instead.
+    let wav_ok = outbound.ok
+        && cleanup_finalized_meeting_session_wavs(session_id).is_ok();
+    // TTS synthesis/delivery can likewise retain a temporary output while
+    // its helper, consumer, playback or native output has not stopped.
+    let tts_ok = output_cancelled && helper.ok && outbound.ok && playback.ok
+        && cleanup_meeting_tts_for_session(session_id, generation).is_ok();
     clear_start_preflight_for_generation(generation);
     clear_prepared_meeting_output_device();
     clear_prepared_virtual_mic_route_selection();
@@ -859,8 +866,24 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
         transcript_retained_for_export,
         || clear_committed_turns_for_session(&session_id),
     );
-    let finalized_audio_cleanup = cleanup_finalized_meeting_session_wavs(&session_id);
-    let tts_cache_cleanup = cleanup_meeting_tts_for_session(&session_id, generation);
+    // An unconfirmed consumer can still be writing/reading its deterministic
+    // ASR WAV. A sweep here would race a worker that Stop deliberately kept
+    // alive for bounded Retry Stop. Only a confirmed owner exit may release
+    // its session-scoped files; skipped cleanup is an explicit Stop failure.
+    let finalized_audio_cleanup = if outbound_cleanup.ok && incoming_cleanup.ok {
+        cleanup_finalized_meeting_session_wavs(&session_id)
+    } else {
+        Err("finalized_utterance_cleanup:consumer_exit_unconfirmed".to_string())
+    };
+    // A helper/AI synth job or playback stream may still own the TTS WAV.
+    // Keep it until all producer, playback and output teardown is confirmed.
+    let tts_cache_cleanup = if output_cancelled && helper_cancel.ok
+        && outbound_cleanup.ok && playback_cleanup.ok
+    {
+        cleanup_meeting_tts_for_session(&session_id, generation)
+    } else {
+        Err("meeting_tts_cleanup:producer_or_playback_exit_unconfirmed".to_string())
+    };
     let transient_audio_cleanup_ok =
         finalized_audio_cleanup.is_ok() && tts_cache_cleanup.is_ok();
     clear_outbound_status();

@@ -2,6 +2,22 @@
 
 ## Current Status
 
+**Temporary WAV Stop sequencing — source repair (2026-10-27).**
+Canonical Stop and failed-Start rollback previously swept session audio files
+even when bounded consumer, helper or playback cleanup was unconfirmed. An
+outstanding worker can still be writing/reading the same deterministic ASR
+or TTS WAV, so deleting it before worker exit can corrupt in-flight work and
+can race a late WAV promotion. Finalized-ASR WAV cleanup now requires both
+outbound and incoming consumers to have confirmed exit (rollback requires
+outbound only). TTS cache cleanup additionally requires helper cancellation,
+outbound consumer exit, playback exit and output cancellation. If any required
+owner is unconfirmed, the existing cleanup path reports an explicit blocked
+cleanup and preserves session ownership for Retry Stop; no premature file
+sweep is attempted. The existing Start rollback source-contract tests now
+assert the sequencing. REMOTE_GITHUB static source review only; Rust/Node
+execution, CI and native Windows behavior remain NOT EXECUTED. The change
+does not increase queue capacity, alter ASR/MT/TTS or add a new owner.
+
 **Deferred WAV cleanup truth and Retry Stop retention (2026-10-27).**
 Previously every deferred cleanup reported success after discarding queued
 jobs even if a per-event WAV unlink failed: the shared WAV delete helper
