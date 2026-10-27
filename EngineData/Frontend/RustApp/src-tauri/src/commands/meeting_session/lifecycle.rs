@@ -1,5 +1,6 @@
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock, TryLockError};
 
 use crate::engine::audio::finalized_utterance::{
     clear_finalized_meeting_sequence, reset_finalized_drop_counters,
@@ -17,7 +18,7 @@ use crate::engine::runtime_state::{
     begin_application_meeting_session, clear_runtime_session_if_generation,
     commit_application_meeting_session_live,
     latest_runtime_session_state, mark_runtime_session_cleanup_incomplete,
-    revoke_runtime_session_authority,
+    revoke_runtime_session_authority, RuntimeSessionStateReport,
 };
 
 use super::super::virtual_mic_route::{
@@ -62,6 +63,36 @@ use super::{
 // A no-session Stop can still fail to clear transient audio/transcript resources.
 // Keep that native fact visible to preflight and the UI until Stop succeeds.
 static STOP_CLEANUP_PENDING: AtomicBool = AtomicBool::new(false);
+
+// Serializes canonical Stop (including the idle cleanup path) with the exact
+// point at which Start claims a new Meeting generation. A duplicate Stop must
+// return immediately instead of executing its old cleanup after a newer Start.
+// This is not a long-running Start lock: Stop may still revoke an in-progress
+// Starting generation through the existing runtime authority.
+static MEETING_LIFECYCLE_GATE: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn meeting_lifecycle_gate() -> &'static Mutex<()> {
+    MEETING_LIFECYCLE_GATE.get_or_init(|| Mutex::new(()))
+}
+
+// Revocation may return another owner's snapshot when the requested generation
+// is stale. Checking only authority_active=false could then tear down the
+// newer Meeting while its own Stop is running.
+fn stop_revoked_own_generation(
+    report: &RuntimeSessionStateReport,
+    generation: u64,
+    session_id: &str,
+) -> bool {
+    report.has_active_session
+        && report.blocker == "runtime_session:authority_revoked"
+        && report.snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot.owner_id == APPLICATION_MEETING_OWNER_ID
+                && snapshot.session_id == session_id
+                && snapshot.generation == generation
+                && !snapshot.authority_active
+                && snapshot.phase == "stopping"
+        })
+}
 
 pub(super) fn transient_stop_cleanup_pending() -> bool {
     if STOP_CLEANUP_PENDING.load(Ordering::Acquire) {
@@ -170,7 +201,8 @@ fn rollback_completion_state() -> &'static str {
 
 #[cfg(test)]
 mod rollback_cleanup_contract_tests {
-    use super::starting_rollback_cleanup_complete;
+    use super::{starting_rollback_cleanup_complete, stop_revoked_own_generation};
+    use crate::engine::runtime_state::{RuntimeSessionSnapshot, RuntimeSessionStateReport};
 
     #[test]
     fn failed_transcript_archive_must_not_clear_active_turns() {
@@ -189,6 +221,40 @@ mod rollback_cleanup_contract_tests {
         }));
         assert!(cleared);
         assert!(!clear_transcript_only_after_retention(true, || false));
+    }
+
+    #[test]
+    fn stale_revocation_never_authorizes_cleanup_of_another_generation() {
+        let mut report = RuntimeSessionStateReport {
+            has_active_session: true,
+            snapshot: Some(RuntimeSessionSnapshot {
+                owner_id: super::APPLICATION_MEETING_OWNER_ID.to_string(),
+                session_id: "meeting-old".to_string(),
+                generation: 42,
+                started_unix_ms: 0,
+                authority_active: false,
+                phase: "stopping".to_string(),
+                live_capture_stream_active: false,
+                safe_to_stop: true,
+                note: String::new(),
+            }),
+            active_age_ms: Some(0),
+            ready_for_stop: true,
+            blocker: "runtime_session:authority_revoked".to_string(),
+            note: String::new(),
+        };
+        assert!(stop_revoked_own_generation(&report, 42, "meeting-old"));
+        assert!(!stop_revoked_own_generation(&report, 43, "meeting-old"));
+        assert!(!stop_revoked_own_generation(&report, 42, "meeting-new"));
+        report.snapshot.as_mut().unwrap().generation = 43;
+        assert!(!stop_revoked_own_generation(&report, 42, "meeting-old"),
+            "an already-stopping newer generation cannot be torn down by stale Stop");
+        report.snapshot.as_mut().unwrap().generation = 42;
+        report.snapshot.as_mut().unwrap().authority_active = true;
+        assert!(!stop_revoked_own_generation(&report, 42, "meeting-old"));
+        report.snapshot.as_mut().unwrap().authority_active = false;
+        report.blocker = "runtime_session:generation_mismatch".to_string();
+        assert!(!stop_revoked_own_generation(&report, 42, "meeting-old"));
     }
 
     #[test]
@@ -340,7 +406,27 @@ fn start_meeting_impl(original_requested: bool) -> MeetingSessionActionResult {
     };
     // Output preparation belongs to a claimed Meeting generation. Otherwise,
     // a rejected overlapping Start could clear the winning Start's device.
-    let starting = begin_application_meeting_session();
+    let starting = {
+        // Stop holds this same guard across all cleanup, so an idle/old Stop
+        // cannot remove globally shared audio state after this new claim.
+        let _transition = match meeting_lifecycle_gate().try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::WouldBlock) => {
+                return blocked_result(
+                    "meeting_transition_in_progress",
+                    "Meeting Stop or another session claim is in progress. Retry Start after the transition finishes.".to_string(),
+                );
+            }
+            Err(TryLockError::Poisoned(_)) => {
+                return blocked_result(
+                    "meeting_transition_unavailable",
+                    "Meeting transition state is unavailable. Start did not claim any new resources.".to_string(),
+                );
+            }
+        };
+        let starting = begin_application_meeting_session();
+        starting
+    };
     if !starting.blocker.is_empty() {
         // This rejected request never owned the prepared output cache.
         return MeetingSessionActionResult {
@@ -651,6 +737,24 @@ fn start_meeting_impl(original_requested: bool) -> MeetingSessionActionResult {
 }
 
 pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
+    // Duplicate Stop/Retry Stop calls must never run the same teardown twice.
+    // Keep the guard until Stop has verified release or recorded incomplete
+    // cleanup; do not queue a stale second Stop against a later generation.
+    let _transition = match meeting_lifecycle_gate().try_lock() {
+        Ok(guard) => guard,
+        Err(TryLockError::WouldBlock) => {
+            return blocked_result(
+                "meeting_stop_in_progress",
+                "A Meeting lifecycle transition is still in progress. No second cleanup was started.".to_string(),
+            );
+        }
+        Err(TryLockError::Poisoned(_)) => {
+            return blocked_result(
+                "meeting_transition_unavailable",
+                "Meeting transition state is unavailable. Stop did not attempt unverified cleanup.".to_string(),
+            );
+        }
+    };
     let current = latest_runtime_session_state();
     if current.has_active_session && current.snapshot.is_none() {
         return MeetingSessionActionResult {
@@ -725,16 +829,10 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
         generation,
         "Stop Translation accepted. Old outbound Meeting generation authority was revoked before full-session cleanup.",
     );
-    if revoked.snapshot.is_none()
-        || revoked
-            .snapshot
-            .as_ref()
-            .map(|value| value.authority_active)
-            .unwrap_or(true)
-    {
+    if !stop_revoked_own_generation(&revoked, generation, &session_id) {
         return blocked_result(
             "stop_authority_failed",
-            "Stop Translation could not revoke Meeting generation authority, so cleanup was not allowed to proceed under an ambiguous owner."
+            "Stop Translation could not verify revocation of its exact Meeting session and generation. No unrelated or newer resources were cleaned."
                 .to_string(),
         );
     }

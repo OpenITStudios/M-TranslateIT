@@ -2,6 +2,19 @@
 
 ## Current Status
 
+**Concurrent Meeting Stop and new Start claim fence — source repair (2026-10-27).**
+Canonical Stop now owns a nonblocking lifecycle transition guard from its
+first runtime snapshot through cleanup result, so duplicate Stop/Retry Stop
+cannot execute the same unscoped teardown concurrently. The new Start
+generation claim uses that guard briefly; a Start arriving during Stop is
+rejected rather than acquiring a new generation while the prior Stop is still
+cleaning caches. Revocation must now identify the exact previous Meeting
+session and generation before any audio resource is touched; a mismatched
+already-stopping snapshot is not accepted. Pure Rust regression and existing
+source contract were authored; compilation, tests, native Start/Stop, CI and
+receiver evidence remain NOT EXECUTED. This is a bounded race fence, not a
+claim that all asynchronous Start/Stop interleavings are safe.
+
 **Concurrent Meeting Start output-cache ownership — source repair (2026-10-27).**
 The Start path previously cleared preflight and prepared output before claiming
 a generation. A rejected overlapping Start could therefore clear a winning

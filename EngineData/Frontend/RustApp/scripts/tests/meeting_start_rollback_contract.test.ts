@@ -36,6 +36,18 @@ test("Start prepares output only after winning session and route ownership", () 
   assert.match(failure, /rollback_completion_state\(\)/);
 });
 
+test("Meeting Stop and new Start claim share one fail-closed lifecycle gate", () => {
+  const start = lifecycle.indexOf("fn start_meeting_impl(");
+  const claim = lifecycle.indexOf("let starting = begin_application_meeting_session();", start);
+  const stop = lifecycle.indexOf("pub(super) fn stop_meeting_translation_impl()");
+  const revoke = lifecycle.indexOf("let revoked = revoke_runtime_session_authority(", stop);
+  const cleanup = lifecycle.indexOf("original_voice_pcm::stop(generation);", revoke);
+  assert.ok(start >= 0 && claim > start && stop > claim && revoke > stop && cleanup > revoke);
+  assert.match(lifecycle.slice(start, claim), /meeting_lifecycle_gate\(\)\.try_lock\(\)/);
+  assert.match(lifecycle.slice(stop, revoke), /meeting_lifecycle_gate\(\)\.try_lock\(\)/);
+  assert.match(lifecycle.slice(revoke, cleanup), /stop_revoked_own_generation\(&revoked, generation, &session_id\)/);
+});
+
 test("Live commit failure uses the canonical rollback instead of a partial cleanup copy", () => {
   const start = lifecycle.lastIndexOf("let committed = commit_application_meeting_session_live");
   const end = lifecycle.indexOf("update_outbound_status(", start);
