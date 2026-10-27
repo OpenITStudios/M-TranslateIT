@@ -1,4 +1,5 @@
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
@@ -83,7 +84,21 @@ const MAX_RECOVERED_DURATION_SECONDS: u64 = 60;
 const MAX_RECOVERED_WAV_BYTES: u64 =
     44 + MAX_RECOVERED_NATIVE_RATE_HZ as u64 * MAX_RECOVERED_DURATION_SECONDS * 2;
 
-fn checked_recovery_pcm16(path: &Path, canonical: bool) -> Result<(u32, Vec<f32>), String> {
+// The recovered review is bound to the exact bytes inspected as canonical
+// audio, not merely filenames that may later be replaced on disk.
+#[derive(Clone)]
+pub(super) struct RecoveredDraftIdentity {
+    review_sha256: [u8; 32],
+    native_sha256: [u8; 32],
+}
+
+struct CheckedRecoveryWav {
+    rate: u32,
+    samples: Vec<f32>,
+    sha256: [u8; 32],
+}
+
+fn checked_recovery_pcm16(path: &Path, canonical: bool) -> Result<CheckedRecoveryWav, String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|_| "voice_lab:recovery:draft_missing_or_inaccessible".to_string())?;
     if !metadata.file_type().is_file() || metadata.len() < 46
@@ -116,47 +131,117 @@ fn checked_recovery_pcm16(path: &Path, canonical: bool) -> Result<(u32, Vec<f32>
     {
         return Err("voice_lab:recovery:invalid_audio_format_or_duration".to_string());
     }
+    // Hash the very same validated bytes. Re-reading afterward would permit
+    // a file swap between integrity validation and its retained identity.
+    let digest = Sha256::digest(&bytes);
+    let mut sha256 = [0_u8; 32];
+    sha256.copy_from_slice(&digest);
     let samples = bytes[44..].chunks_exact(2)
         .map(|pcm| f32::from(i16::from_le_bytes([pcm[0], pcm[1]])) / f32::from(i16::MAX))
         .collect();
-    Ok((rate, samples))
+    Ok(CheckedRecoveryWav { rate, samples, sha256 })
+}
+
+fn no_unfinished_recovery_stage(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path.with_extension("wav.tmp")) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        _ => Err("voice_lab:recovery:unfinished_staging_present".to_string()),
+    }
+}
+
+// Inspect both existing files again under the PendingDraft owner immediately
+// before replay, accept or discard. In particular, a verified filename must
+// not authorize deleting or accepting a later unrelated file at that path.
+// Discard permits an already-missing half following an earlier partial discard,
+// but still rejects any remaining file whose bytes have changed.
+fn verify_recovered_file(
+    path: &Path,
+    expected_sha256: &[u8; 32],
+    missing_permitted: bool,
+) -> Result<(), String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound && missing_permitted => {
+            return Ok(());
+        }
+        Err(_) => return Err("voice_lab:recovery:owned_file_missing".to_string()),
+    };
+    if !metadata.file_type().is_file()
+        || metadata.len() < 46
+        || metadata.len() > MAX_RECOVERED_WAV_BYTES
+    {
+        return Err("voice_lab:recovery:owned_file_not_regular".to_string());
+    }
+    let bytes = fs::read(path)
+        .map_err(|_| "voice_lab:recovery:owned_file_read_failed".to_string())?;
+    if bytes.len() as u64 != metadata.len() {
+        return Err("voice_lab:recovery:owned_file_changed".to_string());
+    }
+    let digest = Sha256::digest(&bytes);
+    let mut sha256 = [0_u8; 32];
+    sha256.copy_from_slice(&digest);
+    if &sha256 != expected_sha256 {
+        return Err("voice_lab:recovery:owned_file_changed".to_string());
+    }
+    Ok(())
+}
+
+pub(super) fn verify_recovered_draft_identity(
+    review_path: &Path,
+    native_path: &Path,
+    identity: &RecoveredDraftIdentity,
+    discard: bool,
+) -> Result<(), String> {
+    no_unfinished_recovery_stage(review_path)?;
+    no_unfinished_recovery_stage(native_path)?;
+    verify_recovered_file(review_path, &identity.review_sha256, discard)?;
+    verify_recovered_file(native_path, &identity.native_sha256, discard)
+}
+
+// The same validated bytes must reach the replay caller. A separate digest
+// check before fs::read alone cannot bind the later audio buffer to its owner.
+pub(super) fn recovered_review_matches_bytes(
+    identity: &RecoveredDraftIdentity,
+    audio: &[u8],
+) -> bool {
+    let digest = Sha256::digest(audio);
+    let mut sha256 = [0_u8; 32];
+    sha256.copy_from_slice(&digest);
+    sha256 == identity.review_sha256
 }
 
 pub(super) fn recover_guided_draft_pair(
     review_path: &Path,
     native_path: &Path,
     line_id: u32,
-) -> Result<GuidedTakeReview, String> {
+) -> Result<(GuidedTakeReview, RecoveredDraftIdentity), String> {
     if review_path == native_path {
         return Err("voice_lab:recovery:identical_draft_paths".to_string());
     }
     for path in [review_path, native_path] {
-        // An unfinished stage may be the only recoverable bytes. Do not
-        // remove it or promote an unrelated final WAV while it exists.
-        match fs::symlink_metadata(path.with_extension("wav.tmp")) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            _ => return Err("voice_lab:recovery:unfinished_staging_present".to_string()),
-        }
+        // A staged WAV can still be the only recoverable bytes. Treat it as
+        // an unknown owner, never remove or silently promote it.
+        no_unfinished_recovery_stage(path)?;
     }
-    let (_, canonical) = checked_recovery_pcm16(review_path, true)?;
-    let (native_rate, native) = checked_recovery_pcm16(native_path, false)?;
-    let expected_frames = native.len() as u128
-        * u128::from(GUIDED_TAKE_SAMPLE_RATE_HZ) / u128::from(native_rate);
-    if canonical.len() as u128 != expected_frames {
+    let canonical = checked_recovery_pcm16(review_path, true)?;
+    let native = checked_recovery_pcm16(native_path, false)?;
+    let expected_frames = native.samples.len() as u128
+        * u128::from(GUIDED_TAKE_SAMPLE_RATE_HZ) / u128::from(native.rate);
+    if canonical.samples.len() as u128 != expected_frames {
         return Err("voice_lab:recovery:draft_duration_mismatch".to_string());
     }
-    let converted = resample_guided_native_for_review(&native, native_rate)
+    let converted = resample_guided_native_for_review(&native.samples, native.rate)
         .map_err(|_| "voice_lab:recovery:native_audio_resample_failed".to_string())?;
-    if converted.len() != canonical.len() {
+    if converted.len() != canonical.samples.len() {
         return Err("voice_lab:recovery:native_audio_length_mismatch".to_string());
     }
     let mut error_energy = 0_f64;
     let mut signal_energy = 0_f64;
-    for (actual, expected) in converted.iter().zip(&canonical) {
+    for (actual, expected) in converted.iter().zip(&canonical.samples) {
         error_energy += f64::from(actual - expected).powi(2);
         signal_energy += f64::from(*expected).powi(2);
     }
-    let count = canonical.len() as f64;
+    let count = canonical.samples.len() as f64;
     let error_rms = (error_energy / count).sqrt();
     let signal_rms = (signal_energy / count).sqrt();
     // Native-rate and resampled 32 kHz WAVs were both PCM16 quantized.
@@ -165,11 +250,14 @@ pub(super) fn recover_guided_draft_pair(
     if error_rms > 0.004 + signal_rms * 0.15 {
         return Err("voice_lab:recovery:draft_audio_mismatch".to_string());
     }
-    let mut review = review_guided_samples(line_id, &canonical);
+    let mut review = review_guided_samples(line_id, &canonical.samples);
     if review.quality_blocker.is_empty() {
         review.review_advice.push("voice_lab:review:recovered_from_disk".to_string());
     }
-    Ok(review)
+    Ok((review, RecoveredDraftIdentity {
+        review_sha256: canonical.sha256,
+        native_sha256: native.sha256,
+    }))
 }
 
 // A fresh guided Stop owns the Draft paths only when neither existed before
@@ -413,8 +501,10 @@ mod native_rate_take_tests {
         let resampled = resample_guided_native_for_review(&native_samples, native_rate).unwrap();
         write_pcm16_wav(&native_path, native_rate, 1, &native_samples).unwrap();
         write_pcm16_wav(&review_path, GUIDED_TAKE_SAMPLE_RATE_HZ, 1, &resampled).unwrap();
-        let restored = recover_guided_draft_pair(&review_path, &native_path, 17)
+        let (restored, identity) = recover_guided_draft_pair(&review_path, &native_path, 17)
             .expect("native and review WAVs came from the same source");
+        verify_recovered_draft_identity(&review_path, &native_path, &identity, false)
+            .expect("unchanged pair matches its recovered identity");
         assert_eq!(restored.line_id, 17);
         assert_eq!(restored.duration_ms, 1_000);
         assert!(restored.quality_blocker.is_empty());
@@ -442,6 +532,50 @@ mod native_rate_take_tests {
         fs::write(&unfinished, b"unpublished").unwrap();
         assert!(recover_guided_draft_pair(&review, &native, 18).is_err(),
             "an unverified writer stage blocks recovery even if both final WAVs exist");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovered_pair_identity_rejects_swapped_file_before_accept_or_replay() {
+        use crate::engine::audio::live_segment_writer::write_pcm16_wav;
+        let root = fixture("recover_swap");
+        let draft = root.join("Draft");
+        let native = draft.join("NativeRate/take_0020.wav");
+        let review = draft.join("take_0020.wav");
+        let first: Vec<f32> = (0..32_000).map(|i| (i as f32 * 0.018).sin() * 0.15).collect();
+        write_pcm16_wav(&native, 32_000, 1, &first).unwrap();
+        write_pcm16_wav(&review, 32_000, 1, &first).unwrap();
+        let (_, identity) = recover_guided_draft_pair(&review, &native, 20).unwrap();
+        let original_bytes = fs::read(&review).unwrap();
+        assert!(recovered_review_matches_bytes(&identity, &original_bytes));
+        let changed: Vec<f32> = (0..32_000).map(|i| (i as f32 * 0.035).sin() * 0.15).collect();
+        write_pcm16_wav(&review, 32_000, 1, &changed).unwrap();
+        assert!(!recovered_review_matches_bytes(&identity, &fs::read(&review).unwrap()),
+            "a changed replay payload must not be sent as previously verified audio");
+        assert!(verify_recovered_draft_identity(&review, &native, &identity, false).is_err());
+        assert!(verify_recovered_draft_identity(&review, &native, &identity, true).is_err(),
+            "Retry may never remove a replaced WAV under an obsolete review owner");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn partial_retry_accepts_missing_half_but_rejects_replaced_survivor() {
+        use crate::engine::audio::live_segment_writer::write_pcm16_wav;
+        let root = fixture("recover_partial_discard");
+        let review = root.join("take_0021.wav");
+        let native = root.join("NativeRate/take_0021.wav");
+        let waveform: Vec<f32> = (0..32_000).map(|i| (i as f32 * 0.023).sin() * 0.15).collect();
+        write_pcm16_wav(&native, 32_000, 1, &waveform).unwrap();
+        write_pcm16_wav(&review, 32_000, 1, &waveform).unwrap();
+        let (_, identity) = recover_guided_draft_pair(&review, &native, 21).unwrap();
+        fs::remove_file(&native).unwrap();
+        assert!(verify_recovered_draft_identity(&review, &native, &identity, true).is_ok(),
+            "an earlier partial discard must remain retryable");
+        assert!(verify_recovered_draft_identity(&review, &native, &identity, false).is_err(),
+            "replay and accept require the complete original pair");
+        fs::write(&review, b"replacement audio").unwrap();
+        assert!(verify_recovered_draft_identity(&review, &native, &identity, true).is_err(),
+            "Retry may not erase an unrelated replacement of the surviving file");
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -558,6 +558,7 @@
       case "take_unusable":
         return "This recording isn't usable yet. Record the line again.";
       case "recovery_unavailable":
+      case "recovery_changed":
       case "draft_recovery_required":
         return result.message;
       case "draft_write_failed":

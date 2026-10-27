@@ -2,6 +2,28 @@
 
 ## Current Status
 
+**Recovered Draft byte ownership through Replay/Save/Retry (2026-10-27).**
+Previously interrupted-Draft recovery verified the WAV pair once, then only
+kept paths and a quality review in PendingDraft. External modification or
+replacement at those paths before Replay, Save or Record again could play,
+archive, accept or delete audio that was not actually reviewed. The recovery
+owner now retains SHA-256 identities computed from the exact bounded WAV bytes
+that passed audio validation. Under the canonical PendingDraft mutex, Replay
+rechecks those identities and holds its file read through completion; it also checks the exact
+bytes returned to the replay caller against the recovered review digest. Save
+rechecks the complete pair before starting any archive/accepted-take mutation;
+Record again rechecks all existing owned WAVs before deletion. A partially
+completed earlier explicit discard may retry with a missing half, but never
+deletes a surviving WAV whose bytes changed. Unfinished .wav.tmp or nonregular
+files remain blocked. Freshly recorded drafts keep the existing canonical
+writer ownership; accepted recordings and native training policy are unchanged.
+The existing Rust file fixtures cover replacement and partial-retry cases,
+and the My Voice source contract checks ordering and UI error disclosure;
+three malformed regular-expression patterns in its earlier source contract
+were also corrected without running any tests.
+REMOTE_GITHUB source and staged-tree review only; Rust/TypeScript execution,
+filesystem, playback, Windows and CI are NOT EXECUTED.
+
 **VoiceLab interrupted Draft discovery and opt-in review recovery (2026-10-27).**
 Orphaned guided WAVs were intentionally protected by the prior Draft write
 guard, but their unowned on-disk state was invisible to My Voice after an

@@ -70,9 +70,9 @@ test("orphan Draft recovery is explicitly user initiated and never auto-accepts 
   assert.match(recording, /pub fn recover_voice_lab_guided_take\(/);
   assert.match(recording, /recover_guided_draft_pair\(&review_path, &native_path, line_id\)/);
   assert.match(recording, /authorized_voice_confirmed/);
-  assert.match(recording, /ensure_new_guided_draft_paths_are_free(/);
-  assert.match(storage, /fn ensure_new_guided_draft_paths_are_free(/);
-  assert.match(storage, /path.with_extension("wav.tmp")/);
+  assert.match(recording, /ensure_new_guided_draft_paths_are_free\(/);
+  assert.match(storage, /fn ensure_new_guided_draft_paths_are_free\(/);
+  assert.match(storage, /path\.with_extension\("wav\.tmp"\)/);
   assert.match(recording, /let current = latest_runtime_session_state\(\)/);
   assert.match(recording, /let latest = latest_runtime_session_state\(\)/);
   assert.match(page, /Recover for review/);
@@ -91,4 +91,39 @@ test("orphan Draft recovery is explicitly user initiated and never auto-accepts 
   assert.doesNotMatch(recover, /accept_review_take|archive_guided_take|fs::remove_file/,
     "recovery must not publish training take, archive bytes or delete old audio");
   assert.match(recover, /\*guard = Some\(PendingDraft \{/);
+});
+
+test("recovered review keeps verified WAV ownership through replay, accept and discard", () => {
+  assert.match(storage, /struct RecoveredDraftIdentity/);
+  assert.match(storage, /sha2::\{Digest, Sha256\}/);
+  assert.match(storage, /fn verify_recovered_draft_identity\(/);
+  assert.match(storage, /fn recovered_review_matches_bytes\(/);
+  assert.match(storage, /fn recovered_pair_identity_rejects_swapped_file_before_accept_or_replay\(/);
+  assert.match(storage, /fn partial_retry_accepts_missing_half_but_rejects_replaced_survivor\(/);
+  assert.match(recording, /recovered_identity: Some\(recovered_identity\)/);
+  assert.match(recording, /recovered_identity: None/);
+  const retry = recording.slice(
+    recording.indexOf("pub fn retry_voice_lab_guided_take("),
+    recording.indexOf("pub fn accept_voice_lab_guided_take("),
+  );
+  assert.ok(retry.indexOf("verify_recovered_draft_identity(") <
+    retry.indexOf("discard_review_take(&native_rate_path)"));
+  assert.match(retry, /identity, true/);
+  const accept = recording.slice(
+    recording.indexOf("pub fn accept_voice_lab_guided_take("),
+    recording.indexOf("pub fn list_voice_lab_saved_recordings("),
+  );
+  assert.ok(accept.indexOf("verify_recovered_draft_identity(") <
+    accept.indexOf("archive_guided_take("),
+    "recovered Save must verify the pair before any archive or accepted-take mutation");
+  assert.match(accept, /identity, false/);
+  const replay = recording.slice(recording.indexOf("pub fn get_voice_lab_guided_take_audio("));
+  assert.ok(replay.indexOf("let guard = draft_store()") <
+    replay.indexOf("verify_recovered_draft_identity("));
+  assert.ok(replay.indexOf("fs::read(&path)") <
+    replay.indexOf("recovered_review_matches_bytes(") &&
+    replay.indexOf("recovered_review_matches_bytes(") <
+    replay.indexOf("drop(guard)"),
+    "the actual replay bytes must be fingerprint checked while the Draft owner is locked");
+  assert.match(page, /case "recovery_changed":/);
 });

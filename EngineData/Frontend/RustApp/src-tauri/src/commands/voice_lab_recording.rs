@@ -26,7 +26,8 @@ pub(crate) use guided_lines::RecordingSuggestion;
 use storage_transaction::{
     accept_review_take_with_native_rate, discard_review_take, write_guided_review_draft_pair,
     find_orphaned_guided_drafts, recover_guided_draft_pair,
-    ensure_new_guided_draft_paths_are_free,
+    ensure_new_guided_draft_paths_are_free, verify_recovered_draft_identity,
+    recovered_review_matches_bytes, RecoveredDraftIdentity,
 };
 pub use storage_transaction::OrphanedGuidedDraft;
 
@@ -64,6 +65,9 @@ struct PendingDraft {
     path: PathBuf,
     native_rate_path: PathBuf,
     review: GuidedTakeReview,
+    // None for a freshly captured review whose files are owned by this
+    // transaction; Some binds a recovered review to exact verified WAV bytes.
+    recovered_identity: Option<RecoveredDraftIdentity>,
 }
 
 static PENDING_DRAFT: OnceLock<Mutex<Option<PendingDraft>>> = OnceLock::new();
@@ -384,6 +388,7 @@ pub fn stop_voice_lab_guided_take(line_id: u32) -> GuidedRecordingActionResult {
         path: draft,
         native_rate_path: native_rate_draft,
         review,
+        recovered_identity: None,
     });
     drop(guard);
     result(true, "needs_review", "Recording stopped. Replay the take, then accept it or retry the line.")
@@ -435,7 +440,7 @@ pub fn recover_voice_lab_guided_take(
     let review_path = draft_path(line_id);
     let native_path = draft_native_rate_path(line_id);
     let reviewed = recover_guided_draft_pair(&review_path, &native_path, line_id);
-    let Ok(review) = reviewed else {
+    let Ok((review, recovered_identity)) = reviewed else {
         let error = reviewed.err().unwrap_or_else(|| "voice_lab:recovery:unverified".to_string());
         drop(guard);
         return result(false, "recovery_unavailable",
@@ -456,6 +461,7 @@ pub fn recover_voice_lab_guided_take(
         path: review_path,
         native_rate_path: native_path,
         review,
+        recovered_identity: Some(recovered_identity),
     });
     drop(guard);
     result(true, "needs_review",
@@ -482,6 +488,19 @@ pub fn retry_voice_lab_guided_take(line_id: u32) -> GuidedRecordingActionResult 
     }
     let path = draft.path.clone();
     let native_rate_path = draft.native_rate_path.clone();
+    // An explicitly recovered review owns only the WAV bytes that passed
+    // validation. If a file was replaced at the same name, Record again
+    // must not delete the replacement. After a partial earlier discard,
+    // only the still-present original file is eligible for Retry.
+    if let Some(identity) = draft.recovered_identity.as_ref() {
+        if let Err(error) = verify_recovered_draft_identity(
+            &path, &native_rate_path, identity, true,
+        ) {
+            drop(guard);
+            return result(false, "recovery_changed",
+                format!("Recovered Draft files changed or are still being staged ({error}). No additional WAV was deleted."));
+        }
+    }
     if let Err(error) = discard_review_take(&native_rate_path) {
         drop(guard);
         return result(false, "discard_failed", error);
@@ -522,6 +541,18 @@ pub fn accept_voice_lab_guided_take(line_id: u32) -> GuidedRecordingActionResult
     if !draft.review.quality_blocker.is_empty() {
         drop(guard);
         return result(false, "take_unusable", "This take is silent or empty. Retry the line before accepting it.");
+    }
+    // Recover verified the audio before restoring this PendingDraft, but Save
+    // must also verify that the same pair remains before any immutable archive
+    // or accepted-take replacement can begin.
+    if let Some(identity) = draft.recovered_identity.as_ref() {
+        if let Err(error) = verify_recovered_draft_identity(
+            &draft.path, &draft.native_rate_path, identity, false,
+        ) {
+            drop(guard);
+            return result(false, "recovery_changed",
+                format!("Recovered Draft audio no longer matches its reviewed bytes ({error}). Nothing was archived or accepted."));
+        }
     }
     let target = accepted_path(line_id);
     if let Some(parent) = target.parent() {
@@ -691,18 +722,44 @@ pub fn get_voice_lab_guided_take_audio(line_id: u32) -> Result<tauri::ipc::Respo
     if guided_text(line_id).is_none() {
         return Err("voice_lab:invalid_guided_line".to_string());
     }
-    let pending_path = draft_store()
+    // Keep the PendingDraft guard while verifying and copying replay bytes.
+    // Retry/Accept hold the same guard for file deletion/renaming; dropping
+    // it before fs::read allowed replay to open a moved or partly discarded
+    // recovered file.
+    let guard = draft_store()
         .lock()
-        .map_err(|_| "voice_lab:guided_draft_state_unavailable".to_string())?
-        .as_ref()
-        .filter(|draft| draft.line_id == line_id)
-        .map(|draft| draft.path.clone());
-    let path = pending_path.unwrap_or_else(|| accepted_path(line_id));
-    let metadata = fs::metadata(&path).map_err(|_| "voice_lab:take_audio_missing".to_string())?;
-    if !metadata.is_file() || metadata.len() < 44 || metadata.len() > MAX_REPLAY_WAV_BYTES {
+        .map_err(|_| "voice_lab:guided_draft_state_unavailable".to_string())?;
+    let pending = guard.as_ref().filter(|draft| draft.line_id == line_id);
+    if let Some(draft) = pending {
+        if let Some(identity) = draft.recovered_identity.as_ref() {
+            verify_recovered_draft_identity(
+                &draft.path, &draft.native_rate_path, identity, false,
+            ).map_err(|error| format!(
+                "voice_lab:recovery:replay_source_changed:{error}"
+            ))?;
+        }
+    }
+    let path = pending.map(|draft| draft.path.clone())
+        .unwrap_or_else(|| accepted_path(line_id));
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|_| "voice_lab:take_audio_missing".to_string())?;
+    if !metadata.file_type().is_file()
+        || metadata.len() < 44
+        || metadata.len() > MAX_REPLAY_WAV_BYTES
+    {
         return Err("voice_lab:take_audio_invalid".to_string());
     }
-    let bytes = fs::read(path).map_err(|_| "voice_lab:take_audio_read_failed".to_string())?;
+    let bytes = fs::read(&path)
+        .map_err(|_| "voice_lab:take_audio_read_failed".to_string())?;
+    if bytes.len() as u64 != metadata.len() {
+        return Err("voice_lab:take_audio_changed_during_read".to_string());
+    }
+    if let Some(identity) = pending.and_then(|draft| draft.recovered_identity.as_ref()) {
+        if !recovered_review_matches_bytes(identity, &bytes) {
+            return Err("voice_lab:recovery:replay_bytes_changed".to_string());
+        }
+    }
+    drop(guard);
     Ok(tauri::ipc::Response::new(bytes))
 }
 
