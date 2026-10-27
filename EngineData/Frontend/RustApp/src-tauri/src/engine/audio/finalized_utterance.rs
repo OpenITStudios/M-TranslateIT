@@ -25,6 +25,7 @@ const LANE_INCOMING: &str = "incoming";
 #[path = "speech_ingress.rs"]
 mod speech_ingress;
 use speech_ingress::SpeechIngress;
+use super::silero::SpeechWindows;
 
 static OVERFLOW_DROPPED_UTTERANCES: AtomicU64 = AtomicU64::new(0);
 static EVICTED_PENDING_UTTERANCES: AtomicU64 = AtomicU64::new(0);
@@ -427,9 +428,14 @@ fn validated_silero_start_session(
     session: &str, generation: Option<u64>, rate: u32,
 ) -> Result<&str, &'static str> {
     let session = session.trim();
-    if session.is_empty() || rate == 0 || generation == Some(0) {
+    if session.is_empty() || generation == Some(0) {
         return Err("silero:invalid_session_generation_or_rate");
     }
+    // The canonical window constructor owns the full supported-rate contract.
+    // Reject an unsupported nonzero rate before clearing an active producer;
+    // otherwise a failed new Start would stop the previous Meeting's CPU lease.
+    let _ = SpeechWindows::new(rate)
+        .map_err(|_| "silero:invalid_session_generation_or_rate")?;
     Ok(session)
 }
 

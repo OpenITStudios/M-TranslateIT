@@ -2,6 +2,17 @@
 
 ## Current Status
 
+**Silero Start admission source repair (2026-10-27).** Local candidate now
+validates the complete supported 8,000–192,000 Hz window input range through
+the canonical SpeechWindows constructor before clearing any active producer.
+Unsupported nonzero rates were previously allowed to revoke the old producer
+before the new CPU worker rejected the rate. The existing isolated no-model
+regression now covers boundary rates, invalid rates and preservation of the old
+producer state. This is source-only GitHub review and authored test coverage:
+Rust compilation, execution and native audio remain NOT EXECUTED for this change.
+The wider Meeting lifecycle/source audit continues independently; no claim about
+historical native PCM drops is made.
+
 **Background source-test admission repaired (2026-10-27).** With explicit owner
 approval, scheduler tests now share the existing runtime test guard with bridge
 contracts instead of owning an independent mutex. Ordinary parallel Rust passed
@@ -250,6 +261,9 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
+Continue the bounded GitHub source audit of Meeting Start/Stop ownership and
+cleanup, repairing only reproduced source defects. Native capture/status/
+Diagnostics/Stop remains deferred until the user explicitly authorizes PC control.
 When PC-control authorization is available again, finish the existing integrated native capture/status/Diagnostics/Stop check on the pinned repaired candidate. Until then retain the goal as incomplete; source and fixture work is finished for this bounded outcome, so do not repeat checks or invent adjacent work while waiting. Historical native drops, incoming error and uncontrolled phrases remain unattributed. No CI, model/context/style/glossary change, incoming toggle, queue enlargement, blind retry or corrective translation layer is authorized.
 
 ## Retained My Voice source candidate (paused)

@@ -38,6 +38,13 @@ fn silero_start_argument_gate_preserves_existing_cpu_owner() {
         Ok("normalized-session"),
         "producer and CPU worker must use the same trimmed session identity",
     );
+    for rate in [8_000, 16_000, 192_000] {
+        assert_eq!(
+            validated_silero_start_session("accepted-rate", None, rate),
+            Ok("accepted-rate"),
+            "a supported Silero sample rate must pass source preflight",
+        );
+    }
 
     // Private static producer without model loading or a capture thread.
     // Invalid starts must return before clear_producer or ingress.write.
@@ -55,6 +62,9 @@ fn silero_start_argument_gate_preserves_existing_cpu_owner() {
         ("", None, 16_000),
         (" \t ", None, 16_000),
         ("new-meeting", None, 0),
+        ("new-meeting", None, 7_999),
+        ("new-meeting", None, 192_001),
+        ("new-meeting", None, u32::MAX),
         ("new-meeting", Some(0), 16_000),
     ] {
         assert_eq!(
