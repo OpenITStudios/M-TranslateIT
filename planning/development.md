@@ -2,6 +2,23 @@
 
 ## Current Status
 
+**Late ASR/translation/status after Stop — source repair (2026-10-27).**
+The finalized-turn facade previously read Live ownership before locking the
+committed-turn store. Stop could revoke authority and finish interruption
+while the worker waited on that lock, letting an old ASR/source or translated
+result enter the stopped transcript afterward. Commit, translation completion
+and queued-playback admission now validate exact Live session/generation and
+authority while holding that same turn mutex; only the intentional
+`interrupted` delivery transition may bypass Live admission after revocation.
+Other delivery and outbound timing updates also require Live ownership under
+the turn mutex. The outbound status owner previously accepted stale progress
+unconditionally after Stop cleared its status; it now gates updates and
+incident recording under the existing status mutex against the current Live
+Meeting, matching the incoming status policy. Pure owner regressions were
+authored in the existing Rust test modules. REMOTE_GITHUB structural review
+only: Rust/Node compilation/tests, native Stop, receiver, deferred timing,
+model outputs and CI are NOT EXECUTED.
+
 **Delayed optional incoming capture/consumer admission — source repair (2026-10-27).**
 The detached incoming activation previously checked Live before reading its
 suppression/routing inputs, but the later capture Start could still open a

@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
 
 use crate::engine::runtime_events::emit_meeting_runtime_event;
-use crate::engine::runtime_state::latest_runtime_session_state;
+use crate::engine::runtime_state::{latest_runtime_session_state, RuntimeSessionSnapshot};
 
 use super::super::helper_bridge_runtime::unix_ms;
 use super::transcript_archive;
@@ -426,6 +426,25 @@ fn terminal_delivery_state(state: Option<&str>) -> bool {
     )
 }
 
+// Finalized worker results must be admitted while the committed-turn mutex
+// is held. A pre-lock Live check can become stale after Stop revoked authority
+// and finalized already-pending turns, otherwise letting old work arrive late.
+// The caller owns the turn mutex; Stop's turn interruption takes that same
+// mutex after revoking authority, so one mutation is ordered before the other.
+fn live_turn_owner_matches(
+    snapshot: Option<&RuntimeSessionSnapshot>,
+    session_id: &str,
+    generation: Option<u64>,
+) -> bool {
+    snapshot.is_some_and(|session| {
+        session.owner_id == APPLICATION_MEETING_OWNER_ID
+            && session.session_id == session_id
+            && session.authority_active
+            && session.phase == "live"
+            && generation.is_none_or(|value| session.generation == value)
+    })
+}
+
 pub(super) fn reset_committed_turns(session_id: &str) {
     if let Ok(mut ended) = ended_transcript_store().lock() {
         *ended = None;
@@ -534,19 +553,16 @@ pub(super) fn commit_meeting_turn(
     delivery_state: Option<&str>,
     outbound_timing: Option<MeetingOutboundTiming>,
 ) -> bool {
-    let Some(session) = latest_runtime_session_state().snapshot else {
-        return false;
-    };
-    if session.owner_id != APPLICATION_MEETING_OWNER_ID
-        || session.session_id != session_id
-        || session.phase != "live"
-        || generation.is_some_and(|current| session.generation != current)
-    {
-        return false;
-    }
     let Ok(mut guard) = committed_turn_store().lock() else {
         return false;
     };
+    // Stop revokes runtime authority first, then obtains this turn mutex.
+    // Recheck Live while holding it: a late ASR result cannot insert a
+    // pending turn after Stop already finalized the old session.
+    let current = latest_runtime_session_state();
+    if !live_turn_owner_matches(current.snapshot.as_ref(), session_id, generation) {
+        return false;
+    }
     let Some(store) = guard.as_mut() else {
         return false;
     };
@@ -583,19 +599,16 @@ pub(super) fn finish_meeting_turn_translation(
     lane: &str,
     translated: Option<&str>,
 ) -> bool {
-    let Some(session) = latest_runtime_session_state().snapshot else {
-        return false;
-    };
-    if session.owner_id != APPLICATION_MEETING_OWNER_ID
-        || session.session_id != session_id
-        || session.phase != "live"
-        || generation.is_some_and(|current| session.generation != current)
-    {
-        return false;
-    }
     let Ok(mut guard) = committed_turn_store().lock() else {
         return false;
     };
+    // Translation may return after Stop, even when its pre-request check was
+    // Live. Keep the final eligibility read inside this store lock, so it is
+    // serialized with the Stop interruption of pending translations.
+    let current = latest_runtime_session_state();
+    if !live_turn_owner_matches(current.snapshot.as_ref(), session_id, generation) {
+        return false;
+    }
     let Some(store) = guard.as_mut() else {
         return false;
     };
@@ -620,19 +633,13 @@ pub(super) fn begin_committed_playback(
     sequence: u64,
     utterance_id: u64,
 ) -> bool {
-    let Some(session) = latest_runtime_session_state().snapshot else {
-        return false;
-    };
-    if session.owner_id != APPLICATION_MEETING_OWNER_ID
-        || session.session_id != session_id
-        || session.phase != "live"
-        || session.generation != generation
-    {
-        return false;
-    }
     let Ok(mut guard) = committed_turn_store().lock() else {
         return false;
     };
+    let current = latest_runtime_session_state();
+    if !live_turn_owner_matches(current.snapshot.as_ref(), session_id, Some(generation)) {
+        return false;
+    }
     let Some(store) = guard.as_mut() else {
         return false;
     };
@@ -658,6 +665,16 @@ pub(super) fn update_committed_turn_delivery_state(
     let Ok(mut guard) = committed_turn_store().lock() else {
         return false;
     };
+    // Explicit interruption is also used to retire old work after authority
+    // revocation. Every other state transition (including output_complete)
+    // must still belong to the current Live generation, or a late native
+    // completion could falsely survive Stop as successfully delivered.
+    if delivery_state != "interrupted" {
+        let current = latest_runtime_session_state();
+        if !live_turn_owner_matches(current.snapshot.as_ref(), session_id, Some(generation)) {
+            return false;
+        }
+    }
     let Some(store) = guard.as_mut() else {
         return false;
     };
@@ -694,6 +711,10 @@ pub(super) fn update_committed_turn_outbound_timing(
     let Ok(mut guard) = committed_turn_store().lock() else {
         return false;
     };
+    let current = latest_runtime_session_state();
+    if !live_turn_owner_matches(current.snapshot.as_ref(), session_id, Some(generation)) {
+        return false;
+    }
     let Some(store) = guard.as_mut() else {
         return false;
     };
@@ -882,6 +903,38 @@ mod tests {
             "s1", 1, Some(7), 51, "you", Some("I agree"), 1_100,
         ).is_none());
         assert_eq!(store.turns.front().unwrap().source_text, "Saya tidak setuju");
+    }
+
+    #[test]
+    fn late_worker_completion_requires_the_exact_authoritative_live_session() {
+        use super::live_turn_owner_matches;
+        use crate::engine::runtime_state::{
+            RuntimeSessionSnapshot, APPLICATION_MEETING_OWNER_ID, MIC_TEST_OWNER_ID,
+        };
+        let mut session = RuntimeSessionSnapshot {
+            started_unix_ms: 0,
+            owner_id: APPLICATION_MEETING_OWNER_ID.to_string(),
+            session_id: "meeting-current".to_string(),
+            generation: 42,
+            authority_active: true,
+            phase: "live".to_string(),
+            live_capture_stream_active: true,
+            safe_to_stop: true,
+            note: String::new(),
+        };
+        assert!(live_turn_owner_matches(Some(&session), "meeting-current", None));
+        assert!(live_turn_owner_matches(Some(&session), "meeting-current", Some(42)));
+        assert!(!live_turn_owner_matches(None, "meeting-current", None));
+        assert!(!live_turn_owner_matches(Some(&session), "meeting-old", None));
+        assert!(!live_turn_owner_matches(Some(&session), "meeting-current", Some(41)));
+        session.authority_active = false;
+        assert!(!live_turn_owner_matches(Some(&session), "meeting-current", None));
+        session.authority_active = true;
+        session.phase = "stopping".to_string();
+        assert!(!live_turn_owner_matches(Some(&session), "meeting-current", None));
+        session.phase = "live".to_string();
+        session.owner_id = MIC_TEST_OWNER_ID.to_string();
+        assert!(!live_turn_owner_matches(Some(&session), "meeting-current", Some(42)));
     }
 
     #[test]

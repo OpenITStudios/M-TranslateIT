@@ -187,6 +187,23 @@ pub(super) fn current_incoming_status() -> MeetingIncomingRuntimeStatus {
     status
 }
 
+// Status updates are session mutations too. Stop revokes authority before
+// clearing this status; a worker completing afterward must not resurrect
+// stale outbound progress or overwrite the next Meeting's status.
+fn outbound_status_update_allowed(
+    current: Option<&RuntimeSessionSnapshot>,
+    generation: u64,
+    session_id: &str,
+) -> bool {
+    current.is_some_and(|session| {
+        session.owner_id == APPLICATION_MEETING_OWNER_ID
+            && session.session_id == session_id
+            && session.generation == generation
+            && session.authority_active
+            && session.phase == "live"
+    })
+}
+
 pub(super) fn update_outbound_status(
     generation: u64,
     session_id: &str,
@@ -197,10 +214,14 @@ pub(super) fn update_outbound_status(
     blocker: &str,
     note: &str,
 ) {
-    if !last_stage_ok && !blocker.is_empty() {
-        let _ = record_runtime_incident("meeting_outbound", stage, blocker, note);
-    }
-    if let Ok(mut status) = outbound_status_store().lock() {
+    let applied = if let Ok(mut status) = outbound_status_store().lock() {
+        // Read the runtime owner under the existing outbound status mutex.
+        // If Stop already revoked the generation, its cleared status cannot
+        // be repopulated; if this write wins first, Stop clears it afterward.
+        let owner = latest_runtime_session_state();
+        if !outbound_status_update_allowed(owner.snapshot.as_ref(), generation, session_id) {
+            return;
+        }
         let timing = if status.generation == Some(generation)
             && status.session_id.as_deref() == Some(session_id)
             && status.utterance_sequence == utterance_sequence
@@ -235,6 +256,14 @@ pub(super) fn update_outbound_status(
                 "meeting_outbound_finalized_segment_contract_source_side_not_windows_runtime_proof"
                     .to_string(),
         };
+        true
+    } else {
+        false
+    };
+    // Stale or rejected worker results must not create an incident for a
+    // session that has already stopped or a newer Meeting.
+    if applied && !last_stage_ok && !blocker.is_empty() {
+        let _ = record_runtime_incident("meeting_outbound", stage, blocker, note);
     }
 }
 
@@ -473,6 +502,23 @@ mod incoming_status_terminal_tests {
         assert!(!incoming_status_update_allowed(
             &reset, "session-a", Some(&session_a),
         ));
+    }
+
+    #[test]
+    fn old_outbound_result_cannot_restore_status_after_stop_or_new_meeting() {
+        let mut live = live_session("meeting-a");
+        assert!(super::outbound_status_update_allowed(Some(&live), 42, "meeting-a"));
+        assert!(!super::outbound_status_update_allowed(None, 42, "meeting-a"));
+        assert!(!super::outbound_status_update_allowed(Some(&live), 41, "meeting-a"));
+        assert!(!super::outbound_status_update_allowed(Some(&live), 42, "meeting-old"));
+        live.authority_active = false;
+        assert!(!super::outbound_status_update_allowed(Some(&live), 42, "meeting-a"));
+        live.authority_active = true;
+        live.phase = "stopping".to_string();
+        assert!(!super::outbound_status_update_allowed(Some(&live), 42, "meeting-a"));
+        live.phase = "live".to_string();
+        live.owner_id = crate::engine::runtime_state::MIC_TEST_OWNER_ID.to_string();
+        assert!(!super::outbound_status_update_allowed(Some(&live), 42, "meeting-a"));
     }
 
     #[test]
