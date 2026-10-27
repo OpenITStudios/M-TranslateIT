@@ -31,6 +31,44 @@ fn ingress_rejection_is_separate_from_handoff_loss_and_exports_only_counts() {
     assert_eq!(pcm_drop_breakdown(&sync).ingress_rejected_callbacks, 0);
 }
 
+#[test]
+fn silero_start_argument_gate_preserves_existing_cpu_owner() {
+    assert_eq!(
+        validated_silero_start_session("  normalized-session  ", None, 16_000),
+        Ok("normalized-session"),
+        "producer and CPU worker must use the same trimmed session identity",
+    );
+
+    // Private static producer without model loading or a capture thread.
+    // Invalid starts must return before clear_producer or ingress.write.
+    static ISOLATED_SYNC: OnceLock<FinalizedProducerSync> = OnceLock::new();
+    let sync = ISOLATED_SYNC.get_or_init(|| FinalizedProducerSync {
+        ingress: RwLock::new(None),
+        transport_loss: AtomicU64::new(0),
+        state: Mutex::new(None),
+        ready: Condvar::new(),
+        callback_lock_observations: AtomicU64::new(0),
+        callback_lock_wait_max_ns: AtomicU64::new(0),
+    });
+    reset_producer(sync, "active-meeting", None, LANE_INCOMING, 16_000);
+    for (session, generation, rate) in [
+        ("", None, 16_000),
+        (" \t ", None, 16_000),
+        ("new-meeting", None, 0),
+        ("new-meeting", Some(0), 16_000),
+    ] {
+        assert_eq!(
+            start_silero(sync, session, generation, LANE_INCOMING, rate),
+            Err("silero:invalid_session_generation_or_rate".to_string()),
+        );
+        let guard = sync.state.lock().expect("existing producer state");
+        let state = guard.as_ref().expect("invalid start cannot clear active producer");
+        assert_eq!(state.session_id, "active-meeting");
+        assert_eq!(state.capture_epoch, 1);
+    }
+    assert!(clear_producer(sync));
+}
+
 // These scenarios run inside one test fn because the producer state lives in
 // process-wide statics; parallel unit tests would race on those mutexes.
 

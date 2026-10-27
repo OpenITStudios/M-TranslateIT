@@ -419,8 +419,24 @@ fn clear_producer_if(
     true
 }
 
+// Start validation runs before clearing the previous CPU lease or taking the
+// ingress write lock. reset_producer clears invalid inputs; invoking that
+// cleanup while holding ingress.write would deadlock. Pass one normalized
+// session identity to both producer state and the Silero CPU worker.
+fn validated_silero_start_session(
+    session: &str, generation: Option<u64>, rate: u32,
+) -> Result<&str, &'static str> {
+    let session = session.trim();
+    if session.is_empty() || rate == 0 || generation == Some(0) {
+        return Err("silero:invalid_session_generation_or_rate");
+    }
+    Ok(session)
+}
+
 fn start_silero(sync: &'static FinalizedProducerSync, session: &str,
     generation: Option<u64>, lane: &'static str, rate: u32) -> Result<(), String> {
+    let session = validated_silero_start_session(session, generation, rate)
+        .map_err(str::to_string)?;
     if !clear_producer(sync) { return Err("silero:cleanup_pending".to_string()); }
     let mut ingress = sync.ingress.write().map_err(|_| "silero:ingress_poisoned")?;
     reset_producer(sync, session, generation, lane, rate);
