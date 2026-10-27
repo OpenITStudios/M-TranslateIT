@@ -2,8 +2,8 @@ use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::engine::audio::finalized_utterance::{
-    clear_finalized_incoming_utterance_producer, clear_finalized_meeting_sequence,
-    reset_finalized_drop_counters, reset_finalized_meeting_sequence,
+    clear_finalized_meeting_sequence, reset_finalized_drop_counters,
+    reset_finalized_meeting_sequence,
 };
 use crate::engine::audio::live_segment_writer::cleanup_finalized_meeting_session_wavs;
 use crate::engine::audio::original_voice_pcm;
@@ -657,8 +657,11 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
     let Some(snapshot) = current.snapshot.as_ref() else {
         clear_all_start_preflight();
         clear_prepared_meeting_output_device();
+        // Meeting Sound Stop already owns and verifies incoming producer
+        // teardown. Never invoke a second unscoped clear outside its owner
+        // lock: it could touch a newly activated producer, and its result
+        // would not be included in the Retry Stop decision.
         let incoming_capture_stop = stop_meeting_sound_capture_runtime();
-        clear_finalized_incoming_utterance_producer();
         let deferred_cleanup = clear_deferred_incoming_queue();
         clear_finalized_meeting_sequence();
         // No runtime snapshot does not prove that the writer has finished.

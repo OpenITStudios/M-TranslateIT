@@ -2,6 +2,16 @@
 
 ## Current Status
 
+**Idle Meeting Stop cleanup ownership (2026-10-27).** The no-snapshot Stop
+path previously called a second unchecked unscoped incoming producer clear
+after Meeting Sound Stop. The canonical sound-capture Stop already clears
+the producer under its capture-owner lock and includes its success in
+`incoming_capture_stop.ok`. The redundant second clear was removed so
+one checked owner controls teardown and Retry Stop; no capture policy,
+incoming activation, worker or model behavior changed. This is static
+GitHub source evidence only, NOT EXECUTED Rust or Windows acceptance.
+Concurrent Start/Stop native correctness remains unverified.
+
 **Silero Start admission source repair (2026-10-27).** Local candidate now
 validates the complete supported 8,000–192,000 Hz window input range through
 the canonical SpeechWindows constructor before clearing any active producer.
