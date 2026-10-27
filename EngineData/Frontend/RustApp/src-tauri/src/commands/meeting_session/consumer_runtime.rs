@@ -279,6 +279,13 @@ pub(super) fn start_meeting_incoming_consumer(session_id: &str) -> Result<(), St
     if guard.is_some() {
         return Err("meeting_incoming:consumer_already_active".to_string());
     }
+    // Check Live admission under the SAME consumer-store lock used by Stop.
+    // If Stop completed before this detached activation arrived, reject it.
+    // If Stop revokes authority after this check, its consumer cleanup must
+    // wait for this guard and will see the newly stored thread owner.
+    if !incoming_session_is_eligible(session_id) {
+        return Err("meeting_incoming:session_no_longer_live".to_string());
+    }
 
     let thread_session_id = session_id.to_string();
     let runtime_session_id = thread_session_id.clone();

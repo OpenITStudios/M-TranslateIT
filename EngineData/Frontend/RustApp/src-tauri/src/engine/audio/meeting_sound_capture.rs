@@ -16,6 +16,9 @@ use super::finalized_utterance::{
     observe_finalized_incoming_i64_samples, observe_finalized_incoming_u8_samples,
 };
 use crate::engine::runtime_settings::load_settings;
+use crate::engine::runtime_state::{
+    latest_runtime_session_state, RuntimeSessionSnapshot, APPLICATION_MEETING_OWNER_ID,
+};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MeetingSoundCaptureStatus {
@@ -82,6 +85,22 @@ static MEETING_SOUND_CAPTURE_RUNTIME: OnceLock<Mutex<Option<MeetingSoundCaptureR
 const CAPTURE_STOP_WAIT_BUDGET: Duration = Duration::from_millis(500);
 const CAPTURE_STOP_POLL: Duration = Duration::from_millis(10);
 
+// Optional loopback capture must belong to the currently Live Meeting.
+// Unlike the earlier activation-thread eligibility check, this is evaluated
+// after acquiring the canonical capture store lock: a prior Stop cannot finish
+// capture cleanup and then have a delayed activation create a fresh old stream.
+fn capture_start_owner_matches(
+    session: Option<&RuntimeSessionSnapshot>,
+    session_id: &str,
+) -> bool {
+    session.is_some_and(|current| {
+        current.owner_id == APPLICATION_MEETING_OWNER_ID
+            && current.session_id == session_id
+            && current.authority_active
+            && current.phase == "live"
+    })
+}
+
 // Never detach a capture whose device thread has not exited; retry on the
 // same stored JoinHandle after the finite wait budget.
 fn capture_finished_within(thread: &thread::JoinHandle<()>, budget: Duration) -> bool {
@@ -124,6 +143,17 @@ pub fn start_meeting_sound_capture_runtime(
             "Meeting Sound capture state is unavailable.",
         );
     };
+
+    // This check belongs inside the same capture ownership lock as Stop.
+    // A stale detached activation cannot open a stream after Stop already
+    // completed, even if it saw Live before reading audio-route settings.
+    let meeting = latest_runtime_session_state();
+    if !capture_start_owner_matches(meeting.snapshot.as_ref(), &session_id) {
+        return blocked_start(
+            "meeting_sound:session_not_live",
+            "Incoming capture was not opened because this Meeting is no longer the authoritative Live session.",
+        );
+    }
 
     if let Some(runtime) = guard.as_ref() {
         let status = build_status_from_guard(Some(runtime));
@@ -734,6 +764,29 @@ mod isolation_tests {
         use std::sync::Mutex;
 
         // Local store: exercises the production decision without global CPAL.
+        let mut live = crate::engine::runtime_state::RuntimeSessionSnapshot {
+            started_unix_ms: 0,
+            owner_id: crate::engine::runtime_state::APPLICATION_MEETING_OWNER_ID.to_string(),
+            session_id: "new-meeting".to_string(),
+            generation: 42,
+            authority_active: true,
+            phase: "live".to_string(),
+            live_capture_stream_active: true,
+            safe_to_stop: true,
+            note: String::new(),
+        };
+        assert!(super::capture_start_owner_matches(Some(&live), "new-meeting"));
+        assert!(!super::capture_start_owner_matches(Some(&live), "old-meeting"));
+        assert!(!super::capture_start_owner_matches(None, "new-meeting"));
+        live.authority_active = false;
+        assert!(!super::capture_start_owner_matches(Some(&live), "new-meeting"));
+        live.authority_active = true;
+        live.phase = "stopping".to_string();
+        assert!(!super::capture_start_owner_matches(Some(&live), "new-meeting"));
+        live.phase = "live".to_string();
+        live.owner_id = "translateit_mic_test".to_string();
+        assert!(!super::capture_start_owner_matches(Some(&live), "new-meeting"));
+
         let state = Mutex::new(Some("new-meeting".to_string()));
         let mut guard = state.lock().unwrap();
         assert!(take_capture_if_owned(

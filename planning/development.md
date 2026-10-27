@@ -2,6 +2,21 @@
 
 ## Current Status
 
+**Delayed optional incoming capture/consumer admission — source repair (2026-10-27).**
+The detached incoming activation previously checked Live before reading its
+suppression/routing inputs, but the later capture Start could still open a
+loopback stream after Stop had already finished. The capture owner now checks
+the exact Live Meeting session and active authority under its existing capture
+store mutex before opening any new stream. The incoming consumer also checks
+session eligibility while holding its own canonical consumer store lock:
+a stopped session cannot register a late worker, while Stop arriving after
+the check observes the worker through that same lock. Existing scoped cleanup
+and next-session isolation remain unchanged. The existing isolation regression
+now covers stale/foreign/Stopping owner admission; source proof only.
+Rust/Node tests, native audio, real concurrent Stop, CI and receiver checks
+remain NOT EXECUTED. No new activation owner, queue, thread, source selector,
+model fallback or policy was introduced.
+
 **Start/Stop full transaction ownership — source repair (2026-10-27).**
 The earlier shared lifecycle gate protected only Start's generation claim,
 while Stop held the same gate across full cleanup. Thus Stop could revoke
