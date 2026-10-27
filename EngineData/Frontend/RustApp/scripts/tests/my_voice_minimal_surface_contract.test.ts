@@ -10,6 +10,7 @@ const voiceApi = source("src/app/bridge/myVoiceApi.ts");
 const registry = source("src-tauri/src/commands/registry.rs");
 const recording = source("src-tauri/src/commands/voice_lab_recording.rs");
 const storage = source("src-tauri/src/commands/voice_lab_recording/storage_transaction.rs");
+const archive = source("src-tauri/src/commands/voice_lab/storage/recording_archive.rs");
 
 test("normal My Voice opens with a ready-to-use voice picker before optional creation", () => {
   assert.match(page, /<BuiltinVoicePicker/);
@@ -126,4 +127,44 @@ test("recovered review keeps verified WAV ownership through replay, accept and d
     replay.indexOf("drop(guard)"),
     "the actual replay bytes must be fingerprint checked while the Draft owner is locked");
   assert.match(page, /case "recovery_changed":/);
+});
+
+test("accepted WAV inspection is read-only and backed by exact immutable archive receipts", () => {
+  assert.match(voiceApi, /inspect_voice_lab_accepted_take_recovery/);
+  assert.match(voiceApi, /type AcceptedTakeRecoveryInspection/);
+  assert.match(registry, /crate::commands::voice_lab_recording::inspect_voice_lab_accepted_take_recovery/);
+  assert.match(recording, /pub fn inspect_voice_lab_accepted_take_recovery\(/);
+  assert.match(archive, /fn verified_archive_id_for_pair_locked\(/);
+  assert.match(archive, /verified_archive\(&complete, &prepared\.receipt\)/);
+  assert.match(archive, /fn classify_accepted_take_candidates\(/);
+  assert.match(archive, /"accepted", "previous", "draft"/);
+  assert.match(archive, /previous_backup_present \|\| !unverified_files\.is_empty\(\)/);
+  assert.match(archive, /verified_archive_id_for_pair_locked\(\s*storage, line_id, exact_text/);
+  assert.match(archive, /interrupted_save_finds_old_previous_pair_and_new_draft_active_pair/);
+  assert.match(archive, /legacy_canonical_only_archive_never_claims_an_unmatched_native_sidecar/);
+  assert.match(page, /Inspect Save files/);
+  assert.match(page, /myVoiceApi\.inspectAcceptedTake\(inspectedLine\)/);
+  const inspectUi = page.slice(
+    page.indexOf("async function inspectAcceptedFiles()"),
+    page.indexOf("async function startRecording()"),
+  );
+  assert.match(inspectUi, /busy = true;/);
+  assert.match(inspectUi, /busy = false;/);
+  assert.match(page, /acceptedFileInspection = null;/);
+  assert.match(page, /selectedAcceptedEvidence\.verified_pairs/);
+  assert.match(page, /selectedAcceptedEvidence\.unverified_files/);
+  const inspect = recording.slice(
+    recording.indexOf("pub fn inspect_voice_lab_accepted_take_recovery("),
+    recording.indexOf("pub fn start_voice_lab_guided_take("),
+  );
+  assert.match(inspect, /let _draft_owner = draft_store\(\)\.lock\(\)/);
+  assert.match(inspect, /inspect_accepted_take_recovery\(/);
+  assert.doesNotMatch(inspect, /archive_guided_take\(|fs::remove_file\(|fs::rename\(|accept_review_take\(/,
+    "inspection must never promote or delete ambiguous accepted files");
+  const scanner = archive.slice(
+    archive.indexOf("pub(crate) fn inspect_accepted_take_recovery("),
+    archive.indexOf("pub(crate) fn archive_guided_take("),
+  );
+  assert.doesNotMatch(scanner, /fs::remove_file\(|fs::rename\(|fs::write\(/);
+  assert.match(scanner, /ARCHIVE_LOCK/);
 });

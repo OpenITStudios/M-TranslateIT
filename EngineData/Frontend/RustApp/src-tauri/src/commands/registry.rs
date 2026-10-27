@@ -45,6 +45,7 @@ pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wr
         crate::commands::startup_recovery::get_startup_recovery_status,
         crate::commands::settings::load_runtime_settings,
         crate::commands::voice_lab_recording::get_voice_lab_guided_recording_state,
+        crate::commands::voice_lab_recording::inspect_voice_lab_accepted_take_recovery,
         crate::commands::voice_lab_recording::get_voice_lab_legacy_archive_status,
         crate::commands::voice_lab_recording::get_voice_lab_training_recovery_status,
         crate::commands::voice_lab_recording::create_voice_lab_backup,

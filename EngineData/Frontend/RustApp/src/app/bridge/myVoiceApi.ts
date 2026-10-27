@@ -74,6 +74,22 @@ export type MyVoiceBackupReport = {
   already_present: number;
 };
 
+export type AcceptedTakePairEvidence = {
+  canonical_location: "accepted" | "previous" | "draft";
+  native_location: "accepted" | "previous" | "draft" | "none";
+  archive_id: string;
+};
+
+export type AcceptedTakeRecoveryInspection = {
+  line_id: number;
+  verified_pairs: AcceptedTakePairEvidence[];
+  unverified_files: string[];
+  previous_backup_present: boolean;
+  verification_incomplete: boolean;
+  needs_attention: boolean;
+  note: string;
+};
+
 export type GuidedRecordingActionResult = {
   ok: boolean;
   state: string;
@@ -123,6 +139,13 @@ export const myVoiceApi = {
   async protectLegacyRecordings(): Promise<LegacyMigrationResult | null> {
     return runCommand<LegacyMigrationResult>("protect_voice_lab_legacy_recordings");
   },
+  async inspectAcceptedTake(lineId: number): Promise<AcceptedTakeRecoveryInspection | null> {
+    // Read-only filesystem/archive evidence, not a recovery mutation.
+    return runCommand<AcceptedTakeRecoveryInspection>(
+      "inspect_voice_lab_accepted_take_recovery", { lineId },
+    );
+  },
+
   async getState(): Promise<GuidedRecordingState | null> {
     // A failed bridge read is unknown, never evidence that recording stopped.
     return runCommand<GuidedRecordingState>("get_voice_lab_guided_recording_state");

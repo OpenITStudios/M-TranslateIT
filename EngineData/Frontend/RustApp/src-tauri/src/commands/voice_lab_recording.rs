@@ -16,7 +16,7 @@ use crate::engine::runtime_state::{
     revoke_runtime_session_authority, VOICE_RECORDING_OWNER_ID,
 };
 
-use super::voice_lab::{training_recovery_status, TrainingRecoveryStatus, create_voice_backup, check_voice_backup, restore_voice_backup, voice_backup_active, BackupReport, archive_guided_take, current_voice_lab_build_snapshot, legacy_protection_status, migrate_legacy_recordings, LegacyMigrationResult, LegacyProtectionStatus, SavedRecordingPage, saved_recordings_page, saved_recording_audio, VoiceLabStoragePaths};
+use super::voice_lab::{training_recovery_status, TrainingRecoveryStatus, create_voice_backup, check_voice_backup, restore_voice_backup, voice_backup_active, BackupReport, archive_guided_take, current_voice_lab_build_snapshot, legacy_protection_status, migrate_legacy_recordings, LegacyMigrationResult, LegacyProtectionStatus, SavedRecordingPage, saved_recordings_page, saved_recording_audio, VoiceLabStoragePaths, inspect_accepted_take_recovery, AcceptedTakeRecoveryInspection};
 
 mod guided_lines;
 mod storage_transaction;
@@ -223,6 +223,52 @@ pub(crate) fn voice_lab_recording_blocks_app_exit() -> bool {
 #[tauri::command]
 pub fn get_voice_lab_guided_recording_state() -> GuidedRecordingState {
     current_state()
+}
+
+/// On-demand evidence only: never chooses an "old" or "new" WAV from a
+/// filename and never moves, deletes or silently accepts archived audio.
+/// Holding PendingDraft ownership prevents a concurrent Save/Retry from
+/// changing the application's own Draft/accepted files mid-inspection.
+#[tauri::command]
+pub fn inspect_voice_lab_accepted_take_recovery(
+    line_id: u32,
+) -> Result<AcceptedTakeRecoveryInspection, String> {
+    let exact_text = guided_text(line_id)
+        .ok_or_else(|| "voice_lab:accepted_recovery:invalid_guided_line".to_string())?;
+    if voice_backup_active() || current_voice_lab_build_snapshot().active {
+        return Err("voice_lab:accepted_recovery:voice_build_or_backup_active".to_string());
+    }
+    let _draft_owner = draft_store().lock()
+        .map_err(|_| "voice_lab:accepted_recovery:draft_state_unavailable".to_string())?;
+    let runtime = latest_runtime_session_state();
+    if runtime.has_active_session || runtime.snapshot.is_some()
+        || runtime.blocker != "runtime_session:no_active_session"
+        || active_guided_take_line_id().is_some()
+    {
+        return Err("voice_lab:accepted_recovery:audio_operation_active".to_string());
+    }
+    let storage = storage_paths();
+    let canonical_accepted = accepted_path(line_id);
+    let canonical_previous = canonical_accepted.with_extension("wav.previous");
+    let canonical_draft = draft_path(line_id);
+    let native_accepted = accepted_native_rate_path(line_id);
+    let native_previous = native_accepted.with_extension("wav.previous");
+    let native_draft = draft_native_rate_path(line_id);
+    inspect_accepted_take_recovery(
+        &storage,
+        line_id,
+        exact_text,
+        [
+            canonical_accepted.as_path(),
+            canonical_previous.as_path(),
+            canonical_draft.as_path(),
+        ],
+        [
+            native_accepted.as_path(),
+            native_previous.as_path(),
+            native_draft.as_path(),
+        ],
+    )
 }
 
 pub fn start_voice_lab_guided_take(

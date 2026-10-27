@@ -20,7 +20,10 @@ mod archive_dataset;
 pub(crate) use archive_dataset::{choose_archived_takes, ArchivedSelection};
 pub(crate) use dataset_history::archived_frozen_review_matches;
 pub(crate) use actor_history::{actor_version_page, ActorVersionPage};
-pub(crate) use recording_archive::{archive_guided_take, saved_recordings_page, saved_recording_audio, SavedRecordingPage};
+pub(crate) use recording_archive::{
+    archive_guided_take, inspect_accepted_take_recovery, AcceptedTakeRecoveryInspection,
+    saved_recordings_page, saved_recording_audio, SavedRecordingPage,
+};
 pub(crate) use recording_migration::{legacy_protection_status, migrate_legacy_recordings, LegacyMigrationResult, LegacyProtectionStatus};
 
 #[cfg(target_os = "windows")]

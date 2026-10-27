@@ -139,19 +139,20 @@ fn archive_inputs(
 }
 
 /// Read-only verification, never generates or repairs the archive on a status read.
-pub(crate) fn guided_take_is_archived(
+// Reuse the single immutable receipt, content-address and verified_archive
+// law for both regular dataset checks and read-only interrupted Accept
+// inspection. The caller must already hold ARCHIVE_LOCK.
+fn verified_archive_id_for_pair_locked(
     storage: &VoiceLabStoragePaths, line_id: u32, exact_text: &str,
     canonical_path: &Path, native_rate_path: Option<&Path>,
-) -> Result<bool, String> {
-    let _guard = ARCHIVE_LOCK.get_or_init(|| Mutex::new(())).lock()
-        .map_err(|_| "voice_lab:archive_lock_unavailable")?;
+) -> Result<Option<String>, String> {
     let prepared = archive_inputs(line_id, exact_text, canonical_path, native_rate_path)?;
     let shard = storage.saved_root.join("Recordings").join(&prepared.id[..2]);
     let complete = shard.join(&prepared.id);
     match fs::symlink_metadata(&complete) {
         Ok(_) => {
             verified_archive(&complete, &prepared.receipt)?;
-            Ok(true)
+            Ok(Some(prepared.id))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let pending = shard.join(format!(".pending-{}", prepared.id));
@@ -159,14 +160,179 @@ pub(crate) fn guided_take_is_archived(
                 Ok(_) => {
                     verified_archive(&pending, &prepared.receipt)
                         .map_err(|_| "voice_lab:archive_pending_recovery_required")?;
-                    Ok(false)
+                    Ok(None) // a staged receipt is not a published immutable archive
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
                 Err(error) => Err(format!("voice_lab:archive_pending_metadata_failed:{error}")),
             }
         }
         Err(error) => Err(format!("voice_lab:archive_metadata_failed:{error}")),
     }
+}
+
+pub(crate) fn guided_take_is_archived(
+    storage: &VoiceLabStoragePaths, line_id: u32, exact_text: &str,
+    canonical_path: &Path, native_rate_path: Option<&Path>,
+) -> Result<bool, String> {
+    let _guard = ARCHIVE_LOCK.get_or_init(|| Mutex::new(())).lock()
+        .map_err(|_| "voice_lab:archive_lock_unavailable")?;
+    Ok(verified_archive_id_for_pair_locked(
+        storage, line_id, exact_text, canonical_path, native_rate_path,
+    )?.is_some())
+}
+
+// Files may be split across Accepted, *.previous and Draft after a crash.
+// These are locations, NOT a claim about old/new chronology; only an exact
+// verified immutable receipt may bind a canonical and native-rate pair.
+const TAKE_LOCATIONS: [&str; 3] = ["accepted", "previous", "draft"];
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AcceptedTakePairEvidence {
+    pub canonical_location: String,
+    pub native_location: String,
+    pub archive_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AcceptedTakeRecoveryInspection {
+    pub line_id: u32,
+    pub verified_pairs: Vec<AcceptedTakePairEvidence>,
+    pub unverified_files: Vec<String>,
+    pub previous_backup_present: bool,
+    pub verification_incomplete: bool,
+    pub needs_attention: bool,
+    pub note: String,
+}
+
+// Read only known exact application-owned files and explicitly reject
+// symlinks, directories and oversized artifacts. Unknown file ownership
+// fails closed rather than allowing an apparently complete status.
+fn present_accepted_take_candidates<'a>(
+    paths: [&'a Path; 3], max_bytes: u64,
+) -> Result<Vec<(usize, &'a Path)>, String> {
+    let mut result = Vec::new();
+    for (slot, path) in paths.into_iter().enumerate() {
+        match fs::symlink_metadata(path) {
+            Ok(metadata) => {
+                if !metadata.file_type().is_file()
+                    || metadata.len() < 44 || metadata.len() > max_bytes
+                {
+                    return Err("voice_lab:accepted_recovery:untrusted_take_file".to_string());
+                }
+                result.push((slot, path));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err("voice_lab:accepted_recovery:take_metadata_unknown".to_string()),
+        }
+    }
+    Ok(result)
+}
+
+// Pure classification, independent from IO and Windows hashing for narrow
+// regression fixtures. Archive evidence is exact identity, not permission
+// to move, delete or replace files in the currently interrupted transaction.
+fn classify_accepted_take_candidates(
+    line_id: u32,
+    canonical: &[(usize, &Path)],
+    native: &[(usize, &Path)],
+    mut verify: impl FnMut(&Path, Option<&Path>) -> Result<Option<String>, String>,
+) -> AcceptedTakeRecoveryInspection {
+    let mut verified_pairs = Vec::new();
+    let mut covered_canonical = [false; 3];
+    let mut covered_native = [false; 3];
+    let mut verification_incomplete = false;
+
+    for &(ci, canonical_path) in canonical {
+        if native.is_empty() {
+            match verify(canonical_path, None) {
+                Ok(Some(id)) => {
+                    covered_canonical[ci] = true;
+                    verified_pairs.push(AcceptedTakePairEvidence {
+                        canonical_location: TAKE_LOCATIONS[ci].to_string(),
+                        native_location: "none".to_string(),
+                        archive_id: id,
+                    });
+                }
+                Ok(None) => {}
+                Err(_) => verification_incomplete = true,
+            }
+        } else {
+            for &(ni, native_path) in native {
+                match verify(canonical_path, Some(native_path)) {
+                    Ok(Some(id)) => {
+                        covered_canonical[ci] = true;
+                        covered_native[ni] = true;
+                        verified_pairs.push(AcceptedTakePairEvidence {
+                            canonical_location: TAKE_LOCATIONS[ci].to_string(),
+                            native_location: TAKE_LOCATIONS[ni].to_string(),
+                            archive_id: id,
+                        });
+                    }
+                    Ok(None) => {}
+                    Err(_) => verification_incomplete = true,
+                }
+            }
+        }
+    }
+
+    let mut unverified_files = Vec::new();
+    for &(index, _) in canonical {
+        if !covered_canonical[index] {
+            unverified_files.push(format!("{} canonical WAV", TAKE_LOCATIONS[index]));
+        }
+    }
+    for &(index, _) in native {
+        if !covered_native[index] {
+            unverified_files.push(format!("{} native-rate WAV", TAKE_LOCATIONS[index]));
+        }
+    }
+    let previous_backup_present = canonical.iter().any(|(slot, _)| *slot == 1)
+        || native.iter().any(|(slot, _)| *slot == 1);
+    let active_pair_verified = verified_pairs.iter().any(|pair| {
+        pair.canonical_location == "accepted"
+            && (pair.native_location == "accepted" || pair.native_location == "none")
+    });
+    let needs_attention = previous_backup_present || !unverified_files.is_empty()
+        || verification_incomplete || (!canonical.is_empty() && !active_pair_verified);
+    let note = if verification_incomplete {
+        "Some source/archive combinations could not be verified. No automatic recovery or cleanup was attempted."
+    } else if needs_attention {
+        "Verified pairs identify exact immutable archive contents, not the correct promotion order. Preserve all files until explicit recovery."
+    } else if verified_pairs.is_empty() {
+        "No accepted WAV candidate was present. No files were changed."
+    } else {
+        "The active WAV pairing matches an immutable archive receipt. Inspection only; no files were changed."
+    }.to_string();
+
+    AcceptedTakeRecoveryInspection {
+        line_id, verified_pairs, unverified_files, previous_backup_present,
+        verification_incomplete, needs_attention, note,
+    }
+}
+
+/// Inspect at most nine exact candidate combinations, on explicit request.
+/// Never publish staged receipts as proof; never infer chronology from a
+/// .previous suffix. The result never moves, replaces or deletes a WAV.
+pub(crate) fn inspect_accepted_take_recovery(
+    storage: &VoiceLabStoragePaths,
+    line_id: u32,
+    exact_text: &str,
+    canonical_paths: [&Path; 3],
+    native_paths: [&Path; 3],
+) -> Result<AcceptedTakeRecoveryInspection, String> {
+    if line_id == 0 || exact_text.trim().is_empty() {
+        return Err("voice_lab:accepted_recovery:invalid_guided_line".to_string());
+    }
+    let _guard = ARCHIVE_LOCK.get_or_init(|| Mutex::new(())).lock()
+        .map_err(|_| "voice_lab:archive_lock_unavailable")?;
+    let canonical = present_accepted_take_candidates(canonical_paths, MAX_CANONICAL_BYTES)?;
+    let native = present_accepted_take_candidates(native_paths, MAX_NATIVE_BYTES)?;
+    Ok(classify_accepted_take_candidates(
+        line_id, &canonical, &native,
+        |review, sidecar| verified_archive_id_for_pair_locked(
+            storage, line_id, exact_text, review, sidecar,
+        ),
+    ))
 }
 
 /// Archive a guided take BEFORE permitting the legacy accepted-take replacement.
@@ -530,5 +696,85 @@ mod tests {
         fs::write(item, wav(12)).unwrap();
         assert!(archive_guided_take(&storage, 2, "Thanks for joining today.", &source, None).is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+// These tests exercise the bounded cross-location decision without filesystem
+// execution or Windows-only native hashing. They are authored but not run in
+// the REMOTE_GITHUB source environment.
+#[cfg(test)]
+mod interrupted_accepted_pair_contract_tests {
+    use super::{classify_accepted_take_candidates, AcceptedTakePairEvidence};
+    use std::path::Path;
+
+    #[test]
+    fn interrupted_save_finds_old_previous_pair_and_new_draft_active_pair() {
+        let canonical = [
+            (0, Path::new("canonical-accepted")),
+            (1, Path::new("canonical-previous")),
+            (2, Path::new("canonical-draft")),
+        ];
+        let native = [
+            (0, Path::new("native-accepted")),
+            (1, Path::new("native-previous")),
+        ];
+        let report = classify_accepted_take_candidates(
+            17, &canonical, &native, |c, n| match (c.to_str(), n.and_then(Path::to_str)) {
+                (Some("canonical-previous"), Some("native-previous")) => Ok(Some("old-receipt".into())),
+                (Some("canonical-draft"), Some("native-accepted")) => Ok(Some("new-receipt".into())),
+                _ => Ok(None),
+            },
+        );
+        assert!(report.needs_attention);
+        assert!(report.previous_backup_present);
+        assert!(!report.verification_incomplete);
+        assert_eq!(report.verified_pairs.len(), 2);
+        assert!(report.verified_pairs.contains(&AcceptedTakePairEvidence {
+            canonical_location: "previous".into(), native_location: "previous".into(),
+            archive_id: "old-receipt".into(),
+        }));
+        assert!(report.verified_pairs.contains(&AcceptedTakePairEvidence {
+            canonical_location: "draft".into(), native_location: "accepted".into(),
+            archive_id: "new-receipt".into(),
+        }));
+        assert_eq!(report.unverified_files, vec!["accepted canonical WAV"]);
+    }
+
+    #[test]
+    fn fully_accepted_archived_pair_does_not_require_recovery() {
+        let report = classify_accepted_take_candidates(
+            4, &[(0, Path::new("canonical"))], &[(0, Path::new("native"))],
+            |_, _| Ok(Some("verified-receipt".into())),
+        );
+        assert!(!report.needs_attention);
+        assert!(!report.previous_backup_present);
+        assert!(report.unverified_files.is_empty());
+        assert_eq!(report.verified_pairs[0].archive_id, "verified-receipt");
+    }
+
+    #[test]
+    fn unmatched_backup_and_failed_lookup_must_remain_unverified() {
+        let report = classify_accepted_take_candidates(
+            9, &[(1, Path::new("previous"))], &[(0, Path::new("native"))],
+            |_, _| Err("archive_missing_or_unavailable".into()),
+        );
+        assert!(report.needs_attention);
+        assert!(report.verification_incomplete);
+        assert!(report.verified_pairs.is_empty());
+        assert!(report.unverified_files.contains(&"previous canonical WAV".to_string()));
+        assert!(report.unverified_files.contains(&"accepted native-rate WAV".to_string()));
+    }
+
+    #[test]
+    fn legacy_canonical_only_archive_never_claims_an_unmatched_native_sidecar() {
+        let report = classify_accepted_take_candidates(
+            12, &[(0, Path::new("canonical"))], &[],
+            |_, sidecar| {
+                assert!(sidecar.is_none());
+                Ok(Some("legacy-canonical-only".into()))
+            },
+        );
+        assert!(!report.needs_attention);
+        assert_eq!(report.verified_pairs[0].native_location, "none");
     }
 }

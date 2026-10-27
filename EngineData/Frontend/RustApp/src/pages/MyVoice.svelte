@@ -8,6 +8,7 @@
     type LegacyProtectionStatus,
     type SavedRecordingPage,
     type SavedRecording,
+    type AcceptedTakeRecoveryInspection,
   } from "../app/bridge/myVoiceApi";
   import { myVoiceBuildApi, type MyVoiceBuildStatus } from "../app/bridge/myVoiceBuildApi";
   import { runtimeApi } from "../app/bridge/runtimeApi";
@@ -60,6 +61,11 @@
   let savedLibraryError = $state(false);
   let savedLibraryPage = $state<SavedRecordingPage | null>(null);
   let savedPlayingId = $state<string | null>(null);
+  // Read-only explicit inspection; this is presentation state, not a second
+  // filesystem or recovery owner. Stale results are hidden for other lines.
+  let acceptedFileInspection = $state<AcceptedTakeRecoveryInspection | null>(null);
+  let inspectedAcceptedLineId = $state<number | null>(null);
+  let inspectingAcceptedFiles = $state(false);
   let improvementTakes = $state<Record<number, string>>({});
   let improvementAuthorized = $state(false);
   let improvementStarting = $state(false);
@@ -311,6 +317,9 @@
   }
 
   const currentLine = $derived(recordingState.lines.find((line) => line.line_id === selectedLineId) ?? null);
+  const selectedAcceptedEvidence = $derived(
+    inspectedAcceptedLineId === selectedLineId ? acceptedFileInspection : null,
+  );
   // Keep the creator mounted while hidden: its build status owns Stop/Review recovery.
   const creatorNeedsAttention = $derived(Boolean(
     recordingStatusUnknown || isRecording || pendingLineId !== null || recordingState.orphaned_drafts.length > 0
@@ -583,6 +592,8 @@
     acceptedMayHaveChanged = false,
   ): Promise<void> {
     if (disposed) return;
+    acceptedFileInspection = null;
+    inspectedAcceptedLineId = null;
     recordingStatusUnknown = true;
     onRecordingChange(true);
     onNotice(message);
@@ -601,6 +612,10 @@
     acceptedMayHaveChanged = false,
   ): Promise<void> {
     if (disposed) return;
+    // Any recording mutation makes a previously inspected filesystem
+    // snapshot stale. Never retain its 'verified' label after Save/Retry.
+    acceptedFileInspection = null;
+    inspectedAcceptedLineId = null;
     if (result.state === "frontend_bridge_error" || !result.recording) {
       await reconcileUncertainRecordingAction(
         "Couldn't verify the recording action. Checking recording status.",
@@ -631,6 +646,35 @@
         onRecordingChange(true);
         onNotice("Couldn't check recording status. Select Retry status.");
       }
+    }
+  }
+
+  async function inspectAcceptedFiles(): Promise<void> {
+    if (busy || inspectingAcceptedFiles || selectedLineId === null
+      || recordingStatusUnknown || isRecording || voiceChangesLocked
+      || buildSnapshot?.active || buildSnapshot?.preview_active) return;
+    const inspectedLine = selectedLineId;
+    inspectingAcceptedFiles = true;
+    busy = true;
+    acceptedFileInspection = null;
+    inspectedAcceptedLineId = null;
+    try {
+      const report = await myVoiceApi.inspectAcceptedTake(inspectedLine);
+      if (disposed) return;
+      if (!report || report.line_id !== inspectedLine) {
+        onNotice("Couldn't verify the saved WAV files. No recovery action was taken.");
+        return;
+      }
+      inspectedAcceptedLineId = inspectedLine;
+      acceptedFileInspection = report;
+      if (report.needs_attention) {
+        onNotice("Some saved WAV files need attention. The inspection did not move or delete them.");
+      }
+    } catch {
+      if (!disposed) onNotice("Couldn't inspect this recording's archive evidence. Files were unchanged.");
+    } finally {
+      inspectingAcceptedFiles = false;
+      busy = false;
     }
   }
 
@@ -949,7 +993,43 @@
                 {/if}
               </div>
               <p class="mb-0 mt-4 text-[20px] font-medium leading-8 tracking-[-0.015em]">{currentLine.text}</p>
+              <button type="button" class="ti-button ti-button-secondary mt-4 text-xs"
+                disabled={busy || inspectingAcceptedFiles || recordingStatusUnknown || isRecording
+                  || voiceChangesLocked || buildSnapshot?.active === true || buildSnapshot?.preview_active === true}
+                onclick={() => void inspectAcceptedFiles()}>
+                {inspectingAcceptedFiles ? "Checking saved WAVs..." : "Inspect Save files"}
+              </button>
+              <p class="mt-2 text-xs text-[var(--ti-text-muted)]">
+                Read-only check of accepted WAVs, previous backups, Draft files and immutable archives.
+              </p>
             </div>
+            {#if selectedAcceptedEvidence}
+              <section class="mt-4 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-4"
+                aria-label="Accepted recording archive inspection">
+                <strong class="text-sm font-semibold">
+                  {selectedAcceptedEvidence.needs_attention ? "Saved WAVs need attention" : "Archive evidence checked"}
+                </strong>
+                <p class="mt-2 text-sm text-[var(--ti-text-muted)]">{selectedAcceptedEvidence.note}</p>
+                {#each selectedAcceptedEvidence.verified_pairs as match}
+                  <p class="mt-2 text-sm text-[var(--ti-text-muted)]">
+                    Verified archive pair: {match.canonical_location} canonical + {match.native_location} native-rate
+                  </p>
+                {/each}
+                {#each selectedAcceptedEvidence.unverified_files as name}
+                  <p class="mt-2 text-sm text-[var(--ti-warning)]">Unverified WAV: {name}</p>
+                {/each}
+                {#if selectedAcceptedEvidence.previous_backup_present}
+                  <p class="mt-2 text-sm text-[var(--ti-warning)]">
+                    An earlier .wav.previous backup remains. Do not overwrite or remove it without verified recovery.
+                  </p>
+                {/if}
+                {#if selectedAcceptedEvidence.verification_incomplete}
+                  <p class="mt-2 text-sm text-[var(--ti-warning)]">
+                    Some archive checks could not complete; no unmatched file should be treated as recovered.
+                  </p>
+                {/if}
+              </section>
+            {/if}
             {#if recordingState.draft_recovery_error}
               <p role="alert" class="mt-4 text-sm text-[var(--ti-warning)]">
                 Couldn't verify unfinished Draft files: {recordingState.draft_recovery_error}

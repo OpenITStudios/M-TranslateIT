@@ -2,6 +2,28 @@
 
 ## Current Status
 
+**Read-only interrupted Accept archive evidence (2026-10-27).**
+An interrupted Save can leave canonical and native-rate WAVs divided among
+Accepted, `.wav.previous` and Draft paths. Filename-based guesses would
+silently choose the wrong version; the prior flow preserved such files
+but could not identify pairs backed by immutable recording evidence.
+The canonical immutable recording archive owner now exposes a read-only,
+on-demand inspection of at most nine exact canonical/native slot pairings,
+reusing its content-addressed receipt and verified archive copy checks.
+Results distinguish an archive-confirmed pairing (with its verified ID)
+from unmatched file paths, previous backups and incomplete verification.
+Legacy canonical-only archives are classified only when no native WAV is
+present. No staged archive, invalid/symlinked path or unverified source is
+promoted to accepted audio. The existing My Voice page has an explicit
+"Inspect Save files" control for the selected reading line, with warnings
+for unmatched and previous files; the result is presentation-only and
+invalidated after a recording mutation or uncertain response; concurrent
+page actions are blocked during the explicit inspection. No source file is moved, deleted,
+rewritten, or auto-recovered by this inspection. Four pure Rust classifier
+fixtures and an existing TypeScript UI/source contract were extended.
+REMOTE_GITHUB pinned source/tree inspection only: Rust/TypeScript builds,
+tests, target Windows filesystem, audio and CI are NOT EXECUTED.
+
 **My Voice Accept pair preflight and rollback ordering — source repair (2026-10-27).**
 The accepted WAV transaction previously deleted a canonical `.wav.previous`
 backup whenever the active destination also existed. That backup could be the
@@ -492,14 +514,14 @@ Earlier Text/runtime and paused My Voice source-candidate evidence retains its o
 
 ## Next Step
 
-Review any remaining source-level failure paths in Accept that could
-separate canonical/native accepted WAVs or their immutable archive evidence,
-without automatically deleting or promoting ambiguous `.wav.previous`
-files. A partially completed accepted-take Save requires an explicit,
-verified recovery decision and is not solved by retrying the rename blindly.
-Keep existing Rust regression tests as NOT EXECUTED until authorized
-integrated validation; native Windows/Meeting/My Voice acceptance stays
-deferred.
+Keep interrupted accepted-take recovery fail-closed. Consider only an
+explicitly authorized recovery mutation if immutable archive evidence
+unambiguously identifies the source pair, all affected destinations and
+backups remain verified, and a reversible on-disk transaction can be
+reasoned about; otherwise preserve the files and report attention.
+The read-only inspector is not an automatic repair. Target-Windows native
+build, filesystem, capture, and acceptance remain NOT EXECUTED until the
+owner authorizes the single integrated validation phase.
 When PC-control authorization is available again, finish the existing integrated native capture/status/Diagnostics/Stop check on the pinned repaired candidate. Until then retain the goal as incomplete; source and fixture work is finished for this bounded outcome, so do not repeat checks or invent adjacent work while waiting. Historical native drops, incoming error and uncontrolled phrases remain unattributed. No CI, model/context/style/glossary change, incoming toggle, queue enlargement, blind retry or corrective translation layer is authorized.
 
 ## Retained My Voice source candidate (paused)
