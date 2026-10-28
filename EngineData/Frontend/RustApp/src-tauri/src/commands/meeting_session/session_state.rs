@@ -204,6 +204,21 @@ fn outbound_status_update_allowed(
     })
 }
 
+// Outbound inference and playback use separate consumers. A late error from
+// an earlier playback sequence may still be in the same Live generation, but
+// must not rewind the "latest phrase" status after a newer turn is displayed.
+// Per-turn delivery state and playback activity keep their independent owners.
+fn outbound_status_sequence_is_fresh(
+    status: &MeetingOutboundRuntimeStatus,
+    generation: u64,
+    session_id: &str,
+    utterance_sequence: u64,
+) -> bool {
+    status.generation != Some(generation)
+        || status.session_id.as_deref() != Some(session_id)
+        || utterance_sequence >= status.utterance_sequence
+}
+
 pub(super) fn update_outbound_status(
     generation: u64,
     session_id: &str,
@@ -219,7 +234,11 @@ pub(super) fn update_outbound_status(
         // If Stop already revoked the generation, its cleared status cannot
         // be repopulated; if this write wins first, Stop clears it afterward.
         let owner = latest_runtime_session_state();
-        if !outbound_status_update_allowed(owner.snapshot.as_ref(), generation, session_id) {
+        if !outbound_status_update_allowed(owner.snapshot.as_ref(), generation, session_id)
+            || !outbound_status_sequence_is_fresh(&status, generation, session_id, utterance_sequence)
+        {
+            // Also suppress an obsolete error incident: the committed turn
+            // still owns its outcome, but it cannot overwrite a newer UI stage.
             return;
         }
         let timing = if status.generation == Some(generation)
@@ -504,6 +523,53 @@ mod incoming_status_terminal_tests {
         reset.stage = "listening".to_string();
         assert!(!incoming_status_update_allowed(
             &reset, "session-a", Some(&session_a),
+        ));
+    }
+
+    #[test]
+    fn earlier_playback_failure_cannot_rewind_newer_live_utterance_status() {
+        let live = live_session("meeting-a");
+        let mut status = super::idle_outbound_status();
+        status.generation = Some(42);
+        status.session_id = Some("meeting-a".to_string());
+        status.utterance_sequence = 13;
+        status.stage = "transcribing".to_string();
+
+        // Session/generation authority by itself admits #12. The sequence
+        // watermark must separately reject its late playback failure.
+        assert!(super::outbound_status_update_allowed(Some(&live), 42, "meeting-a"));
+        assert!(!super::outbound_status_sequence_is_fresh(
+            &status, 42, "meeting-a", 12,
+        ));
+        assert_eq!(status.utterance_sequence, 13);
+        assert_eq!(status.stage, "transcribing");
+        // Updates belonging to the current phrase and later phrases remain
+        // possible, even if the older playback is still audible.
+        assert!(super::outbound_status_sequence_is_fresh(
+            &status, 42, "meeting-a", 13,
+        ));
+        assert!(super::outbound_status_sequence_is_fresh(
+            &status, 42, "meeting-a", 14,
+        ));
+    }
+
+    #[test]
+    fn new_generation_is_not_blocked_by_prior_session_sequence() {
+        let mut status = super::idle_outbound_status();
+        status.generation = Some(41);
+        status.session_id = Some("meeting-old".to_string());
+        status.utterance_sequence = 99;
+
+        // A newly authorized Meeting has its own sequence identity. Canonical
+        // Start still resets the status store; this check never reuses the old
+        // generation's sequence as an authority gate.
+        let next = live_session("meeting-new");
+        assert!(super::outbound_status_update_allowed(Some(&next), 42, "meeting-new"));
+        assert!(super::outbound_status_sequence_is_fresh(
+            &status, 42, "meeting-new", 1,
+        ));
+        assert!(!super::outbound_status_update_allowed(
+            Some(&next), 41, "meeting-old",
         ));
     }
 
