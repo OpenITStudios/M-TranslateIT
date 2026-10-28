@@ -6,7 +6,8 @@ use crate::engine::runtime_state::{
 };
 
 use super::helper_bridge::{
-    cancel_helper_bridge_meeting_session, send_helper_worker_task, HelperBridgeWorkerResponse,
+    cancel_helper_bridge_meeting_session, send_helper_worker_task,
+    shutdown_helper_bridge_for_app_exit, HelperBridgeWorkerResponse,
 };
 use super::helper_bridge_runtime::{
     clear_active_request, runtime, set_blocked, stop_child, validate_worker_response_contract,
@@ -15,7 +16,7 @@ use super::helper_bridge_runtime::{
 
 fn reset_bridge_runtime() {
     if let Ok(mut bridge) = runtime().lock() {
-        stop_child(&mut bridge);
+        assert!(stop_child(&mut bridge), "tests must not drop an unjoined helper owner");
         *bridge = HelperBridgeRuntime::default();
     }
 }
@@ -235,6 +236,87 @@ fn helper_hard_cancel_is_session_scoped_and_cleans_matching_metadata() {
             bridge.last_error.as_deref(),
             Some("helper_bridge:meeting_session_hard_cancelled")
         );
+    }
+    reset_bridge_runtime();
+}
+
+
+#[test]
+fn exit_is_nonblocking_when_startup_owns_the_helper_mutex() {
+    let _serial = crate::engine::runtime_state::runtime_test_guard();
+    reset_bridge_runtime();
+    let held = runtime().lock().expect("test owns helper mutex");
+    assert!(!shutdown_helper_bridge_for_app_exit());
+    drop(held);
+    reset_bridge_runtime();
+}
+
+#[test]
+fn incomplete_stderr_cleanup_prevents_clean_exit_until_retry_finishes() {
+    let _serial = crate::engine::runtime_state::runtime_test_guard();
+    reset_bridge_runtime();
+
+    let (sender, receiver) = std::sync::mpsc::channel::<()>();
+    {
+        let mut bridge = runtime().lock().expect("helper mutex");
+        bridge.state = "ready".to_string();
+        bridge.stderr_logger = Some(std::thread::spawn(move || {
+            let _ = receiver.recv();
+        }));
+    }
+
+    assert!(!shutdown_helper_bridge_for_app_exit());
+    {
+        let bridge = runtime().lock().expect("helper mutex after failed exit");
+        assert_eq!(bridge.state, "blocked");
+        assert_eq!(bridge.last_error.as_deref(), Some("helper_bridge:cleanup_incomplete"));
+        assert!(bridge.stderr_logger.is_some(), "live stderr owner must be retained");
+    }
+
+    sender.send(()).expect("release stderr reader");
+    assert!(shutdown_helper_bridge_for_app_exit());
+    {
+        let bridge = runtime().lock().expect("helper mutex after clean exit");
+        assert_eq!(bridge.state, "stopped");
+        assert!(bridge.child.is_none());
+        assert!(bridge.stderr_logger.is_none());
+        assert!(bridge.last_error.is_none());
+    }
+    reset_bridge_runtime();
+}
+
+#[test]
+fn meeting_retry_stop_cannot_claim_success_until_stderr_owner_is_reaped() {
+    let _serial = crate::engine::runtime_state::runtime_test_guard();
+    reset_bridge_runtime();
+
+    let (sender, receiver) = std::sync::mpsc::channel::<()>();
+    {
+        let mut bridge = runtime().lock().expect("helper mutex");
+        bridge.state = "ready".to_string();
+        bridge.active_meeting_session_id = Some("test-session".to_string());
+        bridge.active_task = Some("translate".to_string());
+        bridge.stderr_logger = Some(std::thread::spawn(move || {
+            let _ = receiver.recv();
+        }));
+    }
+    let incomplete = cancel_helper_bridge_meeting_session("test-session");
+    assert!(!incomplete.ok);
+    assert_eq!(incomplete.state, "blocked");
+    {
+        let bridge = runtime().lock().expect("helper mutex");
+        assert_eq!(bridge.last_error.as_deref(), Some("helper_bridge:cleanup_incomplete"));
+        assert!(bridge.stderr_logger.is_some());
+    }
+
+    sender.send(()).expect("release stderr reader");
+    let resumed = cancel_helper_bridge_meeting_session("test-session");
+    assert!(resumed.ok);
+    assert_eq!(resumed.state, "stopped");
+    {
+        let bridge = runtime().lock().expect("helper mutex");
+        assert!(bridge.stderr_logger.is_none());
+        assert!(bridge.child.is_none());
     }
     reset_bridge_runtime();
 }

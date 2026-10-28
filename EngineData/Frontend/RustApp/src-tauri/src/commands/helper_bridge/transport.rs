@@ -276,6 +276,18 @@ fn send_worker_task_inner(task: &str, mut payload: Value) -> HelperBridgeWorkerR
     let (mut stdin, stdout, bridge_generation) = match runtime().lock() {
         Ok(mut runtime) => {
             if runtime.child.is_none() || runtime.stdin.is_none() || runtime.stdout.is_none() {
+                // A timed-out kill/stderr reader still owns resources even
+                // after its request pipes are removed. Do not downgrade that
+                // verified cleanup failure to an ordinary Stopped state.
+                if runtime.last_error.as_deref() == Some("helper_bridge:cleanup_incomplete") {
+                    return blocked_response_from_runtime(
+                        task,
+                        &request_id,
+                        priority,
+                        "Python helper cleanup is incomplete. Retry Stop before another worker request.",
+                        &runtime,
+                    );
+                }
                 runtime.state = "stopped".to_string();
                 runtime.message = "Helper worker is not running. Start Helper first.".to_string();
                 runtime.last_error = Some("helper_bridge:not_running".to_string());
@@ -318,12 +330,19 @@ fn send_worker_task_inner(task: &str, mut payload: Value) -> HelperBridgeWorkerR
         let response = match runtime().lock() {
             Ok(mut runtime) => {
                 if runtime.generation_token == bridge_generation {
-                    stop_child(&mut runtime);
+                    let cleaned = stop_child(&mut runtime);
                     runtime.generation_token = runtime.generation_token.saturating_add(1);
-                    runtime.state = "stopped".to_string();
-                    runtime.message =
-                        format!("Failed to write {task} request to Python helper worker: {error}");
-                    runtime.last_error = Some(format!("helper_bridge:{task}_write_failed:{error}"));
+                    runtime.state = if cleaned { "stopped" } else { "blocked" }.to_string();
+                    runtime.message = if cleaned {
+                        format!("Failed to write {task} request to Python helper worker: {error}")
+                    } else {
+                        format!("Failed to write {task} request, and Python helper cleanup remains incomplete: {error}")
+                    };
+                    runtime.last_error = Some(if cleaned {
+                        format!("helper_bridge:{task}_write_failed:{error}")
+                    } else {
+                        "helper_bridge:cleanup_incomplete".to_string()
+                    });
                     clear_active_request(&mut runtime, &request_id);
                     runtime.provider_ready = false;
                     runtime.cuda_ready = false;
@@ -364,14 +383,23 @@ fn send_worker_task_inner(task: &str, mut payload: Value) -> HelperBridgeWorkerR
             let response = match runtime().lock() {
                 Ok(mut runtime) => {
                     if runtime.generation_token == bridge_generation {
-                        stop_child(&mut runtime);
+                        let cleaned = stop_child(&mut runtime);
                         runtime.generation_token = runtime.generation_token.saturating_add(1);
-                        runtime.state = "stopped".to_string();
-                        runtime.message = format!(
+                        runtime.state = if cleaned { "stopped" } else { "blocked" }.to_string();
+                        runtime.message = if cleaned {
+                            format!(
                                 "Failed to read {task} response from Python helper worker before deadline: {error}"
-                            );
-                        runtime.last_error =
-                            Some(format!("helper_bridge:{task}_read_failed:{error}"));
+                            )
+                        } else {
+                            format!(
+                                "Failed to read {task} response, and Python helper cleanup remains incomplete: {error}"
+                            )
+                        };
+                        runtime.last_error = Some(if cleaned {
+                            format!("helper_bridge:{task}_read_failed:{error}")
+                        } else {
+                            "helper_bridge:cleanup_incomplete".to_string()
+                        });
                         clear_active_request(&mut runtime, &request_id);
                         runtime.provider_ready = false;
                         runtime.cuda_ready = false;

@@ -18,7 +18,7 @@ use super::helper_bridge_runtime::{
     set_blocked, spawn_stderr_logger, status_from_runtime, stop_child, unix_ms,
     worker_response_deadline_ms, write_worker_request_with_deadline,
     validate_worker_response_contract, HelperBridgeActionResult,
-    HelperBridgeStatus,
+    HelperBridgeRuntime, HelperBridgeStatus,
 };
 
 mod functional_probe;
@@ -186,13 +186,21 @@ pub fn get_helper_bridge_status() -> HelperBridgeStatus {
                 .is_some();
             if child_exited {
                 invalidate_required_outbound_ai_readiness();
-                stop_child(&mut runtime);
-                runtime.state = "stopped".to_string();
-                runtime.message = "Helper worker process exited.".to_string();
+                let clean = stop_child(&mut runtime);
+                runtime.state = if clean { "stopped" } else { "blocked" }.to_string();
+                runtime.message = if clean {
+                    "Helper worker process exited.".to_string()
+                } else {
+                    "Helper worker exited but process/stderr cleanup is not yet verified. Retry the worker action after cleanup.".to_string()
+                };
                 runtime.cuda_ready = false;
                 runtime.provider_ready = false;
                 runtime.degraded_mode = false;
-                runtime.last_error = Some("helper_bridge:worker_exited".to_string());
+                runtime.last_error = Some(if clean {
+                    "helper_bridge:worker_exited"
+                } else {
+                    "helper_bridge:cleanup_incomplete"
+                }.to_string());
                 runtime.active_task = None;
                 runtime.active_request_id = None;
                 runtime.active_meeting_generation = None;
@@ -249,6 +257,24 @@ pub fn get_helper_bridge_status() -> HelperBridgeStatus {
     }
 }
 
+// A failed startup cannot report its ordinary ping/status error as final
+// if the child or stderr reader is still owned. Preserve those handles for
+// the next explicit attempt and keep readiness blocked until reaped.
+fn fail_start_after_spawn(
+    runtime: &mut HelperBridgeRuntime,
+    message: &str,
+    code: &str,
+) -> HelperBridgeActionResult {
+    if !stop_child(runtime) {
+        return set_blocked(
+            runtime,
+            "Python helper startup failed and process/stderr cleanup remains unverified. Retry only after cleanup completes.",
+            "helper_bridge:cleanup_incomplete",
+        );
+    }
+    set_blocked(runtime, message, code)
+}
+
 fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeActionResult {
     match runtime().lock() {
         Ok(mut runtime) => {
@@ -259,13 +285,20 @@ fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeAc
             {
                 return action_result(true, &runtime);
             }
-            // A duplicate Start must not clear an existing Meeting admission.
+            runtime.generation_token = runtime.generation_token.saturating_add(1);
+            invalidate_required_outbound_ai_readiness();
+            if !stop_child(&mut runtime) {
+                return set_blocked(
+                    &mut runtime,
+                    "The previous Python helper process or stderr reader has not finished cleanup. No new worker was started.",
+                    "helper_bridge:cleanup_incomplete",
+                );
+            }
+            // Clearing the Meeting admission marker is permitted only after
+            // the previous owned resources have actually been released.
             if clear_outbound_pipeline {
                 clear_any_meeting_outbound_pipeline();
             }
-            runtime.generation_token = runtime.generation_token.saturating_add(1);
-            invalidate_required_outbound_ai_readiness();
-            stop_child(&mut runtime);
             runtime.active_task = None;
             runtime.active_request_id = None;
             runtime.active_meeting_generation = None;
@@ -298,7 +331,7 @@ fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeAc
             command.stdout(Stdio::piped());
             command.stderr(Stdio::piped());
 
-            let mut child = match command.spawn() {
+            let child = match command.spawn() {
                 Ok(child) => child,
                 Err(error) => {
                     return set_blocked(
@@ -312,32 +345,29 @@ fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeAc
                 }
             };
 
+            // Transfer ownership immediately so even partial pipe setup
+            // failures use the same bounded, retryable stop path.
+            runtime.child = Some(child);
             let stderr_log_path = helper_stderr_log_path();
-            if let Some(stderr) = child.stderr.take() {
+            if let Some(stderr) = runtime.child.as_mut().and_then(|owned| owned.stderr.take()) {
                 runtime.stderr_logger = Some(spawn_stderr_logger(stderr, stderr_log_path.clone()));
                 runtime.stderr_log_path = Some(slash_path(&stderr_log_path));
             }
 
-            let mut stdin = match child.stdin.take() {
+            let mut stdin = match runtime.child.as_mut().and_then(|owned| owned.stdin.take()) {
                 Some(stdin) => stdin,
                 None => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    stop_child(&mut runtime);
-                    return set_blocked(
+                    return fail_start_after_spawn(
                         &mut runtime,
                         "Python helper stdin was not available after spawn.",
                         "helper_bridge:stdin_missing",
                     );
                 }
             };
-            let stdout = match child.stdout.take() {
+            let stdout = match runtime.child.as_mut().and_then(|owned| owned.stdout.take()) {
                 Some(stdout) => stdout,
                 None => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    stop_child(&mut runtime);
-                    return set_blocked(
+                    return fail_start_after_spawn(
                         &mut runtime,
                         "Python helper stdout was not available after spawn.",
                         "helper_bridge:stdout_missing",
@@ -345,7 +375,6 @@ fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeAc
                 }
             };
             let stdout = BufReader::new(stdout);
-            runtime.child = Some(child);
 
             let ping_deadline_ms = worker_response_deadline_ms("ping");
             if let Err(error) = write_worker_request_with_deadline(
@@ -353,8 +382,7 @@ fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeAc
                 &json!({ "command": "ping", "request_id": STARTUP_PING_REQUEST_ID }),
                 ping_deadline_ms,
             ) {
-                stop_child(&mut runtime);
-                return set_blocked(
+                return fail_start_after_spawn(
                     &mut runtime,
                     &format!("Failed to send ping to helper worker: {error}"),
                     "helper_bridge:ping_write_failed",
@@ -364,8 +392,7 @@ fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeAc
                 match read_worker_response_direct_with_deadline(stdout, ping_deadline_ms) {
                     Ok((value, stdout)) => (value, stdout),
                     Err(error) => {
-                        stop_child(&mut runtime);
-                        return set_blocked(
+                        return fail_start_after_spawn(
                             &mut runtime,
                             &format!(
                             "Failed to read helper worker ping response before deadline: {error}"
@@ -377,16 +404,14 @@ fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeAc
             if let Err(error) = validate_worker_response_contract(
                 "ping", STARTUP_PING_REQUEST_ID, &ping,
             ) {
-                stop_child(&mut runtime);
-                return set_blocked(
+                return fail_start_after_spawn(
                     &mut runtime,
                     &format!("Helper startup ping response violated protocol: {error}"),
                     "helper_bridge:ping_response_invalid",
                 );
             }
             if ping.get("ok").and_then(Value::as_bool) != Some(true) {
-                stop_child(&mut runtime);
-                return set_blocked(
+                return fail_start_after_spawn(
                     &mut runtime,
                     "Helper worker ping returned a non-ready response.",
                     "helper_bridge:ping_not_ok",
@@ -406,8 +431,7 @@ fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeAc
                         if let Err(error) = validate_worker_response_contract(
                             "status", STARTUP_STATUS_REQUEST_ID, &value,
                         ) {
-                            stop_child(&mut runtime);
-                            return set_blocked(
+                            return fail_start_after_spawn(
                                 &mut runtime,
                                 &format!("Helper startup status response violated protocol: {error}"),
                                 "helper_bridge:status_response_invalid",
@@ -417,8 +441,7 @@ fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeAc
                         Some(value)
                     }
                     Err(error) => {
-                        stop_child(&mut runtime);
-                        return set_blocked(
+                        return fail_start_after_spawn(
                             &mut runtime,
                             &format!("Failed to read helper worker status response before deadline: {error}"),
                             "helper_bridge:status_read_failed",
@@ -484,15 +507,23 @@ pub fn start_helper_bridge() -> HelperBridgeActionResult {
 }
 
 pub(crate) fn shutdown_helper_bridge_for_app_exit() -> bool {
-    clear_any_meeting_outbound_pipeline();
-    invalidate_required_outbound_ai_readiness();
-
-    let Ok(mut runtime) = runtime().lock() else {
+    // ExitRequested is a native UI event. Do not block it while a startup
+    // ping/AI task owns the helper transport mutex.
+    let Ok(mut runtime) = runtime().try_lock() else {
         return false;
     };
 
     runtime.generation_token = runtime.generation_token.saturating_add(1);
-    stop_child(&mut runtime);
+    invalidate_required_outbound_ai_readiness();
+    if !stop_child(&mut runtime) {
+        set_blocked(
+            &mut runtime,
+            "TranslateIT cannot confirm Python worker and stderr cleanup yet. The application remains open so shutdown can be retried safely.",
+            "helper_bridge:cleanup_incomplete",
+        );
+        return false;
+    }
+    clear_any_meeting_outbound_pipeline();
     runtime.state = "stopped".to_string();
     runtime.message = "Helper worker stopped for application exit.".to_string();
     runtime.cuda_ready = false;
@@ -513,12 +544,35 @@ pub fn cancel_helper_bridge_meeting_session(session_id: &str) -> HelperBridgeAct
     clear_meeting_outbound_pipeline_for_session(session_id);
     match runtime().lock() {
         Ok(mut runtime) => {
+            // A prior Stop may have timed out while reaping a worker/logger.
+            // Clearing active metadata is not proof the resource was released:
+            // the next session-scoped Retry Stop must finish that cleanup.
+            if runtime.last_error.as_deref() == Some("helper_bridge:cleanup_incomplete") {
+                if !stop_child(&mut runtime) {
+                    return set_blocked(
+                        &mut runtime,
+                        "Meeting helper cleanup is still incomplete; Retry Stop after the owned worker/logger exits.",
+                        "helper_bridge:cleanup_incomplete",
+                    );
+                }
+                runtime.state = "stopped".to_string();
+                runtime.message = "Prior Meeting helper process cleanup was verified after Retry Stop.".to_string();
+                runtime.last_error = Some("helper_bridge:cleanup_completed".to_string());
+                runtime.updated_unix_ms = unix_ms();
+                return action_result(true, &runtime);
+            }
             if !session_id.is_empty()
                 && runtime.active_meeting_session_id.as_deref() == Some(session_id)
             {
                 runtime.generation_token = runtime.generation_token.saturating_add(1);
                 invalidate_required_outbound_ai_readiness();
-                stop_child(&mut runtime);
+                if !stop_child(&mut runtime) {
+                    return set_blocked(
+                        &mut runtime,
+                        "Meeting helper Stop has not verified Python worker/stderr cleanup. Retry Stop before starting another session.",
+                        "helper_bridge:cleanup_incomplete",
+                    );
+                }
                 runtime.state = "stopped".to_string();
                 runtime.message = format!(
                     "In-flight helper inference for Meeting session {session_id} was hard-cancelled during full Meeting Stop."

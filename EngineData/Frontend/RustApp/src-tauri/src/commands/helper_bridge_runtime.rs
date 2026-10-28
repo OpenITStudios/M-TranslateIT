@@ -6,7 +6,7 @@ use std::process::{Child, ChildStderr, ChildStdin, ChildStdout};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::engine::logging::{write_jsonl_event, RuntimeLogEvent};
 
@@ -475,16 +475,61 @@ pub fn read_worker_response_direct_with_deadline(
     }
 }
 
-pub fn stop_child(runtime: &mut HelperBridgeRuntime) {
+// Cleanup runs while the canonical helper mutex is held. Keep the native
+// exit/Stop path bounded instead of waiting indefinitely for a child process
+// or a stderr pipe inherited by descendants. The budget is a responsiveness
+// ceiling, NOT permission to release unverified process/thread ownership.
+const HELPER_CLEANUP_BUDGET: Duration = Duration::from_millis(250);
+
+fn stop_child_with_budget(runtime: &mut HelperBridgeRuntime, budget: Duration) -> bool {
+    // Drop our request pipes before trying to terminate the worker. A reader
+    // thread may still own a moved stdout handle until the child terminates.
     runtime.stdin.take();
     runtime.stdout.take();
-    if let Some(mut child) = runtime.child.take() {
-        let _ = child.kill();
-        let _ = child.wait();
+    let started = Instant::now();
+    let mut kill_attempted = false;
+
+    loop {
+        let mut reaped = false;
+        if let Some(child) = runtime.child.as_mut() {
+            match child.try_wait() {
+                Ok(Some(_)) => reaped = true,
+                Ok(None) | Err(_) if !kill_attempted => {
+                    // kill() is a request, not proof of termination.
+                    let _ = child.kill();
+                    kill_attempted = true;
+                }
+                _ => {}
+            }
+        }
+        if reaped {
+            runtime.child.take();
+        }
+
+        // Do not consume a live JoinHandle: it must remain available for a
+        // subsequent explicit Retry Stop or application exit attempt.
+        if runtime.child.is_none() {
+            if runtime.stderr_logger.as_ref().is_some_and(|logger| logger.is_finished()) {
+                if let Some(logger) = runtime.stderr_logger.take() {
+                    let _ = logger.join();
+                }
+            }
+            if runtime.stderr_logger.is_none() {
+                return true;
+            }
+        }
+
+        if started.elapsed() >= budget {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(10));
     }
-    if let Some(logger) = runtime.stderr_logger.take() {
-        let _ = logger.join();
-    }
+}
+
+/// True only when the owned child is reaped and stderr reader has exited.
+/// On timeout, retain both remaining OS/thread handles for an explicit retry.
+pub fn stop_child(runtime: &mut HelperBridgeRuntime) -> bool {
+    stop_child_with_budget(runtime, HELPER_CLEANUP_BUDGET)
 }
 
 #[cfg(test)]
@@ -639,6 +684,30 @@ mod stderr_lifecycle_tests {
         let _ = fs::remove_dir_all(log_dir);
     }
 
+
+    #[test]
+    fn incomplete_stderr_reader_is_retained_for_retry_not_detached() {
+        let (sender, receiver) = mpsc::channel::<()>();
+        let mut runtime = HelperBridgeRuntime::default();
+        runtime.stderr_logger = Some(thread::spawn(move || {
+            let _ = receiver.recv(); // Simulate a reader awaiting a live pipe.
+        }));
+
+        assert!(!stop_child_with_budget(&mut runtime, Duration::ZERO));
+        assert!(runtime.stderr_logger.is_some(), "never lose an unjoined reader");
+
+        sender.send(()).expect("release test reader");
+        assert!(stop_child_with_budget(&mut runtime, Duration::from_secs(1)));
+        assert!(runtime.stderr_logger.is_none());
+    }
+
+    #[test]
+    fn no_worker_handles_is_a_verified_clean_stop() {
+        let mut runtime = HelperBridgeRuntime::default();
+        assert!(stop_child_with_budget(&mut runtime, Duration::ZERO));
+        assert!(runtime.child.is_none());
+        assert!(runtime.stderr_logger.is_none());
+    }
     #[test]
     fn stop_child_joins_owned_stderr_logger() {
         let finished = Arc::new(AtomicBool::new(false));
@@ -649,7 +718,7 @@ mod stderr_lifecycle_tests {
             finished_in_thread.store(true, Ordering::SeqCst);
         }));
 
-        stop_child(&mut runtime);
+        assert!(stop_child(&mut runtime));
 
         assert!(finished.load(Ordering::SeqCst));
         assert!(runtime.stderr_logger.is_none());
