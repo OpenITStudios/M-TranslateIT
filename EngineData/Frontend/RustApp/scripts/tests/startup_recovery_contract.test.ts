@@ -55,3 +55,35 @@ test("helper cleanup keeps unjoined worker resources and clean-exit marker is fa
   assert.match(shutdown, /shutdown_helper\(\) && mark_clean\(\)/);
 });
 
+
+test("timed-out Python stdout reader remains owned until bounded cleanup joins it", () => {
+  assert.match(helperRuntime, /pub stdout_reader: Option<thread::JoinHandle<\(\)>>/);
+  assert.match(helperRuntime, /fn begin_worker_stdout_read<R: BufRead \+ Send \+ 'static>/);
+  assert.match(helperRuntime, /runtime\.stdout_reader = Some\(thread::spawn\(/);
+  assert.match(helperRuntime, /fn await_worker_stdout_read<R>/);
+  assert.match(helperRuntime, /Err\(RecvTimeoutError::Timeout\)/);
+  assert.match(helperRuntime, /fn finish_received_stdout_read\(/);
+  assert.match(helperRuntime, /if result\.is_ok\(\) && !finish_received_stdout_read\(runtime\)/);
+
+  const stop = helperRuntime.slice(
+    helperRuntime.indexOf("fn stop_child_with_budget("),
+    helperRuntime.indexOf("#[cfg(test)]"),
+  );
+  assert.match(stop, /runtime\.stdout_reader\.as_ref\(\)\.is_some_and\(\|reader\| reader\.is_finished\(\)\)/);
+  assert.match(stop, /runtime\.stdout_reader\.take\(\)/);
+  assert.match(stop, /runtime\.stdout_reader\.is_none\(\) && runtime\.stderr_logger\.is_none\(\)/);
+  assert.match(stop, /if started\.elapsed\(\) >= budget \{\s*return false/);
+
+  assert.match(helper, /read_worker_response_direct_with_deadline\(&mut runtime, stdout, ping_deadline_ms\)/);
+  assert.match(helper, /read_worker_response_direct_with_deadline\(&mut runtime, stdout, status_deadline_ms\)/);
+  const registered = transport.indexOf("begin_worker_stdout_read(&mut runtime, stdout)");
+  const requestWrite = transport.indexOf("write_worker_request_with_deadline(&mut stdin, &payload, response_deadline_ms)");
+  const awaited = transport.indexOf("await_worker_stdout_read(");
+  const joined = transport.indexOf("finish_received_stdout_read(&mut runtime)");
+  const reused = transport.indexOf("runtime.stdout = Some(stdout)");
+  assert.ok(registered > 0 && registered < requestWrite, "reader registration must precede request I/O");
+  assert.ok(requestWrite < awaited && awaited < joined && joined < reused, "join before reuse");
+  assert.match(transport, /if !bridge_still_owns_process \{/);
+  assert.match(helperRuntime, /fn timed_out_stdout_reader_remains_owned_until_explicit_retry_stop\(\)/);
+  assert.match(helperRuntime, /fn successful_worker_response_returns_original_stdout_after_join\(\)/);
+});

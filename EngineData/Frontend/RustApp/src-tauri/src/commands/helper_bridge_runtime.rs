@@ -100,6 +100,9 @@ pub struct HelperBridgeRuntime {
     pub last_error: Option<String>,
     pub stderr_log_path: Option<String>,
     pub stderr_logger: Option<thread::JoinHandle<()>>,
+    // The reader thread MUST be registered under this same canonical owner
+    // before stdout I/O begins, so Stop cannot miss an in-flight read.
+    pub stdout_reader: Option<thread::JoinHandle<()>>,
     pub updated_unix_ms: u128,
     pub child: Option<Child>,
     pub stdin: Option<ChildStdin>,
@@ -124,6 +127,7 @@ impl Default for HelperBridgeRuntime {
             last_error: None,
             stderr_log_path: None,
             stderr_logger: None,
+            stdout_reader: None,
             updated_unix_ms: unix_ms(),
             child: None,
             stdin: None,
@@ -452,16 +456,31 @@ pub fn validate_worker_response_contract(
     Ok(())
 }
 
-pub fn read_worker_response_direct_with_deadline(
-    mut stdout: BufReader<ChildStdout>,
-    deadline_ms: u128,
-) -> Result<(Value, BufReader<ChildStdout>), String> {
+// One read thread per admitted worker request, never a separate worker,
+// scheduler, or background service. Its JoinHandle belongs to the existing
+// HelperBridgeRuntime before the worker request may enter pipe I/O.
+// Generic BufRead permits deterministic slow-reader regression fixtures.
+pub fn begin_worker_stdout_read<R: BufRead + Send + 'static>(
+    runtime: &mut HelperBridgeRuntime,
+    mut stdout: R,
+) -> Result<mpsc::Receiver<(Result<Value, String>, R)>, String> {
+    if runtime.stdout_reader.is_some() {
+        return Err("worker:stdout_reader_still_owned".to_string());
+    }
     let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || {
+    runtime.stdout_reader = Some(thread::spawn(move || {
         let result = read_worker_response(&mut stdout);
         let _ = sender.send((result, stdout));
-    });
+        // A timed-out receiver may have closed: the thread still owns its
+        // stdout pipe until it actually returns, and must be joined by Stop.
+    }));
+    Ok(receiver)
+}
 
+pub fn await_worker_stdout_read<R>(
+    receiver: mpsc::Receiver<(Result<Value, String>, R)>,
+    deadline_ms: u128,
+) -> Result<(Value, R), String> {
     let timeout = Duration::from_millis(deadline_ms.min(u64::MAX as u128) as u64);
     match receiver.recv_timeout(timeout) {
         Ok((Ok(value), stdout)) => Ok((value, stdout)),
@@ -473,6 +492,30 @@ pub fn read_worker_response_direct_with_deadline(
             Err("worker:response_reader_disconnected".to_string())
         }
     }
+}
+
+// Only call this after a full response has been received from the channel.
+// At that point the thread has already handed off its entire pipe and result,
+// so join cannot be held up by Python stdout I/O. On a timeout, NEVER take
+// the handle here: stop_child must retain it until the reader actually exits.
+pub fn finish_received_stdout_read(runtime: &mut HelperBridgeRuntime) -> bool {
+    runtime.stdout_reader.take().is_some_and(|reader| reader.join().is_ok())
+}
+
+// Startup already owns the canonical runtime mutex while waiting for Python;
+// transport tasks instead register a reader under that mutex and await the
+// same bounded response outside it.
+pub fn read_worker_response_direct_with_deadline(
+    runtime: &mut HelperBridgeRuntime,
+    stdout: BufReader<ChildStdout>,
+    deadline_ms: u128,
+) -> Result<(Value, BufReader<ChildStdout>), String> {
+    let receiver = begin_worker_stdout_read(runtime, stdout)?;
+    let result = await_worker_stdout_read(receiver, deadline_ms);
+    if result.is_ok() && !finish_received_stdout_read(runtime) {
+        return Err("worker:response_reader_join_failed".to_string());
+    }
+    result
 }
 
 // Cleanup runs while the canonical helper mutex is held. Keep the native
@@ -506,15 +549,26 @@ fn stop_child_with_budget(runtime: &mut HelperBridgeRuntime, budget: Duration) -
             runtime.child.take();
         }
 
-        // Do not consume a live JoinHandle: it must remain available for a
-        // subsequent explicit Retry Stop or application exit attempt.
+        // A child can be fully reaped while stdout remains open in a reader
+        // (e.g. a descendant inherited the pipe). Both readers must be
+        // observed finished and joined before cleanup is reported complete.
+        // Never remove or detach a still-running JoinHandle on timeout.
         if runtime.child.is_none() {
-            if runtime.stderr_logger.as_ref().is_some_and(|logger| logger.is_finished()) {
-                if let Some(logger) = runtime.stderr_logger.take() {
-                    let _ = logger.join();
+            let mut reader_joins_ok = true;
+            if runtime.stdout_reader.as_ref().is_some_and(|reader| reader.is_finished()) {
+                if let Some(reader) = runtime.stdout_reader.take() {
+                    reader_joins_ok &= reader.join().is_ok();
                 }
             }
-            if runtime.stderr_logger.is_none() {
+            if runtime.stderr_logger.as_ref().is_some_and(|logger| logger.is_finished()) {
+                if let Some(logger) = runtime.stderr_logger.take() {
+                    reader_joins_ok &= logger.join().is_ok();
+                }
+            }
+            if !reader_joins_ok {
+                return false;
+            }
+            if runtime.stdout_reader.is_none() && runtime.stderr_logger.is_none() {
                 return true;
             }
         }
@@ -526,8 +580,8 @@ fn stop_child_with_budget(runtime: &mut HelperBridgeRuntime, budget: Duration) -
     }
 }
 
-/// True only when the owned child is reaped and stderr reader has exited.
-/// On timeout, retain both remaining OS/thread handles for an explicit retry.
+/// True only when the owned child is reaped and both stdout/stderr readers exited.
+/// On timeout, retain every remaining OS/thread handle for an explicit retry.
 pub fn stop_child(runtime: &mut HelperBridgeRuntime) -> bool {
     stop_child_with_budget(runtime, HELPER_CLEANUP_BUDGET)
 }
@@ -684,6 +738,74 @@ mod stderr_lifecycle_tests {
         let _ = fs::remove_dir_all(log_dir);
     }
 
+
+
+    #[test]
+    fn timed_out_stdout_reader_remains_owned_until_explicit_retry_stop() {
+        use std::io::{Cursor, Read};
+        struct GatedInput {
+            release: Option<mpsc::Receiver<()>>,
+            content: Cursor<Vec<u8>>,
+        }
+        impl Read for GatedInput {
+            fn read(&mut self, target: &mut [u8]) -> std::io::Result<usize> {
+                if let Some(release) = self.release.take() {
+                    release.recv().map_err(|_| std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe, "test gate disconnected",
+                    ))?;
+                }
+                self.content.read(target)
+            }
+        }
+
+        let (release, gate) = mpsc::channel::<()>();
+        let mut runtime = HelperBridgeRuntime::default();
+        let input = BufReader::new(GatedInput {
+            release: Some(gate),
+            content: Cursor::new(b"{\"ok\":true,\"stage\":\"ping\"}\n".to_vec()),
+        });
+        let response = begin_worker_stdout_read(&mut runtime, input)
+            .expect("the only helper read owner");
+        // An overlapping request cannot replace the registered owner.
+        assert!(matches!(
+            begin_worker_stdout_read(
+                &mut runtime,
+                BufReader::new(Cursor::new(Vec::<u8>::new())),
+            ),
+            Err(ref reason) if reason.as_str() == "worker:stdout_reader_still_owned"
+        ));
+        assert!(matches!(
+            await_worker_stdout_read(response, 0),
+            Err(ref error) if error.as_str() == "worker:response_deadline_exceeded:0ms"
+        ));
+        assert!(runtime.stdout_reader.is_some());
+        assert!(!stop_child_with_budget(&mut runtime, Duration::ZERO));
+        assert!(runtime.stdout_reader.is_some(), "a still-blocked stdout owner must not detach");
+
+        release.send(()).expect("release the blocked stdout reader");
+        assert!(stop_child_with_budget(&mut runtime, Duration::from_secs(1)));
+        assert!(runtime.stdout_reader.is_none(), "Retry Stop reaped the same reader");
+    }
+
+    #[test]
+    fn successful_worker_response_returns_original_stdout_after_join() {
+        use std::io::Cursor;
+        let mut runtime = HelperBridgeRuntime::default();
+        let line = BufReader::new(Cursor::new(
+            b"{\"ok\":true,\"stage\":\"ping\"}\n{\"ok\":true,\"stage\":\"status\"}\n".to_vec(),
+        ));
+        let response = begin_worker_stdout_read(&mut runtime, line)
+            .expect("registered stdout read");
+        let (value, mut remaining) = await_worker_stdout_read(response, 1_000)
+            .expect("received the response");
+        assert!(finish_received_stdout_read(&mut runtime), "must join completed read");
+        assert_eq!(value["stage"], json!("ping"));
+        assert!(runtime.stdout_reader.is_none());
+        // Buffered bytes remain owned by the caller for the next response.
+        let second = read_worker_response(&mut remaining)
+            .expect("stdout bytes buffered after ping must survive reader handoff");
+        assert_eq!(second["stage"], json!("status"));
+    }
 
     #[test]
     fn incomplete_stderr_reader_is_retained_for_retry_not_detached() {

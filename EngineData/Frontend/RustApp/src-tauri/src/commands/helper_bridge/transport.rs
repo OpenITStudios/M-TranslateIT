@@ -18,7 +18,8 @@ use super::{
 };
 use super::super::helper_bridge_runtime::{
     acquire_helper_task_permit, apply_worker_response, clear_active_request,
-    read_worker_response_direct_with_deadline, validate_worker_response_contract,
+    set_blocked, await_worker_stdout_read, begin_worker_stdout_read,
+    finish_received_stdout_read, validate_worker_response_contract,
     runtime, runtime_claim, stop_child, unix_ms,
     worker_response_deadline_for_priority, write_worker_request_with_deadline,
     HelperBridgeActionResult, HelperBridgeRuntime, HelperTaskPriority,
@@ -273,7 +274,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value) -> HelperBridgeWorkerR
 
     inject_request_metadata(&mut payload, task, &request_id, priority);
 
-    let (mut stdin, stdout, bridge_generation) = match runtime().lock() {
+    let (mut stdin, stdout_receiver, bridge_generation) = match runtime().lock() {
         Ok(mut runtime) => {
             if runtime.child.is_none() || runtime.stdin.is_none() || runtime.stdout.is_none() {
                 // A timed-out kill/stderr reader still owns resources even
@@ -301,8 +302,40 @@ fn send_worker_task_inner(task: &str, mut payload: Value) -> HelperBridgeWorkerR
                 );
             }
 
+            // Publish the reader JoinHandle inside the canonical mutex before
+            // any blocking write or read. Meeting Stop can now find/reap that
+            // exact stdout owner even while this task waits outside the lock.
+            // An earlier timed-out reader must not be overwritten.
+            if runtime.stdout_reader.is_some() {
+                return blocked_response_from_runtime(
+                    task,
+                    &request_id,
+                    priority,
+                    "A previous Python stdout reader is still owned. Complete helper cleanup before another request.",
+                    &runtime,
+                );
+            }
             let stdin = runtime.stdin.take().expect("stdin checked above");
             let stdout = runtime.stdout.take().expect("stdout checked above");
+            let stdout_receiver = match begin_worker_stdout_read(&mut runtime, stdout) {
+                Ok(receiver) => receiver,
+                Err(error) => {
+                    let cleaned = stop_child(&mut runtime);
+                    runtime.generation_token = runtime.generation_token.saturating_add(1);
+                    let blocker = if cleaned {
+                        "helper_bridge:stdout_reader_admission_failed"
+                    } else {
+                        "helper_bridge:cleanup_incomplete"
+                    };
+                    let message = format!(
+                        "Could not register the Python stdout read owner safely: {error}"
+                    );
+                    set_blocked(&mut runtime, &message, blocker);
+                    return blocked_response_from_runtime(
+                        task, &request_id, priority, &message, &runtime,
+                    );
+                }
+            };
             let bridge_generation = runtime.generation_token;
             runtime.active_task = Some(task.to_string());
             runtime.active_request_id = Some(request_id.clone());
@@ -310,7 +343,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value) -> HelperBridgeWorkerR
             runtime.active_meeting_session_id = meeting_session_id.clone();
             runtime.active_meeting_lane = meeting_lane.clone();
             runtime.updated_unix_ms = unix_ms();
-            (stdin, stdout, bridge_generation)
+            (stdin, stdout_receiver, bridge_generation)
         }
         Err(_) => {
             return standalone_blocked_response(
@@ -370,8 +403,8 @@ fn send_worker_task_inner(task: &str, mut payload: Value) -> HelperBridgeWorkerR
         };
     }
 
-    let (mut worker_response, stdout) = match read_worker_response_direct_with_deadline(
-        stdout,
+    let (mut worker_response, stdout) = match await_worker_stdout_read(
+        stdout_receiver,
         response_deadline_ms,
     )
     .and_then(|(response, stdout)| {
@@ -447,6 +480,26 @@ fn send_worker_task_inner(task: &str, mut payload: Value) -> HelperBridgeWorkerR
                     priority,
                     "Helper result was discarded because the worker process was cancelled or replaced while the request was running.",
                     &runtime,
+                );
+            }
+
+            // The response arrived, so the reader has already returned its
+            // stdout pipe to this caller. Join its registered thread before
+            // making that pipe available for the next request. A failed join
+            // invalidates this worker generation rather than silently losing
+            // the read owner or claiming protocol readiness.
+            if !finish_received_stdout_read(&mut runtime) {
+                let cleaned = stop_child(&mut runtime);
+                runtime.generation_token = runtime.generation_token.saturating_add(1);
+                let blocker = if cleaned {
+                    "helper_bridge:stdout_reader_join_failed"
+                } else {
+                    "helper_bridge:cleanup_incomplete"
+                };
+                let message = "Python stdout reader completion could not be verified; the worker response was not committed.";
+                set_blocked(&mut runtime, message, blocker);
+                return blocked_response_from_runtime(
+                    task, &request_id, priority, message, &runtime,
                 );
             }
 

@@ -389,7 +389,7 @@ fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeAc
                 );
             }
             let (ping, mut stdout) =
-                match read_worker_response_direct_with_deadline(stdout, ping_deadline_ms) {
+                match read_worker_response_direct_with_deadline(&mut runtime, stdout, ping_deadline_ms) {
                     Ok((value, stdout)) => (value, stdout),
                     Err(error) => {
                         return fail_start_after_spawn(
@@ -426,7 +426,7 @@ fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeAc
             )
             .is_ok()
             {
-                match read_worker_response_direct_with_deadline(stdout, status_deadline_ms) {
+                match read_worker_response_direct_with_deadline(&mut runtime, stdout, status_deadline_ms) {
                     Ok((value, next_stdout)) => {
                         if let Err(error) = validate_worker_response_contract(
                             "status", STARTUP_STATUS_REQUEST_ID, &value,
