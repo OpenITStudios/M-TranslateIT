@@ -77,6 +77,15 @@ export type MeetingSessionPreflightStatus = {
   runtime_claim: string;
 };
 
+export type MeetingWorkerAttemptTiming = {
+  initial_attempt_ms: number;
+  recovery_ms: number | null;
+  retry_attempt_ms: number | null;
+  initial_scheduler_wait_ms: number | null;
+  retry_scheduler_wait_ms: number | null;
+  scheduler_wait_total_ms: number | null;
+};
+
 export type MeetingOutboundTiming = {
   finalized_unix_ms: number;
   first_playback_unix_ms: number | null;
@@ -100,6 +109,9 @@ export type MeetingOutboundTiming = {
   asr_scheduler_wait_ms: number | null;
   translation_scheduler_wait_ms: number | null;
   tts_scheduler_wait_ms: number | null;
+  asr_worker_attempt_timing: MeetingWorkerAttemptTiming | null;
+  translation_worker_attempt_timing: MeetingWorkerAttemptTiming | null;
+  tts_worker_attempt_timing: MeetingWorkerAttemptTiming | null;
   output_stream_build_ms: number | null;
   output_stream_start_to_first_audio_ms: number | null;
 };

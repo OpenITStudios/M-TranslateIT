@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+use std::time::Instant;
 
 use crate::engine::runtime_state::runtime_generation_is_authoritative;
 
@@ -548,6 +549,54 @@ fn retain_payload_for_live_retry(
         && live_outbound_stage_retry_safe(task)
 }
 
+// One request's observed wall-clock partitions. Attempts include their own
+// permit waits; recovery includes the worker restart and functional re-proof.
+// This is transient measurement, not another scheduler, retry owner, or cache.
+#[derive(Clone, Copy)]
+struct WorkerAttemptObservation {
+    initial_attempt_ms: u64,
+    recovery_ms: Option<u64>,
+    retry_attempt_ms: Option<u64>,
+    initial_scheduler_wait_ms: Option<u64>,
+    retry_scheduler_wait_ms: Option<u64>,
+}
+
+impl WorkerAttemptObservation {
+    fn scheduler_wait_total_ms(&self) -> Option<u64> {
+        if self.retry_attempt_ms.is_some() {
+            self.initial_scheduler_wait_ms?
+                .checked_add(self.retry_scheduler_wait_ms?)
+        } else {
+            self.initial_scheduler_wait_ms
+        }
+    }
+}
+
+fn observed_elapsed_ms(started: Instant) -> u64 {
+    started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+fn response_scheduler_wait_ms(response: &HelperBridgeWorkerResponse) -> Option<u64> {
+    serde_json::from_str::<Value>(&response.worker_response_json).ok()?
+        .get("scheduler_wait_ms").and_then(Value::as_u64)
+}
+
+// Rust owns these measurements; never trust a worker-provided summary and
+// never turn missing/invalid response data into invented numeric evidence.
+fn add_worker_attempt_observation(response: &mut HelperBridgeWorkerResponse, timing: WorkerAttemptObservation) {
+    let Ok(mut value) = serde_json::from_str::<Value>(&response.worker_response_json) else { return };
+    let Some(object) = value.as_object_mut() else { return };
+    object.insert("worker_attempt_timing".to_string(), json!({
+        "initial_attempt_ms": timing.initial_attempt_ms,
+        "recovery_ms": timing.recovery_ms,
+        "retry_attempt_ms": timing.retry_attempt_ms,
+        "initial_scheduler_wait_ms": timing.initial_scheduler_wait_ms,
+        "retry_scheduler_wait_ms": timing.retry_scheduler_wait_ms,
+        "scheduler_wait_total_ms": timing.scheduler_wait_total_ms(),
+    }));
+    response.worker_response_json = value.to_string();
+}
+
 pub(super) fn send_worker_task(task: &str, payload: Value) -> HelperBridgeWorkerResponse {
     let priority = task_priority(task, &payload);
     let outbound_generation = if priority == HelperTaskPriority::MeetingOutbound
@@ -571,13 +620,22 @@ pub(super) fn send_worker_task(task: &str, payload: Value) -> HelperBridgeWorker
         mark_meeting_outbound_pipeline(generation);
     }
 
+    let first_started = Instant::now();
     let mut response = send_worker_task_inner(task, payload);
+    let mut timing = WorkerAttemptObservation {
+        initial_attempt_ms: observed_elapsed_ms(first_started),
+        recovery_ms: None,
+        retry_attempt_ms: None,
+        initial_scheduler_wait_ms: response_scheduler_wait_ms(&response),
+        retry_scheduler_wait_ms: None,
+    };
 
     if let Some(generation) = outbound_generation {
         if helper_transport_failure(&response)
             && live_outbound_generation_is_authoritative(generation)
         {
             let retry_current_stage = live_outbound_stage_retry_safe(task);
+            let recovery_started = Instant::now();
             let recovery = recover_live_meeting_helper_transport(generation, retry_current_stage);
             if recovery.ok && live_outbound_generation_is_authoritative(generation) {
                 // Restarting the worker intentionally invalidates functional readiness
@@ -592,7 +650,10 @@ pub(super) fn send_worker_task(task: &str, payload: Value) -> HelperBridgeWorker
                         // transport recovery + generation-bound functional re-proof.
                         // The retry itself is not recursive.
                         if let Some(retry_payload) = retry_payload.take() {
+                            let retry_started = Instant::now();
                             response = send_worker_task_inner(task, retry_payload);
+                            timing.retry_attempt_ms = Some(observed_elapsed_ms(retry_started));
+                            timing.retry_scheduler_wait_ms = response_scheduler_wait_ms(&response);
                         } else {
                             clear_meeting_outbound_pipeline(generation);
                             response.ok = false;
@@ -632,6 +693,8 @@ pub(super) fn send_worker_task(task: &str, payload: Value) -> HelperBridgeWorker
                     }
                 }
             }
+            // Functional re-proof belongs to recovery, not to retry.
+            timing.recovery_ms = Some(observed_elapsed_ms(recovery_started));
         }
 
         if task == "voice_actor_synthesize"
@@ -644,6 +707,9 @@ pub(super) fn send_worker_task(task: &str, payload: Value) -> HelperBridgeWorker
 
     if failed_required_outbound_task_invalidates_cache(task, priority, &response) {
         invalidate_required_outbound_ai_readiness();
+    }
+    if outbound_generation.is_some() {
+        add_worker_attempt_observation(&mut response, timing);
     }
     response
 }
@@ -740,5 +806,84 @@ mod scheduler_failure_receipt_tests {
         let body: Value = serde_json::from_str(&response.worker_response_json).unwrap();
         assert_eq!(body["scheduler_wait_ms"], 12);
         assert_eq!(body["attempt"], "failed");
+    }
+}
+
+#[cfg(test)]
+mod worker_attempt_observation_tests {
+    use super::{add_worker_attempt_observation, response_scheduler_wait_ms,
+        standalone_blocked_response, WorkerAttemptObservation};
+    use super::super::super::helper_bridge_runtime::HelperTaskPriority;
+    use serde_json::{json, Value};
+
+    fn fake_response(wait: Option<u64>) -> super::HelperBridgeWorkerResponse {
+        let mut response = standalone_blocked_response(
+            "translate", "helper-71", HelperTaskPriority::MeetingOutbound,
+            "error", "helper_bridge:translate_read_failed:timeout", "transport failed",
+        );
+        if let Some(wait) = wait {
+            let mut v: Value = serde_json::from_str(&response.worker_response_json).unwrap();
+            v["scheduler_wait_ms"] = json!(wait);
+            response.worker_response_json = v.to_string();
+        }
+        response
+    }
+
+    #[test]
+    fn first_attempt_without_recovery_preserves_original_wait() {
+        let mut response = fake_response(Some(13));
+        add_worker_attempt_observation(&mut response, WorkerAttemptObservation {
+            initial_attempt_ms: 80, recovery_ms: None, retry_attempt_ms: None,
+            initial_scheduler_wait_ms: response_scheduler_wait_ms(&fake_response(Some(13))),
+            retry_scheduler_wait_ms: None,
+        });
+        let v: Value = serde_json::from_str(&response.worker_response_json).unwrap();
+        assert_eq!(v["scheduler_wait_ms"], 13);
+        assert_eq!(v["worker_attempt_timing"]["initial_attempt_ms"], 80);
+        assert_eq!(v["worker_attempt_timing"]["scheduler_wait_total_ms"], 13);
+        assert!(v["worker_attempt_timing"]["recovery_ms"].is_null());
+    }
+
+    #[test]
+    fn recovery_retry_waits_sum_but_attempt_wall_times_stay_distinct() {
+        let mut response = fake_response(Some(7));
+        add_worker_attempt_observation(&mut response, WorkerAttemptObservation {
+            initial_attempt_ms: 140, recovery_ms: Some(250), retry_attempt_ms: Some(110),
+            initial_scheduler_wait_ms: Some(18), retry_scheduler_wait_ms: Some(7),
+        });
+        let v: Value = serde_json::from_str(&response.worker_response_json).unwrap();
+        assert_eq!(v["scheduler_wait_ms"], 7);
+        let timing = &v["worker_attempt_timing"];
+        assert_eq!(timing["scheduler_wait_total_ms"], 25);
+        assert_eq!(timing["initial_attempt_ms"], 140);
+        assert_eq!(timing["recovery_ms"], 250);
+        assert_eq!(timing["retry_attempt_ms"], 110);
+    }
+
+    #[test]
+    fn incomplete_retry_wait_and_unadmitted_attempt_never_claim_total_wait() {
+        let mut response = fake_response(None);
+        add_worker_attempt_observation(&mut response, WorkerAttemptObservation {
+            initial_attempt_ms: 140, recovery_ms: Some(250), retry_attempt_ms: Some(110),
+            initial_scheduler_wait_ms: Some(18), retry_scheduler_wait_ms: None,
+        });
+        let v: Value = serde_json::from_str(&response.worker_response_json).unwrap();
+        assert!(v["worker_attempt_timing"]["scheduler_wait_total_ms"].is_null());
+        let no_permit = WorkerAttemptObservation {
+            initial_attempt_ms: 1, recovery_ms: None, retry_attempt_ms: None,
+            initial_scheduler_wait_ms: None, retry_scheduler_wait_ms: None,
+        };
+        assert_eq!(no_permit.scheduler_wait_total_ms(), None);
+    }
+
+    #[test]
+    fn malformed_response_does_not_become_a_trusted_measurement() {
+        let mut response = fake_response(None);
+        response.worker_response_json = "invalid-json".to_string();
+        add_worker_attempt_observation(&mut response, WorkerAttemptObservation {
+            initial_attempt_ms: 1, recovery_ms: None, retry_attempt_ms: None,
+            initial_scheduler_wait_ms: None, retry_scheduler_wait_ms: None,
+        });
+        assert_eq!(response.worker_response_json, "invalid-json");
     }
 }

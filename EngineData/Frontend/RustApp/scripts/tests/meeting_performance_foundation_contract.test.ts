@@ -52,3 +52,25 @@ test("support bundle contains only numeric derived timing, no audio or transcrip
   assert.doesNotMatch(diagnostics, /"source_text"\s*:|"translated_text"\s*:|"session_id"\s*:/);
   assert.doesNotMatch(diagnostics, /"finalized_unix_ms"\s*:|"first_playback_unix_ms"\s*:/);
 });
+
+test("Meeting worker attempt attribution keeps recovery distinct and old archives readable", () => {
+  const meeting = source("src-tauri/src/commands/meeting_session.rs");
+  const dto = source("src/app/bridge/runtimeApi.ts");
+  const ui = source("src/components/settings/MeetingPerformanceDiagnostics.svelte");
+  assert.match(transport, /"worker_attempt_timing"\.to_string\(\)/);
+  assert.match(transport, /checked_add\(self\.retry_scheduler_wait_ms\?\)/);
+  assert.match(transport, /timing\.recovery_ms = Some\(observed_elapsed_ms\(recovery_started\)\)/);
+  assert.match(transport, /timing\.retry_attempt_ms = Some\(observed_elapsed_ms\(retry_started\)\)/);
+  assert.match(meeting, /pub struct MeetingWorkerAttemptTiming/);
+  assert.match(meeting, /#\[serde\(default\)\]\s+pub asr_worker_attempt_timing/);
+  assert.match(meeting, /get\("scheduler_wait_total_ms"\)/);
+  assert.match(outbound, /timing\.metrics\.asr_worker_attempt_timing = super::worker_attempt_timing\(&asr\)/);
+  assert.match(outbound, /timing\.metrics\.translation_worker_attempt_timing = super::worker_attempt_timing\(&translation\)/);
+  assert.match(outbound, /timing\.metrics\.tts_worker_attempt_timing = super::worker_attempt_timing\(&tts\)/);
+  assert.match(dto, /export type MeetingWorkerAttemptTiming/);
+  for (const field of ["asr_worker_attempt", "translation_worker_attempt", "tts_worker_attempt"]) {
+    assert.match(diagnostics, new RegExp(\`"\${field}": timing\\\\.\`));
+  }
+  assert.match(ui, /stageMs - admissionWaitMs - recovery/);
+  assert.match(ui, /inclusive initial\/retry totals are not ranked twice/);
+});

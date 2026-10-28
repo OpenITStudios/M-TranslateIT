@@ -159,6 +159,10 @@ pub fn export_diagnostic_support_bundle() -> DiagnosticSupportBundleResult {
                     "asr_scheduler_wait": timing.asr_scheduler_wait_ms,
                     "translation_scheduler_wait": timing.translation_scheduler_wait_ms,
                     "tts_scheduler_wait": timing.tts_scheduler_wait_ms,
+                    // Numeric-only attempt/recovery evidence; never private audio/text.
+                    "asr_worker_attempt": timing.asr_worker_attempt_timing.as_ref(),
+                    "translation_worker_attempt": timing.translation_worker_attempt_timing.as_ref(),
+                    "tts_worker_attempt": timing.tts_worker_attempt_timing.as_ref(),
                     "output_stream_build": timing.output_stream_build_ms,
                     "output_stream_start_to_first_audio": timing.output_stream_start_to_first_audio_ms,
                 })),

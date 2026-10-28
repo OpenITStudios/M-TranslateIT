@@ -61,6 +61,18 @@ pub struct MeetingSessionPreflightStatus {
     pub runtime_claim: String,
 }
 
+// Optional per-worker-stage source evidence; not extra elapsed time to add
+// to the already-measured Meeting stage duration.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct MeetingWorkerAttemptTiming {
+    pub initial_attempt_ms: u64,
+    pub recovery_ms: Option<u64>,
+    pub retry_attempt_ms: Option<u64>,
+    pub initial_scheduler_wait_ms: Option<u64>,
+    pub retry_scheduler_wait_ms: Option<u64>,
+    pub scheduler_wait_total_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct MeetingOutboundTiming {
     pub finalized_unix_ms: u128,
@@ -87,6 +99,13 @@ pub struct MeetingOutboundTiming {
     pub asr_scheduler_wait_ms: Option<u64>,
     pub translation_scheduler_wait_ms: Option<u64>,
     pub tts_scheduler_wait_ms: Option<u64>,
+    // Pre-existing Saved Transcripts have no attempt details.
+    #[serde(default)]
+    pub asr_worker_attempt_timing: Option<MeetingWorkerAttemptTiming>,
+    #[serde(default)]
+    pub translation_worker_attempt_timing: Option<MeetingWorkerAttemptTiming>,
+    #[serde(default)]
+    pub tts_worker_attempt_timing: Option<MeetingWorkerAttemptTiming>,
     pub output_stream_build_ms: Option<u64>,
     pub output_stream_start_to_first_audio_ms: Option<u64>,
 }
@@ -251,9 +270,16 @@ fn worker_number(response: &HelperBridgeWorkerResponse, key: &str) -> Option<f64
 }
 
 fn worker_scheduler_wait_ms(response: &HelperBridgeWorkerResponse) -> Option<u64> {
-    worker_json(response)
-        .get("scheduler_wait_ms")
-        .and_then(Value::as_u64)
+    let value = worker_json(response);
+    if let Some(timing) = value.get("worker_attempt_timing") {
+        // An incomplete retry trace must not fall back to only the last wait.
+        return timing.get("scheduler_wait_total_ms").and_then(Value::as_u64);
+    }
+    value.get("scheduler_wait_ms").and_then(Value::as_u64)
+}
+
+fn worker_attempt_timing(response: &HelperBridgeWorkerResponse) -> Option<MeetingWorkerAttemptTiming> {
+    serde_json::from_value(worker_json(response).get("worker_attempt_timing")?.clone()).ok()
 }
 
 fn generation_is_live(generation: u64) -> bool {
@@ -550,6 +576,9 @@ mod c2_latency_tests {
                 asr_scheduler_wait_ms: Some(10),
                 translation_scheduler_wait_ms: Some(4),
                 tts_scheduler_wait_ms: Some(3),
+                asr_worker_attempt_timing: None,
+                translation_worker_attempt_timing: None,
+                tts_worker_attempt_timing: None,
                 output_stream_build_ms: None,
                 output_stream_start_to_first_audio_ms: None,
             },
@@ -598,6 +627,9 @@ mod c2_latency_tests {
                 asr_scheduler_wait_ms: None,
                 translation_scheduler_wait_ms: None,
                 tts_scheduler_wait_ms: None,
+                asr_worker_attempt_timing: None,
+                translation_worker_attempt_timing: None,
+                tts_worker_attempt_timing: None,
                 output_stream_build_ms: None,
                 output_stream_start_to_first_audio_ms: None,
             },
@@ -699,5 +731,74 @@ mod translation_delivery_contract_tests {
             "ok": true, "stage": "translate", "complete": true,
             "finished_with_eos": true, "translated_text": "unverified"
         })), "id", "en").is_none());
+    }
+}
+
+#[cfg(test)]
+mod worker_attempt_timing_tests {
+    use super::{worker_attempt_timing, worker_scheduler_wait_ms, MeetingOutboundTiming};
+    use crate::commands::helper_bridge::HelperBridgeWorkerResponse;
+    use serde_json::json;
+
+    fn response(body: serde_json::Value) -> HelperBridgeWorkerResponse {
+        HelperBridgeWorkerResponse {
+            ok: true, state: "ready".to_string(), task: "translate".to_string(),
+            request_id: "helper-1".to_string(),
+            scheduler_priority: "meeting_outbound".to_string(),
+            message: String::new(), generation_token: 1,
+            runtime_claim: "fixture".to_string(), worker_response_json: body.to_string(),
+        }
+    }
+
+    #[test]
+    fn complete_retry_wait_beats_last_attempt_value() {
+        let r = response(json!({
+            "scheduler_wait_ms": 7,
+            "worker_attempt_timing": {
+                "initial_attempt_ms": 170, "recovery_ms": 420,
+                "retry_attempt_ms": 160, "initial_scheduler_wait_ms": 18,
+                "retry_scheduler_wait_ms": 7, "scheduler_wait_total_ms": 25
+            }
+        }));
+        assert_eq!(worker_scheduler_wait_ms(&r), Some(25));
+        assert_eq!(worker_attempt_timing(&r).unwrap().recovery_ms, Some(420));
+    }
+
+    #[test]
+    fn absent_total_must_not_use_retry_wait_and_legacy_still_works() {
+        let r = response(json!({
+            "scheduler_wait_ms": 7, "worker_attempt_timing": {
+                "initial_attempt_ms": 170, "recovery_ms": 420,
+                "retry_attempt_ms": 160, "initial_scheduler_wait_ms": null,
+                "retry_scheduler_wait_ms": 7, "scheduler_wait_total_ms": null
+            }
+        }));
+        assert_eq!(worker_scheduler_wait_ms(&r), None);
+        let legacy = response(json!({"scheduler_wait_ms": 7}));
+        assert_eq!(worker_scheduler_wait_ms(&legacy), Some(7));
+        assert!(worker_attempt_timing(&legacy).is_none());
+    }
+
+    #[test]
+    fn legacy_archived_timing_deserializes_without_new_optional_fields() {
+        let old = json!({
+            "finalized_unix_ms": 1, "first_playback_unix_ms": null,
+            "speech_boundary_ms": 0, "finalization_ms": 0,
+            "queue_ms": 0, "audio_prepare_ms": 0, "asr_ms": null,
+            "translation_ms": null, "translation_tokenization_ms": null,
+            "translation_inference_ms": null, "translation_decode_ms": null,
+            "translation_tokens_per_second": null, "tts_ms": null,
+            "playback_queue_ms": null, "delivery_ms": null,
+            "outbound_latency_ms": null, "captured_speech_span_ms": 0,
+            "estimated_onset_to_first_audio_ms": null,
+            "estimated_end_to_first_audio_ms": null,
+            "asr_scheduler_wait_ms": null, "translation_scheduler_wait_ms": null,
+            "tts_scheduler_wait_ms": null, "output_stream_build_ms": null,
+            "output_stream_start_to_first_audio_ms": null
+        });
+        let restored: MeetingOutboundTiming = serde_json::from_value(old).unwrap();
+        assert!(restored.asr_worker_attempt_timing.is_none());
+        assert!(restored.translation_worker_attempt_timing.is_none());
+        assert!(restored.tts_worker_attempt_timing.is_none());
     }
 }
