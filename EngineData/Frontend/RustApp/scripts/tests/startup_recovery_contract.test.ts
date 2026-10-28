@@ -10,6 +10,10 @@ const helper = readFileSync(new URL("../../src-tauri/src/commands/helper_bridge.
 const helperRuntime = readFileSync(new URL("../../src-tauri/src/commands/helper_bridge_runtime.rs", import.meta.url), "utf8");
 const transport = readFileSync(new URL("../../src-tauri/src/commands/helper_bridge/transport.rs", import.meta.url), "utf8");
 const meetingLifecycle = readFileSync(new URL("../../src-tauri/src/commands/meeting_session/lifecycle.rs", import.meta.url), "utf8");
+const helperCancellationTests = readFileSync(
+  new URL("../../src-tauri/src/commands/helper_bridge_contract_tests.rs", import.meta.url),
+  "utf8",
+);
 
 test("startup recovery never resumes Meeting and cleans only bounded cache namespaces", () => {
   assert.match(bootstrap, /begin_startup_recovery/);
@@ -47,8 +51,8 @@ test("helper cleanup keeps unjoined worker resources and clean-exit marker is fa
   assert.doesNotMatch(core, /child\.wait\(\)/);
   assert.match(helper, /pub\(crate\) fn shutdown_helper_bridge_for_app_exit\(\) -> bool \{[\s\S]*?runtime\(\)\.try_lock\(\)/);
   assert.match(helper, /if !stop_child\(&mut runtime\) \{[\s\S]*?"helper_bridge:cleanup_incomplete",[\s\S]*?return false/);
-  assert.match(helper, /if runtime\.last_error\.as_deref\(\) == Some\("helper_bridge:cleanup_incomplete"\)/);
-  assert.match(helper, /if !stop_child\(&mut runtime\) \{[\s\S]*?"Meeting helper Stop has not verified/);
+  assert.match(helper, /let cleanup_unverified = runtime\.last_error\.as_deref\(\)\s*== Some\("helper_bridge:cleanup_incomplete"\)/);
+  assert.match(helper, /if !stop_child\(&mut runtime\) \{[\s\S]*?"Meeting helper Stop could not verify process/);
   assert.match(transport, /let cleaned = stop_child\(&mut runtime\);/);
   assert.match(transport, /runtime\.state = if cleaned \{ "stopped" \} else \{ "blocked" \}/);
   assert.match(meetingLifecycle, /helper_cancel\.ok/);
@@ -180,4 +184,48 @@ test("worker restart admission is native, generation-scoped, and updater-safe", 
   assert.match(helper, /fn direct_helper_start_cannot_restart_while_mic_test_owns_audio\(\)/);
   assert.match(helper, /fn update_installer_reservation_blocks_direct_helper_start\(\)/);
   assert.match(helper, /fn live_recovery_requires_current_generation_even_inside_helper_lock\(\)/);
+});
+
+test("Meeting Stop helper cancellation is bounded and only its matching retry may reap retained resources", () => {
+  const cancel = helper.slice(
+    helper.indexOf("pub fn cancel_helper_bridge_meeting_session("),
+    helper.indexOf("// Worker status probes"),
+  );
+  assert.match(cancel, /if session_id\.is_empty\(\) \{/);
+  assert.match(cancel, /clear_meeting_outbound_pipeline_for_session\(session_id\)/);
+  assert.match(cancel, /match runtime\(\)\.try_lock\(\)/);
+  assert.match(cancel, /Err\(TryLockError::WouldBlock\)/);
+  assert.match(cancel, /helper_cancel_deferred_owned_mutex/);
+  assert.match(cancel, /Err\(TryLockError::Poisoned\(_\)\)/);
+  assert.doesNotMatch(cancel, /runtime\(\)\.lock\(\)/);
+  assert.doesNotMatch(cancel, /clear_any_meeting_outbound_pipeline/);
+
+  const scopedRelease = cancel.indexOf("runtime.pending_meeting_cleanup_session_id.as_deref() != Some(session_id)");
+  const retryCleanup = cancel.indexOf("if !stop_child(&mut runtime)");
+  const activeMatch = cancel.indexOf("runtime.active_meeting_session_id.as_deref() == Some(session_id)");
+  assert.ok(scopedRelease > 0 && scopedRelease < retryCleanup && retryCleanup < activeMatch,
+    "Retry Stop may not reap an unrelated helper before exact session attribution");
+  assert.match(cancel, /helper_cancel_rejected_unattributed_or_other_session_cleanup/);
+  assert.match(cancel, /helper_bridge:cleanup_completed/);
+  assert.match(cancel, /helper_bridge:meeting_session_hard_cancelled/);
+
+  const cleanup = helperRuntime.slice(
+    helperRuntime.indexOf("fn stop_child_with_budget("),
+    helperRuntime.indexOf("#[cfg(test)]"),
+  );
+  assert.match(helperRuntime, /pub pending_meeting_cleanup_session_id: Option<String>/);
+  assert.match(cleanup, /runtime\.pending_meeting_cleanup_session_id = runtime\.active_meeting_session_id\.clone\(\)/);
+  assert.match(cleanup, /runtime\.pending_meeting_cleanup_session_id = None;\s*return true/);
+  assert.match(meetingLifecycle, /let helper_cancel = cancel_helper_bridge_meeting_session\(&session_id\)/);
+  assert.match(meetingLifecycle, /helper_cancel\.ok/);
+  assert.match(meetingLifecycle, /mark_runtime_session_cleanup_incomplete/);
+  for (const fixture of [
+    "meeting_stop_defers_if_canonical_helper_mutex_is_busy_without_clearing_owner",
+    "retry_stop_reaps_only_the_exact_session_that_owned_incomplete_cleanup",
+    "unattributed_incomplete_helper_cleanup_cannot_be_claimed_by_meeting_stop",
+    "incomplete_helper_cleanup_retains_meeting_owner_after_active_request_clears",
+  ]) {
+    assert.ok(helperCancellationTests.includes("fn " + fixture)
+      || helperRuntime.includes("fn " + fixture), fixture + " must remain covered");
+  }
 });

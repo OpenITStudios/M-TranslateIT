@@ -321,6 +321,111 @@ fn meeting_retry_stop_cannot_claim_success_until_stderr_owner_is_reaped() {
     reset_bridge_runtime();
 }
 
+
+#[test]
+fn meeting_stop_defers_if_canonical_helper_mutex_is_busy_without_clearing_owner() {
+    let _serial = crate::engine::runtime_state::runtime_test_guard();
+    reset_bridge_runtime();
+    {
+        let mut bridge = runtime().lock().expect("hold helper mutex during Stop");
+        bridge.state = "ready".to_string();
+        bridge.generation_token = 52;
+        bridge.active_task = Some("translate".to_string());
+        bridge.active_request_id = Some("meeting-request".to_string());
+        bridge.active_meeting_session_id = Some("meeting-session-a".to_string());
+        // A same-thread call would deadlock if cancellation used lock().
+        let result = cancel_helper_bridge_meeting_session("meeting-session-a");
+        assert!(!result.ok);
+        assert_eq!(result.state, "helper_busy");
+        assert_eq!(result.runtime_claim, "helper_cancel_deferred_owned_mutex");
+        assert_eq!(result.generation_token, 0);
+        assert_eq!(bridge.generation_token, 52);
+        assert_eq!(bridge.active_request_id.as_deref(), Some("meeting-request"));
+        assert_eq!(bridge.active_meeting_session_id.as_deref(), Some("meeting-session-a"));
+        assert!(bridge.pending_meeting_cleanup_session_id.is_none());
+    }
+    let resumed = cancel_helper_bridge_meeting_session("meeting-session-a");
+    assert!(resumed.ok);
+    assert_eq!(resumed.state, "stopped");
+    assert_eq!(resumed.generation_token, 53);
+    reset_bridge_runtime();
+}
+
+#[test]
+fn retry_stop_reaps_only_the_exact_session_that_owned_incomplete_cleanup() {
+    let _serial = crate::engine::runtime_state::runtime_test_guard();
+    reset_bridge_runtime();
+    let (release, gate) = std::sync::mpsc::channel::<()>();
+    {
+        let mut bridge = runtime().lock().expect("helper mutex");
+        bridge.state = "ready".to_string();
+        bridge.generation_token = 71;
+        bridge.active_task = Some("voice_actor_synthesize".to_string());
+        bridge.active_request_id = Some("meeting-a-request".to_string());
+        bridge.active_meeting_session_id = Some("meeting-session-a".to_string());
+        bridge.stderr_logger = Some(std::thread::spawn(move || {
+            let _ = gate.recv();
+        }));
+    }
+    let first = cancel_helper_bridge_meeting_session("meeting-session-a");
+    assert!(!first.ok);
+    assert_eq!(first.state, "blocked");
+    {
+        let bridge = runtime().lock().expect("helper after incomplete Stop");
+        assert_eq!(bridge.pending_meeting_cleanup_session_id.as_deref(), Some("meeting-session-a"));
+        assert!(bridge.active_meeting_session_id.is_none());
+        assert!(bridge.stderr_logger.is_some());
+        assert_eq!(bridge.last_error.as_deref(), Some("helper_bridge:cleanup_incomplete"));
+    }
+
+    let wrong = cancel_helper_bridge_meeting_session("meeting-session-b");
+    assert!(!wrong.ok);
+    assert_eq!(wrong.state, "cleanup_owner_unverified");
+    assert_eq!(wrong.runtime_claim, "helper_cancel_rejected_unattributed_or_other_session_cleanup");
+    {
+        let bridge = runtime().lock().expect("helper still owned by session A");
+        assert!(bridge.stderr_logger.is_some(), "wrong session must not reap A's reader");
+        assert_eq!(bridge.pending_meeting_cleanup_session_id.as_deref(), Some("meeting-session-a"));
+        assert_eq!(bridge.generation_token, 72);
+    }
+
+    release.send(()).expect("release matching reader");
+    let right = cancel_helper_bridge_meeting_session("meeting-session-a");
+    assert!(right.ok);
+    assert_eq!(right.state, "stopped");
+    {
+        let bridge = runtime().lock().expect("helper after successful retry");
+        assert!(bridge.stderr_logger.is_none());
+        assert!(bridge.pending_meeting_cleanup_session_id.is_none());
+        assert!(bridge.active_meeting_session_id.is_none());
+        assert_eq!(bridge.last_error.as_deref(), Some("helper_bridge:cleanup_completed"));
+    }
+    reset_bridge_runtime();
+}
+
+#[test]
+fn unattributed_incomplete_helper_cleanup_cannot_be_claimed_by_meeting_stop() {
+    let _serial = crate::engine::runtime_state::runtime_test_guard();
+    reset_bridge_runtime();
+    {
+        let mut bridge = runtime().lock().expect("native helper mutex");
+        bridge.generation_token = 92;
+        bridge.state = "blocked".to_string();
+        bridge.last_error = Some("helper_bridge:cleanup_incomplete".to_string());
+        assert!(bridge.pending_meeting_cleanup_session_id.is_none());
+    }
+    let denied = cancel_helper_bridge_meeting_session("meeting-session-a");
+    assert!(!denied.ok);
+    assert_eq!(denied.state, "cleanup_owner_unverified");
+    {
+        let bridge = runtime().lock().expect("helper not stolen by Meeting A");
+        assert_eq!(bridge.generation_token, 92);
+        assert_eq!(bridge.last_error.as_deref(), Some("helper_bridge:cleanup_incomplete"));
+        assert!(bridge.pending_meeting_cleanup_session_id.is_none());
+    }
+    reset_bridge_runtime();
+}
+
 #[test]
 fn blocked_bridge_state_clears_all_active_request_metadata() {
     let mut bridge = HelperBridgeRuntime::default();

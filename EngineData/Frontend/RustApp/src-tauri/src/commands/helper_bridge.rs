@@ -667,35 +667,70 @@ pub(crate) fn shutdown_helper_bridge_for_app_exit() -> bool {
 
 pub fn cancel_helper_bridge_meeting_session(session_id: &str) -> HelperBridgeActionResult {
     let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return helper_start_denied(
+            "invalid_session",
+            "Meeting helper cancellation requires the exact non-empty session ID.",
+            "helper_cancel_rejected_missing_session_id",
+            0,
+        );
+    }
+
+    // The outbound marker is generation scoped. Even when the helper mutex
+    // is owned, Stop may release only its already-revoked session's marker.
     clear_meeting_outbound_pipeline_for_session(session_id);
-    match runtime().lock() {
+
+    // Cold startup holds the helper mutex across ping/status. Waiting here
+    // can delay Stop for the entire model import; fail closed and retain the
+    // Meeting session for an explicit Retry Stop instead.
+    match runtime().try_lock() {
         Ok(mut runtime) => {
-            // A prior Stop may have timed out while reaping a worker/logger.
-            // Clearing active metadata is not proof the resource was released:
-            // the next session-scoped Retry Stop must finish that cleanup.
-            if runtime.last_error.as_deref() == Some("helper_bridge:cleanup_incomplete") {
+            let cleanup_unverified = runtime.last_error.as_deref()
+                == Some("helper_bridge:cleanup_incomplete")
+                || runtime.pending_meeting_cleanup_session_id.is_some();
+            if cleanup_unverified {
+                // set_blocked and transport have already cleared the active
+                // request. Only its retained exact Meeting ID can authorize
+                // cleanup of the original worker during Retry Stop.
+                if runtime.pending_meeting_cleanup_session_id.as_deref() != Some(session_id) {
+                    return helper_start_denied(
+                        "cleanup_owner_unverified",
+                        "Python helper cleanup is unverified or belongs to a different session. This Stop will not terminate unowned worker resources.",
+                        "helper_cancel_rejected_unattributed_or_other_session_cleanup",
+                        runtime.generation_token,
+                    );
+                }
                 if !stop_child(&mut runtime) {
                     return set_blocked(
                         &mut runtime,
-                        "Meeting helper cleanup is still incomplete; Retry Stop after the owned worker/logger exits.",
+                        "The same Meeting session still has unverified helper cleanup. Retry Stop after its owned process and I/O threads finish.",
                         "helper_bridge:cleanup_incomplete",
                     );
                 }
                 runtime.state = "stopped".to_string();
-                runtime.message = "Prior Meeting helper process cleanup was verified after Retry Stop.".to_string();
+                runtime.message = "The same Meeting session's helper cleanup was verified on Retry Stop.".to_string();
+                runtime.cuda_ready = false;
+                runtime.provider_ready = false;
+                runtime.degraded_mode = false;
+                runtime.active_task = None;
+                runtime.active_request_id = None;
+                runtime.active_meeting_generation = None;
+                runtime.active_meeting_session_id = None;
+                runtime.active_meeting_lane = None;
                 runtime.last_error = Some("helper_bridge:cleanup_completed".to_string());
                 runtime.updated_unix_ms = unix_ms();
                 return action_result(true, &runtime);
             }
-            if !session_id.is_empty()
-                && runtime.active_meeting_session_id.as_deref() == Some(session_id)
-            {
+
+            if runtime.active_meeting_session_id.as_deref() == Some(session_id) {
                 runtime.generation_token = runtime.generation_token.saturating_add(1);
                 invalidate_required_outbound_ai_readiness();
+                // stop_child records the exact session before any active
+                // request metadata can be cleared on an incomplete cleanup.
                 if !stop_child(&mut runtime) {
                     return set_blocked(
                         &mut runtime,
-                        "Meeting helper Stop has not verified Python worker/stderr cleanup. Retry Stop before starting another session.",
+                        "Meeting helper Stop could not verify process/stdin/stdout/stderr cleanup. Retry Stop before releasing this session.",
                         "helper_bridge:cleanup_incomplete",
                     );
                 }
@@ -714,21 +749,27 @@ pub fn cancel_helper_bridge_meeting_session(session_id: &str) -> HelperBridgeAct
                 runtime.last_error =
                     Some("helper_bridge:meeting_session_hard_cancelled".to_string());
             } else {
+                // Never kill an in-flight task owned by a different session.
+                // The existing generation/session guards reject queued stale work.
                 runtime.message = format!(
-                    "No in-flight helper task belongs to Meeting session {session_id}. Queued incoming/outbound work will be rejected by session/generation guards."
+                    "No in-flight helper task belongs to Meeting session {session_id}. Queued work remains protected by session and generation guards."
                 );
             }
             runtime.updated_unix_ms = unix_ms();
             action_result(true, &runtime)
         }
-        Err(_) => HelperBridgeActionResult {
-            ok: false,
-            state: "error".to_string(),
-            message: "Meeting helper session cancellation failed because state lock is poisoned."
-                .to_string(),
-            generation_token: 0,
-            runtime_claim: "bridge_state_error".to_string(),
-        },
+        Err(TryLockError::WouldBlock) => helper_start_denied(
+            "helper_busy",
+            "The Python helper is owned by startup or another request. Meeting Stop retained its session for Retry Stop; helper cleanup is not yet verified.",
+            "helper_cancel_deferred_owned_mutex",
+            0,
+        ),
+        Err(TryLockError::Poisoned(_)) => helper_start_denied(
+            "error",
+            "Meeting helper cancellation failed because native helper state is poisoned.",
+            "bridge_state_error",
+            0,
+        ),
     }
 }
 

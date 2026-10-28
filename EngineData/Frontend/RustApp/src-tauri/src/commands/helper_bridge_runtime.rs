@@ -109,6 +109,10 @@ pub struct HelperBridgeRuntime {
     // A panicked I/O owner must not be forgotten by a later cleanup attempt,
     // which could otherwise mistake missing handles for verified clean exit.
     pub io_thread_join_failed: bool,
+    // A failed helper cleanup may outlive the active-request metadata, which
+    // set_blocked/transport clear. Preserve its original Meeting session ID
+    // for an exact, session-scoped Retry Stop on the same runtime owner.
+    pub pending_meeting_cleanup_session_id: Option<String>,
     pub updated_unix_ms: u128,
     pub child: Option<Child>,
     pub stdin: Option<ChildStdin>,
@@ -136,6 +140,7 @@ impl Default for HelperBridgeRuntime {
             stdin_writer: None,
             stdout_reader: None,
             io_thread_join_failed: false,
+            pending_meeting_cleanup_session_id: None,
             updated_unix_ms: unix_ms(),
             child: None,
             stdin: None,
@@ -624,6 +629,12 @@ pub fn read_worker_response_direct_with_deadline(
 const HELPER_CLEANUP_BUDGET: Duration = Duration::from_millis(250);
 
 fn stop_child_with_budget(runtime: &mut HelperBridgeRuntime, budget: Duration) -> bool {
+    // Save the exact Meeting owner before a transport failure or set_blocked
+    // clears active-request metadata. It is NOT authorization to touch a
+    // different Meeting session; a later retry must match this exact ID.
+    if runtime.pending_meeting_cleanup_session_id.is_none() {
+        runtime.pending_meeting_cleanup_session_id = runtime.active_meeting_session_id.clone();
+    }
     // Drop our available request pipes before terminating the worker. The
     // writer/reader may still own moved pipes while their JoinHandles remain
     // registered in the canonical runtime for verified cleanup.
@@ -680,6 +691,9 @@ fn stop_child_with_budget(runtime: &mut HelperBridgeRuntime, budget: Duration) -
                 && runtime.stdout_reader.is_none()
                 && runtime.stderr_logger.is_none()
             {
+                // No process or I/O owner remains; a future Retry Stop must
+                // not inherit the released session's attribution.
+                runtime.pending_meeting_cleanup_session_id = None;
                 return true;
             }
         }
@@ -1064,6 +1078,28 @@ mod stderr_lifecycle_tests {
         assert!(runtime.stderr_logger.is_none(), "failed join consumed the handle");
         assert!(!stop_child_with_budget(&mut runtime, Duration::ZERO),
             "a second cleanup must not certify the earlier failed join");
+    }
+
+
+    #[test]
+    fn incomplete_helper_cleanup_retains_meeting_owner_after_active_request_clears() {
+        let (release, gate) = mpsc::channel::<()>();
+        let mut runtime = HelperBridgeRuntime::default();
+        runtime.active_meeting_session_id = Some("meeting-session-a".to_string());
+        runtime.stderr_logger = Some(thread::spawn(move || {
+            let _ = gate.recv();
+        }));
+
+        assert!(!stop_child_with_budget(&mut runtime, Duration::ZERO));
+        assert_eq!(runtime.pending_meeting_cleanup_session_id.as_deref(), Some("meeting-session-a"));
+        runtime.active_meeting_session_id = None; // set_blocked clears request metadata
+        assert!(!stop_child_with_budget(&mut runtime, Duration::ZERO));
+        assert_eq!(runtime.pending_meeting_cleanup_session_id.as_deref(), Some("meeting-session-a"));
+
+        release.send(()).expect("release owned stderr reader");
+        assert!(stop_child_with_budget(&mut runtime, Duration::from_secs(1)));
+        assert!(runtime.pending_meeting_cleanup_session_id.is_none());
+        assert!(runtime.stderr_logger.is_none());
     }
 
     #[test]
