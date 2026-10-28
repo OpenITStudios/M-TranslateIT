@@ -58,6 +58,9 @@ struct MeetingSoundCaptureRuntime {
     stop_tx: mpsc::Sender<()>,
     capture_thread: Option<thread::JoinHandle<()>>,
     cleanup_pending: bool,
+    // A failed join consumes its handle. Retain the original session even on
+    // subsequent Retry Stop rather than treating thread=None as clean proof.
+    join_failed: bool,
     session_id: String,
     device_name: Option<String>,
     sample_rate_hz: u32,
@@ -185,26 +188,39 @@ pub fn start_meeting_sound_capture_runtime(
     let thread_virtual_playback_device = virtual_playback_device.to_string();
     let thread_errors = Arc::clone(&callback_errors);
     let thread_error_epoch = Arc::clone(&callback_error_epoch);
-    let capture_thread = thread::spawn(move || {
-        if let Err(error) = run_capture_thread(
-            &thread_session_id,
-            &thread_virtual_playback_device,
-            thread_frames,
-            thread_suppressed,
-            thread_suppression,
-            thread_errors,
-            thread_error_epoch,
-            stop_rx,
-            &ready_tx,
-        ) {
-            let _ = ready_tx.send(Err(error));
-        }
-    });
+    // Thread admission can fail under native resource pressure. Panicking
+    // here would poison the canonical Meeting Sound mutex and prevent Stop
+    // from ever verifying whether the old session was released.
+    let capture_thread = match thread::Builder::new()
+        .name("translateit-meeting-sound-capture".to_string())
+        .spawn(move || {
+            if let Err(error) = run_capture_thread(
+                &thread_session_id,
+                &thread_virtual_playback_device,
+                thread_frames,
+                thread_suppressed,
+                thread_suppression,
+                thread_errors,
+                thread_error_epoch,
+                stop_rx,
+                &ready_tx,
+            ) {
+                let _ = ready_tx.send(Err(error));
+            }
+        })
+    {
+        Ok(thread) => thread,
+        Err(error) => return blocked_start(
+            "meeting_sound:thread_spawn_failed",
+            &format!("Meeting Sound capture thread could not start: {error}"),
+        ),
+    };
 
     let mut runtime = MeetingSoundCaptureRuntime {
         stop_tx,
         capture_thread: Some(capture_thread),
         cleanup_pending: false,
+        join_failed: false,
         session_id,
         device_name: None,
         sample_rate_hz: 0,
@@ -295,26 +311,32 @@ fn stop_meeting_sound_capture_runtime_owned(
     expected_session: Option<&str>,
 ) -> MeetingSoundCaptureStopReport {
     let store = MEETING_SOUND_CAPTURE_RUNTIME.get_or_init(|| Mutex::new(None));
-    let Ok(mut guard) = store.lock() else {
-        // Do not clear a possibly newer producer if capture ownership is unknown.
+    let Ok(mut guard) = store.try_lock() else {
+        // A busy startup or poisoned owner is not a clean native Stop.
         return MeetingSoundCaptureStopReport {
             ok: false,
             status: inactive_status(
                 "meeting_sound:state_lock_failed",
-                "Meeting Sound capture state lock failed while stopping.",
+                "Meeting Sound capture cleanup ownership could not be verified.",
             ),
-            message: "Meeting Sound capture could not acquire its state lock during Stop."
-                .to_string(),
+            message: "Meeting Sound capture owner is busy or unavailable during Stop. Retry Stop.".to_string(),
         };
     };
 
-    // Hold the mutex while requesting cancellation and confirming bounded
-    // thread exit. An unconfirmed owner must remain stored for Retry Stop.
-    if let Some(runtime) = guard
-        .as_mut()
-        .filter(|runtime| expected_session.is_none_or(|session| runtime.session_id == session))
-    {
+    // The original session remains under this canonical lock until its
+    // capture thread AND session-scoped Silero producer both confirm release.
+    if let Some(runtime) = guard.as_mut().filter(|runtime| {
+        expected_session.is_none_or(|session| runtime.session_id == session)
+    }) {
         let _ = runtime.stop_tx.send(());
+        if runtime.join_failed {
+            runtime.cleanup_pending = true;
+            return MeetingSoundCaptureStopReport {
+                ok: false,
+                status: build_status_from_guard(guard.as_ref()),
+                message: "Meeting Sound capture previously failed to join; its original session remains owned.".to_string(),
+            };
+        }
         if runtime.capture_thread.as_ref().is_some_and(|thread| {
             !capture_finished_within(thread, CAPTURE_STOP_WAIT_BUDGET)
         }) {
@@ -322,64 +344,68 @@ fn stop_meeting_sound_capture_runtime_owned(
             return MeetingSoundCaptureStopReport {
                 ok: false,
                 status: build_status_from_guard(guard.as_ref()),
-                message: "Meeting Sound capture thread has not exited after the bounded Stop wait. Retry Stop; its session owner remains reserved.".to_string(),
+                message: "Meeting Sound capture thread exit is unconfirmed; Retry Stop keeps the original owner.".to_string(),
             };
         }
-    }
-    let runtime = take_capture_if_owned(
-        &mut guard,
-        expected_session,
-        |runtime| runtime.session_id.as_str(),
-    );
-    let Some(mut runtime) = runtime else {
-        let cleared = if let Some(session_id) = expected_session {
+        if runtime.capture_thread.take().is_some_and(|thread| thread.join().is_err()) {
+            runtime.join_failed = true;
+            runtime.cleanup_pending = true;
+            return MeetingSoundCaptureStopReport {
+                ok: false,
+                status: build_status_from_guard(guard.as_ref()),
+                message: "Meeting Sound capture thread join failed; the session remains owned and cannot be declared clean.".to_string(),
+            };
+        }
+        // A previously joined capture thread may still have an unverified
+        // Silero producer. Retry Stop repeats only producer cleanup, not join.
+        let producer_cleared = if let Some(session_id) = expected_session {
             clear_finalized_incoming_utterance_producer_for_session(session_id)
         } else {
             clear_finalized_incoming_utterance_producer()
         };
-        let foreign_active = guard.is_some();
-        return MeetingSoundCaptureStopReport {
-            ok: cleared,
-            status: build_status_from_guard(guard.as_ref()),
-            message: if !cleared {
-                "Meeting Sound producer cleanup could not be verified.".to_string()
-            } else if foreign_active {
-                "Stopped session owns no capture; the newer Meeting Sound stream was preserved."
-                    .to_string()
-            } else {
-                "No matching Meeting Sound capture stream required cleanup.".to_string()
-            },
-        };
-    };
+        if !producer_cleared {
+            runtime.cleanup_pending = true;
+            return MeetingSoundCaptureStopReport {
+                ok: false,
+                status: build_status_from_guard(guard.as_ref()),
+                message: "Meeting Sound capture thread stopped, but its Silero producer cleanup is unverified. Retry Stop retains the owner.".to_string(),
+            };
+        }
+    }
 
-    let stopped_session = runtime.session_id.clone();
-    let joined = runtime
-        .capture_thread
-        .take()
-        .map(|handle| handle.join().is_ok())
-        .unwrap_or(true);
-    let producer_cleared = if expected_session.is_some() {
-        clear_finalized_incoming_utterance_producer_for_session(&stopped_session)
+    // Only an already-verified owner may leave this store. Exact-session
+    // admission prevents a stale incoming activation from taking a newer one.
+    let released = take_capture_if_owned(
+        &mut guard,
+        expected_session,
+        |runtime| runtime.session_id.as_str(),
+    );
+    if let Some(released) = released {
+        return MeetingSoundCaptureStopReport {
+            ok: true,
+            status: inactive_status(
+                "meeting_sound:stopped",
+                "Matching Meeting Sound capture and producer ownership were verified released.",
+            ),
+            message: format!("Meeting Sound capture stopped for session {}.", released.session_id),
+        };
+    }
+
+    let cleared = if let Some(session_id) = expected_session {
+        clear_finalized_incoming_utterance_producer_for_session(session_id)
     } else {
         clear_finalized_incoming_utterance_producer()
     };
+    let foreign_active = guard.is_some();
     MeetingSoundCaptureStopReport {
-        ok: joined && producer_cleared,
-        status: inactive_status(
-            if joined && producer_cleared {
-                "meeting_sound:stopped"
-            } else {
-                "meeting_sound:cleanup_unverified"
-            },
-            "Meeting Sound capture stop has released its matching stream ownership.",
-        ),
-        message: if !producer_cleared {
+        ok: cleared,
+        status: build_status_from_guard(guard.as_ref()),
+        message: if !cleared {
             "Meeting Sound producer cleanup could not be verified.".to_string()
-        } else if joined {
-            "Meeting Sound loopback capture stopped and pending incoming audio state was cleared."
-                .to_string()
+        } else if foreign_active {
+            "Requested session owns no capture; the newer Meeting Sound stream was preserved.".to_string()
         } else {
-            "Meeting Sound capture stream exited unexpectedly during cleanup.".to_string()
+            "No matching Meeting Sound capture stream required cleanup.".to_string()
         },
     }
 }
@@ -391,6 +417,60 @@ fn stop_meeting_sound_capture_runtime_owned(
 pub fn inactive_meeting_sound_capture_may_need_stop() -> bool {
     let store = MEETING_SOUND_CAPTURE_RUNTIME.get_or_init(|| Mutex::new(None));
     store.try_lock().map(|guard| guard.is_some()).unwrap_or(true)
+}
+
+// Called only by the canonical no-snapshot Meeting Stop. Read the exact old
+// capture ID from the existing store; do not issue an unscoped Stop against a
+// capture that might belong to another session or startup transaction.
+pub fn finish_orphaned_meeting_sound_capture_without_session() -> MeetingSoundCaptureStopReport {
+    let idle = || {
+        let report = latest_runtime_session_state();
+        !report.has_active_session && report.snapshot.is_none()
+            && report.blocker == "runtime_session:no_active_session"
+    };
+    if !idle() {
+        return MeetingSoundCaptureStopReport {
+            ok: false,
+            status: inactive_status(
+                "meeting_sound:runtime_owner_unverified",
+                "No-snapshot Meeting Sound cleanup requires a verified idle runtime.",
+            ),
+            message: "Meeting Sound orphan cleanup cannot claim a non-idle or unknown native session.".to_string(),
+        };
+    }
+    let store = MEETING_SOUND_CAPTURE_RUNTIME.get_or_init(|| Mutex::new(None));
+    let old_session = match store.try_lock() {
+        Ok(guard) => guard.as_ref().map(|capture| capture.session_id.clone()),
+        Err(_) => return MeetingSoundCaptureStopReport {
+            ok: false,
+            status: inactive_status("meeting_sound:owner_busy", "Meeting Sound capture owner is not verifiable."),
+            message: "Meeting Sound orphan owner is busy or unavailable; Retry Stop.".to_string(),
+        },
+    };
+    if !idle() {
+        return MeetingSoundCaptureStopReport {
+            ok: false,
+            status: inactive_status("meeting_sound:runtime_owner_changed", "Runtime owner changed before capture cleanup."),
+            message: "Meeting Sound orphan cleanup was cancelled because native ownership changed.".to_string(),
+        };
+    }
+    let result = if let Some(session_id) = old_session.as_deref() {
+        stop_meeting_sound_capture_runtime_for_session(session_id)
+    } else {
+        MeetingSoundCaptureStopReport {
+            ok: true,
+            status: inactive_status("meeting_sound:not_active", "No orphan Meeting Sound capture owns native resources."),
+            message: "No orphan Meeting Sound capture required cleanup.".to_string(),
+        }
+    };
+    if !idle() {
+        return MeetingSoundCaptureStopReport {
+            ok: false,
+            status: inactive_status("meeting_sound:runtime_owner_changed", "Runtime owner changed during capture cleanup."),
+            message: "Meeting Sound orphan release cannot be verified after native ownership changed.".to_string(),
+        };
+    }
+    result
 }
 
 pub fn meeting_sound_capture_status() -> MeetingSoundCaptureStatus {
@@ -669,8 +749,19 @@ fn finish_failed_meeting_sound_start(
             message: format!("{message} Capture exit is not confirmed; Retry Stop before another Start."),
         };
     }
-    let _ = runtime.capture_thread.take().map(|thread| thread.join());
-    clear_finalized_incoming_utterance_producer_for_session(&runtime.session_id);
+    let joined = runtime.capture_thread.take().is_some_and(|thread| thread.join().is_ok());
+    runtime.join_failed |= !joined;
+    let producer_cleared =
+        clear_finalized_incoming_utterance_producer_for_session(&runtime.session_id);
+    if !joined || !producer_cleared {
+        runtime.cleanup_pending = true;
+        *store = Some(runtime);
+        return MeetingSoundCaptureStartReport {
+            ok: false,
+            status: build_status_from_guard(store.as_ref()),
+            message: format!("{message} Capture or Silero producer cleanup remains unverified; Retry Stop."),
+        };
+    }
     blocked_start(blocker, message)
 }
 
@@ -735,7 +826,8 @@ mod isolation_tests {
         use super::*;
         let (stop_tx, _) = mpsc::channel();
         let runtime = MeetingSoundCaptureRuntime {
-            stop_tx, capture_thread: None, cleanup_pending: false, session_id: "incoming-test".into(),
+            stop_tx, capture_thread: None, cleanup_pending: false, join_failed: false,
+            session_id: "incoming-test".into(),
             device_name: None, sample_rate_hz: 48_000, channels: 1, sample_format: "f32".into(),
             started_unix_ms: current_unix_ms(), frames_received: Arc::new(AtomicU64::new(48_000)),
             suppressed_frames: Arc::new(AtomicU64::new(0)), suppression: Arc::new(AtomicBool::new(false)),
@@ -766,6 +858,61 @@ mod isolation_tests {
         assert!(inactive_meeting_sound_capture_may_need_stop(),
             "native ExitRequested cannot certify a contended capture store");
         drop(held);
+    }
+
+    #[test]
+    fn failed_capture_join_retains_old_session_and_rejects_unverified_orphan_stop() {
+        use super::*;
+        let _serial = crate::engine::runtime_state::runtime_test_guard();
+        let _ = crate::engine::runtime_state::clear_runtime_session_state();
+        let store = MEETING_SOUND_CAPTURE_RUNTIME.get_or_init(|| Mutex::new(None));
+        let (stop_tx, _) = mpsc::channel();
+        {
+            let mut guard = store.lock().expect("canonical Sound owner");
+            assert!(guard.is_none(), "previous test must release Sound owner");
+            *guard = Some(MeetingSoundCaptureRuntime {
+                stop_tx,
+                capture_thread: Some(thread::spawn(|| panic!("simulated Sound capture panic"))),
+                cleanup_pending: false,
+                join_failed: false,
+                session_id: "old-meeting-sound".to_string(),
+                device_name: None,
+                sample_rate_hz: 0,
+                channels: 0,
+                sample_format: String::new(),
+                started_unix_ms: current_unix_ms(),
+                frames_received: Arc::new(AtomicU64::new(0)),
+                suppressed_frames: Arc::new(AtomicU64::new(0)),
+                suppression: Arc::new(AtomicBool::new(false)),
+                callback_errors: Arc::new(Mutex::new(Vec::new())),
+                callback_error_epoch: Arc::new(AtomicU64::new(0)),
+            });
+        }
+        let result = stop_meeting_sound_capture_runtime_for_session("old-meeting-sound");
+        assert!(!result.ok);
+        assert_eq!(result.status.session_id.as_deref(), Some("old-meeting-sound"));
+        assert_eq!(result.status.blocker, "meeting_sound:cleanup_pending");
+        let repeated = finish_orphaned_meeting_sound_capture_without_session();
+        assert!(!repeated.ok, "Retry Stop cannot forget a failed native capture join");
+        {
+            let guard = store.lock().expect("Sound attribution retained");
+            let owner = guard.as_ref().expect("failed owner must not disappear");
+            assert!(owner.join_failed);
+            assert!(owner.capture_thread.is_none());
+            assert!(owner.cleanup_pending);
+        }
+
+        let mic = crate::engine::runtime_state::begin_mic_test_session();
+        assert!(mic.blocker.is_empty());
+        let generation = mic.snapshot.expect("Mic Test owns audio").generation;
+        assert!(!finish_orphaned_meeting_sound_capture_without_session().ok,
+            "no-snapshot cleanup must not claim an active Mic Test's resources");
+        assert_eq!(
+            crate::engine::runtime_state::clear_runtime_session_if_generation(generation).blocker,
+            "runtime_session:cleared",
+        );
+        // Fixture only: real failed-join ownership remains fail-closed.
+        let _ = store.lock().expect("release controlled fixture").take();
     }
 
     #[test]

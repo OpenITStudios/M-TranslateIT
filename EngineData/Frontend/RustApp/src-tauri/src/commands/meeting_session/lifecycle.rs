@@ -17,6 +17,7 @@ use crate::engine::audio::meeting_output::{
     prepare_meeting_output_device, probe_prepared_meeting_output_device_functionally,
 };
 use crate::engine::audio::meeting_sound_capture::{
+    finish_orphaned_meeting_sound_capture_without_session,
     inactive_meeting_sound_capture_may_need_stop, stop_meeting_sound_capture_runtime,
 };
 use crate::engine::runtime_state::{
@@ -792,7 +793,13 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
         }
     };
     let current = latest_runtime_session_state();
-    if current.has_active_session && current.snapshot.is_none() {
+    // A missing snapshot is NOT verified idle if the native lock is poisoned
+    // or the state report carries a blocker other than no_active_session.
+    // Never enter orphan teardown on an untrusted runtime report.
+    if current.snapshot.is_none()
+        && (current.has_active_session
+            || current.blocker != "runtime_session:no_active_session")
+    {
         return MeetingSessionActionResult {
             ok: false,
             state: "runtime_state_unavailable".to_string(),
@@ -824,7 +831,10 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
         let orphan_playback_cleanup = finish_orphaned_meeting_playback_without_session();
         clear_all_start_preflight();
         clear_prepared_meeting_output_device();
-        let incoming_capture_stop = stop_meeting_sound_capture_runtime();
+        // The optional Sound capture can still own an old Meeting stream.
+        // Read its exact native session and use scoped Stop, not an unscoped
+        // producer clear when the authoritative Meeting snapshot is absent.
+        let incoming_capture_stop = finish_orphaned_meeting_sound_capture_without_session();
 
         let producer_cleanup: Result<(), String> = match orphan_producers.as_ref() {
             Err(error) => Err(error.clone()),

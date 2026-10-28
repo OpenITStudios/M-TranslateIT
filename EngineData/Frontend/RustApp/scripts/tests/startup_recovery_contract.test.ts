@@ -305,6 +305,22 @@ test("no-snapshot Meeting orphan must be reconciled before native Stop and Close
   assert.match(meetingLifecycle, /inactive_meeting_sound_capture_may_need_stop\(\)/);
   assert.match(meetingSound, /pub fn inactive_meeting_sound_capture_may_need_stop\(\) -> bool/);
   assert.match(meetingSound, /store\.try_lock\(\)\.map\(\|guard\| guard\.is_some\(\)\)\.unwrap_or\(true\)/);
+  assert.match(meetingSound, /pub fn finish_orphaned_meeting_sound_capture_without_session\(\) -> MeetingSoundCaptureStopReport/);
+  assert.match(meetingSound, /runtime\.join_failed = true;/);
+  assert.match(meetingSound, /runtime\.capture_thread\.take\(\)\.is_some_and\(\|thread\| thread\.join\(\)\.is_err\(\)\)/);
+  assert.match(meetingSound, /if !producer_cleared \{\s*runtime\.cleanup_pending = true/);
+  assert.match(meetingSound, /fn failed_capture_join_retains_old_session_and_rejects_unverified_orphan_stop\(\)/);
+  assert.match(meetingSound, /let capture_thread = match thread::Builder::new\(\)/);
+  assert.match(meetingSound, /meeting_sound:thread_spawn_failed/);
+  assert.doesNotMatch(meetingSound, /let capture_thread = thread::spawn\(move \|\|/);
+  assert.match(meetingSound, /stop_meeting_sound_capture_runtime_for_session\(session_id\)/);
+  assert.match(stop, /if current\.snapshot\.is_none\(\)\s*&& \(current\.has_active_session\s*\|\| current\.blocker != "runtime_session:no_active_session"\)/);
+  assert.match(stop, /let incoming_capture_stop = finish_orphaned_meeting_sound_capture_without_session\(\)/);
+  assert.ok(
+    stop.indexOf('current.blocker != "runtime_session:no_active_session"')
+      < stop.indexOf("let orphan_producers = finalized_orphan_producer_owners()"),
+    "no-snapshot cleanup must be denied before touching any orphan owner when runtime authority is unavailable",
+  );
 
   assert.match(resources, /let orphan_cleanup = !meeting\.has_session && meeting\.lifecycle == "cleanup_incomplete"/);
   assert.match(applicationLifecycle, /if meeting\.lifecycle == "cleanup_incomplete" \{/);

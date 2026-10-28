@@ -99,6 +99,23 @@ an invalid device or add a feature to manufacture isolation for this procedure.
 | 4. Incoming alongside outbound · A5, C3/C6, B4 | After baseline capture/outbound succeeds, verify Meeting Sound is listening on the intended output and have the separated receiver supply public English speech, reusing the intent of core A12. Speak outbound while incoming is active; observe suppression and bounded work. Exercise existing device-mutation locks during Live | Incoming EN→ID is visible without breaking required outbound; the app's own TTS is not retranslated, no false speaker identity, silent device swap or stale backlog. If incoming cannot be exercised, mark it NOT EXECUTED and limit the claim to verified outbound observations; do not mark complete Meeting acceptance |
 | 5. Transcript → Stop → export → reopen · C8, D8–D11/D18 | Use the same public session. Observe source-first/pending/failed states, Stop and export offline HTML only after writer ownership releases. Restart the app, reopen the saved transcript, then create a distinct new session. If deletion is tested, delete only this disposable test archive | Retention is disclosed; source/translation and session identity remain truthful after restart. Preview and finished export are readable with correct bilingual modes; no script dependency or false participant/delivery claims. New sessions do not merge; deleting the test archive leaves finished HTML intact. Interrupted storage/completeness remains explicit, never an invented complete archive |
 
+**Flow 3 cleanup ownership observation (same integrated session, not an extra test cycle):**
+After stopping while Meeting Sound and outbound translation are processing, confirm
+native Meeting ownership, Silero/consumer/playback threads, transient ASR/TTS WAV
+files and the transcript writer are all reported as released before the app
+advertises `already_stopped`, enables a new Start, or permits clean Exit.
+If the previous session's helper, capture or producer cleanup is unverified,
+the existing Retry Stop must remain available and a competing Mic Test/recording,
+new Meeting or Close must not silently consume the old session owner. Verify a
+missing/unverifiable native session snapshot does **not** permit unscoped Sound
+capture cleanup. Use the existing offline Rust fixtures for panicked joins and
+cross-session file ownership at source admission; **do not deliberately crash**
+the physical microphone, poison real runtime locks, or delete user audio to
+simulate these states. If a targeted fault cannot be exercised in the admitted
+session, record it `UNKNOWN / NOT EXECUTED`, not PASS. Record one source SHA,
+one meaningful non-private symptom and the first wrong native owner only;
+do not add a separate checker registry or repeat the baseline flows.
+
 For flow 2, use existing core membership in
 [`scenarios.json`](../../../tools/audio_validation/scenarios.json) and linked
 ASR/translation corpora as sample owners; do not copy utterances into a new set.
