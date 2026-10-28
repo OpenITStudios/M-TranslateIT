@@ -199,9 +199,14 @@ impl PlaybackCursor {
             }
         }
 
-        // If Mute was accepted while this callback was filling the output,
-        // discard this entire callback buffer; never leave late TTS samples.
-        if original_voice_pcm::is_output_muted(self.generation) {
+        // Stop, Mute or source switching may race the initial callback gate.
+        // Recheck the callback-safe atomics before publishing this buffer;
+        // never send an entire in-flight buffer belonging to a revoked source.
+        if self.cancel_requested.load(Ordering::Acquire)
+            || original_voice_pcm::is_output_muted(self.generation)
+            || self.source_epoch.is_some_and(|epoch|
+                !original_voice_pcm::translated_epoch_matches(self.generation, epoch))
+        {
             data.fill(convert(0.0));
             self.cancel_requested.store(true, Ordering::Release);
             self.signal_complete(Duration::ZERO);
@@ -242,6 +247,40 @@ impl PlaybackCursor {
     }
 }
 
+// CPAL's error callback may run when completion is already queued. The
+// persistent error flag is the authority: a full channel must never turn a
+// device failure into a successful completion. No callback-side mutex or
+// error-string allocation is required.
+fn signal_output_callback_failure(
+    failed: &AtomicBool,
+    completion_tx: &mpsc::SyncSender<Duration>,
+) {
+    failed.store(true, Ordering::Release);
+    let _ = completion_tx.try_send(Duration::ZERO);
+}
+
+// Report completion only when CPAL actually called back with audio and no
+// cancellation, callback failure, or missing completion was observed.
+// Native callback delivery is not proof of remote meeting-app reception.
+fn output_completion_blocker(
+    cancelled: bool,
+    callback_failed: bool,
+    completed: bool,
+    first_audio_callback: bool,
+) -> Option<&'static str> {
+    if cancelled {
+        Some("meeting_output:cancelled")
+    } else if callback_failed {
+        Some("meeting_output:stream_callback_failed")
+    } else if !completed {
+        Some("meeting_output:delivery_deadline_exceeded")
+    } else if !first_audio_callback {
+        Some("meeting_output:first_audio_callback_missing")
+    } else {
+        None
+    }
+}
+
 fn build_output_stream(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -252,7 +291,7 @@ fn build_output_stream(
     source_epoch: Option<u64>,
     completion_tx: mpsc::SyncSender<Duration>,
     first_playback_tx: mpsc::SyncSender<Instant>,
-    callback_errors: Arc<Mutex<Option<String>>>,
+    callback_failed: Arc<AtomicBool>,
 ) -> Result<cpal::Stream, String> {
     let make_cursor = |tx: mpsc::SyncSender<Duration>| PlaybackCursor {
         samples: Arc::clone(&samples),
@@ -271,17 +310,14 @@ fn build_output_stream(
     match sample_format {
         cpal::SampleFormat::F32 => {
             let mut cursor = make_cursor(completion_tx.clone());
-            let errors = Arc::clone(&callback_errors);
+            let errors = Arc::clone(&callback_failed);
             let error_tx = completion_tx.clone();
             device
                 .build_output_stream(
                     *config,
                     move |data: &mut [f32], info| cursor.fill(data, info, |value| value),
-                    move |error| {
-                        if let Ok(mut stored) = errors.lock() {
-                            *stored = Some(error.to_string());
-                        }
-                        let _ = error_tx.try_send(Duration::ZERO);
+                    move |_error| {
+                        signal_output_callback_failure(&errors, &error_tx);
                     },
                     None,
                 )
@@ -289,7 +325,7 @@ fn build_output_stream(
         }
         cpal::SampleFormat::I16 => {
             let mut cursor = make_cursor(completion_tx.clone());
-            let errors = Arc::clone(&callback_errors);
+            let errors = Arc::clone(&callback_failed);
             let error_tx = completion_tx.clone();
             device
                 .build_output_stream(
@@ -299,11 +335,8 @@ fn build_output_stream(
                             (value.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16
                         })
                     },
-                    move |error| {
-                        if let Ok(mut stored) = errors.lock() {
-                            *stored = Some(error.to_string());
-                        }
-                        let _ = error_tx.try_send(Duration::ZERO);
+                    move |_error| {
+                        signal_output_callback_failure(&errors, &error_tx);
                     },
                     None,
                 )
@@ -311,7 +344,7 @@ fn build_output_stream(
         }
         cpal::SampleFormat::U16 => {
             let mut cursor = make_cursor(completion_tx.clone());
-            let errors = Arc::clone(&callback_errors);
+            let errors = Arc::clone(&callback_failed);
             let error_tx = completion_tx.clone();
             device
                 .build_output_stream(
@@ -322,11 +355,8 @@ fn build_output_stream(
                                 as u16
                         })
                     },
-                    move |error| {
-                        if let Ok(mut stored) = errors.lock() {
-                            *stored = Some(error.to_string());
-                        }
-                        let _ = error_tx.try_send(Duration::ZERO);
+                    move |_error| {
+                        signal_output_callback_failure(&errors, &error_tx);
                     },
                     None,
                 )
@@ -365,7 +395,7 @@ pub fn probe_prepared_meeting_output_device_functionally(
     let cancel_requested = Arc::new(AtomicBool::new(false));
     let (completion_tx, _completion_rx) = mpsc::sync_channel(1);
     let (first_playback_tx, first_playback_rx) = mpsc::sync_channel(1);
-    let callback_errors = Arc::new(Mutex::new(None));
+    let callback_failed = Arc::new(AtomicBool::new(false));
     let stream = build_output_stream(
         &device,
         &config,
@@ -376,7 +406,7 @@ pub fn probe_prepared_meeting_output_device_functionally(
         None,
         completion_tx,
         first_playback_tx,
-        Arc::clone(&callback_errors),
+        Arc::clone(&callback_failed),
     )?;
     stream
         .play()
@@ -384,17 +414,13 @@ pub fn probe_prepared_meeting_output_device_functionally(
 
     let callback =
         first_playback_rx.recv_timeout(Duration::from_millis(FUNCTIONAL_OUTPUT_PROBE_TIMEOUT_MS));
-    let callback_error = callback_errors
-        .lock()
-        .ok()
-        .and_then(|error| error.clone());
     let still_authoritative = runtime_generation_is_authoritative(generation);
     drop(stream);
 
     if !still_authoritative {
         return Err("meeting_output:functional_probe_generation_revoked".to_string());
     }
-    if callback_error.is_some() {
+    if callback_failed.load(Ordering::Acquire) {
         return Err("meeting_output:functional_probe_callback_failed".to_string());
     }
     match callback {
@@ -595,7 +621,7 @@ fn deliver_meeting_output_wav_inner(
     }
     let (completion_tx, completion_rx) = mpsc::sync_channel(1);
     let (first_playback_tx, first_playback_rx) = mpsc::sync_channel(1);
-    let callback_errors = Arc::new(Mutex::new(None));
+    let callback_failed = Arc::new(AtomicBool::new(false));
     let stream_build_started_at = Instant::now();
     let stream = match build_output_stream(
         &device,
@@ -607,7 +633,7 @@ fn deliver_meeting_output_wav_inner(
         source_epoch,
         completion_tx,
         first_playback_tx,
-        Arc::clone(&callback_errors),
+        Arc::clone(&callback_failed),
     ) {
         Ok(value) => value,
         Err(blocker) => {
@@ -641,10 +667,7 @@ fn deliver_meeting_output_wav_inner(
         }
         cancel_requested.load(Ordering::Acquire)
     });
-    let callback_error_before_tail = callback_errors
-        .lock()
-        .ok()
-        .and_then(|error| error.clone());
+    let callback_failed_before_tail = callback_failed.load(Ordering::Acquire);
     let first_playback_at = first_playback_rx.try_recv().ok();
     let stream_start_to_first_audio_ms =
         stream_start_to_first_audio_ms(stream_started_at, first_playback_at);
@@ -654,7 +677,7 @@ fn deliver_meeting_output_wav_inner(
         || !runtime_generation_is_authoritative(generation);
 
     match completion {
-        Ok(tail) if !cancelled && callback_error_before_tail.is_none() => {
+        Ok(tail) if !cancelled && !callback_failed_before_tail => {
             let _ = wait_for_output_tail(tail, || {
                 cancel_requested.load(Ordering::Acquire)
                     || !runtime_generation_is_authoritative(generation)
@@ -671,28 +694,14 @@ fn deliver_meeting_output_wav_inner(
     // audio drains. A pre-tail snapshot must never report their output as OK.
     let cancelled_after_tail = cancel_requested.load(Ordering::Acquire)
         || !runtime_generation_is_authoritative(generation);
-    let callback_error_after_tail = callback_errors
-        .lock()
-        .ok()
-        .and_then(|error| error.clone());
-    if cancelled_after_tail {
-        let mut report = blocked("meeting_output:cancelled", true);
-        report.first_playback_at = first_playback_at;
-        report.first_playback_unix_ms = first_playback_unix_ms;
-        report.stream_build_ms = Some(stream_build_ms);
-        report.stream_start_to_first_audio_ms = stream_start_to_first_audio_ms;
-        return report;
-    }
-    if callback_error_before_tail.is_some() || callback_error_after_tail.is_some() {
-        let mut report = blocked("meeting_output:stream_callback_failed", true);
-        report.first_playback_at = first_playback_at;
-        report.first_playback_unix_ms = first_playback_unix_ms;
-        report.stream_build_ms = Some(stream_build_ms);
-        report.stream_start_to_first_audio_ms = stream_start_to_first_audio_ms;
-        return report;
-    }
-    if completion.is_err() {
-        let mut report = blocked("meeting_output:delivery_deadline_exceeded", true);
+    let callback_failed_after_tail = callback_failed.load(Ordering::Acquire);
+    if let Some(blocker) = output_completion_blocker(
+        cancelled_after_tail,
+        callback_failed_before_tail || callback_failed_after_tail,
+        completion.is_ok(),
+        first_playback_at.is_some(),
+    ) {
+        let mut report = blocked(blocker, true);
         report.first_playback_at = first_playback_at;
         report.first_playback_unix_ms = first_playback_unix_ms;
         report.stream_build_ms = Some(stream_build_ms);
@@ -717,12 +726,52 @@ mod tests {
         decode_wav_bytes, delivery_deadline_ms, prepare_output_samples, projected_unix_ms,
         stream_start_to_first_audio_ms, wait_for_output_completion, wait_for_output_tail,
         install_cancel_control, clear_cancel_control, cancel_meeting_output_for_generation,
-        cancel_control, release_output_stream,
+        cancel_control, release_output_stream, signal_output_callback_failure,
+        output_completion_blocker,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
+
+    #[test]
+    fn native_error_is_sticky_even_when_completion_queue_is_already_full() {
+        let failed = AtomicBool::new(false);
+        let (tx, rx) = mpsc::sync_channel(1);
+        tx.try_send(Duration::from_millis(12)).unwrap();
+        signal_output_callback_failure(&failed, &tx);
+        assert!(failed.load(Ordering::Acquire));
+        assert_eq!(rx.try_recv(), Ok(Duration::from_millis(12)));
+        // A normal cursor completion cannot hide an asynchronous device error.
+        assert_eq!(
+            output_completion_blocker(false, failed.load(Ordering::Acquire), true, true),
+            Some("meeting_output:stream_callback_failed"),
+        );
+    }
+
+    #[test]
+    fn device_error_wakes_waiter_but_is_not_successful_playback() {
+        let failed = AtomicBool::new(false);
+        let (tx, rx) = mpsc::sync_channel(1);
+        signal_output_callback_failure(&failed, &tx);
+        let completion = wait_for_output_completion(&rx, Duration::from_secs(1), || false);
+        assert_eq!(completion, Ok(Duration::ZERO));
+        assert_eq!(
+            output_completion_blocker(false, failed.load(Ordering::Acquire), completion.is_ok(), true),
+            Some("meeting_output:stream_callback_failed"),
+        );
+    }
+
+    #[test]
+    fn callback_completion_requires_first_audio_and_live_authority() {
+        assert_eq!(output_completion_blocker(false, false, true, false),
+            Some("meeting_output:first_audio_callback_missing"));
+        assert_eq!(output_completion_blocker(true, false, true, true),
+            Some("meeting_output:cancelled"));
+        assert_eq!(output_completion_blocker(false, false, false, true),
+            Some("meeting_output:delivery_deadline_exceeded"));
+        assert_eq!(output_completion_blocker(false, false, true, true), None);
+    }
     #[test]
     fn revoked_generation_cannot_admit_late_audio_control() {
         use crate::engine::runtime_state::{
