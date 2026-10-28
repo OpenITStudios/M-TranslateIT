@@ -2,6 +2,9 @@
 
 ## Current Status
 
+**Helper status lock contention hardening — source candidate (2026-10-28).** The canonical helper startup/transport remains one Rust mutex and one Python worker. Read-only helper status now uses nonblocking lock admission: when the owner is occupied, snapshots report `checking` with no fabricated model capability, current generation, success or transport error; poisoned locks remain explicit error. Native Start refuses duplicate attempts during contention, and its mutex owner rechecks a real live ready child before clearing the Meeting admission marker or replacing it. The existing ApplicationRuntime and Svelte readiness mapping display Checking during that evidence gap while preserving Live/Stop priority. Rust and TypeScript regression tests were authored but NOT EXECUTED. No additional worker/cache/poller, AI model, timeout, cloud inference, CI or user-PC testing. Windows cold startup/UI responsiveness and real-device proof remain deferred to the one integrated acceptance phase.
+
+
 **Cold-start UI and voice-status source hardening — candidate 2026-10-28.** Returning users now receive the read-only saved-settings + native application snapshot and visible Meeting workspace before the one canonical `ensure_runtime_ready` startup attempt. This attempt runs without awaiting it in the initial shell loading path and reconciles its exact native outcome via the existing application controller, avoiding listener-registration races. A blocked worker is not automatically restarted. Read-heavy My Voice build-status work is offloaded from the native Tauri command thread using the existing blocking executor; its status contract and voice behavior are unchanged. No additional worker, model, AI timeout, background polling, dependency, hosted CI or user-PC action. Two source tests authored, NOT EXECUTED; measured native startup/freeze and model import latency require the later integrated Windows acceptance.
 
 

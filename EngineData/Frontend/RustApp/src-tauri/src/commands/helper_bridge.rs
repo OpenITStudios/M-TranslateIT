@@ -2,6 +2,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::io::BufReader;
 use std::process::{Command, Stdio};
+use std::sync::TryLockError;
 
 use crate::commands::diagnostic_trace::{
     trace_command_end, trace_command_error, trace_command_start,
@@ -149,9 +150,34 @@ pub fn prepare_required_outbound_ai_runtime(meeting_generation: u64) -> Result<(
     Ok(())
 }
 
+// The canonical helper mutex owns cold Python ping/status and worker transport.
+// Read-only status cannot wait for that owner. A busy lock is UNKNOWN, never
+// Ready, Stopped, a guessed generation, or a reason to restart the worker.
+fn status_lock_busy() -> HelperBridgeStatus {
+    HelperBridgeStatus {
+        state: "checking".to_string(),
+        message: "Local AI worker status is being checked; current readiness is not yet verified.".to_string(),
+        cuda_ready: false,
+        provider_ready: false,
+        functional_outbound_ready: false,
+        functional_outbound_verified_unix_ms: None,
+        degraded_mode: false,
+        active_task: None,
+        active_request_id: None,
+        active_meeting_generation: None,
+        active_meeting_session_id: None,
+        active_meeting_lane: None,
+        generation_token: 0,
+        last_error: None,
+        stderr_log_path: None,
+        updated_unix_ms: unix_ms(),
+        runtime_claim: "helper_bridge:status_lock_busy".to_string(),
+    }
+}
+
 pub fn get_helper_bridge_status() -> HelperBridgeStatus {
     let started = trace_command_start("get_helper_bridge_status", "reading helper bridge status");
-    match runtime().lock() {
+    match runtime().try_lock() {
         Ok(mut runtime) => {
             let child_exited = runtime
                 .child
@@ -175,6 +201,8 @@ pub fn get_helper_bridge_status() -> HelperBridgeStatus {
                 runtime.updated_unix_ms = unix_ms();
             }
             let result = decorate_functional_readiness_status(status_from_runtime(&runtime));
+            // Filesystem tracing must never extend this transport-mutex lease.
+            drop(runtime);
             trace_command_end(
                 "get_helper_bridge_status",
                 started,
@@ -182,7 +210,16 @@ pub fn get_helper_bridge_status() -> HelperBridgeStatus {
             );
             result
         }
-        Err(_) => {
+        Err(TryLockError::WouldBlock) => {
+            let result = status_lock_busy();
+            trace_command_end(
+                "get_helper_bridge_status",
+                started,
+                "state=checking; helper status is temporarily owned",
+            );
+            result
+        }
+        Err(TryLockError::Poisoned(_)) => {
             let result = HelperBridgeStatus {
                 state: "error".to_string(),
                 message: "Helper bridge status lock is poisoned.".to_string(),
@@ -213,11 +250,19 @@ pub fn get_helper_bridge_status() -> HelperBridgeStatus {
 }
 
 fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeActionResult {
-    if clear_outbound_pipeline {
-        clear_any_meeting_outbound_pipeline();
-    }
     match runtime().lock() {
         Ok(mut runtime) => {
+            // A competing Start may have completed while this caller waited.
+            // Recheck process liveness under the single authoritative mutex.
+            if runtime.state == "ready"
+                && runtime.child.as_mut().is_some_and(|child| matches!(child.try_wait(), Ok(None)))
+            {
+                return action_result(true, &runtime);
+            }
+            // A duplicate Start must not clear an existing Meeting admission.
+            if clear_outbound_pipeline {
+                clear_any_meeting_outbound_pipeline();
+            }
             runtime.generation_token = runtime.generation_token.saturating_add(1);
             invalidate_required_outbound_ai_readiness();
             stop_child(&mut runtime);
@@ -425,6 +470,16 @@ pub fn start_helper_bridge() -> HelperBridgeActionResult {
             runtime_claim: current.runtime_claim,
         };
     }
+    if current.state == "checking" {
+        // Never queue a new Start behind an already-owned worker mutex.
+        return HelperBridgeActionResult {
+            ok: false,
+            state: current.state,
+            message: "The local AI worker is busy. Its status must be confirmed before starting or restarting it.".to_string(),
+            generation_token: current.generation_token,
+            runtime_claim: current.runtime_claim,
+        };
+    }
     start_helper_bridge_internal(true)
 }
 
@@ -504,6 +559,36 @@ pub async fn helper_bridge_worker_status() -> Result<HelperBridgeWorkerResponse,
     tauri::async_runtime::spawn_blocking(|| send_worker_task("status", json!({})))
         .await
         .map_err(|_| "Worker status probe was interrupted.".to_string())
+}
+
+#[cfg(test)]
+mod helper_status_lock_contention_tests {
+    use super::{get_helper_bridge_status, start_helper_bridge};
+    use super::super::helper_bridge_runtime::runtime;
+
+    #[test]
+    fn busy_status_never_claims_readiness_or_restarts_an_owned_worker() {
+        let _serial = crate::engine::runtime_state::runtime_test_guard();
+        let owner = runtime().lock().expect("hold canonical helper owner");
+        let original_generation = owner.generation_token;
+
+        // This exact status getter must return without waiting for the held
+        // mutex, even while the current owner is starting a Python worker.
+        let status = get_helper_bridge_status();
+        assert_eq!(status.state, "checking");
+        assert_eq!(status.runtime_claim, "helper_bridge:status_lock_busy");
+        assert_eq!(status.generation_token, 0);
+        assert!(!status.provider_ready);
+        assert!(!status.cuda_ready);
+        assert!(!status.functional_outbound_ready);
+        assert!(status.last_error.is_none());
+
+        let start = start_helper_bridge();
+        assert!(!start.ok);
+        assert_eq!(start.state, "checking");
+        assert_eq!(start.generation_token, 0);
+        assert_eq!(owner.generation_token, original_generation);
+    }
 }
 
 #[cfg(test)]

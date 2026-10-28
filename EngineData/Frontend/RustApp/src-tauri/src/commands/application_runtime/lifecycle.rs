@@ -30,6 +30,12 @@ pub fn derive_lifecycle(summaries: &ApplicationSubsystemSummaries) -> String {
         };
     }
 
+    // A busy helper lock prevents a verified readiness observation, but is
+    // not by itself a failed installation or an unhealthy worker.
+    if summaries.worker.state == "checking" {
+        return "checking".to_string();
+    }
+
     if summaries.worker.process_ready && summaries.audio.ready {
         "ready".to_string()
     } else if summaries.worker.state == "frontend_bridge_error"
@@ -123,6 +129,13 @@ mod tests {
             derive_lifecycle(&summaries("idle", false, None, true, true, true)),
             "voice_build_active"
         );
+    }
+
+    #[test]
+    fn occupied_helper_is_checking_not_ready_or_a_setup_failure() {
+        let mut status = summaries("idle", false, None, false, true, false);
+        status.worker.state = "checking".to_string();
+        assert_eq!(derive_lifecycle(&status), "checking");
     }
 
     #[test]

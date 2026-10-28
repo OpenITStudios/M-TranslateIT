@@ -2,6 +2,36 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { resolveMeetingVoiceGate } from "../../src/app/runtime/meetingVoiceGate.ts";
+import { mapProductReadiness } from "../../src/app/bridge/productReadinessState.ts";
+import type { HelperBridgeStatus } from "../../src/app/shared/types.ts";
+test("busy helper lock is Checking, not a fabricated Ready or worker failure", () => {
+  const pending = mapProductReadiness({
+    helper: {
+      state: "checking",
+      runtime_claim: "helper_bridge:status_lock_busy",
+      message: "Worker status could not be read during an owned task.",
+      generation_token: 0,
+      provider_ready: false,
+      cuda_ready: false,
+      functional_outbound_ready: false,
+      last_error: null,
+    } as HelperBridgeStatus,
+    inputStatus: null,
+    meetingSession: null,
+    approvedVoiceReady: null,
+  });
+  assert.equal(pending.level, "checking");
+  assert.equal(pending.meetingReady, false);
+  assert.equal(pending.asrReady, false);
+  assert.equal(pending.translationIdEnReady, false);
+  assert.equal(pending.translationEnIdReady, false);
+  assert.equal(pending.ttsReady, false);
+  assert.equal(pending.helperStatus, "Checking local AI worker");
+  assert.match(pending.summary, /not yet verified/);
+  assert.match(pending.nextAction, /must be confirmed/);
+  assert.equal(pending.blockers.some((entry) => entry.includes("lock_poisoned")), false);
+});
+
 test("preflight-ready Meeting stays Setup Needed until a Meeting voice is selected", () => {
   const result = resolveMeetingVoiceGate({
     live: false,

@@ -21,6 +21,15 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Helper status mutex contention — source repair 2026-10-28
+
+Candidate based on `c5670153b992fe6bbffbe1421e0f1abf15bc76e4`. A read-only `get_helper_bridge_status()` previously used blocking `runtime().lock()` even while `start_helper_bridge_internal()` held the same mutex for Python worker creation, ping and startup status response. This also affected Meeting preflight and ApplicationRuntime snapshots. The updated helper uses `try_lock()`: when the canonical owner is busy it reports `checking` without inventing a verified generation, model readiness, stopped state, error or worker process identity. A poisoned lock keeps the existing failure status. Logging of a successfully obtained status is moved outside the helper transport lock. Public helper Start refuses a duplicate restart during contention. The actual mutex-owning startup code checks if a competing caller already established a live, ready worker before clearing the outbound marker or replacing the process. No worker protocol or inference deadline changed.
+
+Native ApplicationRuntime and frontend product-readiness owners now classify this temporary unverified status as Checking rather than Ready or a confirmed setup failure. An authoritative Live Meeting continues to use its own session state; Stop/cleanup ownership is unchanged. Three focused test cases were authored: Rust held-lock status/duplicate-Start fixture, Rust lifecycle mapping, and TypeScript readiness mapping.
+
+**STATIC_SOURCE / NOT EXECUTED:** owner/call-site review and authored test source only. No Rust build/test, frontend typecheck/test, Python worker, CI, Windows cold-model load, installed-app, physical audio or target latency was executed. This is a source-level reduction of status mutex waiting, **not** a measured claim that historical startup delays or OS Not Responding are eliminated.
+
+
 ### Cold startup shell and My Voice status responsiveness — 2026-10-28
 
 Candidate based on `a90f72e1e797ab5546b0be6372554825112577a8`: returning-user `App.svelte` no longer awaits the canonical Python helper's cold `ensure_runtime_ready` intent before ending the initial shell loading state. First it loads persisted settings and one native `ApplicationSnapshot`, maps it through the existing application controller with event sequencing and displays the resulting Meeting workspace. Only if the authoritative helper reports `not_started`, one non-blocking intent then starts the same single worker; its resulting native snapshot is reconciled by the existing monotonic ApplicationRuntime controller, including when the event subscription was not yet ready. Failed/blocked workers are not retried automatically, and unavailable native snapshots do not grant readiness. Native `get_voice_lab_build_status` now sends its existing read-heavy `current_status` work to Tauri's blocking executor, keeping the response DTO and canonical voice semantics unchanged. No model, lockfile, inference/prompt, helper deadline, worker count, polling, cloud or startup service was changed.

@@ -71,6 +71,11 @@ export function mapProductReadiness(input: {
   const inputUnavailable = inputBridgeUnavailable(inputStatus);
   const runtimeUnavailable = helperUnavailable && meetingUnavailable && inputUnavailable;
 
+  // A cold/active worker may temporarily own the native transport lock.
+  // This is an unknown observation without a verified generation, not an
+  // invitation to restart or a claim that models are unavailable.
+  const helperChecking = helper?.state === "checking"
+    && helper.runtime_claim === "helper_bridge:status_lock_busy";
   const workerHelperReady = helper?.state === "ready";
   const helperReady = meeting.helperReady;
   const microphoneReady = meeting.microphoneReady;
@@ -104,6 +109,8 @@ export function mapProductReadiness(input: {
   const hasRuntimeEvidence = Boolean(helper || worker.responseAvailable || inputStatus || input.meetingSession);
   const level: ProductReadinessLevel = runtimeUnavailable
     ? "unavailable"
+    : helperChecking && !productMeeting.live
+      ? "checking"
     : meetingReady
       ? "ready"
       : hasRuntimeEvidence
@@ -117,6 +124,8 @@ export function mapProductReadiness(input: {
         : "Translation is live. Stop the Meeting session when you are finished."
       : productMeeting.hasSession || productMeeting.lifecycle === "cleanup_incomplete"
         ? productMeeting.message
+      : helperChecking
+        ? "Checking the local AI worker. Its current readiness must be confirmed before starting Translation."
       : voiceGate.nextAction
         ? voiceGate.nextAction
         : meeting.readyForStart
@@ -130,6 +139,8 @@ export function mapProductReadiness(input: {
       ? originalLive ? "Original Microphone is live." : "Meeting Translation is live."
       : productMeeting.hasSession || productMeeting.lifecycle === "cleanup_incomplete"
         ? productMeeting.message
+      : helperChecking
+        ? "Checking local AI worker status; translation readiness is not yet verified."
       : voiceGate.summary
         ? voiceGate.summary
         : meeting.readyForStart
@@ -157,6 +168,8 @@ export function mapProductReadiness(input: {
     summary,
     helperStatus: helperUnavailable
       ? "Unavailable"
+      : helperChecking
+        ? "Checking local AI worker"
       : helperReady
         ? worker.responseAvailable
           ? "Local worker running"
@@ -164,6 +177,8 @@ export function mapProductReadiness(input: {
         : compact(helper?.state ?? helper?.message, "Local worker not running"),
     modelStatus: helperUnavailable
       ? "Unavailable"
+      : helperChecking
+        ? "Checking required local model status"
       : modelsReady && functionalOutboundReady
         ? "Required outbound translation check passed"
         : modelsReady
