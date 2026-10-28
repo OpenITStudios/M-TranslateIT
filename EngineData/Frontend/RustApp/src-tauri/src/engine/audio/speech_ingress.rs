@@ -2,6 +2,7 @@
 use super::*;
 use crate::engine::audio::pcm_handoff::{PcmDrain, PcmHandoff, PcmLane};
 use crate::engine::audio::silero::{Silero, SpeechWindows};
+use std::sync::atomic::AtomicBool;
 use std::thread::{self, JoinHandle};
 
 pub(super) struct SpeechIngress {
@@ -12,6 +13,8 @@ pub(super) struct SpeechIngress {
     queue: Arc<PcmHandoff>,
     thread: Option<JoinHandle<()>>,
     fault: Arc<Mutex<Option<String>>>,
+    // Callback-only capture-rate fault: publishing it must not wait for Diagnostics.
+    rate_mismatch: Arc<AtomicBool>,
     #[cfg(test)]
     submitted: AtomicU64,
     #[cfg(test)]
@@ -31,6 +34,8 @@ impl SpeechIngress {
         let for_worker = Arc::clone(&queue);
         let fault = Arc::new(Mutex::new(None));
         let worker_fault = Arc::clone(&fault);
+        let rate_mismatch = Arc::new(AtomicBool::new(false));
+        let worker_rate_mismatch = Arc::clone(&rate_mismatch);
         #[cfg(test)]
         let processed = Arc::new(AtomicU64::new(0));
         #[cfg(test)]
@@ -120,12 +125,14 @@ impl SpeechIngress {
                     if let Ok(mut fault) = worker_fault.lock() { *fault = Some(error); }
                 }
                 for_worker.request_stop();
-                if worker_fault.lock().map(|f| f.is_some()).unwrap_or(true) {
+                if worker_rate_mismatch.load(Ordering::Acquire)
+                    || worker_fault.lock().map(|f| f.is_some()).unwrap_or(true)
+                {
                     if let Ok(mut state) = sync.state.lock() { *state = None; sync.ready.notify_all(); }
                 }
             }).map_err(|_| "silero:thread_spawn_failed".to_string())?;
         Ok(Self { session: session.to_string(), generation, lane, rate, queue,
-            thread: Some(handle), fault,
+            thread: Some(handle), fault, rate_mismatch,
             #[cfg(test)] submitted: AtomicU64::new(0),
             #[cfg(test)] processed,
             #[cfg(test)] observations })
@@ -133,7 +140,9 @@ impl SpeechIngress {
 
     pub fn push(&self, pcm: &[f32], rate: u32) {
         if rate != self.rate {
-            if let Ok(mut fault) = self.fault.lock() { *fault = Some("silero:capture_rate_changed".to_string()); }
+            // A CPAL callback cannot wait behind a concurrent fault/status reader.
+            // Stop the queue; the CPU owner will publish the terminal fault state.
+            self.rate_mismatch.store(true, Ordering::Release);
             self.queue.request_stop(); return;
         }
         if let crate::engine::audio::pcm_handoff::PcmPush::Accepted(_n) = self.queue.try_push(pcm) {
@@ -152,6 +161,9 @@ impl SpeechIngress {
     }
 
     pub fn fault(&self) -> Option<String> {
+        if self.rate_mismatch.load(Ordering::Acquire) {
+            return Some("silero:capture_rate_changed".to_string());
+        }
         self.fault.lock().map(|f| f.clone()).unwrap_or(Some("silero:fault_poisoned".to_string()))
     }
 
@@ -253,7 +265,8 @@ mod tests {
         let mut cpu = SpeechIngress {
             session: "stalled-speech".to_string(), generation: None, lane: LANE_INCOMING,
             rate: 16_000, queue: Arc::clone(&queue), thread: Some(handle),
-            fault: Arc::new(Mutex::new(None)), submitted: AtomicU64::new(0),
+            fault: Arc::new(Mutex::new(None)), rate_mismatch: Arc::new(AtomicBool::new(false)),
+            submitted: AtomicU64::new(0),
             processed: Arc::new(AtomicU64::new(0)), observations: Arc::new(Mutex::new(Vec::new())),
         };
         assert!(!cpu.stop_with_budget(Duration::ZERO));
@@ -264,5 +277,33 @@ mod tests {
         assert!(cpu.stop());
         assert!(cpu.thread.is_none());
         assert_eq!(queue.metrics().buffered_samples, 0);
+    }
+
+    #[test]
+    fn rate_mismatch_callback_does_not_wait_for_fault_diagnostics_lock() {
+        let queue = Arc::new(PcmHandoff::new("rate-mismatch", PcmLane::Incoming, 1, 16_000).unwrap());
+        let cpu = SpeechIngress {
+            session: "rate-mismatch".to_string(), generation: None, lane: LANE_INCOMING,
+            rate: 16_000, queue: Arc::clone(&queue), thread: None,
+            fault: Arc::new(Mutex::new(None)), rate_mismatch: Arc::new(AtomicBool::new(false)),
+            submitted: AtomicU64::new(0), processed: Arc::new(AtomicU64::new(0)),
+            observations: Arc::new(Mutex::new(Vec::new())),
+        };
+        let fault = Arc::clone(&cpu.fault);
+        let held_status_read = fault.lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let callback = thread::spawn(move || {
+            cpu.push(&[0.25], 48_000);
+            tx.send(cpu).unwrap();
+        });
+        // If callback incorrectly blocks on the diagnostics mutex, release
+        // the test lock before joining so this regression fails, not hangs.
+        let returned = rx.recv_timeout(Duration::from_secs(1));
+        drop(held_status_read);
+        callback.join().unwrap();
+        let cpu = returned.expect("capture callback must not wait for fault diagnostics");
+        assert!(queue.metrics().stopped, "rate mismatch must fail closed");
+        assert!(cpu.rate_mismatch.load(Ordering::Acquire));
+        assert_eq!(cpu.fault().as_deref(), Some("silero:capture_rate_changed"));
     }
 }
