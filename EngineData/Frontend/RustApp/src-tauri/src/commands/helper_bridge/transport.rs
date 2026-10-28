@@ -85,6 +85,32 @@ fn standalone_blocked_response(
     }
 }
 
+// The permit is held by send_worker_task_inner. A failed request can still
+// have spent time waiting for it (worker absent, transport failure, stale
+// generation, or worker replacement). Keep that Rust-measured admission
+// evidence on every post-permit failure, without inventing a measurement for
+// rejected/expired scheduler requests which never acquired a permit.
+fn attach_admitted_wait_to_failure(
+    mut response: HelperBridgeWorkerResponse,
+    scheduler_wait_ms: u64,
+) -> HelperBridgeWorkerResponse {
+    // Successful worker replies already receive this field before the bridge
+    // applies the result. Avoid reparsing or rewriting those normal replies.
+    if response.ok {
+        return response;
+    }
+    if let Ok(mut worker_response) =
+        serde_json::from_str::<Value>(&response.worker_response_json)
+    {
+        if let Some(object) = worker_response.as_object_mut() {
+            // Overwrite any worker-reported value: only Rust owns admission timing.
+            object.insert("scheduler_wait_ms".to_string(), json!(scheduler_wait_ms));
+            response.worker_response_json = worker_response.to_string();
+        }
+    }
+    response
+}
+
 fn incoming_deferred_response(task: &str, request_id: &str) -> HelperBridgeWorkerResponse {
     standalone_blocked_response(
         task,
@@ -223,6 +249,9 @@ fn send_worker_task_inner(task: &str, mut payload: Value) -> HelperBridgeWorkerR
     let scheduler_wait_ms = permit.scheduler_wait_ms();
     let response_deadline_ms = worker_response_deadline_for_priority(task, priority);
 
+    // All early exits below occur AFTER this request acquired its permit.
+    // Preserve its measured wait even when no valid Python reply exists.
+    let response = (|| -> HelperBridgeWorkerResponse {
     // An incoming request may have entered the scheduler before outbound claimed the
     // pipeline. Re-check after permit acquisition so queued optional work cannot slip
     // between required outbound ASR -> translation -> TTS stages.
@@ -441,6 +470,8 @@ fn send_worker_task_inner(task: &str, mut payload: Value) -> HelperBridgeWorkerR
             "Worker response was received, but bridge state could not be updated safely.",
         ),
     }
+    })();
+    attach_admitted_wait_to_failure(response, scheduler_wait_ms)
 }
 
 fn recover_live_meeting_helper_transport(
@@ -655,5 +686,59 @@ mod request_payload_retention_tests {
             HelperTaskPriority::MeetingIncoming,
             None,
         ));
+    }
+}
+
+#[cfg(test)]
+mod scheduler_failure_receipt_tests {
+    use super::{attach_admitted_wait_to_failure, standalone_blocked_response};
+    use super::super::super::helper_bridge_runtime::HelperTaskPriority;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn post_permit_bridge_failure_retains_measured_wait_and_blocker() {
+        let failed = standalone_blocked_response(
+            "translate", "helper-42", HelperTaskPriority::MeetingOutbound,
+            "error", "helper_bridge:translate_read_failed:timeout",
+            "Worker response was not received.",
+        );
+        let original_request = failed.request_id.clone();
+        let original_claim = failed.runtime_claim.clone();
+        let response = attach_admitted_wait_to_failure(failed, 275);
+        let body: Value = serde_json::from_str(&response.worker_response_json).unwrap();
+        assert!(!response.ok);
+        assert_eq!(response.request_id, original_request);
+        assert_eq!(response.runtime_claim, original_claim);
+        assert_eq!(body["blocker"], "helper_bridge:translate_read_failed:timeout");
+        assert_eq!(body["scheduler_wait_ms"], 275);
+        assert_eq!(body["scheduler_priority"], "meeting_outbound");
+    }
+
+    #[test]
+    fn scheduler_rejection_without_permit_must_not_invent_wait_time() {
+        let rejected = standalone_blocked_response(
+            "transcribe", "scheduler-unavailable", HelperTaskPriority::MeetingOutbound,
+            "error", "helper_scheduler:wait_deadline_exceeded:meeting_outbound:120000ms",
+            "Scheduler could not admit the request.",
+        );
+        let body: Value = serde_json::from_str(&rejected.worker_response_json).unwrap();
+        assert!(body.get("scheduler_wait_ms").is_none());
+        assert!(!rejected.ok);
+    }
+
+    #[test]
+    fn rust_admission_receipt_overrides_untrusted_worker_wait() {
+        let mut failure = standalone_blocked_response(
+            "voice_actor_synthesize", "helper-43", HelperTaskPriority::MeetingOutbound,
+            "error", "helper_bridge:worker_exited", "Worker ended.",
+        );
+        failure.worker_response_json = json!({
+            "ok": false, "blocker": "helper_bridge:worker_exited",
+            "scheduler_wait_ms": 999_999, "attempt": "failed"
+        }).to_string();
+        let response = attach_admitted_wait_to_failure(failure, 12);
+        let body: Value = serde_json::from_str(&response.worker_response_json).unwrap();
+        assert_eq!(body["scheduler_wait_ms"], 12);
+        assert_eq!(body["attempt"], "failed");
     }
 }
