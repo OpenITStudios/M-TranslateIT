@@ -59,6 +59,9 @@ struct MeetingPlaybackRuntime {
     session_id: String,
     sender: Option<SyncSender<PreparedPlaybackJob>>,
     thread: Option<JoinHandle<()>>,
+    // A panicked JoinHandle is consumed on join(); retain this ownership
+    // failure for all subsequent Retry Stop/Close decisions.
+    join_failed: bool,
 }
 
 pub(super) struct MeetingPlaybackCleanupResult {
@@ -369,6 +372,7 @@ pub(super) fn start_meeting_playback_runtime(
         session_id: runtime_session_id,
         sender: Some(sender),
         thread: Some(handle),
+        join_failed: false,
     });
     // Stop takes this same owner lock. Keep any raced spawned thread visible
     // so its canonical Stop cleanup can release and join it.
@@ -447,25 +451,32 @@ pub(super) fn enqueue_meeting_playback(job: PreparedPlaybackJob) -> Result<(), S
 pub(super) fn stop_meeting_playback_runtime(
     generation: u64,
 ) -> MeetingPlaybackCleanupResult {
-    let store = playback_runtime_store();
-    let Ok(mut guard) = store.lock() else {
-        return MeetingPlaybackCleanupResult {
+    let mut guard = match playback_runtime_store().try_lock() {
+        Ok(guard) => guard,
+        Err(_) => return MeetingPlaybackCleanupResult {
             ok: false,
-            message: "Meeting playback runtime state lock failed during cleanup.".to_string(),
-        };
+            message: "Meeting playback runtime owner is busy or unavailable during Stop.".to_string(),
+        },
     };
-    if !guard.as_ref().is_some_and(|runtime| runtime.generation == generation) {
+    let Some(active) = guard.as_mut().filter(|runtime| runtime.generation == generation) else {
         return MeetingPlaybackCleanupResult {
             ok: true,
             message: "No matching Meeting playback runtime required cleanup.".to_string(),
         };
-    }
+    };
 
-    let active = guard.as_mut().expect("matching playback owner checked");
-    // Close producer admission, but keep JoinHandle and generation identity
-    // through the bounded wait. A subsequent Retry Stop can check the same
-    // thread even after its queue sender was already closed.
+    // Close producer admission first. A still-running thread and its exact
+    // owner remain stored until bounded Stop can confirm its completion.
     active.sender.take();
+    if active.join_failed {
+        return MeetingPlaybackCleanupResult {
+            ok: false,
+            message: format!(
+                "Meeting playback runtime for {} generation {generation} previously failed to join. Owner remains retained.",
+                active.session_id,
+            ),
+        };
+    }
     if active.thread.as_ref().is_some_and(|thread| {
         !playback_finished_within(thread, PLAYBACK_STOP_WAIT_BUDGET)
     }) {
@@ -477,29 +488,57 @@ pub(super) fn stop_meeting_playback_runtime(
             ),
         };
     }
-
-    let mut runtime = guard.take().expect("matching playback owner still held");
-    let joined = runtime
-        .thread
-        .take()
-        .map(|handle| handle.join().is_ok())
-        .unwrap_or(false);
+    if !active.thread.take().is_some_and(|handle| handle.join().is_ok()) {
+        active.join_failed = true;
+        return MeetingPlaybackCleanupResult {
+            ok: false,
+            message: format!(
+                "Meeting playback runtime for {} generation {generation} failed to join; its original owner remains retained.",
+                active.session_id,
+            ),
+        };
+    }
+    let runtime = guard.take().expect("matching verified playback owner");
     MeetingPlaybackCleanupResult {
-        ok: joined,
-        message: if joined {
-            format!(
-                "Meeting playback runtime stopped for {} generation {}.",
-                runtime.session_id, generation
-            )
-        } else {
-            format!(
-                "Meeting playback runtime for {} generation {} exited unexpectedly during cleanup.",
-                runtime.session_id, generation
-            )
-        },
+        ok: true,
+        message: format!(
+            "Meeting playback runtime stopped for {} generation {}.",
+            runtime.session_id, generation,
+        ),
     }
 }
 
+// Read-only orphan indicator. A contended/poisoned playback store must not
+// become a false idle signal for Meeting Stop or Application Close.
+pub(super) fn inactive_meeting_playback_may_need_stop() -> bool {
+    playback_runtime_store().try_lock()
+        .map(|owner| owner.is_some()).unwrap_or(true)
+}
+
+// Only the canonical no-snapshot Stop may complete the old owned generation.
+// Never reach into a current Meeting, Mic Test or voice recording. The
+// Meeting lifecycle gate prevents a new Meeting Start during this transfer.
+pub(super) fn finish_orphaned_meeting_playback_without_session() -> Result<(), String> {
+    if !super::lifecycle::verified_idle_for_orphan_cleanup() {
+        return Err("meeting_playback:runtime_session_not_verified_idle".to_string());
+    }
+    let old_generation = playback_runtime_store().try_lock()
+        .map_err(|_| "meeting_playback:orphan_owner_busy".to_string())?
+        .as_ref().map(|owner| owner.generation);
+    if !super::lifecycle::verified_idle_for_orphan_cleanup() {
+        return Err("meeting_playback:runtime_owner_changed".to_string());
+    }
+    if let Some(generation) = old_generation {
+        let stopped = stop_meeting_playback_runtime(generation);
+        if !stopped.ok {
+            return Err(format!("meeting_playback:orphan_cleanup_incomplete:{}", stopped.message));
+        }
+    }
+    if !super::lifecycle::verified_idle_for_orphan_cleanup() {
+        return Err("meeting_playback:runtime_owner_changed_after_cleanup".to_string());
+    }
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
@@ -552,6 +591,71 @@ mod tests {
         enqueue_with_deadline(&ready_sender, 6_u8, Duration::ZERO, || true)
             .expect("available slot admits output immediately");
         assert_eq!(ready_receiver.try_recv(), Ok(6));
+    }
+
+    #[test]
+    fn orphan_playback_owner_contention_blocks_clean_close() {
+        use super::*;
+        let _serial = crate::engine::runtime_state::runtime_test_guard();
+        let held = playback_runtime_store().lock().expect("hold playback owner");
+        assert!(inactive_meeting_playback_may_need_stop());
+        drop(held);
+    }
+
+    #[test]
+    fn panicked_playback_join_remains_owned_across_retry_stop() {
+        use super::*;
+        let _serial = crate::engine::runtime_state::runtime_test_guard();
+        let generation = 987655_u64;
+        let store = playback_runtime_store();
+        let (tx, _rx) = mpsc::sync_channel::<PreparedPlaybackJob>(1);
+        {
+            let mut guard = store.lock().expect("playback fixture lock");
+            assert!(guard.is_none(), "fixture starts with no playback owner");
+            *guard = Some(MeetingPlaybackRuntime {
+                generation,
+                session_id: "orphan-playback-fixture".to_string(),
+                sender: Some(tx),
+                thread: Some(thread::spawn(|| panic!("simulated playback panic"))),
+                join_failed: false,
+            });
+        }
+        assert!(!stop_meeting_playback_runtime(generation).ok);
+        {
+            let guard = store.lock().expect("failed playback owner retained");
+            let owner = guard.as_ref().expect("owner retained after failed join");
+            assert!(owner.join_failed);
+            assert!(owner.thread.is_none());
+        }
+        assert!(!stop_meeting_playback_runtime(generation).ok,
+            "Retry Stop cannot turn an earlier join failure into success");
+        let mut guard = store.lock().expect("fixture release");
+        let _ = guard.take();
+    }
+
+    #[test]
+    fn no_snapshot_stop_reaps_only_the_old_playback_generation() {
+        use super::*;
+        let _serial = crate::engine::runtime_state::runtime_test_guard();
+        let _ = crate::engine::runtime_state::clear_runtime_session_state();
+        let generation = 987652_u64;
+        let (sender, receiver) = mpsc::sync_channel::<PreparedPlaybackJob>(1);
+        let store = playback_runtime_store();
+        {
+            let mut guard = store.lock().expect("playback owner");
+            assert!(guard.is_none());
+            *guard = Some(MeetingPlaybackRuntime {
+                generation,
+                session_id: "old-meeting-playback".to_string(),
+                sender: Some(sender),
+                thread: Some(thread::spawn(move || drop(receiver))),
+                join_failed: false,
+            });
+        }
+        assert!(inactive_meeting_playback_may_need_stop());
+        assert!(finish_orphaned_meeting_playback_without_session().is_ok());
+        assert!(store.lock().expect("orphan owner released").is_none());
+        assert!(!inactive_meeting_playback_may_need_stop());
     }
 
     #[test]

@@ -34,6 +34,14 @@ const meetingSound = readFileSync(
   new URL("../../src-tauri/src/engine/audio/meeting_sound_capture.rs", import.meta.url),
   "utf8",
 );
+const meetingConsumers = readFileSync(
+  new URL("../../src-tauri/src/commands/meeting_session/consumer_runtime.rs", import.meta.url),
+  "utf8",
+);
+const meetingPlayback = readFileSync(
+  new URL("../../src-tauri/src/commands/meeting_session/playback_runtime.rs", import.meta.url),
+  "utf8",
+);
 
 test("startup recovery never resumes Meeting and cleans only bounded cache namespaces", () => {
   assert.match(bootstrap, /begin_startup_recovery/);
@@ -312,5 +320,64 @@ test("no-snapshot Meeting orphan must be reconciled before native Stop and Close
     "public_worker_restart_cannot_erase_orphaned_meeting_attribution",
   ]) {
     assert.ok(helperCancellationTests.includes("fn " + fixture), fixture);
+  }
+});
+
+test("orphan Meeting consumers and playback keep exact native ownership through Retry Stop and Close", () => {
+  assert.match(meetingLifecycle, /pub\(super\) fn verified_idle_for_orphan_cleanup\(\) -> bool/);
+  assert.match(meetingLifecycle, /inactive_meeting_consumers_may_need_stop\(\)/);
+  assert.match(meetingLifecycle, /inactive_meeting_playback_may_need_stop\(\)/);
+
+  for (const [source, readName, finishName] of [
+    [meetingConsumers, "inactive_meeting_consumers_may_need_stop", "finish_orphaned_meeting_consumers_without_session"],
+    [meetingPlayback, "inactive_meeting_playback_may_need_stop", "finish_orphaned_meeting_playback_without_session"],
+  ] as const) {
+    assert.ok(source.includes("pub(super) fn " + readName + "() -> bool"));
+    assert.ok(source.includes("pub(super) fn " + finishName + "() -> Result<(), String>"));
+    assert.match(source, /join_failed: bool/);
+    assert.match(source, /active\.join_failed = true;/);
+    assert.match(source, /owner\.is_some\(\)\)\.unwrap_or\(true\)/);
+    assert.match(source, /super::lifecycle::verified_idle_for_orphan_cleanup\(\)/);
+  }
+  assert.match(meetingConsumers, /outbound\.map\(stop_meeting_outbound_consumer\)/);
+  assert.match(meetingConsumers, /incoming\.as_deref\(\)\.map\(stop_meeting_incoming_consumer\)/);
+  assert.match(meetingConsumers, /outbound_consumer_store\(\)\.try_lock\(\)/);
+  assert.match(meetingConsumers, /if !producer_cleared \{/);
+  assert.match(meetingConsumers, /if !producer_cleared \|\| deferred_cleanup\.is_err\(\)/);
+  assert.match(meetingConsumers, /active\.thread\.take\(\)\.is_some_and\(\|handle\| handle\.join\(\)\.is_err\(\)\)/);
+  assert.match(meetingConsumers, /incoming_consumer_store\(\)\.try_lock\(\)/);
+  assert.match(meetingPlayback, /playback_runtime_store\(\)\.try_lock\(\)/);
+  assert.match(meetingPlayback, /stop_meeting_playback_runtime\(generation\)/);
+
+  const idleStop = meetingLifecycle.slice(
+    meetingLifecycle.indexOf("let Some(snapshot) = current.snapshot.as_ref() else {"),
+    meetingLifecycle.indexOf("let generation = snapshot.generation;"),
+  );
+  const consumers = idleStop.indexOf("let orphan_consumers_cleanup = finish_orphaned_meeting_consumers_without_session()");
+  const playback = idleStop.indexOf("let orphan_playback_cleanup = finish_orphaned_meeting_playback_without_session()");
+  const deferred = idleStop.indexOf("let deferred_cleanup = if orphan_consumers_cleanup.is_ok()");
+  const completed = idleStop.indexOf('state: "already_stopped".to_string()');
+  assert.ok(consumers >= 0 && playback > consumers && deferred > playback && completed > deferred);
+  assert.match(idleStop, /if orphan_consumers_cleanup\.is_ok\(\) && orphan_playback_cleanup\.is_ok\(\)/);
+  assert.match(idleStop, /\|\| orphan_consumers_cleanup\.is_err\(\)/);
+  assert.match(idleStop, /\|\| orphan_playback_cleanup\.is_err\(\)/);
+  assert.match(idleStop, /STOP_CLEANUP_PENDING\.store\(true, Ordering::Release\)/);
+  assert.match(meetingLifecycle, /let outbound_cleanup = stop_meeting_outbound_consumer\(generation\)/);
+  assert.match(meetingLifecycle, /let playback_cleanup = stop_meeting_playback_runtime\(generation\)/);
+  assert.match(meetingLifecycle, /let incoming_cleanup = stop_meeting_incoming_consumer\(&session_id\)/);
+  assert.match(shutdown, /meeting_stop_cleanup_pending\(\)/);
+  assert.match(shutdown, /shutdown_helper\(\) && mark_clean\(\)/);
+  assert.match(closePolicy, /snapshot\.lifecycle === "cleanup_incomplete"/);
+
+  for (const name of [
+    "failed_outbound_join_cannot_be_forgotten_by_retry_stop",
+    "already_joined_outbound_consumer_can_retry_scoped_producer_cleanup",
+    "no_snapshot_stop_reaps_only_the_old_outbound_consumer_generation",
+    "live_mic_test_prevents_orphan_consumer_cleanup",
+    "panicked_playback_join_remains_owned_across_retry_stop",
+    "no_snapshot_stop_reaps_only_the_old_playback_generation",
+  ]) {
+    assert.ok(meetingConsumers.includes("fn " + name + "()")
+      || meetingPlayback.includes("fn " + name + "()"), name);
   }
 });

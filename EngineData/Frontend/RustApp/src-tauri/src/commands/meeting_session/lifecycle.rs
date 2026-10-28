@@ -39,6 +39,7 @@ use super::committed_turns::{
     retain_committed_turns_for_export,
 };
 use super::consumer_runtime::{
+    finish_orphaned_meeting_consumers_without_session, inactive_meeting_consumers_may_need_stop,
     start_meeting_outbound_consumer, stop_meeting_incoming_consumer,
     stop_meeting_outbound_consumer,
 };
@@ -48,6 +49,7 @@ use super::incoming_deferred::{
 };
 use super::outbound_pipeline::cleanup_meeting_tts_for_session;
 use super::playback_runtime::{
+    finish_orphaned_meeting_playback_without_session, inactive_meeting_playback_may_need_stop,
     start_meeting_playback_runtime, stop_meeting_playback_runtime,
 };
 use super::preflight::{blocked_result, build_preflight, status_from_report};
@@ -77,6 +79,16 @@ fn meeting_lifecycle_gate() -> &'static Mutex<()> {
     MEETING_LIFECYCLE_GATE.get_or_init(|| Mutex::new(()))
 }
 
+// One native authority check reused by the two existing consumer/playback
+// owners. The only authorized no-snapshot cleanup is the canonical Meeting
+// Stop transaction, which holds MEETING_LIFECYCLE_GATE throughout teardown.
+pub(super) fn verified_idle_for_orphan_cleanup() -> bool {
+    let report = latest_runtime_session_state();
+    !report.has_active_session
+        && report.snapshot.is_none()
+        && report.blocker == "runtime_session:no_active_session"
+}
+
 // Revocation may return another owner's snapshot when the requested generation
 // is stale. Checking only authority_active=false could then tear down the
 // newer Meeting while its own Stop is running.
@@ -100,16 +112,15 @@ pub(super) fn transient_stop_cleanup_pending() -> bool {
     if STOP_CLEANUP_PENDING.load(Ordering::Acquire) {
         return true;
     }
-    // An active Meeting still owns its normal resources. Once canonical
-    // runtime authority is verifiably empty, a leftover transcript writer OR
-    // a worker carrying the old Meeting ID is an orphan. Surface the same
-    // existing Retry Stop gate; no second cleanup registry is introduced.
-    let report = latest_runtime_session_state();
-    !report.has_active_session && report.snapshot.is_none()
-        && report.blocker == "runtime_session:no_active_session"
+    // Once native authority is verifiably empty, any retained Meeting
+    // consumer/playback, helper, capture or transcript owner requires the
+    // SAME existing Retry Stop and native Close gate.
+    verified_idle_for_orphan_cleanup()
         && (super::transcript_archive::inactive_writer_may_need_stop()
             || meeting_helper_orphan_cleanup_pending()
-            || inactive_meeting_sound_capture_may_need_stop())
+            || inactive_meeting_sound_capture_may_need_stop()
+            || inactive_meeting_consumers_may_need_stop()
+            || inactive_meeting_playback_may_need_stop())
 }
 
 // A failed Starting transaction may release session ownership only after
@@ -801,6 +812,11 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
         // orphan, never the generic Text/diagnostic helper. A busy/poisoned
         // helper is unverified and must retain Retry Stop + native close gate.
         let orphan_helper_cleanup = finish_orphaned_meeting_helper_without_session();
+        // Reclaim only the exact old generation/session IDs observed under
+        // their canonical stores. A still-running consumer/playback remains
+        // owned, blocks Start, and keeps Close pending until Retry Stop.
+        let orphan_consumers_cleanup = finish_orphaned_meeting_consumers_without_session();
+        let orphan_playback_cleanup = finish_orphaned_meeting_playback_without_session();
         clear_all_start_preflight();
         clear_prepared_meeting_output_device();
         // Meeting Sound Stop already owns and verifies incoming producer
@@ -808,17 +824,26 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
         // lock: it could touch a newly activated producer, and its result
         // would not be included in the Retry Stop decision.
         let incoming_capture_stop = stop_meeting_sound_capture_runtime();
-        let deferred_cleanup = clear_deferred_incoming_queue();
-        clear_finalized_meeting_sequence();
+        // The old incoming consumer can still be processing ASR WAVs while
+        // Stop is incomplete. Do not sweep its deferred files/sequence until
+        // the exact consumer and playback owner are verified released.
+        let deferred_cleanup = if orphan_consumers_cleanup.is_ok() {
+            clear_deferred_incoming_queue()
+        } else {
+            Err("meeting_incoming:orphan_consumer_exit_unverified".to_string())
+        };
+        if orphan_consumers_cleanup.is_ok() && orphan_playback_cleanup.is_ok() {
+            clear_finalized_meeting_sequence();
+        }
         // No runtime snapshot does not prove that the writer has finished.
         // Preserve active turns while Retry Stop still owns an orphan writer.
         let writer_finished = super::transcript_archive::finish_writer_without_session();
         let transcript_cleanup_ok = clear_transcript_only_after_retention(
             writer_finished, clear_inactive_committed_turns,
         );
-        clear_outbound_status();
-        clear_incoming_status();
         if orphan_helper_cleanup.is_err()
+            || orphan_consumers_cleanup.is_err()
+            || orphan_playback_cleanup.is_err()
             || !incoming_capture_stop.ok
             || deferred_cleanup.is_err()
             || !transcript_cleanup_ok
@@ -828,12 +853,14 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
                 ok: false,
                 state: "cleanup_incomplete".to_string(),
                 message: format!(
-                    "Translation has no active session, but orphaned resource cleanup is not fully verified. Helper: {} Meeting Sound: {} Deferred queue: {} Transcript state: {}",
+                    "Translation has no active session, but orphaned resource cleanup is not fully verified. Helper: {} Consumers: {} Playback: {} Meeting Sound: {} Deferred queue: {} Transcript state: {}",
                     orphan_helper_cleanup
                         .as_ref()
                         .err()
                         .copied()
                         .unwrap_or("clean"),
+                    orphan_consumers_cleanup.as_ref().err().map(String::as_str).unwrap_or("clean"),
+                    orphan_playback_cleanup.as_ref().err().map(String::as_str).unwrap_or("clean"),
                     incoming_capture_stop.message,
                     deferred_cleanup
                         .err()
@@ -843,11 +870,13 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
                 status: status_from_report(current, build_preflight()),
             };
         }
+        clear_outbound_status();
+        clear_incoming_status();
         STOP_CLEANUP_PENDING.store(false, Ordering::Release);
         return MeetingSessionActionResult {
             ok: true,
             state: "already_stopped".to_string(),
-            message: "Translation is already stopped. No Meeting helper orphan remains, optional incoming audio is released, and transcript writer cleanup was verified."
+            message: "Translation is already stopped. Meeting helper, consumers, playback, optional incoming audio and transcript writer cleanup were verified."
                 .to_string(),
             status: status_from_report(current, build_preflight()),
         };
