@@ -350,7 +350,19 @@ fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeAc
             runtime.child = Some(child);
             let stderr_log_path = helper_stderr_log_path();
             if let Some(stderr) = runtime.child.as_mut().and_then(|owned| owned.stderr.take()) {
-                runtime.stderr_logger = Some(spawn_stderr_logger(stderr, stderr_log_path.clone()));
+                // Thread admission is fallible: preserve the child owner and
+                // use the same bounded cleanup as other partial boot failures.
+                let logger = match spawn_stderr_logger(stderr, stderr_log_path.clone()) {
+                    Ok(logger) => logger,
+                    Err(error) => {
+                        return fail_start_after_spawn(
+                            &mut runtime,
+                            &format!("Could not start the Python stderr logger: {error}"),
+                            "helper_bridge:stderr_logger_spawn_failed",
+                        );
+                    }
+                };
+                runtime.stderr_logger = Some(logger);
                 runtime.stderr_log_path = Some(slash_path(&stderr_log_path));
             }
 

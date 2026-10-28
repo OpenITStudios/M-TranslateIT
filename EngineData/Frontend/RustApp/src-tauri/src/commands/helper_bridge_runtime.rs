@@ -106,6 +106,9 @@ pub struct HelperBridgeRuntime {
     // The reader thread MUST be registered under this same canonical owner
     // before stdout I/O begins, so Stop cannot miss an in-flight read.
     pub stdout_reader: Option<thread::JoinHandle<()>>,
+    // A panicked I/O owner must not be forgotten by a later cleanup attempt,
+    // which could otherwise mistake missing handles for verified clean exit.
+    pub io_thread_join_failed: bool,
     pub updated_unix_ms: u128,
     pub child: Option<Child>,
     pub stdin: Option<ChildStdin>,
@@ -132,6 +135,7 @@ impl Default for HelperBridgeRuntime {
             stderr_logger: None,
             stdin_writer: None,
             stdout_reader: None,
+            io_thread_join_failed: false,
             updated_unix_ms: unix_ms(),
             child: None,
             stdin: None,
@@ -219,27 +223,34 @@ fn write_helper_stderr_event(log_path: &Path, line: &str) -> std::io::Result<()>
     )
 }
 
-pub fn spawn_stderr_logger(stderr: ChildStderr, log_path: PathBuf) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        let mut reader = BufReader::new(stderr);
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match reader.read_line(&mut line) {
-                Ok(0) => break,
-                Ok(_) => {
-                    let _ = write_helper_stderr_event(&log_path, &line);
-                }
-                Err(error) => {
-                    let _ = write_helper_stderr_event(
-                        &log_path,
-                        &format!("Helper stderr reader failed: {error}"),
-                    );
-                    break;
+pub fn spawn_stderr_logger(
+    stderr: ChildStderr,
+    log_path: PathBuf,
+) -> Result<thread::JoinHandle<()>, String> {
+    // A native thread-admission failure is a recoverable bootstrap error;
+    // thread::spawn would panic while the canonical helper mutex is held.
+    thread::Builder::new()
+        .spawn(move || {
+            let mut reader = BufReader::new(stderr);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        let _ = write_helper_stderr_event(&log_path, &line);
+                    }
+                    Err(error) => {
+                        let _ = write_helper_stderr_event(
+                            &log_path,
+                            &format!("Helper stderr reader failed: {error}"),
+                        );
+                        break;
+                    }
                 }
             }
-        }
-    })
+        })
+        .map_err(|_| "worker:stderr_logger_spawn_failed".to_string())
 }
 
 pub fn clear_active_request(runtime: &mut HelperBridgeRuntime, request_id: &str) {
@@ -453,7 +464,12 @@ pub fn await_worker_stdin_write<W>(
 // Only after the writer has sent its owned stdin pipe back through the
 // channel can the helper reuse the pipe. No long-lived writer is detached.
 pub fn finish_received_stdin_write(runtime: &mut HelperBridgeRuntime) -> bool {
-    runtime.stdin_writer.take().is_some_and(|writer| writer.join().is_ok())
+    let Some(writer) = runtime.stdin_writer.take() else {
+        return false;
+    };
+    let joined = writer.join().is_ok();
+    runtime.io_thread_join_failed |= !joined;
+    joined
 }
 
 // Startup already holds the one canonical helper mutex during ping/status;
@@ -541,12 +557,17 @@ pub fn begin_worker_stdout_read<R: BufRead + Send + 'static>(
         return Err("worker:stdout_reader_still_owned".to_string());
     }
     let (sender, receiver) = mpsc::channel();
-    runtime.stdout_reader = Some(thread::spawn(move || {
-        let result = read_worker_response(&mut stdout);
-        let _ = sender.send((result, stdout));
-        // A timed-out receiver may have closed: the thread still owns its
-        // stdout pipe until it actually returns, and must be joined by Stop.
-    }));
+    // As for stdin, a failed OS thread admission must be returned as an
+    // explicit transport error, not poison the canonical helper mutex.
+    let reader = thread::Builder::new()
+        .spawn(move || {
+            let result = read_worker_response(&mut stdout);
+            let _ = sender.send((result, stdout));
+            // A timed-out receiver may have closed: this thread still owns
+            // stdout until it returns, and Stop must join that same handle.
+        })
+        .map_err(|_| "worker:stdout_reader_spawn_failed".to_string())?;
+    runtime.stdout_reader = Some(reader);
     Ok(receiver)
 }
 
@@ -572,7 +593,12 @@ pub fn await_worker_stdout_read<R>(
 // so join cannot be held up by Python stdout I/O. On a timeout, NEVER take
 // the handle here: stop_child must retain it until the reader actually exits.
 pub fn finish_received_stdout_read(runtime: &mut HelperBridgeRuntime) -> bool {
-    runtime.stdout_reader.take().is_some_and(|reader| reader.join().is_ok())
+    let Some(reader) = runtime.stdout_reader.take() else {
+        return false;
+    };
+    let joined = reader.join().is_ok();
+    runtime.io_thread_join_failed |= !joined;
+    joined
 }
 
 // Startup already owns the canonical runtime mutex while waiting for Python;
@@ -644,7 +670,10 @@ fn stop_child_with_budget(runtime: &mut HelperBridgeRuntime, budget: Duration) -
                     thread_joins_ok &= logger.join().is_ok();
                 }
             }
-            if !thread_joins_ok {
+            // A failed join consumes its handle. Persist the failure so a
+            // subsequent Retry Stop cannot misread "no handle" as clean.
+            runtime.io_thread_join_failed |= !thread_joins_ok;
+            if runtime.io_thread_join_failed {
                 return false;
             }
             if runtime.stdin_writer.is_none()
@@ -662,7 +691,8 @@ fn stop_child_with_budget(runtime: &mut HelperBridgeRuntime, budget: Duration) -
     }
 }
 
-/// True only when child is reaped and stdin writer + stdout/stderr readers exited.
+/// True only when child is reaped, stdin/stdout/stderr joins verified, and
+/// no earlier I/O thread panicked.
 /// On timeout, retain every remaining OS/thread handle for an explicit retry.
 pub fn stop_child(runtime: &mut HelperBridgeRuntime) -> bool {
     stop_child_with_budget(runtime, HELPER_CLEANUP_BUDGET)
@@ -1016,6 +1046,24 @@ mod stderr_lifecycle_tests {
         sender.send(()).expect("release test reader");
         assert!(stop_child_with_budget(&mut runtime, Duration::from_secs(1)));
         assert!(runtime.stderr_logger.is_none());
+    }
+
+
+    #[test]
+    fn panicked_io_thread_join_cannot_be_forgotten_by_retry_stop() {
+        let (started, receiver) = mpsc::channel();
+        let mut runtime = HelperBridgeRuntime::default();
+        runtime.stderr_logger = Some(thread::spawn(move || {
+            started.send(()).expect("signal the test worker");
+            panic!("simulated stderr reader failure");
+        }));
+        receiver.recv().expect("stderr test worker started");
+
+        assert!(!stop_child_with_budget(&mut runtime, Duration::from_secs(1)));
+        assert!(runtime.io_thread_join_failed);
+        assert!(runtime.stderr_logger.is_none(), "failed join consumed the handle");
+        assert!(!stop_child_with_budget(&mut runtime, Duration::ZERO),
+            "a second cleanup must not certify the earlier failed join");
     }
 
     #[test]

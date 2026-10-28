@@ -59,7 +59,9 @@ test("helper cleanup keeps unjoined worker resources and clean-exit marker is fa
 test("timed-out Python stdout reader remains owned until bounded cleanup joins it", () => {
   assert.match(helperRuntime, /pub stdout_reader: Option<thread::JoinHandle<\(\)>>/);
   assert.match(helperRuntime, /fn begin_worker_stdout_read<R: BufRead \+ Send \+ 'static>/);
-  assert.match(helperRuntime, /runtime\.stdout_reader = Some\(thread::spawn\(/);
+  assert.match(helperRuntime, /let reader = thread::Builder::new\(\)/);
+  assert.match(helperRuntime, /runtime\.stdout_reader = Some\(reader\)/);
+  assert.match(helperRuntime, /worker:stdout_reader_spawn_failed/);
   assert.match(helperRuntime, /fn await_worker_stdout_read<R>/);
   assert.match(helperRuntime, /Err\(RecvTimeoutError::Timeout\)/);
   assert.match(helperRuntime, /fn finish_received_stdout_read\(/);
@@ -71,11 +73,11 @@ test("timed-out Python stdout reader remains owned until bounded cleanup joins i
   );
   assert.match(stop, /runtime\.stdout_reader\.as_ref\(\)\.is_some_and\(\|reader\| reader\.is_finished\(\)\)/);
   assert.match(stop, /runtime\.stdout_reader\.take\(\)/);
-  assert.match(stop, /runtime\.stdout_reader\.is_none\(\) && runtime\.stderr_logger\.is_none\(\)/);
+  assert.match(stop, /runtime\.stdin_writer\.is_none\(\)\s*&&\s*runtime\.stdout_reader\.is_none\(\)\s*&&\s*runtime\.stderr_logger\.is_none\(\)/);
   assert.match(stop, /if started\.elapsed\(\) >= budget \{\s*return false/);
 
   assert.match(helper, /read_worker_response_direct_with_deadline\(&mut runtime, stdout, ping_deadline_ms\)/);
-  assert.match(helper, /read_worker_response_direct_with_deadline\(&mut runtime, stdout, status_deadline_ms\)/);
+  assert.match(helper, /read_worker_response_direct_with_deadline\(\s*&mut runtime,\s*stdout,\s*status_deadline_ms,?\s*\)/);
   const registered = transport.indexOf("begin_worker_stdout_read(&mut runtime, stdout)");
   const writerRegistered = transport.indexOf("begin_worker_stdin_write(");
   const awaitedWrite = transport.indexOf("await_worker_stdin_write(stdin_receiver, response_deadline_ms)");
@@ -131,3 +133,20 @@ test("worker stdin write timeout is enforced on an owned thread without losing c
   assert.match(helperRuntime, /fn stdin_backpressure_timeout_keeps_writer_owned_until_retry_cleanup\(\)/);
   assert.match(helperRuntime, /fn completed_stdin_write_retains_original_pipe_and_deadline_payload\(\)/);
 });
+
+test("I/O thread admission and retries cannot erase failed join evidence", () => {
+  assert.match(helperRuntime, /pub io_thread_join_failed: bool/);
+  assert.match(helperRuntime, /io_thread_join_failed: false/);
+  assert.match(helperRuntime, /runtime\.io_thread_join_failed \|= !joined;/);
+  assert.match(helperRuntime, /runtime\.io_thread_join_failed \|= !thread_joins_ok;/);
+  assert.match(helperRuntime, /if runtime\.io_thread_join_failed \{\s*return false;/);
+  assert.match(helperRuntime, /fn panicked_io_thread_join_cannot_be_forgotten_by_retry_stop\(\)/);
+
+  assert.match(helperRuntime, /pub fn spawn_stderr_logger\([\s\S]*?\) -> Result<thread::JoinHandle<\(\)>, String>/);
+  assert.match(helperRuntime, /worker:stderr_logger_spawn_failed/);
+  assert.match(helperRuntime, /worker:stdout_reader_spawn_failed/);
+  assert.match(helper, /let logger = match spawn_stderr_logger\(stderr, stderr_log_path\.clone\(\)\)/);
+  assert.match(helper, /"helper_bridge:stderr_logger_spawn_failed"/);
+  assert.match(helper, /return fail_start_after_spawn\(\s*&mut runtime,[\s\S]*?"helper_bridge:stderr_logger_spawn_failed"/);
+});
+
