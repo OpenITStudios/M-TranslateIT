@@ -441,11 +441,27 @@ pub fn stop_voice_lab_guided_take(line_id: u32) -> GuidedRecordingActionResult {
 }
 
 
+fn admit_recording_file_change(
+) -> Result<crate::engine::runtime_state::RuntimeOperationPermit, GuidedRecordingActionResult> {
+    crate::engine::runtime_state::admit_app_runtime_operation()
+        .map_err(|_| {
+            result(
+                false,
+                "update_installing",
+                "Finish the TranslateIT update before changing My Voice recording files.",
+            )
+        })
+}
+
 #[tauri::command]
 pub fn recover_voice_lab_guided_take(
     line_id: u32,
     authorized_voice_confirmed: bool,
 ) -> GuidedRecordingActionResult {
+    let _update_admission = match admit_recording_file_change() {
+        Ok(permit) => permit,
+        Err(blocked) => return blocked,
+    };
     if !authorized_voice_confirmed {
         return result(false, "authorization_required",
             "Confirm ownership or authorization before recovering a voice recording.");
@@ -516,6 +532,10 @@ pub fn recover_voice_lab_guided_take(
 
 #[tauri::command]
 pub fn retry_voice_lab_guided_take(line_id: u32) -> GuidedRecordingActionResult {
+    let _update_admission = match admit_recording_file_change() {
+        Ok(permit) => permit,
+        Err(blocked) => return blocked,
+    };
     let mut guard = match draft_store().lock() {
         Ok(guard) => guard,
         Err(poisoned) => {
@@ -562,6 +582,10 @@ pub fn retry_voice_lab_guided_take(line_id: u32) -> GuidedRecordingActionResult 
 
 #[tauri::command]
 pub fn accept_voice_lab_guided_take(line_id: u32) -> GuidedRecordingActionResult {
+    let _update_admission = match admit_recording_file_change() {
+        Ok(permit) => permit,
+        Err(blocked) => return blocked,
+    };
     if voice_backup_active() {
         return result(false, "backup_active", "Finish backing up or restoring My Voice before saving another recording.");
     }
@@ -751,6 +775,8 @@ pub fn get_voice_lab_legacy_archive_status() -> LegacyProtectionStatus {
 
 #[tauri::command]
 pub fn protect_voice_lab_legacy_recordings() -> Result<LegacyMigrationResult, String> {
+    let _update_admission = crate::engine::runtime_state::admit_app_runtime_operation()
+        .map_err(str::to_string)?;
     if voice_lab_recording_active() || current_voice_lab_build_snapshot().active {
         return Err("Finish recording or voice creation before protecting previous recordings.".to_string());
     }

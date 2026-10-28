@@ -32,6 +32,96 @@ pub struct RuntimeSessionStateReport {
     pub note: String,
 }
 
+
+#[derive(Default)]
+struct UpdateAdmissionState {
+    installing: bool,
+    active_operations: usize,
+}
+
+// A short-held admission mutex only. Never hold its MutexGuard during
+// network I/O, file writes, model processing, or installer execution.
+static UPDATE_ADMISSION: OnceLock<Mutex<UpdateAdmissionState>> = OnceLock::new();
+
+fn update_admission() -> &'static Mutex<UpdateAdmissionState> {
+    UPDATE_ADMISSION.get_or_init(|| Mutex::new(UpdateAdmissionState::default()))
+}
+
+#[must_use]
+pub struct RuntimeOperationPermit;
+
+impl Drop for RuntimeOperationPermit {
+    fn drop(&mut self) {
+        if let Ok(mut state) = update_admission().lock() {
+            state.active_operations = state.active_operations.saturating_sub(1);
+        }
+        // A poisoned admission mutex remains fail-closed.
+    }
+}
+
+// Hold this short permit until a long-lived audio/voice owner is claimed,
+// or through a finite file mutation with no persistent lifecycle owner.
+pub fn admit_app_runtime_operation() -> Result<RuntimeOperationPermit, &'static str> {
+    let mut state = update_admission()
+        .lock()
+        .map_err(|_| "TranslateIT update admission state is unavailable.")?;
+    if state.installing {
+        return Err("Finish installing the TranslateIT update before starting another action.");
+    }
+    state.active_operations = state
+        .active_operations
+        .checked_add(1)
+        .ok_or("TranslateIT operation admission limit was reached.")?;
+    Ok(RuntimeOperationPermit)
+}
+
+#[must_use]
+pub struct AppUpdateInstallPermit {
+    release_on_drop: bool,
+}
+
+impl AppUpdateInstallPermit {
+    // An installer successfully handed to the OS can outlive the command.
+    // Keep new resource admissions fenced until this application exits.
+    pub fn keep_reserved_until_exit(mut self) {
+        self.release_on_drop = false;
+    }
+}
+
+impl Drop for AppUpdateInstallPermit {
+    fn drop(&mut self) {
+        if self.release_on_drop {
+            if let Ok(mut state) = update_admission().lock() {
+                state.installing = false;
+            }
+        }
+    }
+}
+
+// Final owner checks and the exclusive install reservation are atomic with
+// normal operation admissions. Either a new owner claims first and blocks
+// installation, or installation claims first and rejects new owners.
+pub fn reserve_app_update_install(
+    blocker: impl FnOnce() -> Option<&'static str>,
+) -> Result<AppUpdateInstallPermit, &'static str> {
+    let mut state = update_admission()
+        .lock()
+        .map_err(|_| "TranslateIT update admission state is unavailable.")?;
+    if state.installing {
+        return Err("A TranslateIT update is already being installed.");
+    }
+    if state.active_operations != 0 {
+        return Err("Finish the current TranslateIT action before installing an update.");
+    }
+    if let Some(reason) = blocker() {
+        return Err(reason);
+    }
+    state.installing = true;
+    Ok(AppUpdateInstallPermit {
+        release_on_drop: true,
+    })
+}
+
 static RUNTIME_SESSION_STATE: OnceLock<Mutex<Option<RuntimeSessionSnapshot>>> = OnceLock::new();
 static RUNTIME_AUTHORITY_GENERATION: AtomicU64 = AtomicU64::new(0);
 
@@ -269,6 +359,17 @@ fn begin_runtime_session(
     phase: &str,
     note: &str,
 ) -> RuntimeSessionStateReport {
+    // Direct native audio entrypoints must use the same updater admission,
+    // even when bypassing the product-intent/UI layer.
+    let _update_admission = match admit_app_runtime_operation() {
+        Ok(permit) => permit,
+        Err(_) => {
+            return blocked_session_report(
+                "runtime_session:update_installing",
+                "An application update is in progress; no microphone, Meeting or recording session was opened.",
+            );
+        }
+    };
     let store = RUNTIME_SESSION_STATE.get_or_init(|| Mutex::new(None));
     let Ok(mut guard) = store.lock() else {
         return state_unavailable_report(
@@ -427,6 +528,78 @@ mod tests {
             *guard = None;
         }
         RUNTIME_AUTHORITY_GENERATION.store(0, Ordering::Release);
+    }
+
+    #[test]
+    fn update_reservation_excludes_new_audio_claims_and_releases_after_failure() {
+        let _serial = runtime_test_guard();
+        reset_test_state();
+
+        let reservation = reserve_app_update_install(|| None).expect("idle update admission");
+        for attempt in [
+            begin_application_meeting_session(),
+            begin_mic_test_session(),
+            begin_voice_recording_session(),
+        ] {
+            assert_eq!(attempt.blocker, "runtime_session:update_installing");
+            assert!(attempt.snapshot.is_none());
+        }
+        assert!(admit_app_runtime_operation().is_err());
+        assert!(reserve_app_update_install(|| None).is_err());
+        drop(reservation);
+
+        let meeting = begin_application_meeting_session();
+        assert!(meeting.blocker.is_empty());
+        let generation = meeting.snapshot.expect("new meeting owner").generation;
+        assert_eq!(
+            clear_runtime_session_if_generation(generation).blocker,
+            "runtime_session:cleared",
+        );
+        reset_test_state();
+    }
+
+    #[test]
+    fn in_flight_admission_and_live_session_prevent_update_reservation() {
+        let _serial = runtime_test_guard();
+        reset_test_state();
+
+        let work = admit_app_runtime_operation().expect("pending file or voice claim");
+        assert_eq!(
+            reserve_app_update_install(|| None).err(),
+            Some("Finish the current TranslateIT action before installing an update."),
+        );
+        drop(work);
+
+        let meeting = begin_application_meeting_session();
+        let generation = meeting.snapshot.expect("meeting").generation;
+        assert_eq!(
+            reserve_app_update_install(|| {
+                latest_runtime_session_state()
+                    .has_active_session
+                    .then_some("Meeting session is active.")
+            })
+            .err(),
+            Some("Meeting session is active."),
+        );
+        assert_eq!(
+            clear_runtime_session_if_generation(generation).blocker,
+            "runtime_session:cleared",
+        );
+        reset_test_state();
+    }
+
+    #[test]
+    fn failed_update_preflight_does_not_reserve_admission() {
+        let _serial = runtime_test_guard();
+        reset_test_state();
+
+        assert_eq!(
+            reserve_app_update_install(|| Some("Voice build cleanup is pending.")).err(),
+            Some("Voice build cleanup is pending."),
+        );
+        let operation = admit_app_runtime_operation().expect("no retained update reservation");
+        drop(operation);
+        reset_test_state();
     }
 
     #[test]

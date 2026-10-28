@@ -83,9 +83,28 @@ fn bounded_reap_after_forced_stop(child: &mut std::process::Child) -> Result<(),
 
 // Guard select/approve on the shared worker actor path. No parallel promotion.
 static VOICE_SELECTION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-pub(crate) fn voice_selection_guard() -> Result<std::sync::MutexGuard<'static, ()>, ()> {
-    if voice_backup_active() { return Err(()); }
-    VOICE_SELECTION_LOCK.get_or_init(|| Mutex::new(())).lock().map_err(|_| ())
+pub(crate) struct VoiceSelectionGuard {
+    // Rust drops struct fields in declaration order. Release the existing
+    // voice-selection mutex before releasing the updater operation permit.
+    _selection: std::sync::MutexGuard<'static, ()>,
+    _update_admission: crate::engine::runtime_state::RuntimeOperationPermit,
+}
+
+pub(crate) fn voice_selection_guard() -> Result<VoiceSelectionGuard, ()> {
+    // Keep one existing selection lock for voice changes and backup/restore.
+    // Its updater permit covers the entire file operation, not just admission.
+    let admission = crate::engine::runtime_state::admit_app_runtime_operation()
+        .map_err(|_| ())?;
+    if voice_backup_active() {
+        return Err(());
+    }
+    let selection = VOICE_SELECTION_LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| ())?;
+    Ok(VoiceSelectionGuard {
+        _selection: selection,
+        _update_admission: admission,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

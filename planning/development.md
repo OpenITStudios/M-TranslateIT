@@ -2,6 +2,9 @@
 
 ## Current Status
 
+**Updater concurrency native admission fence — source candidate (2026-10-28).** The app-only updater atomically checks live audio, voice builds (including pending cleanup), recording, unresolved Meeting cleanup and backup state while reserving exclusive update admission before download/install. Meeting route preparation, canonical audio session claim, voice-build admission, voice selection/backup and guided WAV mutations acquire temporary operation permits from the same existing Rust runtime owner. Failure releases the installer reservation; a successful handoff keeps new operations blocked until process exit. No updater daemon, extra worker, dependency, private data migration, release or CI change. Rust/TypeScript regression cases authored, **NOT EXECUTED**; integrated Windows update/install and crash/Stop acceptance remain outstanding.
+
+
 **Early Windows single-instance admission — source candidate (2026-10-28).** The native `main.rs` now acquires one Windows session-scoped kernel mutex before Tauri application setup, startup recovery, worker and device creation. A second launch cannot create its own runtime; it attempts to restore the existing main window only after matching the exact executable identity, otherwise reports that another instance is running or starting. The primary retains the kernel handle for the entire event loop; normal/crash termination releases it without a stale file. No dependency, lockfile, model, audio, private data, installer or CI change. Source-contract tests were authored but NOT EXECUTED; Windows duplicate-launch, activation and crash-restart acceptance remain NOT EXECUTED in the existing integrated Windows phase.
 
 

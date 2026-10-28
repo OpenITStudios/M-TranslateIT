@@ -31,12 +31,22 @@ fn update_blocker() -> Option<&'static str> {
     if crate::commands::voice_lab_recording::voice_lab_recording_blocks_app_exit() {
         return Some("Stop the current My Voice recording before updating TranslateIT.");
     }
-    if crate::commands::voice_lab::current_voice_lab_build_snapshot().active {
+    if crate::commands::voice_lab::voice_lab_build_blocks_meeting() {
         return Some("Wait for the current My Voice build to finish before updating TranslateIT.");
     }
 
+    if crate::commands::meeting_session::meeting_stop_cleanup_pending() {
+        return Some("Finish Meeting cleanup using Retry Stop before updating TranslateIT.");
+    }
+    if crate::commands::voice_lab::voice_backup_active() {
+        return Some("Finish the current My Voice backup or restore before updating TranslateIT.");
+    }
+
     let runtime = crate::engine::runtime_state::latest_runtime_session_state();
-    if runtime.has_active_session {
+    if runtime.has_active_session
+        || runtime.snapshot.is_some()
+        || runtime.blocker != "runtime_session:no_active_session"
+    {
         return Some("Stop Meeting translation or Mic Test before updating TranslateIT.");
     }
 
@@ -125,19 +135,27 @@ pub async fn install_app_update(app: AppHandle) -> Result<AppUpdateInstall, Stri
         });
     };
 
-    if let Some(blocker) = update_blocker() {
-        return Ok(AppUpdateInstall {
-            installed: false,
-            version: Some(update.version.clone()),
-            message: blocker.to_string(),
-        });
-    }
+    // Atomically re-check active owners and reserve the install before any
+    // downloads. A late-starting Meeting/Voice operation cannot pass admission.
+    let update_lease = match crate::engine::runtime_state::reserve_app_update_install(|| update_blocker()) {
+        Ok(lease) => lease,
+        Err(blocker) => {
+            return Ok(AppUpdateInstall {
+                installed: false,
+                version: Some(update.version.clone()),
+                message: blocker.to_string(),
+            });
+        }
+    };
 
     let version = update.version.clone();
     update
         .download_and_install(|_, _| {}, || {})
         .await
         .map_err(|error| format!("update installation failed: {error}"))?;
+    // Error drops the lease and unblocks normal work; successful handoff
+    // must keep the application fenced until this process exits.
+    update_lease.keep_reserved_until_exit();
 
     Ok(AppUpdateInstall {
         installed: true,

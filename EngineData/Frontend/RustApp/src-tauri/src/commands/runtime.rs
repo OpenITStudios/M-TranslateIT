@@ -1,4 +1,6 @@
-use crate::engine::runtime_state::latest_runtime_session_state;
+use crate::engine::runtime_state::{
+    admit_app_runtime_operation, latest_runtime_session_state, RuntimeOperationPermit,
+};
 
 use super::helper_bridge;
 use super::helper_bridge_runtime::HelperBridgeActionResult;
@@ -108,7 +110,23 @@ pub fn verify_required_outbound_ai_readiness() -> HelperBridgeActionResult {
     }
 }
 
+fn admit_meeting_start() -> Result<RuntimeOperationPermit, MeetingSessionActionResult> {
+    // Protect pre-start virtual route preparation as well as the later session
+    // claim. Native direct starts are also fenced by begin_runtime_session.
+    admit_app_runtime_operation().map_err(|_| MeetingSessionActionResult {
+        ok: false,
+        state: "update_installing".to_string(),
+        message: "Finish installing the TranslateIT update before starting Meeting audio."
+            .to_string(),
+        status: meeting_session::get_meeting_session_status(),
+    })
+}
+
 pub fn start_meeting_translation() -> MeetingSessionActionResult {
+    let _update_admission = match admit_meeting_start() {
+        Ok(permit) => permit,
+        Err(blocked) => return blocked,
+    };
     if my_voice_build_blocks_meeting() {
         return MeetingSessionActionResult {
             ok: false,
@@ -147,6 +165,10 @@ pub fn start_meeting_translation() -> MeetingSessionActionResult {
 
 /// Original and TranslateIT use the same provider and Meeting ownership.
 pub fn start_meeting_original() -> MeetingSessionActionResult {
+    let _update_admission = match admit_meeting_start() {
+        Ok(permit) => permit,
+        Err(blocked) => return blocked,
+    };
     if my_voice_build_blocks_meeting() {
         return MeetingSessionActionResult {
             ok: false,

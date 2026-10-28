@@ -21,6 +21,13 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Native updater install/admission exclusion — 2026-10-28
+
+Source candidate based on `bc474eb708520d30592e6fd0d26aead985c0d9d2`: the final updater owner check now occurs atomically with an exclusive application admission reservation, after a candidate update is found but before download/install. Meeting/Mic Test/recording lifecycle state and VoiceLab build/cleanup are retained as canonical authorities. Temporary admission permits cover Meeting route preparation, audio session claims, My Voice build claims, voice selection and backup/restore, and guided Draft Save/Retry/Recover plus explicit legacy protection. Unresolved Meeting cleanup, unverified runtime ownership and voice backup also block updater installation. A failed download/install drops the reservation, while a successful installer handoff keeps admission fenced until the application process exits. No updater daemon, worker, dependency, private audio, release or model behavior was added.
+
+**Proof: STATIC_SOURCE.** Exact-head source/owner and static gate-order review; three Rust gate regression cases and two added Node updater source-contract cases authored. Cargo, TypeScript/Node execution, CI, installer/update failure injection, native devices and installed-app behavior were **NOT EXECUTED**. This code does not establish successful Windows installation or guarantee external installer recovery.
+
+
 ### Early Windows single-instance admission — 2026-10-28
 
 Source candidate based on `e93d5600e4b3427cf32ab48c9e732ec794eed1b0`: native startup now acquires a session-scoped named Windows kernel mutex before Tauri setup, application data/recovery, audio and worker owners. A second invocation exits without a Tauri builder, after attempting to show the exact-executable main window; if none is ready it displays a bounded informational notice. A failed mutex acquisition also refuses startup. The primary handle is retained through the event loop and released by the OS on process termination. Existing startup-marker and Meeting ownership policies are unchanged; legacy already-running builds without the mutex cannot be retroactively protected.

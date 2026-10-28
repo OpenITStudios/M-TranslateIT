@@ -263,6 +263,10 @@ pub fn voice_lab_build_blocks_meeting() -> bool {
 }
 
 pub fn begin_voice_lab_build() -> Result<VoiceLabBuildSnapshot, String> {
+    // The updater cannot take its exclusive reservation between a successful
+    // Meeting check and the canonical VoiceLab build generation claim.
+    let _update_admission = crate::engine::runtime_state::admit_app_runtime_operation()
+        .map_err(str::to_string)?;
     if meeting_blocks_voice_lab() {
         return Err("voice_lab:meeting_active".to_string());
     }
