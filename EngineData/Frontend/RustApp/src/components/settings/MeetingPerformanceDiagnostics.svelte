@@ -7,8 +7,31 @@
   const timing = $derived(status?.outbound?.timing ?? null);
   const outbound = $derived(status?.outbound ?? null);
 
+  function isMeasuredDuration(value: number | null | undefined): value is number {
+    return typeof value === "number" && Number.isFinite(value) && value >= 0;
+  }
+
+  // Worker stage totals already include this scheduler admission wait.
+  // The residual is transport + runtime + inference, NOT isolated model time.
+  // A missing or contradictory admission receipt must stay unmeasured.
+  function postSchedulerElapsed(
+    stageMs: number | null | undefined,
+    admissionWaitMs: number | null | undefined,
+  ): number | null {
+    if (!isMeasuredDuration(stageMs) || !isMeasuredDuration(admissionWaitMs) || admissionWaitMs > stageMs) {
+      return null;
+    }
+    return stageMs - admissionWaitMs;
+  }
+
+  const postScheduler = $derived({
+    asr: postSchedulerElapsed(timing?.asr_ms, timing?.asr_scheduler_wait_ms),
+    translation: postSchedulerElapsed(timing?.translation_ms, timing?.translation_scheduler_wait_ms),
+    tts: postSchedulerElapsed(timing?.tts_ms, timing?.tts_scheduler_wait_ms),
+  });
+
   function formatTiming(value: number | null | undefined): string {
-    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "Not measured";
+    if (!isMeasuredDuration(value)) return "Not measured";
     return `${Math.round(value)} ms`;
   }
 
@@ -36,19 +59,24 @@
     if (timing?.outbound_latency_ms == null) {
       return "First translated playback has not been measured for this phrase. Do not infer end-to-end latency from partial stages.";
     }
+    // Compare disjoint observed intervals. Ranking inclusive ASR/MT/TTS totals
+    // alongside their waits would count scheduler contention as model slowness.
     const stages: Array<[string, number | null | undefined]> = [
-      ["Queue", timing.queue_ms],
+      ["Finalized queue", timing.queue_ms],
       ["Audio preparation", timing.audio_prepare_ms],
-      ["ASR", timing.asr_ms],
-      ["Translation", timing.translation_ms],
-      ["Voice TTS", timing.tts_ms],
+      ["ASR scheduler wait", timing.asr_scheduler_wait_ms],
+      ["ASR post-admission", postScheduler.asr],
+      ["Translation scheduler wait", timing.translation_scheduler_wait_ms],
+      ["Translation post-admission", postScheduler.translation],
+      ["TTS scheduler wait", timing.tts_scheduler_wait_ms],
+      ["TTS post-admission", postScheduler.tts],
+      ["Playback queue", timing.playback_queue_ms],
       ["Delivery", timing.delivery_ms],
     ];
-    const measured = stages.filter((stage): stage is [string, number] =>
-      typeof stage[1] === "number" && Number.isFinite(stage[1]) && stage[1] >= 0);
-    if (!measured.length) return "No individual processing stage has valid timing evidence yet.";
+    const measured = stages.filter((stage): stage is [string, number] => isMeasuredDuration(stage[1]));
+    if (!measured.length) return "No individual processing interval has valid timing evidence yet.";
     const largest = measured.reduce((best, stage) => stage[1] > best[1] ? stage : best);
-    return `Largest recorded stage: ${largest[0]} (${formatTiming(largest[1])}). This is a measurement, not proof of the underlying bottleneck.`;
+    return `Largest recorded stage: ${largest[0]} (${formatTiming(largest[1])}). Intervals exclude measured scheduler wait where available; missing admission evidence is not estimated. This is a measurement, not proof of the underlying bottleneck.`;
   });
 </script>
 
@@ -72,10 +100,19 @@
   </div>
   <p class="mt-2 text-[11px] leading-5 text-[var(--ti-text-soft)]">Speech onset/end estimates include VAD's buffered speech span and trailing silence. They are not precise microphone or remote-participant timestamps.</p>
 
-  <div class="mt-3 grid grid-cols-3 gap-3">
+  <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
     <div class="ti-state-card"><span class="ti-field-label">ASR scheduler wait</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.asr_scheduler_wait_ms)}</strong></div>
     <div class="ti-state-card"><span class="ti-field-label">Translation scheduler wait</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.translation_scheduler_wait_ms)}</strong></div>
     <div class="ti-state-card"><span class="ti-field-label">TTS scheduler wait</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.tts_scheduler_wait_ms)}</strong></div>
+  </div>
+  <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+    <div class="ti-state-card"><span class="ti-field-label">ASR post-admission</span><strong class="mt-2 block text-[12px]">{formatTiming(postScheduler.asr)}</strong></div>
+    <div class="ti-state-card"><span class="ti-field-label">Translation post-admission</span><strong class="mt-2 block text-[12px]">{formatTiming(postScheduler.translation)}</strong></div>
+    <div class="ti-state-card"><span class="ti-field-label">TTS post-admission</span><strong class="mt-2 block text-[12px]">{formatTiming(postScheduler.tts)}</strong></div>
+  </div>
+  <div class="mt-3 grid grid-cols-2 gap-3">
+    <div class="ti-state-card"><span class="ti-field-label">Playback queue wait</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.playback_queue_ms)}</strong></div>
+    <div class="ti-state-card"><span class="ti-field-label">Worker admission truth</span><strong class="mt-2 block text-[12px]">{postScheduler.asr != null && postScheduler.translation != null && postScheduler.tts != null ? "Complete" : "Partial / unmeasured"}</strong></div>
   </div>
 
   <div class="mt-3 grid grid-cols-2 gap-3">
@@ -110,6 +147,6 @@
 
   <p class="mb-0 mt-3 text-[11.5px] leading-5 text-[var(--ti-text-muted)]" role="status">{diagnosis}</p>
   <p class="mb-0 mt-2 text-[11.5px] leading-5 text-[var(--ti-text-soft)]">
-    Stage timings are observational evidence from this device only. ASR/translation/TTS totals already include scheduler wait, so do not add wait times to them. Measure whole-product VRAM with Windows/NVIDIA GPU tools (including browser and WDDM); no app-level VRAM figure is inferred.
+    Stage timings are observational evidence from this device only. ASR/translation/TTS totals already include scheduler wait, so do not add wait times to them. Post-admission elapsed also includes worker transport, preprocessing, and recovery; it is not isolated AI inference. Incomplete or inconsistent admission receipts remain Not measured. Measure whole-product VRAM with Windows/NVIDIA GPU tools (including browser and WDDM); no app-level VRAM figure is inferred.
   </p>
 </article>
