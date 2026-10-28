@@ -227,7 +227,31 @@ impl MeetingCommittedTurnStore {
         };
 
         if terminal_delivery_state(turn.delivery_state.as_deref()) {
+            // Repeated terminal acknowledgement is idempotent, but Stop,
+            // failure and completion cannot rewrite one another.
             return turn.delivery_state.as_deref() == Some(delivery_state);
+        }
+        // Only begin_playback_at owns queued -> speaking, after checking the
+        // exact session/generation/sequence, translation and queued state.
+        // A generic delivery update must never bypass that at-most-once claim.
+        if delivery_state == "speaking" {
+            return false;
+        }
+        // Native output can be marked complete only after its committed turn
+        // was claimed for playback. Failures and Stop may still finalize from
+        // earlier states without inventing first-audio delivery.
+        if delivery_state == "output_complete"
+            && (turn.translation_state != "translated"
+                || turn.delivery_state.as_deref() != Some("speaking"))
+        {
+            return false;
+        }
+        // Once audio is queued or playing, delayed AI-stage results cannot
+        // move the same turn backwards while playback/Stop owns its outcome.
+        if matches!(turn.delivery_state.as_deref(), Some("queued" | "speaking"))
+            && matches!(delivery_state, "translating" | "preparing_voice")
+        {
+            return false;
         }
         // A stale enqueue cannot send a translated or playing unit backwards.
         if delivery_state == "queued"
@@ -1288,7 +1312,8 @@ mod tests {
             Some(timing(1)),
             1_000,
         ).is_some());
-        assert!(store.update_delivery_state_at("session-a", 7, 11, "speaking", 1_010));
+        assert!(store.update_delivery_state_at("session-a", 7, 11, "queued", 1_005));
+        assert!(store.begin_playback_at("session-a", 7, 1, 11, 1_010));
         assert!(store.update_delivery_state_at(
             "session-a",
             7,
@@ -1348,6 +1373,115 @@ mod tests {
             "s1", 1, Some(7), 10, "you", "id", "en",
             "Halo", "", Some("translating"), Some(timing(1)), 10_000,
         ).is_none());
+    }
+
+
+    #[test]
+    fn completion_requires_translated_queued_then_claimed_speaking() {
+        let mut store = MeetingCommittedTurnStore::new("session-a");
+        assert!(store.commit_at(
+            "session-a", 5, Some(7), 51, "you", "id", "en",
+            "Penting", "Important", Some("preparing_voice"), Some(timing(1_000)), 1_000,
+        ).is_some());
+
+        // Native delivery was not claimed. A callback result alone must not
+        // convert a prepared WAV or a queued WAV into claimed output.
+        assert!(!store.update_delivery_state_at(
+            "session-a", 7, 51, "output_complete", 1_005,
+        ));
+        assert!(!store.update_delivery_state_at(
+            "session-a", 7, 51, "speaking", 1_006,
+        ));
+        assert!(store.update_delivery_state_at(
+            "session-a", 7, 51, "queued", 1_010,
+        ));
+        assert!(!store.update_delivery_state_at(
+            "session-a", 7, 51, "output_complete", 1_015,
+        ));
+        assert!(!store.update_delivery_state_at(
+            "session-a", 7, 51, "speaking", 1_016,
+        ));
+        assert!(store.begin_playback_at("session-a", 7, 5, 51, 1_020));
+        assert!(!store.begin_playback_at("session-a", 7, 5, 51, 1_021));
+        assert!(store.update_delivery_state_at(
+            "session-a", 7, 51, "output_complete", 1_030,
+        ));
+        assert_eq!(
+            store.turns.front().unwrap().delivery_state.as_deref(),
+            Some("output_complete"),
+        );
+    }
+
+    #[test]
+    fn interrupted_speaking_cannot_become_complete_after_stop() {
+        let mut store = MeetingCommittedTurnStore::new("session-a");
+        assert!(store.commit_at(
+            "session-a", 6, Some(7), 61, "you", "id", "en",
+            "Halo", "Hello", Some("preparing_voice"), Some(timing(1)), 1,
+        ).is_some());
+        assert!(store.update_delivery_state_at("session-a", 7, 61, "queued", 2));
+        assert!(store.begin_playback_at("session-a", 7, 6, 61, 3));
+        assert_eq!(store.interrupt_generation_at(7, 4).len(), 1);
+        assert!(!store.update_delivery_state_at(
+            "session-a", 7, 61, "output_complete", 5,
+        ));
+        assert!(!store.update_delivery_state_at(
+            "session-a", 7, 61, "output_failed", 6,
+        ));
+        assert_eq!(
+            store.turns.front().unwrap().delivery_state.as_deref(),
+            Some("interrupted"),
+        );
+        assert_eq!(store.turns.front().unwrap().updated_unix_ms, 4);
+    }
+
+    #[test]
+    fn failure_before_playback_and_failure_while_speaking_remain_terminal() {
+        let mut store = MeetingCommittedTurnStore::new("session-a");
+        for (seq, utterance_id) in [(1_u64, 11_u64), (2, 22)] {
+            assert!(store.commit_at(
+                "session-a", seq, Some(7), utterance_id, "you", "id", "en",
+                "Halo", "Hello", Some("preparing_voice"), Some(timing(seq as u128)), 1,
+            ).is_some());
+        }
+        assert!(store.update_delivery_state_at(
+            "session-a", 7, 11, "output_failed", 2,
+        ));
+        assert!(store.update_delivery_state_at(
+            "session-a", 7, 22, "queued", 3,
+        ));
+        assert!(store.begin_playback_at("session-a", 7, 2, 22, 4));
+        assert!(store.update_delivery_state_at(
+            "session-a", 7, 22, "output_failed", 5,
+        ));
+        assert!(store.turns.iter().all(|turn|
+            turn.delivery_state.as_deref() == Some("output_failed")));
+        assert!(!store.update_delivery_state_at(
+            "session-a", 7, 22, "output_complete", 6,
+        ));
+    }
+
+    #[test]
+    fn late_worker_stage_cannot_rewind_queued_or_speaking_output() {
+        let mut store = MeetingCommittedTurnStore::new("session-a");
+        assert!(store.commit_at(
+            "session-a", 3, Some(7), 33, "you", "id", "en",
+            "Halo", "Hello", Some("preparing_voice"), Some(timing(1)), 1,
+        ).is_some());
+        assert!(store.update_delivery_state_at(
+            "session-a", 7, 33, "queued", 2,
+        ));
+        for stale in ["translating", "preparing_voice"] {
+            assert!(!store.update_delivery_state_at("session-a", 7, 33, stale, 3));
+        }
+        assert!(store.begin_playback_at("session-a", 7, 3, 33, 4));
+        for stale in ["translating", "preparing_voice", "queued", "speaking"] {
+            assert!(!store.update_delivery_state_at("session-a", 7, 33, stale, 5));
+        }
+        assert_eq!(
+            store.turns.front().unwrap().delivery_state.as_deref(),
+            Some("speaking"),
+        );
     }
 
     #[test]
