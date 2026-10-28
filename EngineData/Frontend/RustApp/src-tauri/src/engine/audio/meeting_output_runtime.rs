@@ -162,6 +162,7 @@ struct PlaybackCursor {
     completion_tx: mpsc::SyncSender<Duration>,
     first_playback_tx: mpsc::SyncSender<Instant>,
     cancel_requested: Arc<AtomicBool>,
+    callback_failed: Arc<AtomicBool>,
     generation: u64,
     source_epoch: Option<u64>,
     sample_rate_hz: u32,
@@ -175,6 +176,11 @@ impl PlaybackCursor {
         callback_info: &cpal::OutputCallbackInfo,
         convert: impl Fn(f32) -> T,
     ) {
+        // A device fault can occur while the native stream is still issuing
+        // callbacks. The sticky per-stream fault must silence subsequent PCM.
+        if self.discard_on_device_error(data, &convert) {
+            return;
+        }
         let cancelled = self.cancel_requested.load(Ordering::Acquire)
             || original_voice_pcm::is_output_muted(self.generation)
             || !runtime_generation_is_authoritative(self.generation)
@@ -199,6 +205,12 @@ impl PlaybackCursor {
             }
         }
 
+        // The device may report a failure during this callback buffer. Do
+        // not submit that already-prepared buffer after the fault is known.
+        if self.discard_on_device_error(data, &convert) {
+            return;
+        }
+
         // Stop, Mute or source switching may race the initial callback gate.
         // Recheck the callback-safe atomics before publishing this buffer;
         // never send an entire in-flight buffer belonging to a revoked source.
@@ -221,6 +233,21 @@ impl PlaybackCursor {
             };
             self.signal_complete(tail);
         }
+    }
+
+    fn discard_on_device_error<T: Copy>(
+        &mut self,
+        data: &mut [T],
+        convert: &impl Fn(f32) -> T,
+    ) -> bool {
+        if !self.callback_failed.load(Ordering::Acquire) {
+            return false;
+        }
+        data.fill(convert(0.0));
+        // If a normal completion was already queued, the sticky error flag
+        // still determines failure; this signal must never block CPAL.
+        self.signal_complete(Duration::ZERO);
+        true
     }
 
     fn signal_first_playback(&mut self, callback_info: &cpal::OutputCallbackInfo) {
@@ -301,6 +328,7 @@ fn build_output_stream(
         completion_tx: tx,
         first_playback_tx: first_playback_tx.clone(),
         cancel_requested: Arc::clone(&cancel_requested),
+        callback_failed: Arc::clone(&callback_failed),
         generation,
         source_epoch,
         sample_rate_hz: config.sample_rate,
@@ -727,13 +755,49 @@ mod tests {
         stream_start_to_first_audio_ms, wait_for_output_completion, wait_for_output_tail,
         install_cancel_control, clear_cancel_control, cancel_meeting_output_for_generation,
         cancel_control, release_output_stream, signal_output_callback_failure,
-        output_completion_blocker,
+        output_completion_blocker, PlaybackCursor,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::mpsc;
+    use std::sync::{mpsc, Arc};
     use std::time::{Duration, Instant};
 
 
+
+    #[test]
+    fn device_error_discards_callback_buffer_without_claiming_stop() {
+        let callback_failed = Arc::new(AtomicBool::new(false));
+        let cancel_requested = Arc::new(AtomicBool::new(false));
+        let (completion_tx, completion_rx) = mpsc::sync_channel(1);
+        let (first_playback_tx, _first_playback_rx) = mpsc::sync_channel(1);
+        let mut cursor = PlaybackCursor {
+            samples: Arc::new(vec![0.7_f32, 0.8]),
+            index: 0,
+            completed: false,
+            first_playback_signalled: false,
+            completion_tx: completion_tx.clone(),
+            first_playback_tx,
+            cancel_requested: Arc::clone(&cancel_requested),
+            callback_failed: Arc::clone(&callback_failed),
+            generation: 1,
+            source_epoch: None,
+            sample_rate_hz: 48_000,
+            channels: 1,
+        };
+        let mut pcm = [0.7_f32, 0.8];
+        assert!(!cursor.discard_on_device_error(&mut pcm, &|v| v));
+        assert_eq!(pcm, [0.7, 0.8]);
+
+        signal_output_callback_failure(&callback_failed, &completion_tx);
+        assert!(cursor.discard_on_device_error(&mut pcm, &|v| v));
+        assert_eq!(pcm, [0.0, 0.0], "no stale output after device failure");
+        assert_eq!(completion_rx.try_recv(), Ok(Duration::ZERO));
+        assert!(!cancel_requested.load(Ordering::Acquire),
+            "a device fault must not be mistaken for explicit Stop");
+        assert_eq!(
+            output_completion_blocker(false, callback_failed.load(Ordering::Acquire), true, true),
+            Some("meeting_output:stream_callback_failed"),
+        );
+    }
     #[test]
     fn native_error_is_sticky_even_when_completion_queue_is_already_full() {
         let failed = AtomicBool::new(false);
