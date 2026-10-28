@@ -16,7 +16,7 @@ use super::bridge_paths::{
 use super::helper_bridge_runtime::{
     action_result, apply_worker_status, read_worker_response_direct_with_deadline, runtime,
     set_blocked, spawn_stderr_logger, status_from_runtime, stop_child, unix_ms,
-    worker_response_deadline_ms, write_worker_request_with_deadline,
+    worker_response_deadline_ms, write_worker_request_direct_with_deadline,
     validate_worker_response_contract, HelperBridgeActionResult,
     HelperBridgeRuntime, HelperBridgeStatus,
 };
@@ -354,7 +354,7 @@ fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeAc
                 runtime.stderr_log_path = Some(slash_path(&stderr_log_path));
             }
 
-            let mut stdin = match runtime.child.as_mut().and_then(|owned| owned.stdin.take()) {
+            let stdin = match runtime.child.as_mut().and_then(|owned| owned.stdin.take()) {
                 Some(stdin) => stdin,
                 None => {
                     return fail_start_after_spawn(
@@ -377,17 +377,22 @@ fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeAc
             let stdout = BufReader::new(stdout);
 
             let ping_deadline_ms = worker_response_deadline_ms("ping");
-            if let Err(error) = write_worker_request_with_deadline(
-                &mut stdin,
-                &json!({ "command": "ping", "request_id": STARTUP_PING_REQUEST_ID }),
+            // The runtime mutex is already owned during cold bootstrap.
+            // Register the one writer before pipe I/O and await its real
+            // deadline; a timeout retains the writer for bounded cleanup.
+            let stdin = match write_worker_request_direct_with_deadline(
+                &mut runtime,
+                stdin,
+                json!({ "command": "ping", "request_id": STARTUP_PING_REQUEST_ID }),
                 ping_deadline_ms,
             ) {
-                return fail_start_after_spawn(
+                Ok(stdin) => stdin,
+                Err(error) => return fail_start_after_spawn(
                     &mut runtime,
                     &format!("Failed to send ping to helper worker: {error}"),
                     "helper_bridge:ping_write_failed",
-                );
-            }
+                ),
+            };
             let (ping, mut stdout) =
                 match read_worker_response_direct_with_deadline(&mut runtime, stdout, ping_deadline_ms) {
                     Ok((value, stdout)) => (value, stdout),
@@ -419,37 +424,42 @@ fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeAc
             }
 
             let status_deadline_ms = worker_response_deadline_ms("status");
-            let status = if write_worker_request_with_deadline(
-                &mut stdin,
-                &json!({ "command": "status", "request_id": STARTUP_STATUS_REQUEST_ID }),
+            // A failed or timed-out status request must not silently promote
+            // ping-only startup into Ready while stdin is still being written.
+            let stdin = match write_worker_request_direct_with_deadline(
+                &mut runtime,
+                stdin,
+                json!({ "command": "status", "request_id": STARTUP_STATUS_REQUEST_ID }),
                 status_deadline_ms,
-            )
-            .is_ok()
-            {
-                match read_worker_response_direct_with_deadline(&mut runtime, stdout, status_deadline_ms) {
-                    Ok((value, next_stdout)) => {
-                        if let Err(error) = validate_worker_response_contract(
-                            "status", STARTUP_STATUS_REQUEST_ID, &value,
-                        ) {
-                            return fail_start_after_spawn(
-                                &mut runtime,
-                                &format!("Helper startup status response violated protocol: {error}"),
-                                "helper_bridge:status_response_invalid",
-                            );
-                        }
-                        stdout = next_stdout;
-                        Some(value)
-                    }
-                    Err(error) => {
+            ) {
+                Ok(stdin) => stdin,
+                Err(error) => return fail_start_after_spawn(
+                    &mut runtime,
+                    &format!("Failed to send helper startup status request: {error}"),
+                    "helper_bridge:status_write_failed",
+                ),
+            };
+            let status = match read_worker_response_direct_with_deadline(
+                &mut runtime, stdout, status_deadline_ms,
+            ) {
+                Ok((value, next_stdout)) => {
+                    if let Err(error) = validate_worker_response_contract(
+                        "status", STARTUP_STATUS_REQUEST_ID, &value,
+                    ) {
                         return fail_start_after_spawn(
                             &mut runtime,
-                            &format!("Failed to read helper worker status response before deadline: {error}"),
-                            "helper_bridge:status_read_failed",
+                            &format!("Helper startup status response violated protocol: {error}"),
+                            "helper_bridge:status_response_invalid",
                         );
                     }
+                    stdout = next_stdout;
+                    value
                 }
-            } else {
-                None
+                Err(error) => return fail_start_after_spawn(
+                    &mut runtime,
+                    &format!("Failed to read helper worker status response before deadline: {error}"),
+                    "helper_bridge:status_read_failed",
+                ),
             };
 
             runtime.stdin = Some(stdin);
@@ -462,14 +472,7 @@ fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeAc
             runtime.active_meeting_lane = None;
             runtime.last_error = None;
             runtime.updated_unix_ms = unix_ms();
-            if let Some(status) = status {
-                apply_worker_status(&mut runtime, &status);
-            } else {
-                runtime.message = format!("Python helper worker is running via {} and ping verified. Worker capability status was not available yet.", python.source);
-                runtime.cuda_ready = false;
-                runtime.provider_ready = false;
-                runtime.degraded_mode = false;
-            }
+            apply_worker_status(&mut runtime, &status);
             action_result(true, &runtime)
         }
         Err(_) => HelperBridgeActionResult {

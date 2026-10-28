@@ -21,6 +21,17 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Worker stdin pipe write deadline and backpressure — 2026-10-28
+
+Source candidate based on `004af9fb63cfe6cb7c486154e32270c97ccc002d`: `helper_bridge_runtime.rs::write_worker_request_with_deadline` previously called synchronous `write_all()`, newline write and `flush()` on the current thread. `request_deadline_payload` already inserted `deadline_unix_ms` in JSON, but the OS pipe operations themselves had no host-side wait deadline. During cold Python import or when a worker stopped consuming stdin, a blocked native write could prevent prompt Stop/shutdown or retain the single helper resource indefinitely.
+
+The existing `HelperBridgeRuntime` now owns `stdin_writer: Option<JoinHandle<()>>` alongside its stdout reader and stderr logger. The same writer function still inserts the existing protocol metadata and serializes one JSONL request. A bounded completion channel (using the existing task-specific response deadline) and a fallible thread-spawn admission now separate the potentially blocking write/flush from the waiting caller. On timeout or disconnection, its JoinHandle remains owned until the process and stdin/stdout/stderr threads all finish and the existing bounded `stop_child` verifies their joins. No old handle may be overwritten, and a task must pass its original generation check before any completed pipe is published back to the runtime.
+
+Startup ping/status use the owned writer while holding the canonical helper mutex. Transport requests register writer and reader under that same mutex before releasing it to await bounded pipe I/O. On successful response the original stdin and stdout must both be returned and both thread handles joined before allowing another request. A failed startup status write now explicitly blocks startup instead of falling through to ping-only Ready. Request IDs, scheduler priority, Python wire format and all configured task deadlines remain unchanged; the writer and reader each use the applicable existing deadline rather than a new user-facing timeout policy.
+
+**Proof: STATIC_SOURCE** — reviewed the exact pinned native owner, two startup write call sites, all worker task transport admissions/completions, Stop/restart cleanup and prior regression tests. Authored three native Rust regression fixtures for blocked write, blocked flush, owned-handle retry and successful JSON metadata/pipe return, and updated the existing Node source contract for reader/writer ordering, startup fail-closed status and cleanup. Rust/Node execution, compilation, hosted CI, Windows pipe pressure, child-process behavior and installed Meeting/audio acceptance are **NOT EXECUTED**. This is a source-level deadline/ownership repair, not measured timing or runtime certification.
+
+
 ### Stdout response deadline reader ownership — 2026-10-28
 
 Pinned source parent `13b17b42680a1cfc8e16f762f738f94a57f2ea07` showed that `read_worker_response_direct_with_deadline()` previously used `thread::spawn` to move the owned `BufReader<ChildStdout>` into a read thread, but discarded its `JoinHandle`. A `recv_timeout()` failure could therefore return while the reader still held the original stdout pipe, outside the reach of the helper's existing bounded `stop_child()` cleanup. Child termination alone could not prove that a descendant-inherited pipe or reader had finished. The root owner remained `commands/helper_bridge_runtime.rs`.

@@ -77,13 +77,57 @@ test("timed-out Python stdout reader remains owned until bounded cleanup joins i
   assert.match(helper, /read_worker_response_direct_with_deadline\(&mut runtime, stdout, ping_deadline_ms\)/);
   assert.match(helper, /read_worker_response_direct_with_deadline\(&mut runtime, stdout, status_deadline_ms\)/);
   const registered = transport.indexOf("begin_worker_stdout_read(&mut runtime, stdout)");
-  const requestWrite = transport.indexOf("write_worker_request_with_deadline(&mut stdin, &payload, response_deadline_ms)");
+  const writerRegistered = transport.indexOf("begin_worker_stdin_write(");
+  const awaitedWrite = transport.indexOf("await_worker_stdin_write(stdin_receiver, response_deadline_ms)");
   const awaited = transport.indexOf("await_worker_stdout_read(");
+  const writerJoined = transport.indexOf("finish_received_stdin_write(&mut runtime)");
   const joined = transport.indexOf("finish_received_stdout_read(&mut runtime)");
+  const stdinReused = transport.indexOf("runtime.stdin = Some(stdin)");
   const reused = transport.indexOf("runtime.stdout = Some(stdout)");
-  assert.ok(registered > 0 && registered < requestWrite, "reader registration must precede request I/O");
-  assert.ok(requestWrite < awaited && awaited < joined && joined < reused, "join before reuse");
+  assert.ok(registered > 0 && registered < writerRegistered, "reader and writer must register under one mutex");
+  assert.ok(writerRegistered < awaitedWrite && awaitedWrite < awaited, "stdin deadline precedes stdout deadline");
+  assert.ok(awaited < writerJoined && writerJoined < stdinReused, "write join must precede pipe reuse");
+  assert.ok(awaited < joined && joined < reused, "read join must precede pipe reuse");
   assert.match(transport, /if !bridge_still_owns_process \{/);
   assert.match(helperRuntime, /fn timed_out_stdout_reader_remains_owned_until_explicit_retry_stop\(\)/);
   assert.match(helperRuntime, /fn successful_worker_response_returns_original_stdout_after_join\(\)/);
+});
+
+test("worker stdin write timeout is enforced on an owned thread without losing cleanup authority", () => {
+  assert.match(helperRuntime, /pub stdin_writer: Option<thread::JoinHandle<\(\)>>/);
+  assert.match(helperRuntime, /fn begin_worker_stdin_write<W: Write \+ Send \+ 'static>/);
+  assert.match(helperRuntime, /let writer = thread::Builder::new\(\)/);
+  assert.match(helperRuntime, /runtime\.stdin_writer = Some\(writer\)/);
+  assert.match(helperRuntime, /worker:stdin_writer_spawn_failed/);
+  assert.match(helperRuntime, /fn await_worker_stdin_write<W>/);
+  assert.match(helperRuntime, /request_write_deadline_exceeded:/);
+  assert.match(helperRuntime, /fn finish_received_stdin_write\(/);
+  assert.match(helperRuntime, /fn write_worker_request_direct_with_deadline\(/);
+  assert.match(helperRuntime, /if result\.is_ok\(\) && !finish_received_stdin_write\(runtime\)/);
+
+  const cleanup = helperRuntime.slice(
+    helperRuntime.indexOf("fn stop_child_with_budget("),
+    helperRuntime.indexOf("#[cfg(test)]"),
+  );
+  assert.match(cleanup, /runtime\.stdin_writer\.as_ref\(\)\.is_some_and\(\|writer\| writer\.is_finished\(\)\)/);
+  assert.match(cleanup, /runtime\.stdin_writer\.take\(\)/);
+  assert.match(cleanup, /runtime\.stdin_writer\.is_none\(\)/);
+  assert.match(cleanup, /runtime\.stdout_reader\.is_none\(\)/);
+  assert.match(cleanup, /runtime\.stderr_logger\.is_none\(\)/);
+
+  assert.match(helper, /write_worker_request_direct_with_deadline\([\s\S]*?"command": "ping", "request_id": STARTUP_PING_REQUEST_ID/);
+  assert.match(helper, /write_worker_request_direct_with_deadline\([\s\S]*?"command": "status", "request_id": STARTUP_STATUS_REQUEST_ID/);
+  assert.match(helper, /"helper_bridge:status_write_failed"/);
+  assert.doesNotMatch(helper, /write_worker_request_with_deadline\(/);
+
+  const writerRegistered = transport.indexOf("begin_worker_stdin_write(");
+  const timeoutWait = transport.indexOf("await_worker_stdin_write(stdin_receiver, response_deadline_ms)");
+  const writerJoined = transport.indexOf("finish_received_stdin_write(&mut runtime)");
+  const reused = transport.indexOf("runtime.stdin = Some(stdin)");
+  assert.ok(writerRegistered > 0 && writerRegistered < timeoutWait);
+  assert.ok(timeoutWait < writerJoined && writerJoined < reused);
+  assert.match(transport, /if !bridge_still_owns_process \{/);
+  assert.match(transport, /"helper_bridge:stdin_writer_join_failed"/);
+  assert.match(helperRuntime, /fn stdin_backpressure_timeout_keeps_writer_owned_until_retry_cleanup\(\)/);
+  assert.match(helperRuntime, /fn completed_stdin_write_retains_original_pipe_and_deadline_payload\(\)/);
 });

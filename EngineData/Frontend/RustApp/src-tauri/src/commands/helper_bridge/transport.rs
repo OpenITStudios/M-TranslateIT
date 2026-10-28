@@ -17,9 +17,11 @@ use super::{
     worker_message, worker_text, HelperBridgeWorkerResponse,
 };
 use super::super::helper_bridge_runtime::{
-    acquire_helper_task_permit, apply_worker_response, clear_active_request,
-    set_blocked, await_worker_stdout_read, begin_worker_stdout_read,
-    finish_received_stdout_read, validate_worker_response_contract,
+    acquire_helper_task_permit, apply_worker_response, clear_active_request, set_blocked,
+    await_worker_stdin_write, await_worker_stdout_read,
+    begin_worker_stdin_write, begin_worker_stdout_read,
+    finish_received_stdin_write, finish_received_stdout_read,
+    validate_worker_response_contract,
     runtime, runtime_claim, stop_child, unix_ms,
     worker_response_deadline_for_priority, write_worker_request_with_deadline,
     HelperBridgeActionResult, HelperBridgeRuntime, HelperTaskPriority,
@@ -274,7 +276,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value) -> HelperBridgeWorkerR
 
     inject_request_metadata(&mut payload, task, &request_id, priority);
 
-    let (mut stdin, stdout_receiver, bridge_generation) = match runtime().lock() {
+    let (stdin_receiver, stdout_receiver, bridge_generation) = match runtime().lock() {
         Ok(mut runtime) => {
             if runtime.child.is_none() || runtime.stdin.is_none() || runtime.stdout.is_none() {
                 // A timed-out kill/stderr reader still owns resources even
@@ -306,12 +308,12 @@ fn send_worker_task_inner(task: &str, mut payload: Value) -> HelperBridgeWorkerR
             // any blocking write or read. Meeting Stop can now find/reap that
             // exact stdout owner even while this task waits outside the lock.
             // An earlier timed-out reader must not be overwritten.
-            if runtime.stdout_reader.is_some() {
+            if runtime.stdin_writer.is_some() || runtime.stdout_reader.is_some() {
                 return blocked_response_from_runtime(
                     task,
                     &request_id,
                     priority,
-                    "A previous Python stdout reader is still owned. Complete helper cleanup before another request.",
+                    "A previous Python stdin writer or stdout reader is still owned. Complete helper cleanup before another request.",
                     &runtime,
                 );
             }
@@ -336,6 +338,30 @@ fn send_worker_task_inner(task: &str, mut payload: Value) -> HelperBridgeWorkerR
                     );
                 }
             };
+            // Register stdin ownership under this exact same native mutex
+            // before releasing it. Stop can now find a backpressured writer
+            // while this task waits on the original response deadline.
+            let stdin_receiver = match begin_worker_stdin_write(
+                &mut runtime, stdin, payload, response_deadline_ms,
+            ) {
+                Ok(receiver) => receiver,
+                Err(error) => {
+                    let cleaned = stop_child(&mut runtime);
+                    runtime.generation_token = runtime.generation_token.saturating_add(1);
+                    let blocker = if cleaned {
+                        "helper_bridge:stdin_writer_admission_failed"
+                    } else {
+                        "helper_bridge:cleanup_incomplete"
+                    };
+                    let message = format!(
+                        "Could not register the Python stdin write owner safely: {error}"
+                    );
+                    set_blocked(&mut runtime, &message, blocker);
+                    return blocked_response_from_runtime(
+                        task, &request_id, priority, &message, &runtime,
+                    );
+                }
+            };
             let bridge_generation = runtime.generation_token;
             runtime.active_task = Some(task.to_string());
             runtime.active_request_id = Some(request_id.clone());
@@ -343,7 +369,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value) -> HelperBridgeWorkerR
             runtime.active_meeting_session_id = meeting_session_id.clone();
             runtime.active_meeting_lane = meeting_lane.clone();
             runtime.updated_unix_ms = unix_ms();
-            (stdin, stdout_receiver, bridge_generation)
+            (stdin_receiver, stdout_receiver, bridge_generation)
         }
         Err(_) => {
             return standalone_blocked_response(
@@ -357,51 +383,52 @@ fn send_worker_task_inner(task: &str, mut payload: Value) -> HelperBridgeWorkerR
         }
     };
 
-    if let Err(error) =
-        write_worker_request_with_deadline(&mut stdin, &payload, response_deadline_ms)
-    {
-        let response = match runtime().lock() {
-            Ok(mut runtime) => {
-                if runtime.generation_token == bridge_generation {
-                    let cleaned = stop_child(&mut runtime);
-                    runtime.generation_token = runtime.generation_token.saturating_add(1);
-                    runtime.state = if cleaned { "stopped" } else { "blocked" }.to_string();
-                    runtime.message = if cleaned {
-                        format!("Failed to write {task} request to Python helper worker: {error}")
-                    } else {
-                        format!("Failed to write {task} request, and Python helper cleanup remains incomplete: {error}")
-                    };
-                    runtime.last_error = Some(if cleaned {
-                        format!("helper_bridge:{task}_write_failed:{error}")
-                    } else {
-                        "helper_bridge:cleanup_incomplete".to_string()
-                    });
-                    clear_active_request(&mut runtime, &request_id);
-                    runtime.provider_ready = false;
-                    runtime.cuda_ready = false;
-                    runtime.updated_unix_ms = unix_ms();
+    let stdin = match await_worker_stdin_write(stdin_receiver, response_deadline_ms) {
+        Ok(stdin) => stdin,
+        Err(error) => {
+            let response = match runtime().lock() {
+                Ok(mut runtime) => {
+                    if runtime.generation_token == bridge_generation {
+                        let cleaned = stop_child(&mut runtime);
+                        runtime.generation_token = runtime.generation_token.saturating_add(1);
+                        runtime.state = if cleaned { "stopped" } else { "blocked" }.to_string();
+                        runtime.message = if cleaned {
+                            format!("Failed to write {task} request to Python helper worker: {error}")
+                        } else {
+                            format!("Failed to write {task} request, and Python helper cleanup remains incomplete: {error}")
+                        };
+                        runtime.last_error = Some(if cleaned {
+                            format!("helper_bridge:{task}_write_failed:{error}")
+                        } else {
+                            "helper_bridge:cleanup_incomplete".to_string()
+                        });
+                        clear_active_request(&mut runtime, &request_id);
+                        runtime.provider_ready = false;
+                        runtime.cuda_ready = false;
+                        runtime.updated_unix_ms = unix_ms();
+                    }
+                    let message = runtime.message.clone();
+                    blocked_response_from_runtime(task, &request_id, priority, &message, &runtime)
                 }
-                let message = runtime.message.clone();
-                blocked_response_from_runtime(task, &request_id, priority, &message, &runtime)
-            }
-            Err(_) => standalone_blocked_response(
-                task,
-                &request_id,
-                priority,
-                "error",
-                "helper_bridge:lock_poisoned_after_write_failure",
-                "Helper request write failed and bridge state could not be recovered.",
-            ),
-        };
-        return if priority == HelperTaskPriority::MeetingIncoming {
-            recover_incoming_transport_failure_before_permit_release(
-                meeting_session_id.as_deref(),
-                response,
-            )
-        } else {
-            response
-        };
-    }
+                Err(_) => standalone_blocked_response(
+                    task,
+                    &request_id,
+                    priority,
+                    "error",
+                    "helper_bridge:lock_poisoned_after_write_failure",
+                    "Helper request write failed and bridge state could not be recovered.",
+                ),
+            };
+            return if priority == HelperTaskPriority::MeetingIncoming {
+                recover_incoming_transport_failure_before_permit_release(
+                    meeting_session_id.as_deref(),
+                    response,
+                )
+            } else {
+                response
+            };
+        }
+    };
 
     let (mut worker_response, stdout) = match await_worker_stdout_read(
         stdout_receiver,
@@ -483,20 +510,23 @@ fn send_worker_task_inner(task: &str, mut payload: Value) -> HelperBridgeWorkerR
                 );
             }
 
-            // The response arrived, so the reader has already returned its
-            // stdout pipe to this caller. Join its registered thread before
-            // making that pipe available for the next request. A failed join
-            // invalidates this worker generation rather than silently losing
-            // the read owner or claiming protocol readiness.
-            if !finish_received_stdout_read(&mut runtime) {
+            // Both channels have returned their original owned pipes.
+            // Join the registered writer AND reader before exposing either
+            // pipe for another request. A concurrent Stop wins the generation
+            // check above and prevents stale completion from resurrecting them.
+            let writer_joined = finish_received_stdin_write(&mut runtime);
+            let reader_joined = finish_received_stdout_read(&mut runtime);
+            if !writer_joined || !reader_joined {
                 let cleaned = stop_child(&mut runtime);
                 runtime.generation_token = runtime.generation_token.saturating_add(1);
-                let blocker = if cleaned {
-                    "helper_bridge:stdout_reader_join_failed"
-                } else {
+                let blocker = if !cleaned {
                     "helper_bridge:cleanup_incomplete"
+                } else if !writer_joined {
+                    "helper_bridge:stdin_writer_join_failed"
+                } else {
+                    "helper_bridge:stdout_reader_join_failed"
                 };
-                let message = "Python stdout reader completion could not be verified; the worker response was not committed.";
+                let message = "Python worker I/O thread completion could not be verified; the response was not committed.";
                 set_blocked(&mut runtime, message, blocker);
                 return blocked_response_from_runtime(
                     task, &request_id, priority, message, &runtime,

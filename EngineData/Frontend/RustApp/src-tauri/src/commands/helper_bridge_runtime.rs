@@ -100,6 +100,9 @@ pub struct HelperBridgeRuntime {
     pub last_error: Option<String>,
     pub stderr_log_path: Option<String>,
     pub stderr_logger: Option<thread::JoinHandle<()>>,
+    // A blocked write retains the original pipe and thread; Stop/restart must
+    // observe and join this owner, never silently detach or start a new worker.
+    pub stdin_writer: Option<thread::JoinHandle<()>>,
     // The reader thread MUST be registered under this same canonical owner
     // before stdout I/O begins, so Stop cannot miss an in-flight read.
     pub stdout_reader: Option<thread::JoinHandle<()>>,
@@ -127,6 +130,7 @@ impl Default for HelperBridgeRuntime {
             last_error: None,
             stderr_log_path: None,
             stderr_logger: None,
+            stdin_writer: None,
             stdout_reader: None,
             updated_unix_ms: unix_ms(),
             child: None,
@@ -386,8 +390,8 @@ pub fn request_deadline_payload(payload: &Value, deadline_ms: u128) -> Value {
     payload
 }
 
-pub fn write_worker_request_with_deadline(
-    stdin: &mut ChildStdin,
+pub fn write_worker_request_with_deadline<W: Write>(
+    stdin: &mut W,
     payload: &Value,
     deadline_ms: u128,
 ) -> Result<(), String> {
@@ -398,6 +402,75 @@ pub fn write_worker_request_with_deadline(
         .map_err(|error| error.to_string())?;
     stdin.write_all(b"\n").map_err(|error| error.to_string())?;
     stdin.flush().map_err(|error| error.to_string())
+}
+
+// A deadline in the JSON payload is not a deadline for blocking Windows pipe
+// write_all/flush. Move that write into a *single owned thread*, and use the
+// same per-request budget on its completion channel. Publish its JoinHandle
+// under the canonical helper mutex before any competing Stop may enter.
+pub fn begin_worker_stdin_write<W: Write + Send + 'static>(
+    runtime: &mut HelperBridgeRuntime,
+    mut stdin: W,
+    payload: Value,
+    deadline_ms: u128,
+) -> Result<mpsc::Receiver<(Result<(), String>, W)>, String> {
+    if runtime.stdin_writer.is_some() {
+        return Err("worker:stdin_writer_still_owned".to_string());
+    }
+
+    let (sender, receiver) = mpsc::channel();
+    // Unlike thread::spawn, Builder exposes a failure instead of panicking
+    // and poisoning the canonical helper lock under thread resource pressure.
+    let writer = thread::Builder::new()
+        .spawn(move || {
+            let result = write_worker_request_with_deadline(&mut stdin, &payload, deadline_ms);
+            let _ = sender.send((result, stdin));
+            // Once timed out, the receiver may be gone. The thread remains
+            // retained on HelperBridgeRuntime until the bounded Stop reaps it.
+        })
+        .map_err(|_| "worker:stdin_writer_spawn_failed".to_string())?;
+    runtime.stdin_writer = Some(writer);
+    Ok(receiver)
+}
+
+pub fn await_worker_stdin_write<W>(
+    receiver: mpsc::Receiver<(Result<(), String>, W)>,
+    deadline_ms: u128,
+) -> Result<W, String> {
+    let timeout = Duration::from_millis(deadline_ms.min(u64::MAX as u128) as u64);
+    match receiver.recv_timeout(timeout) {
+        Ok((Ok(()), stdin)) => Ok(stdin),
+        Ok((Err(error), _stdin)) => Err(error),
+        Err(RecvTimeoutError::Timeout) => {
+            Err(format!("worker:request_write_deadline_exceeded:{deadline_ms}ms"))
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            Err("worker:request_writer_disconnected".to_string())
+        }
+    }
+}
+
+// Only after the writer has sent its owned stdin pipe back through the
+// channel can the helper reuse the pipe. No long-lived writer is detached.
+pub fn finish_received_stdin_write(runtime: &mut HelperBridgeRuntime) -> bool {
+    runtime.stdin_writer.take().is_some_and(|writer| writer.join().is_ok())
+}
+
+// Startup already holds the one canonical helper mutex during ping/status;
+// transport instead registers the writer under that mutex, then waits outside
+// it so Stop can claim the same writer while Python stops reading.
+pub fn write_worker_request_direct_with_deadline(
+    runtime: &mut HelperBridgeRuntime,
+    stdin: ChildStdin,
+    payload: Value,
+    deadline_ms: u128,
+) -> Result<ChildStdin, String> {
+    let receiver = begin_worker_stdin_write(runtime, stdin, payload, deadline_ms)?;
+    let result = await_worker_stdin_write(receiver, deadline_ms);
+    if result.is_ok() && !finish_received_stdin_write(runtime) {
+        return Err("worker:request_writer_join_failed".to_string());
+    }
+    result
 }
 
 pub fn read_worker_response<R: BufRead>(stdout: &mut R) -> Result<Value, String> {
@@ -525,8 +598,9 @@ pub fn read_worker_response_direct_with_deadline(
 const HELPER_CLEANUP_BUDGET: Duration = Duration::from_millis(250);
 
 fn stop_child_with_budget(runtime: &mut HelperBridgeRuntime, budget: Duration) -> bool {
-    // Drop our request pipes before trying to terminate the worker. A reader
-    // thread may still own a moved stdout handle until the child terminates.
+    // Drop our available request pipes before terminating the worker. The
+    // writer/reader may still own moved pipes while their JoinHandles remain
+    // registered in the canonical runtime for verified cleanup.
     runtime.stdin.take();
     runtime.stdout.take();
     let started = Instant::now();
@@ -549,26 +623,34 @@ fn stop_child_with_budget(runtime: &mut HelperBridgeRuntime, budget: Duration) -
             runtime.child.take();
         }
 
-        // A child can be fully reaped while stdout remains open in a reader
-        // (e.g. a descendant inherited the pipe). Both readers must be
-        // observed finished and joined before cleanup is reported complete.
+        // A child can be fully reaped while stdin/stdout remain owned by a
+        // blocked writer/reader (e.g. descendants inherited open pipe ends).
+        // Every writer/reader must finish and join before cleanup succeeds.
         // Never remove or detach a still-running JoinHandle on timeout.
         if runtime.child.is_none() {
-            let mut reader_joins_ok = true;
+            let mut thread_joins_ok = true;
+            if runtime.stdin_writer.as_ref().is_some_and(|writer| writer.is_finished()) {
+                if let Some(writer) = runtime.stdin_writer.take() {
+                    thread_joins_ok &= writer.join().is_ok();
+                }
+            }
             if runtime.stdout_reader.as_ref().is_some_and(|reader| reader.is_finished()) {
                 if let Some(reader) = runtime.stdout_reader.take() {
-                    reader_joins_ok &= reader.join().is_ok();
+                    thread_joins_ok &= reader.join().is_ok();
                 }
             }
             if runtime.stderr_logger.as_ref().is_some_and(|logger| logger.is_finished()) {
                 if let Some(logger) = runtime.stderr_logger.take() {
-                    reader_joins_ok &= logger.join().is_ok();
+                    thread_joins_ok &= logger.join().is_ok();
                 }
             }
-            if !reader_joins_ok {
+            if !thread_joins_ok {
                 return false;
             }
-            if runtime.stdout_reader.is_none() && runtime.stderr_logger.is_none() {
+            if runtime.stdin_writer.is_none()
+                && runtime.stdout_reader.is_none()
+                && runtime.stderr_logger.is_none()
+            {
                 return true;
             }
         }
@@ -580,10 +662,123 @@ fn stop_child_with_budget(runtime: &mut HelperBridgeRuntime, budget: Duration) -
     }
 }
 
-/// True only when the owned child is reaped and both stdout/stderr readers exited.
+/// True only when child is reaped and stdin writer + stdout/stderr readers exited.
 /// On timeout, retain every remaining OS/thread handle for an explicit retry.
 pub fn stop_child(runtime: &mut HelperBridgeRuntime) -> bool {
     stop_child_with_budget(runtime, HELPER_CLEANUP_BUDGET)
+}
+
+
+#[cfg(test)]
+mod stdin_write_deadline_tests {
+    use super::*;
+    use std::io::{self, Write};
+
+    struct GatedWriter {
+        gate: Option<mpsc::Receiver<()>>,
+        written: Vec<u8>,
+    }
+
+    impl Write for GatedWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if let Some(gate) = self.gate.take() {
+                gate.recv().map_err(|_| io::Error::new(
+                    io::ErrorKind::BrokenPipe, "test write gate disconnected",
+                ))?;
+            }
+            self.written.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn stdin_backpressure_timeout_keeps_writer_owned_until_retry_cleanup() {
+        let (sender, receiver) = mpsc::channel();
+        let mut runtime = HelperBridgeRuntime::default();
+        let writer = GatedWriter { gate: Some(receiver), written: Vec::new() };
+        let pending = begin_worker_stdin_write(
+            &mut runtime, writer, json!({"command": "ping"}), 5_000,
+        ).expect("admit the single stdin write");
+        assert!(matches!(
+            begin_worker_stdin_write(
+                &mut runtime, Vec::<u8>::new(), json!({}), 5_000,
+            ),
+            Err(ref error) if error.as_str() == "worker:stdin_writer_still_owned"
+        ), "a second write cannot replace the owned JoinHandle");
+        assert!(matches!(
+            await_worker_stdin_write(pending, 0),
+            Err(ref error) if error.as_str() == "worker:request_write_deadline_exceeded:0ms"
+        ));
+        assert!(runtime.stdin_writer.is_some());
+        assert!(!stop_child_with_budget(&mut runtime, Duration::ZERO));
+        assert!(runtime.stdin_writer.is_some(), "do not detach a blocked writer");
+
+        sender.send(()).expect("release blocked write");
+        assert!(stop_child_with_budget(&mut runtime, Duration::from_secs(1)));
+        assert!(runtime.stdin_writer.is_none());
+    }
+
+    #[test]
+    fn blocked_flush_uses_the_same_deadline_and_owned_cleanup() {
+        struct GatedFlush {
+            gate: Option<mpsc::Receiver<()>>,
+            written: Vec<u8>,
+        }
+        impl Write for GatedFlush {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.written.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                if let Some(gate) = self.gate.take() {
+                    gate.recv().map_err(|_| io::Error::new(
+                        io::ErrorKind::BrokenPipe, "test flush gate disconnected",
+                    ))?;
+                }
+                Ok(())
+            }
+        }
+
+        let (release, gate) = mpsc::channel::<()>();
+        let mut runtime = HelperBridgeRuntime::default();
+        let writer = GatedFlush { gate: Some(gate), written: Vec::new() };
+        let pending = begin_worker_stdin_write(
+            &mut runtime, writer, json!({"command": "status"}), 30_000,
+        ).expect("single writer registration");
+        assert!(matches!(
+            await_worker_stdin_write(pending, 0),
+            Err(ref error) if error.as_str() == "worker:request_write_deadline_exceeded:0ms"
+        ));
+        assert!(!stop_child_with_budget(&mut runtime, Duration::ZERO));
+        assert!(runtime.stdin_writer.is_some());
+        release.send(()).expect("finish flush");
+        assert!(stop_child_with_budget(&mut runtime, Duration::from_secs(1)));
+        assert!(runtime.stdin_writer.is_none());
+    }
+
+    #[test]
+    fn completed_stdin_write_retains_original_pipe_and_deadline_payload() {
+        let mut runtime = HelperBridgeRuntime::default();
+        let payload = json!({"command": "ping", "request_id": "startup-ping"});
+        let write = begin_worker_stdin_write(
+            &mut runtime, Vec::<u8>::new(), payload, 5_000,
+        ).expect("admit write");
+        let bytes = await_worker_stdin_write(write, 5_000)
+            .expect("writer returned original pipe");
+        assert!(finish_received_stdin_write(&mut runtime));
+        assert!(runtime.stdin_writer.is_none());
+        let frames = String::from_utf8(bytes).expect("UTF-8 worker request");
+        assert!(frames.ends_with('\n'));
+        let request: Value = serde_json::from_str(frames.trim_end())
+            .expect("valid JSON line");
+        assert_eq!(request["command"], json!("ping"));
+        assert_eq!(request["request_id"], json!("startup-ping"));
+        assert_eq!(request["deadline_ms"], json!(5_000));
+        assert!(request["deadline_unix_ms"].as_u64().is_some());
+    }
 }
 
 #[cfg(test)]
