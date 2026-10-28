@@ -69,7 +69,7 @@ test("Meeting worker attempt attribution keeps recovery distinct and old archive
   assert.match(outbound, /timing\.metrics\.tts_worker_attempt_timing = super::worker_attempt_timing\(&tts\)/);
   assert.match(dto, /export type MeetingWorkerAttemptTiming/);
   for (const field of ["asr_worker_attempt", "translation_worker_attempt", "tts_worker_attempt"]) {
-    assert.match(diagnostics, new RegExp(\`"\${field}": timing\\\\.\`));
+    assert.match(diagnostics, new RegExp(`"${field}": timing\\.`));
   }
   assert.match(ui, /stageMs - admissionWaitMs - recovery/);
   assert.match(ui, /inclusive initial\/retry totals are not ranked twice/);
