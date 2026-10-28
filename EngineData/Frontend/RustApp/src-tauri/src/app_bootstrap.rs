@@ -2,6 +2,9 @@ use crate::engine::paths::{initialize_tauri_path_context, ProjectPaths};
 use tauri::{LogicalSize, Manager, Runtime};
 
 #[cfg(target_os = "windows")]
+pub(crate) mod single_instance;
+
+#[cfg(target_os = "windows")]
 mod windows_power_lifecycle {
     use std::ffi::c_void;
     use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};

@@ -46,6 +46,7 @@ This file maps semantic responsibility to the current owner. It does not carry p
 | Responsibility | Owner |
 |---|---|
 | App composition shell | `src/App.svelte` |
+| Windows single-instance admission before runtime bootstrap | `src-tauri/src/app_bootstrap/single_instance.rs`, called by `src-tauri/src/main.rs` |
 | Product pages | `src/pages/` |
 | Product runtime composition | `src/app/bridge/runtimeProductFacade.ts` |
 | Product audio / translation / setup actions | `productAudioFacade.ts`, `productTranslationFacade.ts`, `productSetupFacade.ts` |

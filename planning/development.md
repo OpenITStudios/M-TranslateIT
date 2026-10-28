@@ -2,6 +2,9 @@
 
 ## Current Status
 
+**Early Windows single-instance admission — source candidate (2026-10-28).** The native `main.rs` now acquires one Windows session-scoped kernel mutex before Tauri application setup, startup recovery, worker and device creation. A second launch cannot create its own runtime; it attempts to restore the existing main window only after matching the exact executable identity, otherwise reports that another instance is running or starting. The primary retains the kernel handle for the entire event loop; normal/crash termination releases it without a stale file. No dependency, lockfile, model, audio, private data, installer or CI change. Source-contract tests were authored but NOT EXECUTED; Windows duplicate-launch, activation and crash-restart acceptance remain NOT EXECUTED in the existing integrated Windows phase.
+
+
 **Interrupted Accept cannot silently contaminate a new My Voice dataset (2026-10-27).**
 The legacy current-Takes dataset owner formerly checked only whether the
 32 kHz canonical WAV looked valid, then removed/recreated the frozen Build

@@ -21,6 +21,13 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Early Windows single-instance admission — 2026-10-28
+
+Source candidate based on `e93d5600e4b3427cf32ab48c9e732ec794eed1b0`: native startup now acquires a session-scoped named Windows kernel mutex before Tauri setup, application data/recovery, audio and worker owners. A second invocation exits without a Tauri builder, after attempting to show the exact-executable main window; if none is ready it displays a bounded informational notice. A failed mutex acquisition also refuses startup. The primary handle is retained through the event loop and released by the OS on process termination. Existing startup-marker and Meeting ownership policies are unchanged; legacy already-running builds without the mutex cannot be retroactively protected.
+
+**STATIC_SOURCE:** reviewed native API ordering, exact-image/title filtering, mutex lifetime, collision and fail-closed branches, plus two authored Node source-contract tests. No Cargo compilation, Node execution, CI, Windows duplicate-instance/focus tests, clean install or device behavior was executed. In particular foreground focus is subject to Windows restrictions; a static check cannot claim it was raised on a real machine.
+
+
 ### Status/callback ingress coexistence repair — 2026-10-26
 
 The candidate based on `c48b8bb6f2bc9cb00eea852e7f05ca64b17363f9` replaces the

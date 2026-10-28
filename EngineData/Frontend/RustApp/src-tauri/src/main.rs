@@ -13,6 +13,17 @@ fn restore_main_window(app_handle: &tauri::AppHandle) {
 }
 
 fn main() {
+    // Acquire before Tauri setup, path recovery, windows, workers or audio.
+    #[cfg(target_os = "windows")]
+    let _single_instance = match app_bootstrap::single_instance::acquire() {
+        Ok(app_bootstrap::single_instance::InstanceAdmission::Primary(guard)) => guard,
+        Ok(app_bootstrap::single_instance::InstanceAdmission::Existing) => return,
+        Err(error) => {
+            app_bootstrap::single_instance::show_startup_error(&error);
+            return;
+        }
+    };
+
     let app = commands::registry::register(
         tauri::Builder::default()
             .plugin(tauri_plugin_updater::Builder::new().build())
