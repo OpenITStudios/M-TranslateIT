@@ -74,3 +74,39 @@ test("Meeting worker attempt attribution keeps recovery distinct and old archive
   assert.match(ui, /stageMs - admissionWaitMs - recovery/);
   assert.match(ui, /inclusive initial\/retry totals are not ranked twice/);
 });
+
+test("Meeting recovery timing ends after re-proof and before an outbound retry", () => {
+  // Source-order contract: a wall-time reading after retry would count that
+  // same retry in both recovery_ms and retry_attempt_ms. These are separate.
+  const recoveryStart = transport.indexOf("let recovery_started = Instant::now();");
+  const reproof = transport.indexOf(
+    "let functional_reproof = prepare_required_outbound_ai_runtime(generation);",
+    recoveryStart,
+  );
+  const recoveryEnd = transport.indexOf(
+    "timing.recovery_ms = Some(observed_elapsed_ms(recovery_started));",
+    reproof,
+  );
+  const retryStart = transport.indexOf("let retry_started = Instant::now();", recoveryEnd);
+  const retryCall = transport.indexOf(
+    "response = send_worker_task_inner(task, retry_payload);",
+    retryStart,
+  );
+  const noReproofFallback = transport.indexOf(
+    "if timing.recovery_ms.is_none() {",
+    retryCall,
+  );
+  assert.ok(
+    recoveryStart >= 0 && reproof > recoveryStart && recoveryEnd > reproof &&
+      retryStart > recoveryEnd && retryCall > retryStart &&
+      noReproofFallback > retryCall,
+    "recovery must end before retry and failed recovery remains measured",
+  );
+  assert.match(transport, /match functional_reproof \{/);
+  assert.match(transport, /timing\.retry_attempt_ms = Some\(observed_elapsed_ms\(retry_started\)\)/);
+  assert.match(
+    transport,
+    /if timing\.recovery_ms\.is_none\(\) \{\s*timing\.recovery_ms = Some\(observed_elapsed_ms\(recovery_started\)\);/,
+    "skipped re-proof must not overwrite the already measured recovery interval",
+  );
+});

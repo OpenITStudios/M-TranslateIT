@@ -642,7 +642,12 @@ pub(super) fn send_worker_task(task: &str, payload: Value) -> HelperBridgeWorker
                 // and the generation-bound actor token. Re-prove the exact required
                 // outbound path before retrying a side-effect-safe stage or claiming
                 // the recovered worker is usable for later utterances.
-                match prepare_required_outbound_ai_runtime(generation) {
+                let functional_reproof = prepare_required_outbound_ai_runtime(generation);
+                // Re-proof is the final recovery step. Retry has its own
+                // separately measured wall interval and must not inflate
+                // recovery_ms or be subtracted twice in Meeting Diagnostics.
+                timing.recovery_ms = Some(observed_elapsed_ms(recovery_started));
+                match functional_reproof {
                     Ok(()) if retry_current_stage => {
                         // Only retry-safe Live outbound stages retain a payload clone.
                         // ASR and translation have no Meeting playback side effect, so
@@ -693,8 +698,12 @@ pub(super) fn send_worker_task(task: &str, payload: Value) -> HelperBridgeWorker
                     }
                 }
             }
-            // Functional re-proof belongs to recovery, not to retry.
-            timing.recovery_ms = Some(observed_elapsed_ms(recovery_started));
+            // A failed restart or revoked generation skips functional re-proof.
+            // Preserve the failed recovery interval, but do not invent retry
+            // work or overwrite the already-closed successful recovery timer.
+            if timing.recovery_ms.is_none() {
+                timing.recovery_ms = Some(observed_elapsed_ms(recovery_started));
+            }
         }
 
         if task == "voice_actor_synthesize"
