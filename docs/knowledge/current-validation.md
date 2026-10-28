@@ -21,6 +21,13 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Cold startup shell and My Voice status responsiveness — 2026-10-28
+
+Candidate based on `a90f72e1e797ab5546b0be6372554825112577a8`: returning-user `App.svelte` no longer awaits the canonical Python helper's cold `ensure_runtime_ready` intent before ending the initial shell loading state. First it loads persisted settings and one native `ApplicationSnapshot`, maps it through the existing application controller with event sequencing and displays the resulting Meeting workspace. Only if the authoritative helper reports `not_started`, one non-blocking intent then starts the same single worker; its resulting native snapshot is reconciled by the existing monotonic ApplicationRuntime controller, including when the event subscription was not yet ready. Failed/blocked workers are not retried automatically, and unavailable native snapshots do not grant readiness. Native `get_voice_lab_build_status` now sends its existing read-heavy `current_status` work to Tauri's blocking executor, keeping the response DTO and canonical voice semantics unchanged. No model, lockfile, inference/prompt, helper deadline, worker count, polling, cloud or startup service was changed.
+
+**Proof: STATIC_SOURCE** — exact source and ownership inspection, one added source contract for initial shell ordering/worker non-retry and one native status offload contract authored. Node/Svelte/Cargo builds and tests, Windows UI responsiveness, cold-import timing, GPU/device, installed app and CI remain **NOT EXECUTED**. This source change removes one sequential wait from initial UI presentation; it does not prove the historical OS 'Not Responding' window or the 30s worker cold-start defect is resolved.
+
+
 ### Native updater install/admission exclusion — 2026-10-28
 
 Source candidate based on `bc474eb708520d30592e6fd0d26aead985c0d9d2`: the final updater owner check now occurs atomically with an exclusive application admission reservation, after a candidate update is found but before download/install. Meeting/Mic Test/recording lifecycle state and VoiceLab build/cleanup are retained as canonical authorities. Temporary admission permits cover Meeting route preparation, audio session claims, My Voice build claims, voice selection and backup/restore, and guided Draft Save/Retry/Recover plus explicit legacy protection. Unresolved Meeting cleanup, unverified runtime ownership and voice backup also block updater installation. A failed download/install drops the reservation, while a successful installer handoff keeps admission fenced until the application process exits. No updater daemon, worker, dependency, private audio, release or model behavior was added.

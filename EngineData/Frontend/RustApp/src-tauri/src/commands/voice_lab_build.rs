@@ -744,9 +744,13 @@ fn terminate_process_tree(pid: u32) -> bool {
     }
 }
 
+// current_status inspects accepted recordings, archive metadata and selected
+// voice artifacts. Keep that filesystem work off the native UI event thread.
 #[tauri::command]
-pub fn get_voice_lab_build_status() -> VoiceLabBuildStatus {
-    current_status()
+pub async fn get_voice_lab_build_status() -> Result<VoiceLabBuildStatus, String> {
+    tauri::async_runtime::spawn_blocking(current_status)
+        .await
+        .map_err(|_| "My Voice status collection was interrupted.".to_string())
 }
 
 pub fn start_voice_lab_build(authorized_voice_confirmed: bool) -> VoiceLabBuildActionResult {

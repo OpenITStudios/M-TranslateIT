@@ -372,22 +372,65 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     let unlistenQuickAccessCaptions: (() => void) | null = null;
     discardLegacyOverlayCaption();
     const stopVoiceBuildRuntimeSync = startVoiceBuildRuntimeSync((message) => refreshSnapshot(message));
+    // Cold worker/model imports may take tens of seconds. Render the
+    // authoritative saved-setup + application snapshot before starting them;
+    // a native event/result reconciles readiness after the worker completes.
+    // No second worker, retry loop, deadline change or optimistic ready state.
     const boot = async () => {
+      let initialSnapshot: ApplicationSnapshot | null = null;
       try {
         const loadedSettings = await runtimeApi.loadSettings();
         if (!loadedSettings) {
           setNotice("TranslateIT can't reach the desktop runtime yet. Try again when it is available.");
           return;
         }
+        if (disposed) return;
         applicationController.applySettings(loadedSettings);
         applicationState = applicationController.read();
         if (loadedSettings.meeting_setup_state !== "new") {
-          await refreshSnapshot(undefined, loadedSettings);
+          initialSnapshot = await applicationRuntimeApi.getSnapshot();
+          if (initialSnapshot.revision <= 0 || initialSnapshot.lifecycle === "unavailable") {
+            throw new Error("Initial application state was unavailable.");
+          }
+          if (disposed) return;
+          applyRefreshResult(
+            await applicationController.refreshFromApplication(
+              initialSnapshot, "initial_shell", loadedSettings,
+            ),
+          );
         }
       } catch {
-        if (!disposed) setNotice("Could not load your settings. Select Try Again to check the desktop runtime.");
+        if (!disposed) setNotice("Could not load your settings or desktop status. Select Try Again to check the runtime.");
       } finally {
-        if (!disposed) booting = false;
+        if (disposed) return;
+        booting = false;
+        // The initial page is no longer gated by Python worker readiness.
+        // Only a truly not-started worker gets one automatic start attempt.
+        // A blocked or failed worker requires the existing explicit recovery.
+        if (
+          initialSnapshot?.helper.state === "not_started"
+          && applicationController.read().snapshot?.helper?.state === "not_started"
+        ) {
+          setNotice("Preparing the local AI worker. Meeting and Settings remain accessible while it starts.");
+          void (async () => {
+            const outcome = await applicationRuntimeApi.dispatchIntent("ensure_runtime_ready");
+            if (disposed) return;
+            if (outcome.snapshot.revision > 0 && outcome.snapshot.lifecycle !== "unavailable") {
+              await refreshFromApplicationEvent(outcome.snapshot, "startup_worker_result");
+            }
+            if (disposed) return;
+            if (!outcome.ok) {
+              setNotice(outcome.message);
+            } else {
+              const current = applicationController.read().snapshot;
+              if (current?.helper?.state === "ready" && !current.meeting.hasSession) {
+                setNotice(current.readiness.summary);
+              }
+            }
+          })().catch(() => {
+            if (!disposed) setNotice("Could not confirm local AI startup. Check Help before retrying the worker.");
+          });
+        }
       }
     };
 

@@ -2,6 +2,9 @@
 
 ## Current Status
 
+**Cold-start UI and voice-status source hardening — candidate 2026-10-28.** Returning users now receive the read-only saved-settings + native application snapshot and visible Meeting workspace before the one canonical `ensure_runtime_ready` startup attempt. This attempt runs without awaiting it in the initial shell loading path and reconciles its exact native outcome via the existing application controller, avoiding listener-registration races. A blocked worker is not automatically restarted. Read-heavy My Voice build-status work is offloaded from the native Tauri command thread using the existing blocking executor; its status contract and voice behavior are unchanged. No additional worker, model, AI timeout, background polling, dependency, hosted CI or user-PC action. Two source tests authored, NOT EXECUTED; measured native startup/freeze and model import latency require the later integrated Windows acceptance.
+
+
 **Updater concurrency native admission fence — source candidate (2026-10-28).** The app-only updater atomically checks live audio, voice builds (including pending cleanup), recording, unresolved Meeting cleanup and backup state while reserving exclusive update admission before download/install. Meeting route preparation, canonical audio session claim, voice-build admission, voice selection/backup and guided WAV mutations acquire temporary operation permits from the same existing Rust runtime owner. Failure releases the installer reservation; a successful handoff keeps new operations blocked until process exit. No updater daemon, extra worker, dependency, private data migration, release or CI change. Rust/TypeScript regression cases authored, **NOT EXECUTED**; integrated Windows update/install and crash/Stop acceptance remain outstanding.
 
 
