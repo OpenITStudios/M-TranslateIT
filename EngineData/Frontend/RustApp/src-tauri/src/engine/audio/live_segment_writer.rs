@@ -203,10 +203,11 @@ fn cleanup_finalized_meeting_session_wavs_in_dir(
     session_id: &str,
 ) -> Result<usize, String> {
     let session_component = safe_file_component(session_id);
-    if session_component.is_empty() {
+    // Cleanup cannot silently normalize an invalid identity into another
+    // session's filename. Real Meeting session IDs already use this alphabet.
+    if session_component.is_empty() || session_component != session_id {
         return Err("finalized_utterance_cleanup:invalid_session_id".to_string());
     }
-    let prefix = format!("final_{session_component}_");
     let entries = match fs::read_dir(audio_dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
@@ -223,7 +224,7 @@ fn cleanup_finalized_meeting_session_wavs_in_dir(
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.starts_with(&prefix) || !(name.ends_with(".wav") || name.ends_with(".wav.tmp")) {
+        if !finalized_wav_belongs_to_session(&name, &session_component) {
             continue;
         }
         fs::remove_file(entry.path())
@@ -231,6 +232,35 @@ fn cleanup_finalized_meeting_session_wavs_in_dir(
         removed = removed.saturating_add(1);
     }
     Ok(removed)
+}
+
+// Match the complete app-owned final_<session>_s<event>_<lane>_<id>
+// grammar, not merely a session prefix. Session IDs can contain "_s",
+// so starts_with("final_<session>_") can delete a different session's WAV.
+fn finalized_wav_belongs_to_session(filename: &str, session: &str) -> bool {
+    let prefix = format!("final_{session}_s");
+    let Some(rest) = filename.strip_prefix(&prefix) else { return false };
+    let stem = rest.strip_suffix(".wav.tmp")
+        .or_else(|| rest.strip_suffix(".wav"));
+    let Some(stem) = stem else { return false };
+    let Some((sequence, tail)) = stem.split_once('_') else { return false };
+    if sequence.parse::<u64>().is_err() {
+        return false;
+    }
+    let utterance = if let Some(utterance) = tail.strip_prefix("incoming_u") {
+        utterance
+    } else if let Some(after_gen) = tail.strip_prefix("you_g") {
+        let Some((generation, utterance)) = after_gen.split_once("_u") else {
+            return false;
+        };
+        if generation.parse::<u64>().is_err() {
+            return false;
+        }
+        utterance
+    } else {
+        return false;
+    };
+    utterance.parse::<u64>().is_ok()
 }
 
 fn finalized_audio_filename(audio_path: &str) -> Option<String> {
@@ -474,6 +504,10 @@ mod tests {
             .expect("write matching temp");
         fs::write(root.join("final_session-b_s1_you_g1_u1.wav"), b"c")
             .expect("write foreign wav");
+        fs::write(root.join("final_session-a_something_s3_you_g1_u1.wav"), b"d")
+            .expect("write overlapping session prefix");
+        fs::write(root.join("final_session-a_sbad_you_g1_u1.wav"), b"e")
+            .expect("write misleading non-event file");
         fs::create_dir_all(root.join("final_session-a_directory.wav"))
             .expect("create matching-looking directory");
 
@@ -484,9 +518,26 @@ mod tests {
         assert!(!root.join("final_session-a_s1_you_g1_u1.wav").exists());
         assert!(!root.join("final_session-a_s2_incoming_u2.wav.tmp").exists());
         assert!(root.join("final_session-b_s1_you_g1_u1.wav").exists());
+        assert!(root.join("final_session-a_something_s3_you_g1_u1.wav").exists(),
+            "another session with a common prefix must survive");
+        assert!(root.join("final_session-a_sbad_you_g1_u1.wav").exists());
         assert!(root.join("final_session-a_directory.wav").is_dir());
 
         fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    #[test]
+    fn invalid_cleanup_session_does_not_normalize_into_another_owner() {
+        let root = unique_test_root("invalid-cleanup-session");
+        fs::create_dir_all(&root).expect("isolated cleanup root");
+        let foreign = root.join("final_session-a_s1_you_g2_u1.wav");
+        fs::write(&foreign, b"foreign").expect("foreign WAV");
+        assert_eq!(
+            cleanup_finalized_meeting_session_wavs_in_dir(&root, "session a"),
+            Err("finalized_utterance_cleanup:invalid_session_id".to_string()),
+        );
+        assert!(foreign.exists());
+        fs::remove_dir_all(root).expect("remove isolated root");
     }
 
     #[test]

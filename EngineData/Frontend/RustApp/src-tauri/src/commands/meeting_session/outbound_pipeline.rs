@@ -96,6 +96,37 @@ fn cleanup_meeting_tts_for_session_in_dir(
     session_id: &str,
     generation: u64,
 ) -> Result<usize, String> {
+    cleanup_meeting_tts_for_scope_in_dir(tts_dir, session_id, Some(generation))
+}
+
+// Called only from no-snapshot Meeting Stop after all helper, playback and
+// outbound consumers have verified release. The session identity comes from
+// the existing finalized Meeting producer/sequence store, never from a
+// worker-reported path or a directory-wide wildcard.
+pub(super) fn cleanup_meeting_tts_for_idle_session(session_id: &str) -> Result<usize, String> {
+    let tts_dir = meeting_tts_directory();
+    cleanup_meeting_tts_for_scope_in_dir(&tts_dir, session_id, None)
+}
+
+fn session_tts_filename_matches(name: &str, session_id: &str, generation: Option<u64>) -> bool {
+    let prefix = format!("{session_id}_g");
+    let Some(rest) = name.strip_prefix(&prefix) else { return false };
+    let stem = rest.strip_suffix(".wav.tmp")
+        .or_else(|| rest.strip_suffix(".wav"));
+    let Some(stem) = stem else { return false };
+    let Some((gen, event)) = stem.split_once("_s") else { return false };
+    let Ok(actual_generation) = gen.parse::<u64>() else { return false };
+    if event.parse::<u64>().is_err() {
+        return false;
+    }
+    generation.is_none_or(|expected| expected == actual_generation)
+}
+
+fn cleanup_meeting_tts_for_scope_in_dir(
+    tts_dir: &Path,
+    session_id: &str,
+    generation: Option<u64>,
+) -> Result<usize, String> {
     if session_id.trim().is_empty()
         || session_id.contains('/')
         || session_id.contains('\\')
@@ -105,7 +136,6 @@ fn cleanup_meeting_tts_for_session_in_dir(
     {
         return Err("meeting_tts_cleanup:invalid_session_id".to_string());
     }
-    let prefix = format!("{session_id}_g{generation}_s");
     let entries = match fs::read_dir(tts_dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
@@ -121,7 +151,7 @@ fn cleanup_meeting_tts_for_session_in_dir(
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.starts_with(&prefix) || !name.ends_with(".wav") {
+        if !session_tts_filename_matches(&name, session_id, generation) {
             continue;
         }
         fs::remove_file(entry.path()).map_err(|_| "meeting_tts_cleanup:remove_failed".to_string())?;
@@ -586,8 +616,9 @@ pub(super) fn process_outbound_wav(
 #[cfg(test)]
 mod tests {
     use super::{
-        cleanup_meeting_tts_for_session_in_dir, expected_tts_path_in_dir,
-        remove_temporary_tts_paths_in_dir, tts_output_path, verified_tts_output_in_dir,
+        cleanup_meeting_tts_for_scope_in_dir, cleanup_meeting_tts_for_session_in_dir,
+        expected_tts_path_in_dir, remove_temporary_tts_paths_in_dir, tts_output_path,
+        verified_tts_output_in_dir,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -616,6 +647,10 @@ mod tests {
         fs::write(root.join("meeting_100_7_g9_s2.wav"), b"b").expect("write matching tts");
         fs::write(root.join("meeting_100_7_g8_s1.wav"), b"c").expect("write old generation");
         fs::write(root.join("other_g9_s1.wav"), b"d").expect("write foreign session");
+        fs::write(root.join("meeting_100_7_other_g9_s1.wav"), b"e")
+            .expect("write overlapping session");
+        fs::write(root.join("meeting_100_7_g9_sbad.wav"), b"f")
+            .expect("write invalid event suffix");
 
         let removed = cleanup_meeting_tts_for_session_in_dir(&root, "meeting_100_7", 9)
             .expect("cleanup session tts");
@@ -625,8 +660,39 @@ mod tests {
         assert!(!root.join("meeting_100_7_g9_s2.wav").exists());
         assert!(root.join("meeting_100_7_g8_s1.wav").exists());
         assert!(root.join("other_g9_s1.wav").exists());
+        assert!(root.join("meeting_100_7_other_g9_s1.wav").exists());
+        assert!(root.join("meeting_100_7_g9_sbad.wav").exists());
 
         fs::remove_dir_all(root).expect("remove tts cleanup root");
+    }
+
+    #[test]
+    fn idle_session_tts_cleanup_handles_all_generations_but_no_other_session() {
+        let root = temp_wav("idle-session-tts-cleanup").with_extension("");
+        fs::create_dir_all(&root).expect("test cache root");
+        for filename in [
+            "meeting_100_7_g9_s1.wav",
+            "meeting_100_7_g8_s2.wav.tmp",
+            "meeting_100_7_other_g9_s1.wav",
+            "meeting_100_7_g9_sbad.wav",
+            "meeting_100_8_g9_s1.wav",
+        ] {
+            fs::write(root.join(filename), b"owned-or-foreign").expect("create cache fixture");
+        }
+        assert_eq!(
+            cleanup_meeting_tts_for_scope_in_dir(&root, "meeting_100_7", None),
+            Ok(2),
+        );
+        assert!(!root.join("meeting_100_7_g9_s1.wav").exists());
+        assert!(!root.join("meeting_100_7_g8_s2.wav.tmp").exists());
+        assert!(root.join("meeting_100_7_other_g9_s1.wav").exists());
+        assert!(root.join("meeting_100_7_g9_sbad.wav").exists());
+        assert!(root.join("meeting_100_8_g9_s1.wav").exists());
+        assert_eq!(
+            cleanup_meeting_tts_for_scope_in_dir(&root, "meeting 100 7", None),
+            Err("meeting_tts_cleanup:invalid_session_id".to_string()),
+        );
+        fs::remove_dir_all(root).expect("cleanup test fixture");
     }
 
     #[test]

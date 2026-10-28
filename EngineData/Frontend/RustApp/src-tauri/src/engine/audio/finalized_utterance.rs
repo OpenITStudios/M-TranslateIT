@@ -189,6 +189,95 @@ pub fn clear_finalized_meeting_sequence() {
     }
 }
 
+// Stop must clear only the sequence still owned by its original Meeting.
+// A busy/poisoned store cannot be treated as a successful release.
+pub fn clear_finalized_meeting_sequence_for_session(session_id: &str) -> bool {
+    if session_id.is_empty() {
+        return false;
+    }
+    let Ok(mut guard) = sequence_store().try_lock() else { return false };
+    if guard.as_ref().is_some_and(|sequence| sequence.session_id != session_id) {
+        return false;
+    }
+    *guard = None;
+    true
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FinalizedOrphanProducerOwners {
+    // Best available original Meeting ID, derived from the existing sequence
+    // and producer stores. Never a new persistent identity or cleanup ledger.
+    pub session_id: Option<String>,
+    pub outbound_generation: Option<u64>,
+    pub incoming_owned: bool,
+}
+
+// Read the same two native owners used by the CPU lease cleanup. State may
+// already be None after a timed-out Stop while a SpeechIngress still owns its
+// original session and thread. Obtain ingress before state, matching the
+// original stop lock order. Any contention or mismatched identities is UNKNOWN.
+fn producer_owner_identity(
+    sync: &FinalizedProducerSync,
+    lane: &'static str,
+) -> Result<Option<(String, Option<u64>)>, String> {
+    let ingress = sync.ingress.try_read().map_err(|_| "silero:ingress_owner_busy")?;
+    let state = sync.state.try_lock().map_err(|_| "silero:producer_owner_busy")?;
+    let from_state = state.as_ref().map(|owner| (
+        owner.session_id.as_str(), owner.generation, owner.lane,
+    ));
+    let from_cpu = ingress.as_ref().map(|owner| (
+        owner.session.as_str(), owner.generation, owner.lane,
+    ));
+    if from_state.is_some() && from_cpu.is_some() && from_state != from_cpu {
+        return Err("silero:producer_cpu_owner_mismatch".to_string());
+    }
+    let Some((session_id, generation, observed_lane)) = from_state.or(from_cpu) else {
+        return Ok(None);
+    };
+    if session_id.is_empty() || observed_lane != lane
+        || (lane == LANE_YOU && generation.is_none_or(|value| value == 0))
+        || (lane == LANE_INCOMING && generation.is_some())
+    {
+        return Err("silero:producer_owner_invalid".to_string());
+    }
+    Ok(Some((session_id.to_string(), generation)))
+}
+
+pub fn finalized_orphan_producer_owners() -> Result<FinalizedOrphanProducerOwners, String> {
+    let outbound = producer_owner_identity(outbound_sync(), LANE_YOU)?;
+    let incoming = producer_owner_identity(incoming_sync(), LANE_INCOMING)?;
+    let sequence_id = sequence_store().try_lock()
+        .map_err(|_| "silero:sequence_owner_busy")?
+        .as_ref().map(|owner| owner.session_id.clone());
+    let mut session_id = sequence_id;
+    for owner in [
+        outbound.as_ref().map(|value| &value.0),
+        incoming.as_ref().map(|value| &value.0),
+    ] {
+        if let Some(candidate) = owner {
+            if session_id.as_deref().is_some_and(|current| current != candidate.as_str()) {
+                return Err("silero:orphan_session_owner_mismatch".to_string());
+            }
+            session_id = Some((*candidate).clone());
+        }
+    }
+    Ok(FinalizedOrphanProducerOwners {
+        session_id,
+        outbound_generation: outbound.as_ref().and_then(|value| value.1),
+        incoming_owned: incoming.is_some(),
+    })
+}
+
+// Status/Close never waits on the CPU ingestion or producer mutex. A present
+// sequence itself retains a Meeting session identity until its WAV cleanup is
+// confirmed. Any unavailable owner is not a clean idle signal.
+pub fn inactive_finalized_meeting_producers_may_need_stop() -> bool {
+    finalized_orphan_producer_owners()
+        .map(|owners| owners.session_id.is_some())
+        .unwrap_or(true)
+}
+
+
 fn allocate_meeting_sequence(session_id: &str) -> Option<u64> {
     let mut guard = sequence_store().lock().ok()?;
     let state = guard.as_mut()?;

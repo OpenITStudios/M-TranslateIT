@@ -32,6 +32,40 @@ fn ingress_rejection_is_separate_from_handoff_loss_and_exports_only_counts() {
 }
 
 #[test]
+fn orphan_owner_read_is_exact_and_fails_closed_on_contended_ingress() {
+    // Exercise the production identity reader without loading Silero or
+    // changing the global Meeting owner.
+    let sync = FinalizedProducerSync {
+        ingress: RwLock::new(None),
+        transport_loss: AtomicU64::new(0),
+        state: Mutex::new(None),
+        ready: Condvar::new(),
+        callback_lock_observations: AtomicU64::new(0),
+        callback_lock_wait_max_ns: AtomicU64::new(0),
+    };
+    assert_eq!(producer_owner_identity(&sync, LANE_YOU), Ok(None));
+    reset_producer(&sync, "meeting-owner-a", Some(41), LANE_YOU, 16_000);
+    assert_eq!(
+        producer_owner_identity(&sync, LANE_YOU),
+        Ok(Some(("meeting-owner-a".to_string(), Some(41)))),
+    );
+    assert_eq!(
+        producer_owner_identity(&sync, LANE_INCOMING),
+        Err("silero:producer_owner_invalid".to_string()),
+        "a different lane must never own this producer",
+    );
+    let held = sync.ingress.write().expect("hold the existing CPU owner lock");
+    assert_eq!(
+        producer_owner_identity(&sync, LANE_YOU),
+        Err("silero:ingress_owner_busy".to_string()),
+        "Close/status must not block or invent a clean owner",
+    );
+    drop(held);
+    assert!(clear_producer(&sync));
+    assert_eq!(producer_owner_identity(&sync, LANE_YOU), Ok(None));
+}
+
+#[test]
 fn silero_start_argument_gate_preserves_existing_cpu_owner() {
     assert_eq!(
         validated_silero_start_session("  normalized-session  ", None, 16_000),

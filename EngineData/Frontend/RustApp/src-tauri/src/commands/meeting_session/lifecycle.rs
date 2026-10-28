@@ -3,8 +3,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, TryLockError};
 
 use crate::engine::audio::finalized_utterance::{
-    clear_finalized_meeting_sequence, reset_finalized_drop_counters,
-    reset_finalized_meeting_sequence,
+    clear_finalized_meeting_sequence_for_session,
+    clear_finalized_incoming_utterance_producer_for_session,
+    clear_finalized_outbound_utterance_producer_for_generation,
+    finalized_orphan_producer_owners, inactive_finalized_meeting_producers_may_need_stop,
+    reset_finalized_drop_counters, reset_finalized_meeting_sequence,
 };
 use crate::engine::audio::live_segment_writer::cleanup_finalized_meeting_session_wavs;
 use crate::engine::audio::original_voice_pcm;
@@ -47,7 +50,9 @@ use super::incoming_activation::schedule_optional_incoming_lane;
 use super::incoming_deferred::{
     clear_deferred_incoming_queue, reset_deferred_incoming_drop_counters,
 };
-use super::outbound_pipeline::cleanup_meeting_tts_for_session;
+use super::outbound_pipeline::{
+    cleanup_meeting_tts_for_idle_session, cleanup_meeting_tts_for_session,
+};
 use super::playback_runtime::{
     finish_orphaned_meeting_playback_without_session, inactive_meeting_playback_may_need_stop,
     start_meeting_playback_runtime, stop_meeting_playback_runtime,
@@ -120,7 +125,8 @@ pub(super) fn transient_stop_cleanup_pending() -> bool {
             || meeting_helper_orphan_cleanup_pending()
             || inactive_meeting_sound_capture_may_need_stop()
             || inactive_meeting_consumers_may_need_stop()
-            || inactive_meeting_playback_may_need_stop())
+            || inactive_meeting_playback_may_need_stop()
+            || inactive_finalized_meeting_producers_may_need_stop())
 }
 
 // A failed Starting transaction may release session ownership only after
@@ -156,7 +162,8 @@ fn rollback_starting_meeting_resources(
     let helper = cancel_helper_bridge_meeting_session(session_id);
     let outbound = stop_meeting_outbound_consumer(generation);
     let playback = stop_meeting_playback_runtime(generation);
-    clear_finalized_meeting_sequence();
+    // Preserve the old session's sequence identity until scoped temp-file
+    // cleanup and all CPU/consumer owners confirm release.
     let suppression_ok = clear_self_output_suppression_for_session(session_id);
     let transcript_ok = clear_committed_turns_for_session(session_id);
     // A failed bounded consumer Stop still owns its thread and may be
@@ -174,10 +181,12 @@ fn rollback_starting_meeting_resources(
 
     // Starting has no optional incoming consumer; all other owned cleanup
     // must pass before releasing the revoked generation to another session.
-    let cleanup_ok = starting_rollback_cleanup_complete(
+    let released_resources = starting_rollback_cleanup_complete(
         output_cancelled, microphone.ok, sound.ok, helper.ok, outbound.ok,
         playback.ok, suppression_ok, transcript_ok, wav_ok && tts_ok,
     );
+    let cleanup_ok = released_resources
+        && clear_finalized_meeting_sequence_for_session(session_id);
     if cleanup_ok {
         let cleared = clear_runtime_session_if_generation(generation);
         STOP_CLEANUP_PENDING.store(
@@ -806,66 +815,126 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
     }
 
     let Some(snapshot) = current.snapshot.as_ref() else {
-        // The application session snapshot may have been cleared after a
-        // partial Stop, but the canonical helper can still hold its Meeting
-        // I/O threads or worker. Stop only that verified Meeting-attributed
-        // orphan, never the generic Text/diagnostic helper. A busy/poisoned
-        // helper is unverified and must retain Retry Stop + native close gate.
+        // Recover only existing, attributable owners. Their session identity
+        // must be read BEFORE Stop consumes the matching consumer/CPU handle;
+        // the original finalized sequence is the last file-cleanup authority.
+        let orphan_producers = finalized_orphan_producer_owners();
         let orphan_helper_cleanup = finish_orphaned_meeting_helper_without_session();
-        // Reclaim only the exact old generation/session IDs observed under
-        // their canonical stores. A still-running consumer/playback remains
-        // owned, blocks Start, and keeps Close pending until Retry Stop.
         let orphan_consumers_cleanup = finish_orphaned_meeting_consumers_without_session();
         let orphan_playback_cleanup = finish_orphaned_meeting_playback_without_session();
         clear_all_start_preflight();
         clear_prepared_meeting_output_device();
-        // Meeting Sound Stop already owns and verifies incoming producer
-        // teardown. Never invoke a second unscoped clear outside its owner
-        // lock: it could touch a newly activated producer, and its result
-        // would not be included in the Retry Stop decision.
         let incoming_capture_stop = stop_meeting_sound_capture_runtime();
-        // The old incoming consumer can still be processing ASR WAVs while
-        // Stop is incomplete. Do not sweep its deferred files/sequence until
-        // the exact consumer and playback owner are verified released.
-        let deferred_cleanup = if orphan_consumers_cleanup.is_ok() {
+
+        let producer_cleanup: Result<(), String> = match orphan_producers.as_ref() {
+            Err(error) => Err(error.clone()),
+            Ok(owners) => {
+                if !verified_idle_for_orphan_cleanup() {
+                    Err("silero:orphan_runtime_owner_changed".to_string())
+                } else {
+                    let outbound_clean = owners.outbound_generation.map(
+                        clear_finalized_outbound_utterance_producer_for_generation,
+                    ).unwrap_or(true);
+                    let incoming_clean = if owners.incoming_owned {
+                        owners.session_id.as_deref().is_some_and(
+                            clear_finalized_incoming_utterance_producer_for_session,
+                        )
+                    } else {
+                        true
+                    };
+                    if !outbound_clean || !incoming_clean {
+                        Err("silero:orphan_producer_cleanup_incomplete".to_string())
+                    } else if !verified_idle_for_orphan_cleanup() {
+                        Err("silero:orphan_runtime_owner_changed_after_cleanup".to_string())
+                    } else {
+                        Ok(())
+                    }
+                }
+            }
+        };
+
+        // An unverified consumer or Silero CPU producer may still write ASR
+        // WAVs. Neither deferred files nor finalized sequence may be swept.
+        let deferred_cleanup = if orphan_consumers_cleanup.is_ok()
+            && producer_cleanup.is_ok()
+        {
             clear_deferred_incoming_queue()
         } else {
-            Err("meeting_incoming:orphan_consumer_exit_unverified".to_string())
+            Err("meeting_incoming:orphan_consumer_or_producer_exit_unverified".to_string())
         };
-        if orphan_consumers_cleanup.is_ok() && orphan_playback_cleanup.is_ok() {
-            clear_finalized_meeting_sequence();
-        }
-        // No runtime snapshot does not prove that the writer has finished.
-        // Preserve active turns while Retry Stop still owns an orphan writer.
         let writer_finished = super::transcript_archive::finish_writer_without_session();
         let transcript_cleanup_ok = clear_transcript_only_after_retention(
             writer_finished, clear_inactive_committed_turns,
         );
+
+        // The only safe file prefix is the exact original Meeting session
+        // captured from the finalized producer/sequence owner. Generic Text
+        // worker or unknown historical file names are never used for deletion.
+        let temporary_wav_cleanup: Result<(usize, usize), String> =
+            if orphan_helper_cleanup.is_ok()
+                && orphan_consumers_cleanup.is_ok()
+                && orphan_playback_cleanup.is_ok()
+                && producer_cleanup.is_ok()
+                && incoming_capture_stop.ok
+                && deferred_cleanup.is_ok()
+                && transcript_cleanup_ok
+                && verified_idle_for_orphan_cleanup()
+            {
+                match orphan_producers.as_ref() {
+                    Ok(owners) => {
+                        if let Some(session_id) = owners.session_id.as_deref() {
+                            let asr = cleanup_finalized_meeting_session_wavs(session_id);
+                            let tts = cleanup_meeting_tts_for_idle_session(session_id);
+                            match (asr, tts) {
+                                (Ok(asr_count), Ok(tts_count)) => Ok((asr_count, tts_count)),
+                                (Err(error), _) => Err(error),
+                                (_, Err(error)) => Err(error),
+                            }
+                        } else {
+                            // No session owner was recorded: do not guess
+                            // cached file ownership or sweep other sessions.
+                            Ok((0, 0))
+                        }
+                    }
+                    Err(error) => Err(error.clone()),
+                }
+            } else {
+                Err("meeting_temporary_wav:orphan_owner_exit_unverified".to_string())
+            };
+
+        let sequence_cleanup_ok = temporary_wav_cleanup.is_ok()
+            && verified_idle_for_orphan_cleanup()
+            && orphan_producers.as_ref().is_ok_and(|owners| {
+                owners.session_id.as_deref().map(
+                    clear_finalized_meeting_sequence_for_session,
+                ).unwrap_or(true)
+            });
+
         if orphan_helper_cleanup.is_err()
             || orphan_consumers_cleanup.is_err()
             || orphan_playback_cleanup.is_err()
+            || producer_cleanup.is_err()
             || !incoming_capture_stop.ok
             || deferred_cleanup.is_err()
             || !transcript_cleanup_ok
+            || temporary_wav_cleanup.is_err()
+            || !sequence_cleanup_ok
         {
             STOP_CLEANUP_PENDING.store(true, Ordering::Release);
             return MeetingSessionActionResult {
                 ok: false,
                 state: "cleanup_incomplete".to_string(),
                 message: format!(
-                    "Translation has no active session, but orphaned resource cleanup is not fully verified. Helper: {} Consumers: {} Playback: {} Meeting Sound: {} Deferred queue: {} Transcript state: {}",
-                    orphan_helper_cleanup
-                        .as_ref()
-                        .err()
-                        .copied()
-                        .unwrap_or("clean"),
+                    "Translation has no active session, but orphaned cleanup is not verified. Helper: {} Consumers: {} Playback: {} Silero: {} Meeting Sound: {} Deferred: {} Transcript: {} Temporary WAV: {} Sequence: {}",
+                    orphan_helper_cleanup.as_ref().err().copied().unwrap_or("clean"),
                     orphan_consumers_cleanup.as_ref().err().map(String::as_str).unwrap_or("clean"),
                     orphan_playback_cleanup.as_ref().err().map(String::as_str).unwrap_or("clean"),
+                    producer_cleanup.as_ref().err().map(String::as_str).unwrap_or("clean"),
                     incoming_capture_stop.message,
-                    deferred_cleanup
-                        .err()
-                        .unwrap_or_else(|| "clean".to_string()),
-                    if transcript_cleanup_ok { "clean" } else { "unverified" }
+                    deferred_cleanup.as_ref().err().map(String::as_str).unwrap_or("clean"),
+                    if transcript_cleanup_ok { "clean" } else { "unverified" },
+                    temporary_wav_cleanup.as_ref().err().map(String::as_str).unwrap_or("clean"),
+                    if sequence_cleanup_ok { "clean" } else { "unverified" },
                 ),
                 status: status_from_report(current, build_preflight()),
             };
@@ -876,8 +945,7 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
         return MeetingSessionActionResult {
             ok: true,
             state: "already_stopped".to_string(),
-            message: "Translation is already stopped. Meeting helper, consumers, playback, optional incoming audio and transcript writer cleanup were verified."
-                .to_string(),
+            message: "Translation is already stopped. Attributable helper, consumer, playback, Silero, Meeting Sound, transcript and temporary WAV cleanup are verified.".to_string(),
             status: status_from_report(current, build_preflight()),
         };
     };
@@ -917,7 +985,7 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
     let incoming_cleanup = stop_meeting_incoming_consumer(&session_id);
 
     let suppression_cleanup_ok = clear_self_output_suppression_for_session(&session_id);
-    clear_finalized_meeting_sequence();
+    // Keep the original session's file identity through failed Stop.
     let transcript_cleanup_ok = clear_transcript_only_after_retention(
         transcript_retained_for_export,
         || clear_committed_turns_for_session(&session_id),
@@ -944,7 +1012,7 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
         finalized_audio_cleanup.is_ok() && tts_cache_cleanup.is_ok();
     clear_outbound_status();
 
-    let cleanup_complete = transcript_retained_for_export && meeting_cleanup_complete(
+    let released_resources = transcript_retained_for_export && meeting_cleanup_complete(
         output_cancelled,
         capture_stop.ok,
         incoming_capture_stop.ok,
@@ -956,6 +1024,9 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
         transcript_cleanup_ok,
         transient_audio_cleanup_ok,
     );
+    let sequence_cleanup_ok = released_resources
+        && clear_finalized_meeting_sequence_for_session(&session_id);
+    let cleanup_complete = released_resources && sequence_cleanup_ok;
 
     if !cleanup_complete {
         let mut failed = Vec::new();

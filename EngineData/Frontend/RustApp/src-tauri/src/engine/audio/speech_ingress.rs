@@ -12,6 +12,9 @@ pub(super) struct SpeechIngress {
     rate: u32,
     queue: Arc<PcmHandoff>,
     thread: Option<JoinHandle<()>>,
+    // A panicked JoinHandle is consumed by join(). Do not report verified
+    // cleanup on a second Stop merely because that handle is now absent.
+    join_failed: bool,
     fault: Arc<Mutex<Option<String>>>,
     // Callback-only capture-rate fault: publishing it must not wait for Diagnostics.
     rate_mismatch: Arc<AtomicBool>,
@@ -132,7 +135,7 @@ impl SpeechIngress {
                 }
             }).map_err(|_| "silero:thread_spawn_failed".to_string())?;
         Ok(Self { session: session.to_string(), generation, lane, rate, queue,
-            thread: Some(handle), fault, rate_mismatch,
+            thread: Some(handle), join_failed: false, fault, rate_mismatch,
             #[cfg(test)] submitted: AtomicU64::new(0),
             #[cfg(test)] processed,
             #[cfg(test)] observations })
@@ -179,6 +182,9 @@ impl SpeechIngress {
 
     fn stop_with_budget(&mut self, budget: Duration) -> bool {
         self.queue.request_stop();
+        if self.join_failed {
+            return false;
+        }
         if let Some(handle) = self.thread.as_ref() {
             handle.thread().unpark();
             let deadline = Instant::now() + budget;
@@ -188,7 +194,10 @@ impl SpeechIngress {
             }
         }
         if let Some(handle) = self.thread.take() {
-            let ok = handle.join().is_ok(); self.queue.stop(); return ok;
+            let joined = handle.join().is_ok();
+            self.queue.stop();
+            self.join_failed |= !joined;
+            return joined;
         }
         true
     }
@@ -264,7 +273,7 @@ mod tests {
         let queue = Arc::new(PcmHandoff::new("stalled-speech", PcmLane::Incoming, 1, 16_000).unwrap());
         let mut cpu = SpeechIngress {
             session: "stalled-speech".to_string(), generation: None, lane: LANE_INCOMING,
-            rate: 16_000, queue: Arc::clone(&queue), thread: Some(handle),
+            rate: 16_000, queue: Arc::clone(&queue), thread: Some(handle), join_failed: false,
             fault: Arc::new(Mutex::new(None)), rate_mismatch: Arc::new(AtomicBool::new(false)),
             submitted: AtomicU64::new(0),
             processed: Arc::new(AtomicU64::new(0)), observations: Arc::new(Mutex::new(Vec::new())),
@@ -280,11 +289,37 @@ mod tests {
     }
 
     #[test]
+    fn panicked_silero_cpu_join_remains_unverified_across_retry_stop() {
+        let handle = thread::spawn(|| panic!("simulated Silero worker panic"));
+        let queue = Arc::new(PcmHandoff::new(
+            "panicked-silero", PcmLane::Incoming, 1, 16_000,
+        ).expect("bounded test PCM queue"));
+        let mut cpu = SpeechIngress {
+            session: "panicked-silero".to_string(),
+            generation: None,
+            lane: LANE_INCOMING,
+            rate: 16_000,
+            queue,
+            thread: Some(handle),
+            join_failed: false,
+            fault: Arc::new(Mutex::new(None)),
+            rate_mismatch: Arc::new(AtomicBool::new(false)),
+            submitted: AtomicU64::new(0),
+            processed: Arc::new(AtomicU64::new(0)),
+            observations: Arc::new(Mutex::new(Vec::new())),
+        };
+        assert!(!cpu.stop());
+        assert!(cpu.join_failed);
+        assert!(cpu.thread.is_none());
+        assert!(!cpu.stop(), "consumed failed join is not verified cleanup");
+    }
+
+    #[test]
     fn rate_mismatch_callback_does_not_wait_for_fault_diagnostics_lock() {
         let queue = Arc::new(PcmHandoff::new("rate-mismatch", PcmLane::Incoming, 1, 16_000).unwrap());
         let cpu = SpeechIngress {
             session: "rate-mismatch".to_string(), generation: None, lane: LANE_INCOMING,
-            rate: 16_000, queue: Arc::clone(&queue), thread: None,
+            rate: 16_000, queue: Arc::clone(&queue), thread: None, join_failed: false,
             fault: Arc::new(Mutex::new(None)), rate_mismatch: Arc::new(AtomicBool::new(false)),
             submitted: AtomicU64::new(0), processed: Arc::new(AtomicU64::new(0)),
             observations: Arc::new(Mutex::new(Vec::new())),

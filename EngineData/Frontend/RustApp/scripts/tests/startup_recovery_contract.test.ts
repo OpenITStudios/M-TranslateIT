@@ -42,6 +42,22 @@ const meetingPlayback = readFileSync(
   new URL("../../src-tauri/src/commands/meeting_session/playback_runtime.rs", import.meta.url),
   "utf8",
 );
+const sileroProducer = readFileSync(
+  new URL("../../src-tauri/src/engine/audio/finalized_utterance.rs", import.meta.url),
+  "utf8",
+);
+const sileroCpu = readFileSync(
+  new URL("../../src-tauri/src/engine/audio/speech_ingress.rs", import.meta.url),
+  "utf8",
+);
+const finalizedWav = readFileSync(
+  new URL("../../src-tauri/src/engine/audio/live_segment_writer.rs", import.meta.url),
+  "utf8",
+);
+const ttsPipeline = readFileSync(
+  new URL("../../src-tauri/src/commands/meeting_session/outbound_pipeline.rs", import.meta.url),
+  "utf8",
+);
 
 test("startup recovery never resumes Meeting and cleans only bounded cache namespaces", () => {
   assert.match(bootstrap, /begin_startup_recovery/);
@@ -358,7 +374,9 @@ test("orphan Meeting consumers and playback keep exact native ownership through 
   const deferred = idleStop.indexOf("let deferred_cleanup = if orphan_consumers_cleanup.is_ok()");
   const completed = idleStop.indexOf('state: "already_stopped".to_string()');
   assert.ok(consumers >= 0 && playback > consumers && deferred > playback && completed > deferred);
-  assert.match(idleStop, /if orphan_consumers_cleanup\.is_ok\(\) && orphan_playback_cleanup\.is_ok\(\)/);
+  assert.match(idleStop, /let deferred_cleanup = if orphan_consumers_cleanup\.is_ok\(\)/);
+  assert.match(idleStop, /&& producer_cleanup\.is_ok\(\)/);
+  assert.match(idleStop, /let temporary_wav_cleanup: Result<\(usize, usize\), String>/);
   assert.match(idleStop, /\|\| orphan_consumers_cleanup\.is_err\(\)/);
   assert.match(idleStop, /\|\| orphan_playback_cleanup\.is_err\(\)/);
   assert.match(idleStop, /STOP_CLEANUP_PENDING\.store\(true, Ordering::Release\)/);
@@ -380,4 +398,54 @@ test("orphan Meeting consumers and playback keep exact native ownership through 
     assert.ok(meetingConsumers.includes("fn " + name + "()")
       || meetingPlayback.includes("fn " + name + "()"), name);
   }
+});
+
+test("Silero CPU, finalized session identity, and temporary WAV release remain owned through Retry Stop", () => {
+  assert.match(sileroCpu, /join_failed: bool/);
+  assert.match(sileroCpu, /if self\.join_failed \{\s*return false/);
+  assert.match(sileroCpu, /self\.join_failed \|= !joined/);
+  assert.match(sileroCpu, /fn panicked_silero_cpu_join_remains_unverified_across_retry_stop\(\)/);
+  assert.match(sileroProducer, /pub fn finalized_orphan_producer_owners\(\) -> Result<FinalizedOrphanProducerOwners, String>/);
+  assert.match(sileroProducer, /pub fn inactive_finalized_meeting_producers_may_need_stop\(\) -> bool/);
+  assert.match(sileroProducer, /sync\.ingress\.try_read\(\)/);
+  assert.match(sileroProducer, /sync\.state\.try_lock\(\)/);
+  assert.match(sileroProducer, /silero:producer_cpu_owner_mismatch/);
+  assert.match(sileroProducer, /silero:orphan_session_owner_mismatch/);
+  assert.match(sileroProducer, /pub fn clear_finalized_meeting_sequence_for_session\(session_id: &str\) -> bool/);
+
+  const stop = meetingLifecycle.slice(
+    meetingLifecycle.indexOf("pub(super) fn stop_meeting_translation_impl()"),
+    meetingLifecycle.indexOf("pub(super) fn meeting_cleanup_complete("),
+  );
+  const producerIdentity = stop.indexOf("let orphan_producers = finalized_orphan_producer_owners()");
+  const consumers = stop.indexOf("let orphan_consumers_cleanup = finish_orphaned_meeting_consumers_without_session()");
+  const producerCleanup = stop.indexOf("let producer_cleanup: Result<(), String>");
+  const deferred = stop.indexOf("let deferred_cleanup = if orphan_consumers_cleanup.is_ok()");
+  const wav = stop.indexOf("let temporary_wav_cleanup: Result<(usize, usize), String>");
+  const sequence = stop.indexOf("let sequence_cleanup_ok = temporary_wav_cleanup.is_ok()");
+  const completed = stop.indexOf('state: "already_stopped".to_string()');
+  assert.ok(producerIdentity >= 0 && producerIdentity < consumers && consumers < producerCleanup
+    && producerCleanup < deferred && deferred < wav && wav < sequence && sequence < completed,
+    "Stop must retain original session identity until producer/CPU/WAV release is verified");
+  assert.match(stop, /clear_finalized_outbound_utterance_producer_for_generation/);
+  assert.match(stop, /clear_finalized_incoming_utterance_producer_for_session/);
+  assert.match(stop, /cleanup_finalized_meeting_session_wavs\(session_id\)/);
+  assert.match(stop, /cleanup_meeting_tts_for_idle_session\(session_id\)/);
+  assert.match(stop, /\|\| producer_cleanup\.is_err\(\)/);
+  assert.match(stop, /\|\| temporary_wav_cleanup\.is_err\(\)/);
+  assert.match(stop, /\|\| !sequence_cleanup_ok/);
+  assert.match(meetingLifecycle, /inactive_finalized_meeting_producers_may_need_stop\(\)/);
+  assert.doesNotMatch(meetingLifecycle, /clear_finalized_meeting_sequence\(\);/);
+  assert.match(meetingLifecycle, /let sequence_cleanup_ok = released_resources\s*&& clear_finalized_meeting_sequence_for_session\(&session_id\)/);
+  assert.match(meetingLifecycle, /let cleanup_ok = released_resources\s*&& clear_finalized_meeting_sequence_for_session\(session_id\)/);
+
+  assert.match(finalizedWav, /fn finalized_wav_belongs_to_session\(/);
+  assert.match(finalizedWav, /session_component != session_id/);
+  assert.match(finalizedWav, /strip_suffix\("\.wav\.tmp"\)/);
+  assert.match(finalizedWav, /another session with a common prefix must survive/);
+  assert.match(ttsPipeline, /pub\(super\) fn cleanup_meeting_tts_for_idle_session\(session_id: &str\)/);
+  assert.match(ttsPipeline, /fn session_tts_filename_matches\(/);
+  assert.match(ttsPipeline, /fn idle_session_tts_cleanup_handles_all_generations_but_no_other_session\(\)/);
+  assert.match(shutdown, /meeting_stop_cleanup_pending\(\)/);
+  assert.match(shutdown, /shutdown_helper\(\) && mark_clean\(\)/);
 });
