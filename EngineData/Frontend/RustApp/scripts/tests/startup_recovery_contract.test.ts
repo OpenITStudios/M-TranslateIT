@@ -150,3 +150,34 @@ test("I/O thread admission and retries cannot erase failed join evidence", () =>
   assert.match(helper, /return fail_start_after_spawn\(\s*&mut runtime,[\s\S]*?"helper_bridge:stderr_logger_spawn_failed"/);
 });
 
+
+test("worker restart admission is native, generation-scoped, and updater-safe", () => {
+  const internal = helper.slice(
+    helper.indexOf("fn start_helper_bridge_internal("),
+    helper.indexOf("pub fn start_helper_bridge()"),
+  );
+  const publicStart = helper.slice(
+    helper.indexOf("pub fn start_helper_bridge()"),
+    helper.indexOf("pub(crate) fn shutdown_helper_bridge_for_app_exit()"),
+  );
+  assert.match(helper, /fn public_worker_start_has_idle_audio_owner\(\) -> bool/);
+  assert.match(helper, /latest_runtime_session_state\(\)/);
+  assert.match(helper, /state\.blocker == "runtime_session:no_active_session"/);
+  assert.match(publicStart, /let _update_admission = match admit_app_runtime_operation\(\)/);
+  assert.match(publicStart, /if !public_worker_start_has_idle_audio_owner\(\)/);
+  assert.match(publicStart, /start_helper_bridge_internal\(true, None\)/);
+  assert.match(internal, /if clear_outbound_pipeline && !public_worker_start_has_idle_audio_owner\(\)/);
+  assert.match(internal, /if !worker_restart_generation_allowed\(recovery_generation\)/);
+  assert.match(internal, /helper_restart_denied_stale_meeting_generation/);
+  assert.match(internal, /helper_restart_denied_after_cleanup_generation_revoke/);
+
+  const recheck = internal.indexOf("helper_restart_denied_after_cleanup_generation_revoke");
+  const markerReset = internal.indexOf("clear_any_meeting_outbound_pipeline();");
+  const spawn = internal.indexOf("let child = match command.spawn()");
+  assert.ok(recheck > 0 && markerReset > recheck && spawn > markerReset,
+    "a revoked Meeting generation cannot clear live admission or spawn a replacement worker");
+  assert.match(transport, /start_helper_bridge_internal\(false, Some\(generation\)\)/);
+  assert.match(helper, /fn direct_helper_start_cannot_restart_while_mic_test_owns_audio\(\)/);
+  assert.match(helper, /fn update_installer_reservation_blocks_direct_helper_start\(\)/);
+  assert.match(helper, /fn live_recovery_requires_current_generation_even_inside_helper_lock\(\)/);
+});

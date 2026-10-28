@@ -7,7 +7,10 @@ use std::sync::TryLockError;
 use crate::commands::diagnostic_trace::{
     trace_command_end, trace_command_error, trace_command_start,
 };
-use crate::engine::runtime_state::runtime_generation_is_authoritative;
+use crate::engine::runtime_state::{
+    admit_app_runtime_operation, latest_runtime_session_state,
+    runtime_generation_is_authoritative,
+};
 
 use super::bridge_paths::{
     helper_stderr_log_path, resolve_worker_python_command, slash_path,
@@ -35,6 +38,7 @@ use functional_readiness::{
 pub use functional_readiness::required_outbound_voice_actor_token;
 use request_policy::{
     clear_any_meeting_outbound_pipeline, clear_meeting_outbound_pipeline_for_session,
+    live_outbound_generation_is_authoritative,
 };
 
 const STARTUP_PING_REQUEST_ID: &str = "helper-startup-ping";
@@ -275,9 +279,66 @@ fn fail_start_after_spawn(
     set_blocked(runtime, message, code)
 }
 
-fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeActionResult {
+// User/setup worker start must not replace the one Python helper while the
+// canonical audio session is active, cleanup-unverified or unavailable.
+// This owner gate is required even for direct helper_bridge callers that
+// bypass the commands/runtime.rs facade.
+fn public_worker_start_has_idle_audio_owner() -> bool {
+    let state = latest_runtime_session_state();
+    !state.has_active_session
+        && state.snapshot.is_none()
+        && state.blocker == "runtime_session:no_active_session"
+}
+
+// A Live Meeting recovery is the ONLY internal helper restart allowed while
+// a Meeting session is active. Recheck its exact generation under the helper
+// mutex, after the scheduler wait and again before process creation.
+fn worker_restart_generation_allowed(recovery_generation: Option<u64>) -> bool {
+    recovery_generation
+        .map(live_outbound_generation_is_authoritative)
+        .unwrap_or(true)
+}
+
+fn helper_start_denied(
+    state: &str,
+    message: &str,
+    claim: &str,
+    generation_token: u64,
+) -> HelperBridgeActionResult {
+    HelperBridgeActionResult {
+        ok: false,
+        state: state.to_string(),
+        message: message.to_string(),
+        generation_token,
+        runtime_claim: claim.to_string(),
+    }
+}
+
+fn start_helper_bridge_internal(
+    clear_outbound_pipeline: bool,
+    recovery_generation: Option<u64>,
+) -> HelperBridgeActionResult {
     match runtime().lock() {
         Ok(mut runtime) => {
+            // The public caller checked before waiting for the helper mutex.
+            // A Meeting/Mic Test/recording may have claimed runtime authority
+            // in the interim; do not mutate its worker or outbound admission.
+            if clear_outbound_pipeline && !public_worker_start_has_idle_audio_owner() {
+                return helper_start_denied(
+                    "active_runtime_session",
+                    "Finish the active or unverified audio session before starting or restarting the local helper.",
+                    "helper_start_denied_runtime_session_not_verified_empty",
+                    runtime.generation_token,
+                );
+            }
+            if !worker_restart_generation_allowed(recovery_generation) {
+                return helper_start_denied(
+                    "stale_generation",
+                    "Live Meeting helper recovery was rejected because the original Meeting generation no longer owns authority.",
+                    "helper_restart_denied_stale_meeting_generation",
+                    runtime.generation_token,
+                );
+            }
             // A competing Start may have completed while this caller waited.
             // Recheck process liveness under the single authoritative mutex.
             if runtime.state == "ready"
@@ -294,16 +355,46 @@ fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeAc
                     "helper_bridge:cleanup_incomplete",
                 );
             }
-            // Clearing the Meeting admission marker is permitted only after
-            // the previous owned resources have actually been released.
-            if clear_outbound_pipeline {
-                clear_any_meeting_outbound_pipeline();
-            }
             runtime.active_task = None;
             runtime.active_request_id = None;
             runtime.active_meeting_generation = None;
             runtime.active_meeting_session_id = None;
             runtime.active_meeting_lane = None;
+
+            // stop_child can consume the bounded cleanup budget. Recheck
+            // native ownership after it, BEFORE clearing Meeting outbound
+            // admission or starting a replacement Python worker.
+            if clear_outbound_pipeline && !public_worker_start_has_idle_audio_owner() {
+                runtime.state = "stopped".to_string();
+                runtime.message = "The native audio owner changed while the old helper was being cleaned up.".to_string();
+                runtime.provider_ready = false;
+                runtime.cuda_ready = false;
+                runtime.updated_unix_ms = unix_ms();
+                return helper_start_denied(
+                    "active_runtime_session",
+                    "Worker restart was rejected because an audio session claimed authority during helper cleanup.",
+                    "helper_start_denied_after_cleanup_runtime_owner_change",
+                    runtime.generation_token,
+                );
+            }
+            if !worker_restart_generation_allowed(recovery_generation) {
+                runtime.state = "stopped".to_string();
+                runtime.message = "Live Meeting helper recovery was revoked before Python startup.".to_string();
+                runtime.provider_ready = false;
+                runtime.cuda_ready = false;
+                runtime.updated_unix_ms = unix_ms();
+                return helper_start_denied(
+                    "stale_generation",
+                    "The Meeting generation was revoked during helper cleanup; no replacement worker was started.",
+                    "helper_restart_denied_after_cleanup_generation_revoke",
+                    runtime.generation_token,
+                );
+            }
+            // The marker is shared with live outbound scheduling; never
+            // clear it on a stale/losing helper start admission.
+            if clear_outbound_pipeline {
+                clear_any_meeting_outbound_pipeline();
+            }
 
             let worker = worker_script();
             if !worker.is_file() {
@@ -498,6 +589,26 @@ fn start_helper_bridge_internal(clear_outbound_pipeline: bool) -> HelperBridgeAc
 }
 
 pub fn start_helper_bridge() -> HelperBridgeActionResult {
+    // Unlike the special generation-scoped Live recovery, ordinary worker
+    // startup owns an updater operation permit for its entire cold import.
+    // It must not start while an update is installing or being downloaded.
+    let _update_admission = match admit_app_runtime_operation() {
+        Ok(permit) => permit,
+        Err(_) => return helper_start_denied(
+            "update_installing",
+            "A TranslateIT update is in progress. Worker startup remains blocked until installation completes.",
+            "helper_start_denied_update_installing",
+            0,
+        ),
+    };
+    if !public_worker_start_has_idle_audio_owner() {
+        return helper_start_denied(
+            "active_runtime_session",
+            "Finish the current Meeting, Mic Test or recording cleanup before restarting the local helper.",
+            "helper_start_denied_runtime_session_not_verified_empty",
+            0,
+        );
+    }
     let current = get_helper_bridge_status();
     if current.state == "ready" {
         return HelperBridgeActionResult {
@@ -518,7 +629,7 @@ pub fn start_helper_bridge() -> HelperBridgeActionResult {
             runtime_claim: current.runtime_claim,
         };
     }
-    start_helper_bridge_internal(true)
+    start_helper_bridge_internal(true, None)
 }
 
 pub(crate) fn shutdown_helper_bridge_for_app_exit() -> bool {
@@ -628,6 +739,107 @@ pub async fn helper_bridge_worker_status() -> Result<HelperBridgeWorkerResponse,
     tauri::async_runtime::spawn_blocking(|| send_worker_task("status", json!({})))
         .await
         .map_err(|_| "Worker status probe was interrupted.".to_string())
+}
+
+#[cfg(test)]
+mod worker_restart_admission_tests {
+    use super::{
+        public_worker_start_has_idle_audio_owner, runtime, start_helper_bridge,
+        start_helper_bridge_internal, worker_restart_generation_allowed,
+    };
+    use super::super::helper_bridge_runtime::{stop_child, HelperBridgeRuntime};
+    use crate::engine::runtime_state::{
+        begin_application_meeting_session, begin_mic_test_session,
+        clear_runtime_session_if_generation, clear_runtime_session_state,
+        commit_application_meeting_session_live, reserve_app_update_install,
+        revoke_runtime_session_authority, runtime_test_guard,
+    };
+
+    fn reset_worker() {
+        let mut owner = runtime().lock().expect("canonical helper lock");
+        assert!(stop_child(&mut owner), "do not discard an unjoined helper");
+        *owner = HelperBridgeRuntime::default();
+    }
+
+    #[test]
+    fn direct_helper_start_cannot_restart_while_mic_test_owns_audio() {
+        let _serial = runtime_test_guard();
+        let _ = clear_runtime_session_state();
+        reset_worker();
+
+        let claimed = begin_mic_test_session();
+        assert!(claimed.blocker.is_empty());
+        let generation = claimed.snapshot.expect("mic test owner").generation;
+        assert!(!public_worker_start_has_idle_audio_owner());
+
+        // Direct helper API and product intents share this native admission.
+        let denied = start_helper_bridge();
+        assert!(!denied.ok);
+        assert_eq!(denied.state, "active_runtime_session");
+        let owner = runtime().lock().expect("helper status after denied start");
+        assert!(owner.child.is_none());
+        assert_eq!(owner.generation_token, 0);
+        drop(owner);
+
+        assert_eq!(
+            clear_runtime_session_if_generation(generation).blocker,
+            "runtime_session:cleared",
+        );
+        assert!(public_worker_start_has_idle_audio_owner());
+        reset_worker();
+    }
+
+    #[test]
+    fn update_installer_reservation_blocks_direct_helper_start() {
+        let _serial = runtime_test_guard();
+        let _ = clear_runtime_session_state();
+        reset_worker();
+
+        let update = reserve_app_update_install(|| None).expect("idle update permit");
+        let denied = start_helper_bridge();
+        assert!(!denied.ok);
+        assert_eq!(denied.state, "update_installing");
+        assert!(runtime().lock().expect("helper owner").child.is_none());
+        drop(update);
+        reset_worker();
+    }
+
+    #[test]
+    fn live_recovery_requires_current_generation_even_inside_helper_lock() {
+        let _serial = runtime_test_guard();
+        let _ = clear_runtime_session_state();
+        reset_worker();
+
+        let denied = start_helper_bridge_internal(false, Some(741));
+        assert!(!denied.ok);
+        assert_eq!(denied.state, "stale_generation");
+        assert_eq!(runtime().lock().expect("helper owner").generation_token, 0);
+
+        let started = begin_application_meeting_session();
+        assert!(started.blocker.is_empty());
+        let generation = started.snapshot.expect("meeting owner").generation;
+        let live = commit_application_meeting_session_live(
+            generation, false, "test-only live authority without starting audio",
+        );
+        assert!(live.blocker.is_empty());
+        assert!(worker_restart_generation_allowed(Some(generation)));
+
+        let revoked = revoke_runtime_session_authority(
+            generation, "test revoked Live recovery generation",
+        );
+        assert!(revoked.snapshot.is_some());
+        assert!(!worker_restart_generation_allowed(Some(generation)));
+        let denied = start_helper_bridge_internal(false, Some(generation));
+        assert!(!denied.ok);
+        assert_eq!(denied.state, "stale_generation");
+        assert!(runtime().lock().expect("helper status").child.is_none());
+
+        assert_eq!(
+            clear_runtime_session_if_generation(generation).blocker,
+            "runtime_session:cleared",
+        );
+        reset_worker();
+    }
 }
 
 #[cfg(test)]

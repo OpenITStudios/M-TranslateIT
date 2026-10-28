@@ -627,7 +627,10 @@ fn recover_live_meeting_helper_transport(
         };
     }
 
-    let mut recovery = start_helper_bridge_internal(false);
+    // The scheduler preflight is not atomic with helper mutex acquisition.
+    // Pin the Live Meeting generation again under the helper mutex before
+    // any restart side effects, not only at this caller's earlier checks.
+    let mut recovery = start_helper_bridge_internal(false, Some(generation));
     if recovery.ok && live_outbound_generation_is_authoritative(generation) {
         if retain_outbound_pipeline {
             mark_meeting_outbound_pipeline(generation);
