@@ -14,6 +14,26 @@ const helperCancellationTests = readFileSync(
   new URL("../../src-tauri/src/commands/helper_bridge_contract_tests.rs", import.meta.url),
   "utf8",
 );
+const applicationLifecycle = readFileSync(
+  new URL("../../src-tauri/src/commands/application_runtime/lifecycle.rs", import.meta.url),
+  "utf8",
+);
+const resources = readFileSync(
+  new URL("../../src-tauri/src/commands/application_runtime/resources.rs", import.meta.url),
+  "utf8",
+);
+const closePolicy = readFileSync(
+  new URL("../../src/app/runtime/closePolicy.ts", import.meta.url),
+  "utf8",
+);
+const closeController = readFileSync(
+  new URL("../../src/app/runtime/closeController.ts", import.meta.url),
+  "utf8",
+);
+const meetingSound = readFileSync(
+  new URL("../../src-tauri/src/engine/audio/meeting_sound_capture.rs", import.meta.url),
+  "utf8",
+);
 
 test("startup recovery never resumes Meeting and cleans only bounded cache namespaces", () => {
   assert.match(bootstrap, /begin_startup_recovery/);
@@ -215,7 +235,8 @@ test("Meeting Stop helper cancellation is bounded and only its matching retry ma
   );
   assert.match(helperRuntime, /pub pending_meeting_cleanup_session_id: Option<String>/);
   assert.match(cleanup, /runtime\.pending_meeting_cleanup_session_id = runtime\.active_meeting_session_id\.clone\(\)/);
-  assert.match(cleanup, /runtime\.pending_meeting_cleanup_session_id = None;\s*return true/);
+  assert.doesNotMatch(cleanup, /runtime\.pending_meeting_cleanup_session_id = None;/);
+  assert.match(helper, /owner\.pending_meeting_cleanup_session_id = None;/);
   assert.match(meetingLifecycle, /let helper_cancel = cancel_helper_bridge_meeting_session\(&session_id\)/);
   assert.match(meetingLifecycle, /helper_cancel\.ok/);
   assert.match(meetingLifecycle, /mark_runtime_session_cleanup_incomplete/);
@@ -227,5 +248,69 @@ test("Meeting Stop helper cancellation is bounded and only its matching retry ma
   ]) {
     assert.ok(helperCancellationTests.includes("fn " + fixture)
       || helperRuntime.includes("fn " + fixture), fixture + " must remain covered");
+  }
+});
+
+test("no-snapshot Meeting orphan must be reconciled before native Stop and Close can succeed", () => {
+  assert.match(helper, /pub\(crate\) fn meeting_helper_orphan_cleanup_pending\(\) -> bool/);
+  assert.match(helper, /pub\(crate\) fn finish_orphaned_meeting_helper_without_session\(\) -> Result<\(\), &'static str>/);
+  assert.match(helper, /helper_orphan:owner_busy/);
+  assert.match(helper, /helper_orphan:cleanup_incomplete/);
+  assert.match(helper, /let meeting_owned = owner\.pending_meeting_cleanup_session_id\.is_some\(\)/);
+  assert.match(helper, /if !meeting_owned \{/);
+  assert.match(helper, /helper_bridge:orphan_meeting_cleanup_verified/);
+
+  const helperShutdown = helper.slice(
+    helper.indexOf("pub(crate) fn shutdown_helper_bridge_for_app_exit()"),
+    helper.indexOf("pub fn cancel_helper_bridge_meeting_session("),
+  );
+  assert.match(helperShutdown, /runtime\.pending_meeting_cleanup_session_id\.is_some\(\)/);
+  assert.match(helperShutdown, /runtime\.active_meeting_session_id\.is_some\(\)/);
+
+  const stop = meetingLifecycle.slice(
+    meetingLifecycle.indexOf("pub(super) fn stop_meeting_translation_impl()"),
+    meetingLifecycle.indexOf("pub(super) fn meeting_cleanup_complete("),
+  );
+  const orphanCleanup = stop.indexOf("finish_orphaned_meeting_helper_without_session()");
+  const orphanFailed = stop.indexOf("if orphan_helper_cleanup.is_err()");
+  const alreadyStopped = stop.indexOf('state: "already_stopped".to_string()');
+  assert.ok(orphanCleanup >= 0 && orphanCleanup < orphanFailed && orphanFailed < alreadyStopped);
+  assert.match(stop, /STOP_CLEANUP_PENDING\.store\(true, Ordering::Release\)/);
+  assert.match(meetingLifecycle, /meeting_helper_orphan_cleanup_pending\(\)/);
+  assert.match(meetingLifecycle, /inactive_writer_may_need_stop\(\)/);
+  assert.match(meetingLifecycle, /inactive_meeting_sound_capture_may_need_stop\(\)/);
+  assert.match(meetingSound, /pub fn inactive_meeting_sound_capture_may_need_stop\(\) -> bool/);
+  assert.match(meetingSound, /store\.try_lock\(\)\.map\(\|guard\| guard\.is_some\(\)\)\.unwrap_or\(true\)/);
+
+  assert.match(resources, /let orphan_cleanup = !meeting\.has_session && meeting\.lifecycle == "cleanup_incomplete"/);
+  assert.match(applicationLifecycle, /if meeting\.lifecycle == "cleanup_incomplete" \{/);
+  assert.match(closePolicy, /snapshot\.lifecycle === "cleanup_incomplete"/);
+  assert.match(closePolicy, /snapshot\.lifecycle === "checking"/);
+  assert.match(closeController, /verdict\.orphanCleanup/);
+  assert.match(shutdown, /meeting_stop_cleanup_pending\(\)/);
+  assert.match(shutdown, /shutdown_helper\(\) && mark_clean\(\)/);
+  assert.match(helperRuntime, /pub pending_meeting_cleanup_session_id: Option<String>/);
+  assert.match(helper, /let meeting_cleanup_pending =\s*runtime\.pending_meeting_cleanup_session_id\.is_some\(\)/);
+  assert.match(helper, /helper_start_denied_orphan_meeting_cleanup/);
+  assert.match(helper, /helper_bridge:stale_generation_during_startup/);
+  const workerStart = helper.slice(
+    helper.indexOf("fn start_helper_bridge_internal("),
+    helper.indexOf("pub fn start_helper_bridge()"),
+  );
+  const lateGenerationCheck = workerStart.lastIndexOf("if !worker_restart_generation_allowed(recovery_generation)");
+  const handoff = workerStart.indexOf("runtime.pending_meeting_cleanup_session_id = None;");
+  const workerReady = workerStart.indexOf('runtime.state = "ready".to_string();');
+  assert.ok(lateGenerationCheck >= 0 && handoff > lateGenerationCheck && workerReady > handoff,
+    "a revoked Live generation during Python cold startup may not clear orphan attribution or report Ready");
+  assert.match(helperRuntime, /reaping I\/O cannot release the owning Meeting's Stop transaction/);
+
+  for (const fixture of [
+    "orphaned_meeting_helper_blocks_native_close_until_no_snapshot_retry_stop",
+    "no_snapshot_meeting_stop_does_not_terminate_standalone_worker",
+    "no_snapshot_orphan_cleanup_never_waits_for_busy_helper_lock",
+    "orphan_helper_cleanup_does_not_take_over_active_mic_test",
+    "public_worker_restart_cannot_erase_orphaned_meeting_attribution",
+  ]) {
+    assert.ok(helperCancellationTests.includes("fn " + fixture), fixture);
   }
 });

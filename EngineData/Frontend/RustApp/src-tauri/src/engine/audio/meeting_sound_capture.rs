@@ -384,6 +384,15 @@ fn stop_meeting_sound_capture_runtime_owned(
     }
 }
 
+// Native Meeting Stop/ExitRequested must not infer a clean idle session
+// while an orphan Meeting Sound capture (including a timed-out Stop thread)
+// still owns this store. This read is nonblocking and conservative on
+// contention/poison; it never opens a device or mutates the capture owner.
+pub fn inactive_meeting_sound_capture_may_need_stop() -> bool {
+    let store = MEETING_SOUND_CAPTURE_RUNTIME.get_or_init(|| Mutex::new(None));
+    store.try_lock().map(|guard| guard.is_some()).unwrap_or(true)
+}
+
 pub fn meeting_sound_capture_status() -> MeetingSoundCaptureStatus {
     let store = MEETING_SOUND_CAPTURE_RUNTIME.get_or_init(|| Mutex::new(None));
     match store.lock() {
@@ -746,6 +755,17 @@ mod isolation_tests {
         assert_eq!(status.pcm_drop_count, 4);
         assert_eq!(status.blocker, "silero:pcm_poisoned");
         assert_eq!(build_status_with_capture_health(None, 4, None).pcm_drop_count, 0);
+    }
+
+    #[test]
+    fn contended_meeting_sound_owner_is_not_reported_as_clean_for_close() {
+        use super::*;
+        let _serial = crate::engine::runtime_state::runtime_test_guard();
+        let store = MEETING_SOUND_CAPTURE_RUNTIME.get_or_init(|| Mutex::new(None));
+        let held = store.lock().expect("Meeting Sound capture test lock");
+        assert!(inactive_meeting_sound_capture_may_need_stop(),
+            "native ExitRequested cannot certify a contended capture store");
+        drop(held);
     }
 
     #[test]

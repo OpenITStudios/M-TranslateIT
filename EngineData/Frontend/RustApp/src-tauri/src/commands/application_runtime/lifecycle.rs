@@ -22,6 +22,13 @@ pub fn derive_lifecycle(summaries: &ApplicationSubsystemSummaries) -> String {
         }
     }
 
+    // No active session does not imply clean Meeting resources. Project the
+    // existing orphan cleanup truth before generic Ready/Setup readiness, so
+    // the Close UI can offer Retry Stop instead of closing optimistically.
+    if meeting.lifecycle == "cleanup_incomplete" {
+        return "cleanup_incomplete".to_string();
+    }
+
     if summaries.voice.build_active {
         return match summaries.voice.build_phase.as_str() {
             "cancelling" => "voice_build_stopping".to_string(),
@@ -136,6 +143,17 @@ mod tests {
         let mut status = summaries("idle", false, None, false, true, false);
         status.worker.state = "checking".to_string();
         assert_eq!(derive_lifecycle(&status), "checking");
+    }
+
+    #[test]
+    fn orphan_meeting_cleanup_takes_priority_over_ready_without_a_session() {
+        let mut state = summaries("cleanup_incomplete", false, None, true, true, false);
+        assert_eq!(derive_lifecycle(&state), "cleanup_incomplete");
+        state.worker.state = "checking".to_string();
+        assert_eq!(derive_lifecycle(&state), "cleanup_incomplete");
+        state.worker.state = "ready".to_string();
+        state.voice.build_active = true;
+        assert_eq!(derive_lifecycle(&state), "cleanup_incomplete");
     }
 
     #[test]

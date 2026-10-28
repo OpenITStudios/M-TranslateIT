@@ -53,6 +53,41 @@ test("destroys immediately when no shared audio resource is owned", () => {
   assert.deepEqual(verdict({ audioLocked: false, ownerKind: "none", lifecycle: "ready" }), { kind: "destroy" });
 });
 
+test("Checking helper must be rechecked before a no-audio close", () => {
+  const pending = verdict({
+    audioLocked: false,
+    ownerKind: "none",
+    lifecycle: "checking",
+  });
+  assert.equal(pending.kind, "dialog");
+  assert.equal(pending.kind === "dialog" ? pending.action : null, "retry");
+});
+
+test("orphaned Meeting cleanup requests Retry Stop even without active audio owner", () => {
+  assert.deepEqual(verdict({
+    audioLocked: true,
+    ownerKind: "none",
+    lifecycle: "cleanup_incomplete",
+  }), { kind: "stop-and-close", orphanCleanup: true });
+
+  // A stale inconsistent audio flag cannot override native cleanup truth.
+  assert.deepEqual(verdict({
+    audioLocked: false,
+    ownerKind: "none",
+    lifecycle: "cleanup_incomplete",
+  }), { kind: "stop-and-close", orphanCleanup: true });
+});
+
+test("unverified native state still blocks instead of promising orphan cleanup", () => {
+  const blocked = verdict({
+    ownerKind: "none",
+    lifecycle: "cleanup_incomplete",
+    runtimeUnavailable: true,
+  });
+  assert.equal(blocked.kind, "dialog");
+});
+
+
 test("blocks close when audio belongs to another action", () => {
   assert.equal(verdict({ ownerKind: "mic_test", lifecycle: "mic_test_live" }).kind, "dialog");
   assert.equal(verdict({ ownerKind: "voice_recording", lifecycle: "voice_recording_live" }).kind, "dialog");

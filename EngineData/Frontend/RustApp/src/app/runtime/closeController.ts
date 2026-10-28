@@ -57,8 +57,10 @@ export function createCloseController(): {
     }
     if (verdict.kind === "stop-and-close") {
       showDialog(
-        "Translation is still running",
-        "Stop & Close ends Meeting translation safely before closing TranslateIT.",
+        verdict.orphanCleanup ? "Meeting cleanup is incomplete" : "Translation is still running",
+        verdict.orphanCleanup
+          ? "Retry Stop to release the previous Meeting resources before closing TranslateIT."
+          : "Stop & Close ends Meeting translation safely before closing TranslateIT.",
         "stop",
       );
       return;

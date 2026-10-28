@@ -109,9 +109,10 @@ pub struct HelperBridgeRuntime {
     // A panicked I/O owner must not be forgotten by a later cleanup attempt,
     // which could otherwise mistake missing handles for verified clean exit.
     pub io_thread_join_failed: bool,
-    // A failed helper cleanup may outlive the active-request metadata, which
-    // set_blocked/transport clear. Preserve its original Meeting session ID
-    // for an exact, session-scoped Retry Stop on the same runtime owner.
+    // A failed or reaped helper may outlive the Meeting audio/transcript
+    // cleanup transaction. Preserve its original Meeting session ID until
+    // Meeting Stop (or an authorized same-generation Live recovery) confirms
+    // release; read-only status/transport may NOT erase this attribution.
     pub pending_meeting_cleanup_session_id: Option<String>,
     pub updated_unix_ms: u128,
     pub child: Option<Child>,
@@ -691,9 +692,12 @@ fn stop_child_with_budget(runtime: &mut HelperBridgeRuntime, budget: Duration) -
                 && runtime.stdout_reader.is_none()
                 && runtime.stderr_logger.is_none()
             {
-                // No process or I/O owner remains; a future Retry Stop must
-                // not inherit the released session's attribution.
-                runtime.pending_meeting_cleanup_session_id = None;
+                // Process and I/O thread release is only one part of Meeting
+                // Stop. Do NOT clear pending_meeting_cleanup_session_id here:
+                // status probes and transport failure handling also call
+                // stop_child, but cannot certify Meeting audio/transcript
+                // cleanup. Only the owning Meeting Stop or authorized Live
+                // generation recovery may release that attribution.
                 return true;
             }
         }
@@ -1098,7 +1102,11 @@ mod stderr_lifecycle_tests {
 
         release.send(()).expect("release owned stderr reader");
         assert!(stop_child_with_budget(&mut runtime, Duration::from_secs(1)));
-        assert!(runtime.pending_meeting_cleanup_session_id.is_none());
+        assert_eq!(
+            runtime.pending_meeting_cleanup_session_id.as_deref(),
+            Some("meeting-session-a"),
+            "reaping I/O cannot release the owning Meeting's Stop transaction",
+        );
         assert!(runtime.stderr_logger.is_none());
     }
 

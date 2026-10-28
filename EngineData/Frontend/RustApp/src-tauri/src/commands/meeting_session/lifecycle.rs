@@ -13,7 +13,9 @@ use crate::engine::audio::meeting_output::{
     cancel_meeting_output_for_generation, stop_original_voice_output, start_original_voice_output, clear_prepared_meeting_output_device,
     prepare_meeting_output_device, probe_prepared_meeting_output_device_functionally,
 };
-use crate::engine::audio::meeting_sound_capture::stop_meeting_sound_capture_runtime;
+use crate::engine::audio::meeting_sound_capture::{
+    inactive_meeting_sound_capture_may_need_stop, stop_meeting_sound_capture_runtime,
+};
 use crate::engine::runtime_state::{
     begin_application_meeting_session, clear_runtime_session_if_generation,
     commit_application_meeting_session_live,
@@ -26,7 +28,8 @@ use super::super::virtual_mic_route::{
     get_virtual_mic_route_selection,
 };
 use super::super::helper_bridge::{
-    cancel_helper_bridge_meeting_session, get_helper_bridge_status,
+    cancel_helper_bridge_meeting_session, finish_orphaned_meeting_helper_without_session,
+    get_helper_bridge_status, meeting_helper_orphan_cleanup_pending,
     prepare_required_outbound_ai_runtime, required_outbound_voice_actor_token,
     send_helper_worker_task, start_helper_bridge,
 };
@@ -97,11 +100,16 @@ pub(super) fn transient_stop_cleanup_pending() -> bool {
     if STOP_CLEANUP_PENDING.load(Ordering::Acquire) {
         return true;
     }
-    // A normal active Meeting writer is not an orphan. An idle runtime with
-    // an unreleased or unverified writer must instead expose Retry Stop.
+    // An active Meeting still owns its normal resources. Once canonical
+    // runtime authority is verifiably empty, a leftover transcript writer OR
+    // a worker carrying the old Meeting ID is an orphan. Surface the same
+    // existing Retry Stop gate; no second cleanup registry is introduced.
     let report = latest_runtime_session_state();
     !report.has_active_session && report.snapshot.is_none()
-        && super::transcript_archive::inactive_writer_may_need_stop()
+        && report.blocker == "runtime_session:no_active_session"
+        && (super::transcript_archive::inactive_writer_may_need_stop()
+            || meeting_helper_orphan_cleanup_pending()
+            || inactive_meeting_sound_capture_may_need_stop())
 }
 
 // A failed Starting transaction may release session ownership only after
@@ -787,6 +795,12 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
     }
 
     let Some(snapshot) = current.snapshot.as_ref() else {
+        // The application session snapshot may have been cleared after a
+        // partial Stop, but the canonical helper can still hold its Meeting
+        // I/O threads or worker. Stop only that verified Meeting-attributed
+        // orphan, never the generic Text/diagnostic helper. A busy/poisoned
+        // helper is unverified and must retain Retry Stop + native close gate.
+        let orphan_helper_cleanup = finish_orphaned_meeting_helper_without_session();
         clear_all_start_preflight();
         clear_prepared_meeting_output_device();
         // Meeting Sound Stop already owns and verifies incoming producer
@@ -804,13 +818,22 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
         );
         clear_outbound_status();
         clear_incoming_status();
-        if !incoming_capture_stop.ok || deferred_cleanup.is_err() || !transcript_cleanup_ok {
+        if orphan_helper_cleanup.is_err()
+            || !incoming_capture_stop.ok
+            || deferred_cleanup.is_err()
+            || !transcript_cleanup_ok
+        {
             STOP_CLEANUP_PENDING.store(true, Ordering::Release);
             return MeetingSessionActionResult {
                 ok: false,
                 state: "cleanup_incomplete".to_string(),
                 message: format!(
-                    "Translation has no active session, but transient cleanup could not be confirmed. Meeting Sound: {} Deferred queue: {} Transcript state: {}",
+                    "Translation has no active session, but orphaned resource cleanup is not fully verified. Helper: {} Meeting Sound: {} Deferred queue: {} Transcript state: {}",
+                    orphan_helper_cleanup
+                        .as_ref()
+                        .err()
+                        .copied()
+                        .unwrap_or("clean"),
                     incoming_capture_stop.message,
                     deferred_cleanup
                         .err()
@@ -824,7 +847,7 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
         return MeetingSessionActionResult {
             ok: true,
             state: "already_stopped".to_string(),
-            message: "Translation is already stopped. Stop remains idempotent and optional incoming audio state was cleared."
+            message: "Translation is already stopped. No Meeting helper orphan remains, optional incoming audio is released, and transcript writer cleanup was verified."
                 .to_string(),
             status: status_from_report(current, build_preflight()),
         };

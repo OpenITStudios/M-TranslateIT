@@ -191,16 +191,27 @@ pub fn get_helper_bridge_status() -> HelperBridgeStatus {
             if child_exited {
                 invalidate_required_outbound_ai_readiness();
                 let clean = stop_child(&mut runtime);
-                runtime.state = if clean { "stopped" } else { "blocked" }.to_string();
-                runtime.message = if clean {
-                    "Helper worker process exited.".to_string()
+                // Reaping an exited Python process is NOT permission to
+                // release the previous Meeting's Stop/cleanup attribution.
+                // Preserve it until its exact Meeting Stop verifies release.
+                let meeting_cleanup_pending =
+                    runtime.pending_meeting_cleanup_session_id.is_some();
+                runtime.state = if clean && !meeting_cleanup_pending {
+                    "stopped"
                 } else {
-                    "Helper worker exited but process/stderr cleanup is not yet verified. Retry the worker action after cleanup.".to_string()
+                    "blocked"
+                }.to_string();
+                runtime.message = if clean && !meeting_cleanup_pending {
+                    "Helper worker process exited.".to_string()
+                } else if meeting_cleanup_pending {
+                    "Helper process exited, but the previous Meeting still requires Retry Stop cleanup verification.".to_string()
+                } else {
+                    "Helper worker exited but process and I/O cleanup are not yet verified.".to_string()
                 };
                 runtime.cuda_ready = false;
                 runtime.provider_ready = false;
                 runtime.degraded_mode = false;
-                runtime.last_error = Some(if clean {
+                runtime.last_error = Some(if clean && !meeting_cleanup_pending {
                     "helper_bridge:worker_exited"
                 } else {
                     "helper_bridge:cleanup_incomplete"
@@ -339,6 +350,21 @@ fn start_helper_bridge_internal(
                     runtime.generation_token,
                 );
             }
+            // A no-snapshot Meeting orphan still owns cleanup, even though
+            // native audio session authority is now empty. Ordinary public
+            // Worker Start/Retry Worker cannot consume that attribution by
+            // restarting the process behind Meeting Retry Stop's back.
+            if clear_outbound_pipeline
+                && (runtime.pending_meeting_cleanup_session_id.is_some()
+                    || runtime.active_meeting_session_id.is_some())
+            {
+                return helper_start_denied(
+                    "cleanup_incomplete",
+                    "The previous Meeting still owns unverified helper resources. Retry Stop Translation before starting another worker.",
+                    "helper_start_denied_orphan_meeting_cleanup",
+                    runtime.generation_token,
+                );
+            }
             // A competing Start may have completed while this caller waited.
             // Recheck process liveness under the single authoritative mutex.
             if runtime.state == "ready"
@@ -390,6 +416,9 @@ fn start_helper_bridge_internal(
                     runtime.generation_token,
                 );
             }
+            // Old Meeting attribution is retained through Python startup.
+            // A revoked generation during cold import must not leave the
+            // orphan unowned or produce a stale Ready worker.
             // The marker is shared with live outbound scheduling; never
             // clear it on a stale/losing helper start admission.
             if clear_outbound_pipeline {
@@ -565,6 +594,20 @@ fn start_helper_bridge_internal(
                 ),
             };
 
+            // This may have taken many seconds in Python imports. Recheck
+            // the original Live generation immediately before publishing
+            // Ready or transferring its old pending cleanup attribution.
+            if !worker_restart_generation_allowed(recovery_generation) {
+                return fail_start_after_spawn(
+                    &mut runtime,
+                    "Live Meeting generation was revoked while the Python helper was starting; no stale worker readiness was committed.",
+                    "helper_bridge:stale_generation_during_startup",
+                );
+            }
+            if recovery_generation.is_some() {
+                runtime.pending_meeting_cleanup_session_id = None;
+            }
+
             runtime.stdin = Some(stdin);
             runtime.stdout = Some(stdout);
             runtime.state = "ready".to_string();
@@ -609,6 +652,16 @@ pub fn start_helper_bridge() -> HelperBridgeActionResult {
             0,
         );
     }
+    // A public retry must not report Ready just because a stale helper
+    // process is still alive while the old Meeting owns orphan cleanup.
+    if meeting_helper_orphan_cleanup_pending() {
+        return helper_start_denied(
+            "cleanup_incomplete",
+            "Finish the previous Meeting Retry Stop before starting the local helper.",
+            "helper_start_denied_orphan_meeting_cleanup",
+            0,
+        );
+    }
     let current = get_helper_bridge_status();
     if current.state == "ready" {
         return HelperBridgeActionResult {
@@ -632,12 +685,95 @@ pub fn start_helper_bridge() -> HelperBridgeActionResult {
     start_helper_bridge_internal(true, None)
 }
 
+// Read-only orphan indication for the canonical Meeting lifecycle. A busy
+// helper mutex is not evidence of an orphan (it may belong to standalone
+// translation); Stop and native ExitRequested independently fail closed on
+// lock contention. A poisoned owner is never considered clean.
+pub(crate) fn meeting_helper_orphan_cleanup_pending() -> bool {
+    match runtime().try_lock() {
+        Ok(owner) => owner.pending_meeting_cleanup_session_id.is_some()
+            || owner.active_meeting_session_id.is_some(),
+        Err(TryLockError::WouldBlock) => false,
+        Err(TryLockError::Poisoned(_)) => true,
+    }
+}
+
+// Only the no-snapshot Meeting Stop transaction calls this recovery. It
+// must never stop a normal standalone/Text helper merely because a process
+// exists. Ownership must be an existing Meeting ID on this very runtime,
+// AND native runtime session authority must be verifiably idle. The Meeting
+// lifecycle gate serializes other Meeting Starts; the helper mutex keeps
+// the same worker owner from being replaced while cleanup runs.
+pub(crate) fn finish_orphaned_meeting_helper_without_session() -> Result<(), &'static str> {
+    if !public_worker_start_has_idle_audio_owner() {
+        return Err("helper_orphan:runtime_session_not_verified_idle");
+    }
+    let mut owner = match runtime().try_lock() {
+        Ok(owner) => owner,
+        Err(TryLockError::WouldBlock) => return Err("helper_orphan:owner_busy"),
+        Err(TryLockError::Poisoned(_)) => return Err("helper_orphan:owner_poisoned"),
+    };
+    if !public_worker_start_has_idle_audio_owner() {
+        return Err("helper_orphan:runtime_owner_changed");
+    }
+
+    let meeting_owned = owner.pending_meeting_cleanup_session_id.is_some()
+        || owner.active_meeting_session_id.is_some();
+    if !meeting_owned {
+        // Ordinary helper activity or an un-attributed cleanup must not be
+        // claimed or killed by Meeting's no-snapshot Stop.
+        return Ok(());
+    }
+    owner.generation_token = owner.generation_token.saturating_add(1);
+    invalidate_required_outbound_ai_readiness();
+    if !stop_child(&mut owner) {
+        set_blocked(
+            &mut owner,
+            "An orphaned Meeting helper is still releasing its original worker and I/O threads. Retry Stop before closing.",
+            "helper_bridge:cleanup_incomplete",
+        );
+        return Err("helper_orphan:cleanup_incomplete");
+    }
+    owner.state = "stopped".to_string();
+    owner.message = "Orphaned Meeting helper resources were verified released by no-snapshot Retry Stop.".to_string();
+    owner.cuda_ready = false;
+    owner.provider_ready = false;
+    owner.degraded_mode = false;
+    owner.active_task = None;
+    owner.active_request_id = None;
+    owner.active_meeting_generation = None;
+    owner.active_meeting_session_id = None;
+    owner.active_meeting_lane = None;
+    owner.last_error = Some("helper_bridge:orphan_meeting_cleanup_verified".to_string());
+    owner.updated_unix_ms = unix_ms();
+    // With no Meeting session, the previous outbound marker is stale. Do
+    // not clear it until the helper and its exact native idle state were
+    // verified; this cannot touch another Meeting while its lifecycle gate
+    // excludes concurrent Meeting Start.
+    if !public_worker_start_has_idle_audio_owner() {
+        return Err("helper_orphan:runtime_owner_changed_after_cleanup");
+    }
+    // Meeting Stop (not status polling or generic worker restart) has now
+    // verified the old helper and native idle ownership for this orphan.
+    owner.pending_meeting_cleanup_session_id = None;
+    clear_any_meeting_outbound_pipeline();
+    Ok(())
+}
+
 pub(crate) fn shutdown_helper_bridge_for_app_exit() -> bool {
     // ExitRequested is a native UI event. Do not block it while a startup
     // ping/AI task owns the helper transport mutex.
     let Ok(mut runtime) = runtime().try_lock() else {
         return false;
     };
+    // Even if orphan cleanup could finish here, the app-close path cannot
+    // certify Meeting audio/transcript cleanup on the basis of helper process
+    // exit alone. The no-snapshot Retry Stop must release its native owner.
+    if runtime.pending_meeting_cleanup_session_id.is_some()
+        || runtime.active_meeting_session_id.is_some()
+    {
+        return false;
+    }
 
     runtime.generation_token = runtime.generation_token.saturating_add(1);
     invalidate_required_outbound_ai_readiness();
@@ -707,6 +843,9 @@ pub fn cancel_helper_bridge_meeting_session(session_id: &str) -> HelperBridgeAct
                         "helper_bridge:cleanup_incomplete",
                     );
                 }
+                // Only the matching Meeting Stop can release pending
+                // attribution after a verified helper resource cleanup.
+                runtime.pending_meeting_cleanup_session_id = None;
                 runtime.state = "stopped".to_string();
                 runtime.message = "The same Meeting session's helper cleanup was verified on Retry Stop.".to_string();
                 runtime.cuda_ready = false;
@@ -734,6 +873,9 @@ pub fn cancel_helper_bridge_meeting_session(session_id: &str) -> HelperBridgeAct
                         "helper_bridge:cleanup_incomplete",
                     );
                 }
+                // Only the matching Meeting Stop can release pending
+                // attribution after a verified helper resource cleanup.
+                runtime.pending_meeting_cleanup_session_id = None;
                 runtime.state = "stopped".to_string();
                 runtime.message = format!(
                     "In-flight helper inference for Meeting session {session_id} was hard-cancelled during full Meeting Stop."

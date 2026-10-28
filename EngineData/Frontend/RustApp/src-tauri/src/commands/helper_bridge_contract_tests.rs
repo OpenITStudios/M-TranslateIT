@@ -1,12 +1,15 @@
 use serde_json::{json, Value};
 
 use crate::engine::runtime_state::{
-    begin_application_meeting_session, clear_runtime_session_if_generation,
-    clear_runtime_session_state, commit_application_meeting_session_live,
+    begin_application_meeting_session, begin_mic_test_session,
+    clear_runtime_session_if_generation, clear_runtime_session_state,
+    commit_application_meeting_session_live,
 };
 
 use super::helper_bridge::{
-    cancel_helper_bridge_meeting_session, send_helper_worker_task,
+    cancel_helper_bridge_meeting_session, finish_orphaned_meeting_helper_without_session,
+    meeting_helper_orphan_cleanup_pending, send_helper_worker_task,
+    start_helper_bridge,
     shutdown_helper_bridge_for_app_exit, HelperBridgeWorkerResponse,
 };
 use super::helper_bridge_runtime::{
@@ -423,6 +426,137 @@ fn unattributed_incomplete_helper_cleanup_cannot_be_claimed_by_meeting_stop() {
         assert_eq!(bridge.last_error.as_deref(), Some("helper_bridge:cleanup_incomplete"));
         assert!(bridge.pending_meeting_cleanup_session_id.is_none());
     }
+    reset_bridge_runtime();
+}
+
+
+#[test]
+fn orphaned_meeting_helper_blocks_native_close_until_no_snapshot_retry_stop() {
+    let _serial = crate::engine::runtime_state::runtime_test_guard();
+    let _ = clear_runtime_session_state();
+    reset_bridge_runtime();
+
+    let (release, gate) = std::sync::mpsc::channel::<()>();
+    {
+        let mut owner = runtime().lock().expect("orphan helper owner");
+        owner.state = "blocked".to_string();
+        owner.last_error = Some("helper_bridge:cleanup_incomplete".to_string());
+        owner.pending_meeting_cleanup_session_id = Some("orphan-meeting".to_string());
+        owner.stderr_logger = Some(std::thread::spawn(move || {
+            let _ = gate.recv();
+        }));
+    }
+
+    assert!(meeting_helper_orphan_cleanup_pending());
+    assert!(super::meeting_session::meeting_stop_cleanup_pending());
+    assert!(!shutdown_helper_bridge_for_app_exit(),
+        "native ExitRequested may not certify Meeting audio cleanup on a helper reap");
+    assert_eq!(
+        finish_orphaned_meeting_helper_without_session().unwrap_err(),
+        "helper_orphan:cleanup_incomplete",
+    );
+    {
+        let owner = runtime().lock().expect("retained owner after failed cleanup");
+        assert_eq!(owner.pending_meeting_cleanup_session_id.as_deref(), Some("orphan-meeting"));
+        assert!(owner.stderr_logger.is_some());
+    }
+
+    release.send(()).expect("finish orphan stderr reader");
+    assert!(finish_orphaned_meeting_helper_without_session().is_ok());
+    assert!(!meeting_helper_orphan_cleanup_pending());
+    {
+        let owner = runtime().lock().expect("verified orphan helper release");
+        assert!(owner.stderr_logger.is_none());
+        assert!(owner.child.is_none());
+        assert!(owner.pending_meeting_cleanup_session_id.is_none());
+        assert_eq!(owner.last_error.as_deref(),
+            Some("helper_bridge:orphan_meeting_cleanup_verified"));
+    }
+    assert!(shutdown_helper_bridge_for_app_exit());
+    reset_bridge_runtime();
+}
+
+#[test]
+fn no_snapshot_meeting_stop_does_not_terminate_standalone_worker() {
+    let _serial = crate::engine::runtime_state::runtime_test_guard();
+    let _ = clear_runtime_session_state();
+    reset_bridge_runtime();
+    {
+        let mut owner = runtime().lock().expect("text helper owner");
+        owner.state = "ready".to_string();
+        owner.generation_token = 31;
+        owner.last_error = None;
+    }
+    assert!(!meeting_helper_orphan_cleanup_pending());
+    assert!(finish_orphaned_meeting_helper_without_session().is_ok());
+    let owner = runtime().lock().expect("standalone helper state untouched");
+    assert_eq!(owner.state, "ready");
+    assert_eq!(owner.generation_token, 31);
+    drop(owner);
+    reset_bridge_runtime();
+}
+
+#[test]
+fn no_snapshot_orphan_cleanup_never_waits_for_busy_helper_lock() {
+    let _serial = crate::engine::runtime_state::runtime_test_guard();
+    let _ = clear_runtime_session_state();
+    reset_bridge_runtime();
+    let owner = runtime().lock().expect("hold canonical helper mutex");
+    assert_eq!(
+        finish_orphaned_meeting_helper_without_session().unwrap_err(),
+        "helper_orphan:owner_busy",
+    );
+    drop(owner);
+    reset_bridge_runtime();
+}
+
+#[test]
+fn public_worker_restart_cannot_erase_orphaned_meeting_attribution() {
+    let _serial = crate::engine::runtime_state::runtime_test_guard();
+    let _ = clear_runtime_session_state();
+    reset_bridge_runtime();
+    {
+        let mut owner = runtime().lock().expect("old Meeting cleanup owner");
+        owner.state = "stopped".to_string();
+        owner.generation_token = 24;
+        owner.pending_meeting_cleanup_session_id = Some("old-meeting".to_string());
+    }
+
+    let denied = start_helper_bridge();
+    assert!(!denied.ok);
+    assert_eq!(denied.state, "cleanup_incomplete");
+    {
+        let owner = runtime().lock().expect("retained old helper owner");
+        assert_eq!(owner.generation_token, 24);
+        assert_eq!(owner.pending_meeting_cleanup_session_id.as_deref(), Some("old-meeting"));
+        assert!(owner.child.is_none());
+    }
+    assert!(finish_orphaned_meeting_helper_without_session().is_ok());
+    reset_bridge_runtime();
+}
+
+#[test]
+fn orphan_helper_cleanup_does_not_take_over_active_mic_test() {
+    let _serial = crate::engine::runtime_state::runtime_test_guard();
+    let _ = clear_runtime_session_state();
+    reset_bridge_runtime();
+    let report = begin_mic_test_session();
+    assert!(report.blocker.is_empty());
+    let generation = report.snapshot.expect("mic test owner").generation;
+    {
+        let mut owner = runtime().lock().expect("meeting orphan pending");
+        owner.pending_meeting_cleanup_session_id = Some("old-meeting".to_string());
+    }
+    assert_eq!(
+        finish_orphaned_meeting_helper_without_session().unwrap_err(),
+        "helper_orphan:runtime_session_not_verified_idle",
+    );
+    assert!(meeting_helper_orphan_cleanup_pending());
+    assert_eq!(
+        clear_runtime_session_if_generation(generation).blocker,
+        "runtime_session:cleared",
+    );
+    assert!(finish_orphaned_meeting_helper_without_session().is_ok());
     reset_bridge_runtime();
 }
 

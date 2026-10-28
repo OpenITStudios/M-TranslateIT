@@ -3,7 +3,7 @@ export type CloseDialogAction = "stop" | "retry" | null;
 export type CloseVerdict =
   | { kind: "dialog"; title: string; message: string; action: CloseDialogAction }
   | { kind: "destroy" }
-  | { kind: "stop-and-close" }
+  | { kind: "stop-and-close"; orphanCleanup?: true }
   | { kind: "wait-for-stop"; title: string; message: string };
 
 export type ClosePolicySnapshot = {
@@ -51,6 +51,24 @@ export function resolveClosePolicy(snapshot: ClosePolicySnapshot): CloseVerdict 
       "Stop My Voice creation before closing TranslateIT so the training process can end safely.",
       null,
     );
+  }
+
+  // The helper can report Checking while a cold Python startup or transport
+  // owns its mutex. No snapshot from that interval proves native exit safe;
+  // request a fresh read instead of destroying and relying on ExitRequested
+  // to reopen the main window.
+  if (snapshot.lifecycle === "checking") {
+    return dialog(
+      "Checking local runtime",
+      "TranslateIT is verifying the local worker. Try closing again after its status is confirmed.",
+      "retry",
+    );
+  }
+
+  // An idle native session may still own Meeting helper/transcript resources.
+  // The same canonical Retry Stop must verify their release before Close.
+  if (snapshot.lifecycle === "cleanup_incomplete") {
+    return { kind: "stop-and-close", orphanCleanup: true };
   }
 
   if (!snapshot.audioLocked) return { kind: "destroy" };
