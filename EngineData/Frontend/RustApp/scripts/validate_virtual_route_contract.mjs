@@ -19,6 +19,15 @@ const files = {
   nativeMiniPairs: resolve(root, "src-tauri/windows/virtual-audio/Source/Filters/minipairs.h"),
   nativeProject: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/Main.vcxproj"),
   nativeRust: resolve(root, "src-tauri/src/engine/audio/native_capture_transport.rs"),
+  nativeRustPipe: resolve(root, "src-tauri/src/engine/audio/native_capture_pipe.rs"),
+  nativeRustPacing: resolve(root, "src-tauri/src/engine/audio/native_capture_pacing.rs"),
+  brokerProtocol: resolve(root, "src-tauri/windows/virtual-audio/Broker/broker_protocol.h"),
+  brokerDevice: resolve(root, "src-tauri/windows/virtual-audio/Broker/broker_driver.cpp"),
+  brokerIdentity: resolve(root, "src-tauri/windows/virtual-audio/Broker/broker_identity.cpp"),
+  brokerIo: resolve(root, "src-tauri/windows/virtual-audio/Broker/broker_io.cpp"),
+  brokerService: resolve(root, "src-tauri/windows/virtual-audio/Broker/broker_service.cpp"),
+  brokerProject: resolve(root, "src-tauri/windows/virtual-audio/Broker/TranslateITMicBroker.vcxproj"),
+  nativeSolution: resolve(root, "src-tauri/windows/virtual-audio/TranslateITMic.sln"),
   nativeStream: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/minwavertstream.cpp"),
   nativeCaptureFormat: resolve(root, "src-tauri/windows/virtual-audio/Source/Filters/micarraywavtable.h"),
   meetingOutput: resolve(root, "src-tauri/src/engine/audio/meeting_output.rs"),
@@ -228,6 +237,8 @@ requireMarkers(source.nativeCaptureFormat, "48 kHz mono PCM16 and multiple reade
 ]);
 requireMarkers(source.audioMod, "candidate client compiled but not admitted to Meeting", [
   "pub(crate) mod native_capture_transport;",
+  "pub(crate) mod native_capture_pipe;",
+  "pub(crate) mod native_capture_pacing;",
 ]);
 requireMarkers(source.nativeRust, "user-mode client matches restricted wire ABI", [
   "DEVICE_PATH", "TranslateITMicControl",
@@ -246,4 +257,82 @@ forbidMarkers(
   ["TranslateITMicControl", "IOCTL_BEGIN", "NativeCaptureSession::begin("],
 );
 
-console.log("[virtual-route] VB-CABLE remains the only admitted Meeting route; capture-only WDK source and privileged Rust IOCTL client are not installed, signed or native-accepted.");
+// Source contracts for the unaccepted non-admin broker and existing Meeting
+// worker's pacing primitive. These are NOT proof of signature, SCM install,
+// token identity at runtime, callback timing, or actual device delivery.
+requireMarkers(source.nativeProtocol, "shared kernel/user-mode ABI", [
+  "TRANSLATEIT_USER_MODE", "static_assert(offsetof(TI_CAPTURE_WRITE, Data)",
+]);
+requireMarkers(source.brokerProtocol, "fixed authenticated IPC framing", [
+  "TI_BROKER_PIPE_NAME", "TI_BROKER_VERSION 1u",
+  "TI_BROKER_MAX_PAYLOAD", "TI_BROKER_MAGIC",
+  "static_assert(sizeof(TI_BROKER_REQUEST) == 16",
+  "static_assert(sizeof(TI_BROKER_REPLY) == 16",
+  "TI_CAPTURE_WRITE",
+]);
+requireMarkers(source.brokerDevice, "only privileged forwarding to captured PnP device", [
+  "CreateFileW(kKernelControl", "TI_CAPTURE_IOCTL_BEGIN",
+  "TI_CAPTURE_IOCTL_WRITE", "TI_CAPTURE_IOCTL_FLUSH",
+  "TI_CAPTURE_IOCTL_END", "TI_CAPTURE_IOCTL_STATUS",
+  "CloseHandle(handle_)", "producerActive_",
+]);
+requireMarkers(source.brokerIdentity, "SCM/install publisher-controlled admission", [
+  "GetNamedPipeClientProcessId", "GetNamedPipeClientSessionId",
+  "ImpersonateNamedPipeClient", "RevertToSelf",
+  "OpenThreadToken", "OpenProcessToken",
+  "SidAndLogonMatch", "QueryFullProcessImageNameW",
+  "ImageHashApproved", "ApprovedDesktopSha256",
+  "SOFTWARE\\\\OpenITStudios\\\\TranslateIT",
+  "CompareStringOrdinal",
+]);
+requireMarkers(source.brokerService, "single privileged transport worker only", [
+  "StartServiceCtrlDispatcherW", "TranslateITMicBroker",
+  "PIPE_REJECT_REMOTE_CLIENTS", "FILE_FLAG_FIRST_PIPE_INSTANCE",
+  "FILE_FLAG_OVERLAPPED", "AuthenticatePipeClient(pipe)",
+  "BrokerDriver driver;", "BrokerPipeIo io(pipe.h, g_stop);",
+  "TI_BROKER_REPLY", "ProducerClock",
+]);
+requireMarkers(source.brokerIo, "cancelable bounded server IPC", [
+  "WaitForMultipleObjects", "CancelIoEx",
+  "GetOverlappedResult", "WaitForSingleObject(stop_, 0)",
+  "BrokerPipeIo::ReadExactly", "BrokerPipeIo::WriteExactly",
+]);
+requireMarkers(source.brokerProject, "broker Win32 build target", [
+  "TranslateITMicBroker", "broker_identity.cpp",
+  "broker_driver.cpp", "broker_io.cpp",
+  "broker_service.cpp", "TRANSLATEIT_USER_MODE",
+  "bcrypt.lib", "advapi32.lib",
+]);
+requireMarkers(source.nativeSolution, "native driver and broker in one solution", [
+  "Source\\Main\\Main.vcxproj",
+  "Broker\\TranslateITMicBroker.vcxproj",
+]);
+requireMarkers(source.nativeRustPipe, "non-admin service identity before PCM send", [
+  "OpenServiceW", "QueryServiceStatusEx",
+  "GetNamedPipeServerProcessId", "verify_service_process(&file)?",
+  "CLIENT_ACCESS: u32 = 0x0012_008B",
+  "FILE_FLAG_OVERLAPPED", "GetOverlappedResult",
+  "CancelIoEx", "fn transfer(",
+  "pub fn submit(&mut self", "pub fn flush(&mut self)",
+  "pub fn end(mut self)",
+]);
+requireMarkers(source.nativeRustPacing, "reuse one Meeting worker with bounded PCM", [
+  "pub fn send_paced(", "FnMut(u64, u64) -> bool",
+  "FRAMES_PER_PACKET: usize = 960",
+  "MAX_LATENESS", "thread::sleep(",
+  "if !authorized(generation, source_epoch) { return Err(interrupted()); }",
+  "revoked_session_sends_no_audio",
+]);
+forbidMarkers(source.brokerService, "broker must not become a second translation engine", [
+  "start_helper_bridge(", "synthesize(", "launch_worker(",
+  "process_outbound_wav(", "llama.cpp",
+]);
+forbidMarkers(
+  [source.route, source.pairSelection, source.meetingLifecycle, source.playbackRuntime,
+   source.outboundPipeline, source.runtimeCommands].join("\n"),
+  "unaccepted broker cannot activate on ordinary Meeting",
+  ["NativeCapturePipeSession::begin(", "TranslateITMicBrokerV1",
+   "TranslateITMicControl", "native_capture_pacing::send_paced("],
+);
+
+console.log("[virtual-route] VB-CABLE remains the only admitted Meeting provider; capture-only kernel, authenticated broker and Rust pacing stay source candidates until native release acceptance.");

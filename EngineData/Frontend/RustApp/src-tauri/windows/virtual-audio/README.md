@@ -25,7 +25,10 @@ service/package identity to avoid accidental upgrade collisions.
 | --- | --- | --- |
 | TranslateIT Meeting Microphone | WaveRT capture-only mic | Meeting applications via normal Windows capture |
 | TranslateITMicControl | Separate secured device object | Currently SYSTEM / elevated Administrators only |
-| Rust native_capture_transport.rs | Windows DeviceIoControl client | Unaccepted candidate; not used by production Meeting |
+| Rust native_capture_transport.rs | Privileged diagnostic DeviceIoControl adapter | Not used by normal Meeting |
+| TranslateITMicBroker.exe | Local SYSTEM service mediating restricted kernel writes | Source only; not installed |
+| Rust native_capture_pipe.rs | Non-admin client with SCM server-PID verification | Source only; no Meeting caller |
+| Rust native_capture_pacing.rs | 20 ms paced PCM helper for the existing Meeting worker | Source only; no Meeting caller |
 
 No virtual speaker, no virtual render/feed endpoint, no second translation
 worker and no file-backed meeting audio. Normal audio applications can
@@ -73,18 +76,53 @@ and DACL `D:P(A;;GA;;;SY)(A;;GA;;;BA)`. There is no write grant to
 World, Authenticated Users, Interactive Users or a public pipe. Control IOCTLs
 also require FILE_WRITE_DATA and METHOD_BUFFERED.
 
-A normal non-elevated TranslateIT application **cannot** open this control
-device. This is deliberate fail-closed behavior in the source candidate, **not
-a completed end-user solution**. The next product security boundary is a
-reviewed least-privilege broker/authorization transport under the existing
-single Rust Meeting output owner. Do not lower the DACL or embed shared static
-secrets in the app to simulate authorization.
+A normal non-elevated TranslateIT application **cannot** open the kernel
+control device. A restricted Windows service broker source is now available
+to mediate this access, but it is not signed, installed, provisioned,
+or admitted into the normal Meeting path. It must never weaken the driver
+DACL or use a shared static password as a substitute for client identity.
 
+## Candidate non-admin broker (not an installed Windows service)
+
+The C++ `Broker/TranslateITMicBroker.vcxproj` is part of the native
+`TranslateITMic.sln` source solution. It is a Windows service intended to
+run as SYSTEM under a separately hardened machine installation. It only
+forwards authenticated, bounded PCM to the privileged kernel control device.
+It does not translate, mix, record or own Meeting sessions.
+
+- Pipe: `\\.\pipe\TranslateITMicBrokerV1`, local clients only.
+- Pipe SDDL: `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x0012008B;;;AU)`.
+  Authenticated users get read/write-data only, not the pipe-create right.
+- The broker impersonates the connected pipe client and checks user SID,
+  logon authentication ID, Windows session and process identity.
+- It requires the actual client executable path inside a machine-protected
+  Program Files installation and a SHA-256 match against
+  `HKLM\SOFTWARE\OpenITStudios\TranslateIT\ApprovedDesktopSha256`
+  (32-byte REG_BINARY). Missing hash or mismatched executable denies access.
+- The ordinary Rust client checks the running Windows SCM service PID
+  against the actual pipe server PID before transmitting PCM.
+- Server I/O is cancelable during Stop; the initial handshake and packet
+  bodies have finite deadlines. Rust IPC uses overlapped operations and
+  per-transaction deadlines. The broker limits PCM burst rate while the
+  existing Meeting worker can use its 20-ms pacing helper.
+- Disconnecting a pipe releases the broker's kernel FILE_OBJECT,
+  triggering scoped writer cleanup. Neither native Mute nor Stop may
+  claim success without the relevant FLUSH acknowledgement.
+
+No installer currently provisions the approved executable hash, registers
+the Windows service or installs this broker executable. Consequently
+the new IPC path remains a source candidate, not a usable microphone.
+The trusted package installer must first verify its signed payload and
+enforce a non-user-writable installation directory. Hash checking does
+not protect against malicious code injection into an authorized process;
+service privileges, SCM access, signer identity, update invalidation,
+reparse/hardlink threats, session isolation and device lifecycle remain
+native-security acceptance requirements.
 ## Required higher-context proof
 
 All remain **UNKNOWN / NOT EXECUTED**: WDK x64/ARM64 compiler/link, WDK
 code analysis, INF/CAT syntax and Microsoft-required driver signing,
-non-admin authorization broker, actual PnP root-device provisioning,
+broker SCM registration, installed trust hash and non-admin access proof, actual PnP root-device provisioning,
 Windows 10/11 endpoint name, WASAPI capture/driver IOCTL roundtrip,
 simultaneous capture clients, device lifecycle, drift/latency, Mute/Stop
 tail, physical mic isolation, crash/restart/rollback/uninstall, and real

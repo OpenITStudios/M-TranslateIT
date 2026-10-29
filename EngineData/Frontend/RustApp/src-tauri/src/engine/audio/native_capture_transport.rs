@@ -78,7 +78,7 @@ fn send_control(file: &File, code: u32, input: &[u8], output: &mut [u8]) -> io::
     Ok(received)
 }
 
-fn begin_bytes(generation: u64, epoch: u64) -> io::Result<[u8; 32]> {
+pub(super) fn begin_bytes(generation: u64, epoch: u64) -> io::Result<[u8; 32]> {
     if generation == 0 || epoch == 0 {
         return Err(invalid("native_capture:missing_session_authority"));
     }
@@ -92,7 +92,7 @@ fn begin_bytes(generation: u64, epoch: u64) -> io::Result<[u8; 32]> {
     Ok(bytes)
 }
 
-fn revoke_bytes(generation: u64, epoch: u64) -> io::Result<[u8; 24]> {
+pub(super) fn revoke_bytes(generation: u64, epoch: u64) -> io::Result<[u8; 24]> {
     if generation == 0 || epoch == 0 {
         return Err(invalid("native_capture:missing_session_authority"));
     }
@@ -104,7 +104,7 @@ fn revoke_bytes(generation: u64, epoch: u64) -> io::Result<[u8; 24]> {
     Ok(bytes)
 }
 
-fn frame_bytes(generation: u64, epoch: u64, sequence: u64, samples: &[i16]) -> io::Result<Vec<u8>> {
+pub(super) fn frame_bytes(generation: u64, epoch: u64, sequence: u64, samples: &[i16]) -> io::Result<Vec<u8>> {
     if generation == 0 || epoch == 0 || sequence == 0 {
         return Err(invalid("native_capture:missing_frame_identity"));
     }
@@ -212,19 +212,36 @@ impl NativeCaptureSession {
         if received != bytes.len() {
             return Err(io::Error::new(ErrorKind::InvalidData, "native_capture:status_size_mismatch"));
         }
-        let u32_at = |offset: usize| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
-        let u64_at = |offset: usize| u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
-        if u32_at(0) != VERSION || u32_at(8) != 9600 {
-            return Err(io::Error::new(ErrorKind::InvalidData, "native_capture:status_contract_mismatch"));
-        }
-        Ok(NativeCaptureStatus {
-            producer_active: u32_at(4) != 0,
-            buffered_frames: u32_at(12),
-            accepted_frames: u64_at(16),
-            overwritten_frames: u64_at(24),
-            underrun_frames: u64_at(32),
-        })
+        parse_status(&bytes)
+
     }
+}
+
+pub(super) fn parse_status(bytes: &[u8]) -> io::Result<NativeCaptureStatus> {
+    if bytes.len() != 40 {
+        return Err(io::Error::new(ErrorKind::InvalidData, "native_capture:status_size_mismatch"));
+    }
+    let read_u32 = |offset: usize| -> u32 {
+        u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("bounded status"))
+    };
+    let read_u64 = |offset: usize| -> u64 {
+        u64::from_le_bytes(bytes[offset..offset + 8].try_into().expect("bounded status"))
+    };
+    if read_u32(0) != VERSION || read_u32(8) != 9_600 {
+        return Err(io::Error::new(ErrorKind::InvalidData, "native_capture:status_contract_mismatch"));
+    }
+    let capacity = read_u32(8);
+    let buffered = read_u32(12);
+    if buffered > capacity || read_u32(4) > 1 {
+        return Err(io::Error::new(ErrorKind::InvalidData, "native_capture:status_values_invalid"));
+    }
+    Ok(NativeCaptureStatus {
+        producer_active: read_u32(4) != 0,
+        buffered_frames: buffered,
+        accepted_frames: read_u64(16),
+        overwritten_frames: read_u64(24),
+        underrun_frames: read_u64(32),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

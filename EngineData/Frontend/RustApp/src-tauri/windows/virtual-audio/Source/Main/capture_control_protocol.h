@@ -3,7 +3,15 @@
 // All offsets and sizes are fixed. Native Rust client encodes little-endian bytes.
 // The security descriptor of the control device restricts writes to elevated
 // Administrators/SYSTEM while the broker/normal-user authorization is pending.
+// Kernel and user-mode code share EXACTLY this ABI. The user-mode build
+// defines TRANSLATEIT_USER_MODE; kernel builds include the WDK declarations.
+#if defined(TRANSLATEIT_USER_MODE)
+#include <Windows.h>
+#include <winioctl.h>
+#include <stddef.h>
+#else
 #include <ntddk.h>
+#endif
 
 #define TI_CAPTURE_PROTOCOL_VERSION 1u
 #define TI_CAPTURE_RATE_HZ 48000u
@@ -54,6 +62,10 @@ typedef struct _TI_CAPTURE_STATUS {
 } TI_CAPTURE_STATUS;
 
 C_ASSERT(sizeof(TI_CAPTURE_BEGIN) == 32);
+#if defined(TRANSLATEIT_USER_MODE)
+static_assert(offsetof(TI_CAPTURE_WRITE, Data) == 32, "user/kernel write ABI");
+#else
 C_ASSERT(FIELD_OFFSET(TI_CAPTURE_WRITE, Data) == 32);
+#endif
 C_ASSERT(sizeof(TI_CAPTURE_REVOKE) == 24);
 C_ASSERT(sizeof(TI_CAPTURE_STATUS) == 40);

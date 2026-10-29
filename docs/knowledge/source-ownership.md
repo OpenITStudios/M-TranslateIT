@@ -109,6 +109,8 @@ Domain algorithms remain in their domain modules; ApplicationRuntime coordinates
 | Meeting output delivery | `engine/audio/meeting_output*.rs` |
 | Virtual microphone route / session binding | `commands/virtual_mic_route.rs` (one lifecycle owner); pure approved-pair selection in `commands/virtual_mic_route/pair_selection.rs` |
 | Candidate native Windows PCM client | `engine/audio/native_capture_transport.rs`, not admitted by normal Meeting |
+| Candidate normal-user IPC and paced delivery | `engine/audio/native_capture_pipe.rs` (SCM-backed IPC) and `native_capture_pacing.rs` (existing Meeting worker helper); no new output owner |
+| Candidate privileged Windows broker transport | `src-tauri/windows/virtual-audio/Broker/` (`broker_identity`, `broker_io`, `broker_driver`, `broker_service`); not registered as a Windows service in this source state |
 | Candidate native capture-only kernel and privileged control device | `src-tauri/windows/virtual-audio/Source/Main/capture_pcm.{h,cpp}`, `capture_control_protocol.h`, `capture_control_device.{h,cpp}` |
 | Device/settings persistence | `commands/settings.rs` + `engine/settings.rs` |
 

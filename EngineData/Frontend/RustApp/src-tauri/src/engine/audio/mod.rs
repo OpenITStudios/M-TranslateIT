@@ -9,6 +9,10 @@ pub mod live_segment_writer;
 pub mod meeting_output;
 #[cfg(windows)]
 pub(crate) mod native_capture_transport;
+#[cfg(windows)]
+pub(crate) mod native_capture_pipe;
+#[cfg(windows)]
+pub(crate) mod native_capture_pacing;
 pub mod original_voice_pcm;
 pub mod meeting_sound_capture;
 // Bounded callback-to-CPU transport; capture and finalizer retain their owners.

@@ -216,7 +216,8 @@ Physical microphone -> Original passthrough or translated English TTS
 
 NATIVE CAPTURE-ONLY SOURCE CANDIDATE (NOT ROUTED OR INSTALLED)
 Same single Rust Meeting output owner
-  -> checked privileged PCM16 mono control session (generation/epoch/sequence)
+  -> existing worker's 20-ms paced PCM16 mono via authenticated local broker
+  -> privileged control session (generation/epoch/sequence)
   -> one Windows recording endpoint: TranslateIT Meeting Microphone
   -> meeting application's microphone
 No new render/speaker endpoint and no parallel Meeting engine.
@@ -228,7 +229,7 @@ VB-CABLE remains the only admitted Meeting route and shipped provider. The old p
 
 **Capture-only source contract:** One WaveRT recording endpoint at 48 kHz PCM16 mono; at most eight independent capture readers, each with a separate read cursor; silent underflow and bounded 200 ms ring. A single privileged producer uses versioned METHOD_BUFFERED FILE_WRITE_DATA BEGIN/WRITE/FLUSH/END requests with checked lengths, session generation, source epoch and sequence; all readers observe new producer epochs without draining each other. STOP/Mute/Source Switch revokes queued kernel PCM before acknowledgement, but cannot recall speech already consumed by an external app.
 
-**Security boundary:** The current control-device DACL grants SYSTEM/elevated Administrator access only, not regular Windows users. It must not be weakened to World/Interactive write. A reviewed least-privilege broker and paced audio output under the existing Rust Meeting owner are still required. Native Rust IOCTL source is present but not wired to normal Meeting Start. Separate WDK, PnP provisioning, driver signing, installer rollback, device identity, clock drift and actual receiver tests remain unexecuted.
+**Security boundary:** Kernel control writes remain SYSTEM/Administrator-only. A source-only privileged Windows service now offers a restricted-rights local named pipe and verifies the caller's user/session, process image and installer-provisioned SHA-256. The non-admin Rust client verifies the SCM service PID before writing, and a 20-ms pacing primitive is available for the existing Meeting output worker. These sources are **not installed, trusted, activated or build-tested**; missing installer-provisioned trust makes the broker reject clients. The broker is never a second voice/Meeting owner. A signed, protected machine installation and native security/WDK/audio acceptance are mandatory before any route switch. No World/Interactive kernel-write ACL or raw-microphone fallback is permitted.
 
 Physical microphone, incoming Meeting Sound and calling-app microphone/speaker remain independent. There is no raw-mic or speaker fallback. Windows endpoint-wide loopback may capture unrelated processes.
 
