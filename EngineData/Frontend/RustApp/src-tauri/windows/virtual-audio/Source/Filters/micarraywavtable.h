@@ -18,21 +18,21 @@ Abstract:-
 //
 // Mic array range.
 //
-#define MICARRAY_RAW_CHANNELS                   2       // Channels for raw mode
-#define MICARRAY_DEVICE_MAX_CHANNELS            2       // Max channels overall
+#define MICARRAY_RAW_CHANNELS                   1       // Channels for raw mode
+#define MICARRAY_DEVICE_MAX_CHANNELS            1       // Max channels overall
 #define MICARRAY_16_BITS_PER_SAMPLE_PCM         16      // 16 Bits Per Sample
 #define MICARRAY_RAW_SAMPLE_RATE                48000   // Raw sample rate
 
 //
 // Max # of pin instances.
 //
-#define MICARRAY_MAX_INPUT_STREAMS              1
+#define MICARRAY_MAX_INPUT_STREAMS              8
 
 //=============================================================================
 static
 KSDATAFORMAT_WAVEFORMATEXTENSIBLE MicArrayPinSupportedDeviceFormats[] =
 {
-    // 48 kHz 16-bit stereo PCM, matching the paired render endpoint
+    // 48 kHz PCM16 mono; each of up to eight capture clients has an independent cursor.
     {
         {
             sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE),
@@ -46,15 +46,15 @@ KSDATAFORMAT_WAVEFORMATEXTENSIBLE MicArrayPinSupportedDeviceFormats[] =
         {
             {
                 WAVE_FORMAT_EXTENSIBLE,
-                2,
+                1,
                 48000,
-                192000,
-                4,
+                96000,
+                2,
                 16,
                 sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
             },
             16,
-            KSAUDIO_SPEAKER_STEREO,
+            KSAUDIO_SPEAKER_MONO,
             STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
         }
     }

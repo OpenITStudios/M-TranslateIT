@@ -108,6 +108,8 @@ Domain algorithms remain in their domain modules; ApplicationRuntime coordinates
 | Optional Meeting Sound capture | `engine/audio/meeting_sound_capture.rs` |
 | Meeting output delivery | `engine/audio/meeting_output*.rs` |
 | Virtual microphone route / session binding | `commands/virtual_mic_route.rs` (one lifecycle owner); pure approved-pair selection in `commands/virtual_mic_route/pair_selection.rs` |
+| Candidate native Windows PCM client | `engine/audio/native_capture_transport.rs`, not admitted by normal Meeting |
+| Candidate native capture-only kernel and privileged control device | `src-tauri/windows/virtual-audio/Source/Main/capture_pcm.{h,cpp}`, `capture_control_protocol.h`, `capture_control_device.{h,cpp}` |
 | Device/settings persistence | `commands/settings.rs` + `engine/settings.rs` |
 
 ## Local AI / voice

@@ -94,6 +94,8 @@ protected:
     ULONGLONG                   m_ullPlayPosition;
     ULONGLONG                   m_ullWritePosition;
     ULONGLONG                   m_ullLinearPosition;
+    ULONGLONG                   m_TranslateITCaptureReadFrame;
+    ULONGLONG                   m_TranslateITCaptureSerial;
     ULONGLONG                   m_ullPresentationPosition;
     ULONG                       m_ulLastOsReadPacket;
     ULONG                       m_ulLastOsWritePacket;
@@ -166,11 +168,6 @@ private:
         _In_ ULONG ByteDisplacement
     );
         
-    VOID ReadBytes
-    (
-        _In_ ULONG ByteDisplacement
-    );
-    
     VOID UpdatePosition
     (
         _In_ LARGE_INTEGER ilQPC

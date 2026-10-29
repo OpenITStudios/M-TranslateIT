@@ -4,7 +4,7 @@
 #include "endpoints.h"
 #include "minwavert.h"
 #include "minwavertstream.h"
-#include "pcm_bridge.h"
+#include "capture_pcm.h"
 #define MINWAVERTSTREAM_POOLTAG 'SRWM'
 
 #pragma warning (disable : 4127)
@@ -219,6 +219,8 @@ Return Value:
     m_plPeakMeter = NULL;
     m_pWfExt = NULL;
     m_ullLinearPosition = 0;
+    m_TranslateITCaptureReadFrame = 0;
+    m_TranslateITCaptureSerial = 0;
     m_ullPresentationPosition = 0;
     m_ulContentId = 0;
     m_ulCurrentWritePosition = 0;
@@ -302,77 +304,7 @@ Return Value:
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    if (m_bCapture)
-    {
-        ReadRegistrySettings();
-        DWORD toneFrequency = 0;
-        DWORD toneAmplitude = 0;
-        DWORD toneDCOffset = 0;
-        DWORD toneInitialPhase = 0;
-
-        double toneAmplitudeDouble = 0;
-        double toneDCOffsetDouble = 0;
-        double toneInitialPhaseDouble = 0;
-
-        toneFrequency = m_ulHostCaptureToneFrequency;
-        toneAmplitude = m_dwHostCaptureToneAmplitude;
-        toneDCOffset = m_dwHostCaptureToneDCOffset;
-        toneInitialPhase = m_dwHostCaptureToneInitialPhase;
-
-        if (labs(toneAmplitude) > 100)
-        {
-            toneAmplitude = toneAmplitude > 0 ? 100 : -100;
-        }
-
-        if (labs(toneDCOffset) > 100)
-        {
-            toneDCOffset = toneDCOffset > 0 ? 100 : -100;
-        }
-
-        DWORD abssum = labs(toneAmplitude) + labs(toneDCOffset);
-
-        if (abssum > 100)
-        {
-            toneAmplitudeDouble = ((double)toneAmplitude) / abssum;
-            toneDCOffsetDouble = ((double)toneDCOffset) / abssum;
-        }
-        else
-        {
-            toneAmplitudeDouble = ((double)toneAmplitude) / 100.0;
-            toneDCOffsetDouble = ((double)toneDCOffset) / 100.0;
-        }
-
-        if (labs(toneInitialPhase) > 31416)
-        {
-            toneInitialPhase = toneInitialPhase > 0 ? 31416 : -31416;
-        }
-
-        toneInitialPhaseDouble = (double)toneInitialPhase / 10000;
-
-        ntStatus = m_ToneGenerator.Init(toneFrequency, toneAmplitudeDouble, toneDCOffsetDouble, toneInitialPhaseDouble, m_pWfExt);
-
-        if (!NT_SUCCESS(ntStatus))
-        {
-            return ntStatus;
-        }
-    }
-    else if (!g_DoNotCreateDataFiles)
-    {
-        //
-        // Create an output file for the render data.
-        //
-        DPF(D_TERSE, ("SaveData %p", &m_SaveData));
-        ntStatus = m_SaveData.SetDataFormat(DataFormat_);
-        if (NT_SUCCESS(ntStatus))
-        {
-            ntStatus = m_SaveData.Initialize();
-        }
-    
-        if (!NT_SUCCESS(ntStatus))
-        {
-            return ntStatus;
-        }
-    }
+    // Capture-only: no test tone, render stream or debug audio file.
 
     //
     // Register this stream.
@@ -1188,6 +1120,8 @@ NTSTATUS CMiniportWaveRTStream::SetState
             m_ullPlayPosition = 0;
             m_ullWritePosition = 0;
             m_ullLinearPosition = 0;
+    m_TranslateITCaptureReadFrame = 0;
+    m_TranslateITCaptureSerial = 0;
             m_ullPresentationPosition = 0;
             
             // Reset OS read/write positions
@@ -1198,9 +1132,6 @@ NTSTATUS CMiniportWaveRTStream::SetState
             m_bLastBufferRendered = FALSE;
 
             KeReleaseSpinLock(&m_PositionSpinLock, oldIrql);
-
-            // A stopped source must not leak queued audio into later sessions.
-            if (!m_bCapture) TranslateITBridgeReset();
 
             // Wait until all work items are completed.
             if (!m_bCapture && !g_DoNotCreateDataFiles)
@@ -1251,8 +1182,9 @@ NTSTATUS CMiniportWaveRTStream::SetState
             break;
 
         case KSSTATE_RUN:
-            // A freshly started microphone consumes only new complete frames.
-            if (m_bCapture) TranslateITBridgeReset();
+            // Reset only THIS client's cursor, not every capture reader.
+            m_TranslateITCaptureReadFrame = 0;
+            m_TranslateITCaptureSerial = 0;
             // Start DMA
             LARGE_INTEGER ullPerfCounterTemp;
             ullPerfCounterTemp = KeQueryPerformanceCounter(&m_ullPerformanceCounterFrequency);
@@ -1338,42 +1270,9 @@ VOID CMiniportWaveRTStream::UpdatePosition
 
     if (m_bCapture)
     {
-        // Write sine wave to buffer.
+        // Fill capture DMA with independently read admitted PCM.
         WriteBytes(ByteDisplacement);
     }
-    else
-    {
-
-        if (m_bEoSReceived)
-        {
-            // since EoS flag is set, we'll need to make sure not to read data beyond EOS position.
-            // If driver's current position is less than EoS position, then make sure not to read data beyond EoS.
-            if (m_ullWritePosition <= m_ulCurrentWritePosition)
-            {
-                ByteDisplacement = min(ByteDisplacement, m_ulCurrentWritePosition - (ULONG)m_ullWritePosition);
-            }
-            // If our current position is ahead of EoS position and we'll wrap around after new position then adjust
-            // new position if it crosses EoS.
-            else if ((m_ullWritePosition + ByteDisplacement) % m_ulDmaBufferSize < m_ullWritePosition)
-            {
-                if ((m_ullWritePosition + ByteDisplacement) % m_ulDmaBufferSize > m_ulCurrentWritePosition)
-                {
-                    ByteDisplacement = ByteDisplacement - (((ULONG)m_ullWritePosition + ByteDisplacement) % m_ulDmaBufferSize - m_ulCurrentWritePosition);
-                }
-            }
-        }
-
-        // If the last packet was rendered(read in the sample driver's case), send out an etw event.
-        if (m_bEoSReceived && !m_bLastBufferRendered
-            && (m_ullWritePosition + ByteDisplacement) % m_ulDmaBufferSize == m_ulCurrentWritePosition)
-        {
-            m_bLastBufferRendered = TRUE;
-        }
-
-        // Copy Windows render frames into our single capture FIFO.
-        ReadBytes(ByteDisplacement);
-    }
-    
     // Increment the DMA position by the number of bytes displaced since the last
     // call to UpdatePosition() and ensure we properly wrap at buffer length.
     //
@@ -1400,7 +1299,7 @@ VOID CMiniportWaveRTStream::WriteBytes
 
 Routine Description:
 
-This function copies the virtual render stream to the capture DMA buffer
+This function reads the current producer into each capture DMA buffer
 
 Arguments:
 
@@ -1408,6 +1307,7 @@ ByteDisplacement - # of bytes to process.
 
 --*/
 {
+    if (m_pDmaBuffer == NULL || m_ulDmaBufferSize == 0) return;
     ULONG bufferOffset = m_ullLinearPosition % m_ulDmaBufferSize;
 
     // Normally this will loop no more than once for a single wrap, but if
@@ -1416,39 +1316,9 @@ ByteDisplacement - # of bytes to process.
     {
         ULONG runWrite = min(ByteDisplacement, m_ulDmaBufferSize - bufferOffset);
         
-        TranslateITBridgeRead(m_pDmaBuffer + bufferOffset, runWrite);
+        TranslateITCaptureRead(m_pDmaBuffer + bufferOffset, runWrite,
+            &m_TranslateITCaptureReadFrame, &m_TranslateITCaptureSerial);
            	
-        bufferOffset = (bufferOffset + runWrite) % m_ulDmaBufferSize;
-        ByteDisplacement -= runWrite;
-    }
-}
-
-//=============================================================================
-#pragma code_seg()
-VOID CMiniportWaveRTStream::ReadBytes
-(
-    _In_ ULONG ByteDisplacement
-)
-/*++
-
-Routine Description:
-
-This function reads the virtual playback DMA into the bounded PCM bridge.
-
-Arguments:
-
-ByteDisplacement - # of bytes to process.
-
---*/
-{
-    ULONG bufferOffset = m_ullLinearPosition % m_ulDmaBufferSize;
-
-    // Normally this will loop no more than once for a single wrap, but if
-    // many bytes have been displaced then this may loops many times.
-    while (ByteDisplacement > 0)
-    {
-        ULONG runWrite = min(ByteDisplacement, m_ulDmaBufferSize - bufferOffset);
-        TranslateITBridgeWrite(m_pDmaBuffer + bufferOffset, runWrite);
         bufferOffset = (bufferOffset + runWrite) % m_ulDmaBufferSize;
         ByteDisplacement -= runWrite;
     }

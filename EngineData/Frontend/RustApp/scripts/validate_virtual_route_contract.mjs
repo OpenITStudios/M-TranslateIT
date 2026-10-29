@@ -11,11 +11,16 @@ const files = {
   playbackRuntime: resolve(root, "src-tauri/src/commands/meeting_session/playback_runtime.rs"),
   route: resolve(root, "src-tauri/src/commands/virtual_mic_route.rs"),
   pairSelection: resolve(root, "src-tauri/src/commands/virtual_mic_route/pair_selection.rs"),
-  nativeInf: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/TranslateITVA.inx"),
-  nativeBridge: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/pcm_bridge.cpp"),
+  nativeInf: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/TranslateITMic.inx"),
+  nativeProtocol: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/capture_control_protocol.h"),
+  nativeControl: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/capture_control_device.cpp"),
+  nativePcm: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/capture_pcm.cpp"),
+  nativeAdapter: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/adapter.cpp"),
+  nativeMiniPairs: resolve(root, "src-tauri/windows/virtual-audio/Source/Filters/minipairs.h"),
+  nativeProject: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/Main.vcxproj"),
+  nativeRust: resolve(root, "src-tauri/src/engine/audio/native_capture_transport.rs"),
   nativeStream: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/minwavertstream.cpp"),
   nativeCaptureFormat: resolve(root, "src-tauri/windows/virtual-audio/Source/Filters/micarraywavtable.h"),
-  nativeRenderFormat: resolve(root, "src-tauri/windows/virtual-audio/Source/Filters/speakerwavtable.h"),
   meetingOutput: resolve(root, "src-tauri/src/engine/audio/meeting_output.rs"),
   meetingOutputRuntime: resolve(root, "src-tauri/src/engine/audio/meeting_output_runtime.rs"),
   audioMod: resolve(root, "src-tauri/src/engine/audio/mod.rs"),
@@ -25,6 +30,9 @@ const files = {
 const retired = [
   resolve(root, "src-tauri/src/commands/virtual_audio_route_runtime.rs"),
   resolve(root, "../../Backend/LocalWorker/WorkerRuntime/virtual_audio_route_provider.py"),
+  resolve(root, "src-tauri/windows/virtual-audio/Source/Main/pcm_bridge.cpp"),
+  resolve(root, "src-tauri/windows/virtual-audio/Source/Main/pcm_bridge.h"),
+  resolve(root, "src-tauri/windows/virtual-audio/Source/Main/TranslateITVA.inx"),
 ];
 
 const source = {};
@@ -138,32 +146,104 @@ forbidMarkers(source.registry, "mutating/manual route surface", [
   "dispatch_guarded_virtual_audio_route_provider",
 ]);
 
-requireMarkers(source.nativeInf, "TranslateIT Windows endpoint branding", [
-  'TRANSLATEITVA.WaveSpeaker.szPname="TranslateIT Microphone Feed"',
-  'TRANSLATEITVA.WaveMicArray1.szPname="TranslateIT Meeting Microphone"',
-  "ROOT\\\\TranslateITVirtualAudio",
+requireMarkers(source.nativeInf, "one capture-only PnP endpoint", [
+  'TRANSLATEITMIC.WaveMicArray1.szPname="TranslateIT Meeting Microphone"',
+  "ROOT\\TranslateITCaptureMic",
+  "Guid.TranslateITCapture",
+  "MediaCategories",
 ]);
-requireMarkers(source.nativeBridge, "bounded native PCM bridge", [
-  "kFrameBytes = 4", "kBufferBytes = 38400",
-  "KeAcquireSpinLock", "RtlZeroMemory(destination, byteCount)",
+forbidMarkers(source.nativeInf, "paired render endpoint in capture-only INF", [
+  "AddInterface=%KSCATEGORY_RENDER%", "KSNAME_WaveSpeaker",
+  'WaveSpeaker.szPname="TranslateIT Microphone Feed"',
 ]);
-forbidMarkers(source.nativeBridge, "insecure custom user-mode driver channel", [
-  "DeviceIoControl(", "IOCTL_", "CreateFile(",
+requireMarkers(source.nativeMiniPairs, "one registered WaveRT capture minipair", [
+  "g_CaptureEndpoints", "&MicArray1Miniports",
+  "#define g_MaxMiniports  (g_cCaptureEndpoints * 2)",
 ]);
-requireMarkers(source.nativeStream, "paired native WaveRT stream transfer", [
-  "TranslateITBridgeRead(m_pDmaBuffer + bufferOffset, runWrite)",
-  "TranslateITBridgeWrite(m_pDmaBuffer + bufferOffset, runWrite)",
-  "ReadBytes(ByteDisplacement);",
+forbidMarkers(source.nativeMiniPairs, "obsolete render minipair", [
+  "g_RenderEndpoints", "SpeakerMiniports",
 ]);
-forbidMarkers(source.nativeStream, "sample test tone or raw audio file writer", [
-  "m_SaveData.WriteData(m_pDmaBuffer", "m_ToneGenerator.GenerateSine(m_pDmaBuffer",
+requireMarkers(source.nativeProject, "WDK driver and secure-device linker", [
+  "wdmsec.lib", 'ClCompile Include="capture_pcm.cpp"',
+  'ClCompile Include="capture_control_device.cpp"',
+  "TranslateITMic",
 ]);
-requireMarkers(source.nativeCaptureFormat, "48 kHz stereo PCM16 capture", [
-  "MICARRAY_16_BITS_PER_SAMPLE_PCM", "192000",
+requireMarkers(source.nativeProtocol, "bounded PCM16 mono IOCTL ABI", [
+  "TI_CAPTURE_PROTOCOL_VERSION 1u", "TI_CAPTURE_RATE_HZ 48000u",
+  "TI_CAPTURE_CHANNELS 1u", "TI_CAPTURE_SAMPLE_BITS 16u",
+  "TI_CAPTURE_MAX_FRAMES_PER_WRITE 960u",
+  "TI_CAPTURE_FIFO_FRAMES 9600u",
+  "METHOD_BUFFERED, FILE_WRITE_DATA", "METHOD_BUFFERED, FILE_READ_DATA",
+  "C_ASSERT(sizeof(TI_CAPTURE_BEGIN) == 32)",
+  "C_ASSERT(FIELD_OFFSET(TI_CAPTURE_WRITE, Data) == 32)",
+  "C_ASSERT(sizeof(TI_CAPTURE_REVOKE) == 24)",
+  "C_ASSERT(sizeof(TI_CAPTURE_STATUS) == 40)",
 ]);
-requireMarkers(source.nativeRenderFormat, "48 kHz stereo PCM16 render", [
-  "SPEAKER_HOST_MIN_BITS_PER_SAMPLE            16",
-  "SPEAKER_HOST_MIN_SAMPLE_RATE                48000",
+requireMarkers(source.nativeControl, "privileged control admission and cleanup", [
+  "IoCreateDeviceSecure(", "wdmsec.h",
+  'D:P(A;;GA;;;SY)(A;;GA;;;BA)',
+  "TI_CAPTURE_IOCTL_WRITE",
+  "TranslateITCaptureCloseWriter(stack->FileObject)",
+  "PcDispatchIrp(device, irp)", "input != sizeof(TI_CAPTURE_BEGIN)",
+  "openedEpoch != currentEpoch",
 ]);
+forbidMarkers(source.nativeControl, "publicly writable driver surface", [
+  "(A;;GRGW;;;WD)", "(A;;GRGW;;;IU)", "FILE_ANY_ACCESS",
+]);
+requireMarkers(source.nativePcm, "session owned PCM and independent readers", [
+  "g_writer != file", "g_lastGeneration",
+  "request->SourceEpoch <= g_lastSourceEpoch",
+  "request->Sequence != g_expectedSequence",
+  "invalidateLocked(releaseWriter)",
+  "*observedSerial == 0",
+  "*observedSerial != g_serial",
+  "RtlZeroMemory(destination, bytes)", "g_online",
+  "g_deviceEpoch", "TranslateITCaptureDeviceEpoch()",
+  "TranslateITCaptureRead(",
+]);
+requireMarkers(source.nativeAdapter, "driver install and PnP lifecycle", [
+  "TranslateITCaptureInitialize();",
+  "TranslateITControlInitialize(DriverObject)",
+  "TranslateITCaptureSetOnline();",
+  "TranslateITCaptureInvalidateAll();",
+  "TranslateITControlShutdown();",
+]);
+forbidMarkers(source.nativeAdapter, "render-device admission", [
+  "InstallAllRenderFilters(", "g_RenderEndpoints",
+]);
+requireMarkers(source.nativeStream, "WaveRT independent PCM capture", [
+  "TranslateITCaptureRead(m_pDmaBuffer + bufferOffset, runWrite,",
+  "&m_TranslateITCaptureReadFrame",
+  "&m_TranslateITCaptureSerial",
+]);
+forbidMarkers(source.nativeStream, "legacy paired-PCM/tone playback", [
+  "TranslateITBridgeRead(", "TranslateITBridgeWrite(",
+  "m_ToneGenerator.GenerateSine(m_pDmaBuffer",
+  "m_ToneGenerator.Init(", "ReadBytes(ByteDisplacement);",
+]);
+requireMarkers(source.nativeCaptureFormat, "48 kHz mono PCM16 and multiple readers", [
+  "MICARRAY_RAW_CHANNELS                   1",
+  "MICARRAY_MAX_INPUT_STREAMS              8",
+  "KSAUDIO_SPEAKER_MONO", "96000",
+]);
+requireMarkers(source.audioMod, "candidate client compiled but not admitted to Meeting", [
+  "pub(crate) mod native_capture_transport;",
+]);
+requireMarkers(source.nativeRust, "user-mode client matches restricted wire ABI", [
+  "DEVICE_PATH", "TranslateITMicControl",
+  "fn DeviceIoControl(",
+  "fn frame_bytes(",
+  "pub fn submit_20ms(&mut self,",
+  "pub fn flush(&mut self)",
+  "pub fn resume(&mut self",
+  "pub fn end(mut self)",
+  "pub fn status(&self)",
+  "ioctls_match_kernel_method_buffered_file_access",
+]);
+forbidMarkers(
+  source.route + "\n" + source.pairSelection + "\n" + source.meetingLifecycle,
+  "unaccepted capture driver cannot displace VB-CABLE",
+  ["TranslateITMicControl", "IOCTL_BEGIN", "NativeCaptureSession::begin("],
+);
 
-console.log("[virtual-route] Legacy standard VB-CABLE remains the only admitted Meeting route; the native paired-source prototype is unaccepted, pair selection has no lifecycle state, and capture-only is a separate gated target.");
+console.log("[virtual-route] VB-CABLE remains the only admitted Meeting route; capture-only WDK source and privileged Rust IOCTL client are not installed, signed or native-accepted.");

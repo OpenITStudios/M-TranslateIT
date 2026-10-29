@@ -209,30 +209,28 @@ Indonesian speech
 ### Canonical Meeting audio topology
 
 ```text
-CURRENT SUPPORTED MEETING OUTBOUND (one selected source)
-Physical spoken microphone (selected Windows input)
-  -> [Original] direct PCM passthrough, no AI/ASR/translation/TTS
-  -> [TranslateIT] finalized Indonesian speech -> local English TTS
-  -> one Rust-owned output -> standard VB-CABLE CABLE Input (render)
-  -> paired CABLE Output (recording) -> calling application's microphone input
+SUPPORTED MEETING OUTBOUND (unchanged)
+Physical microphone -> Original passthrough or translated English TTS
+  -> one Rust-owned CPAL playback -> standard VB-CABLE CABLE Input
+  -> paired CABLE Output recording -> meeting application's microphone
 
-TARGET NATIVE CAPTURE-ONLY (NOT YET IMPLEMENTED/ACCEPTED)
-Same existing Rust Meeting source and generation/epoch owner
-  -> checked user-mode PCM transport with exclusive writer + atomic Flush
-  -> TranslateIT Meeting Microphone (single Windows recording endpoint)
-  -> calling application's microphone input
-No extra Windows playback/feed endpoint and no parallel Meeting engine.
+NATIVE CAPTURE-ONLY SOURCE CANDIDATE (NOT ROUTED OR INSTALLED)
+Same single Rust Meeting output owner
+  -> checked privileged PCM16 mono control session (generation/epoch/sequence)
+  -> one Windows recording endpoint: TranslateIT Meeting Microphone
+  -> meeting application's microphone
+No new render/speaker endpoint and no parallel Meeting engine.
 
-OPTIONAL INCOMING (UNCHANGED)
-Calling application's physical speaker/headset output
-  -> Windows endpoint loopback -> local EN->ID captions only
+INCOMING (unchanged): physical Meeting Sound -> Windows loopback -> EN/ID captions
 ```
 
-The supported route is the standard licensed VB-CABLE pair; its endpoint names are inverted from TranslateIT's perspective. The earlier Microsoft WaveRT-derived paired native prototype remains source-reference only, **not admitted to Meeting selection, not bundled or production signed**. An apparent `TranslateIT Meeting Microphone` name cannot prove driver provenance, route readiness or capture reception. Presence of a prototype native device must not hijack a valid VB-CABLE route. If no supported provider exists, Start fails closed.
+VB-CABLE remains the only admitted Meeting route and shipped provider. The old paired WaveRT prototype is retained in Git history, not silently selected by friendly-name matching. The new capture-only source is not compiled, signed, installed or accepted on Windows, and no native endpoint discovery or local playback is proof of meeting-app reception.
 
-**Native target contract:** One Windows capture endpoint; no second virtual playback endpoint. One Rust Meeting output authority with an exclusive, access-controlled local PCM writer; bounded 48 kHz PCM16 mono frames converted before kernel admission; explicit generation + source epoch + monotonic sequence; safe multi-reader capture without cross-consumer draining; silent underflow; bounded, observable overflow. Stop, Mute and source switches must invalidate old sessions and flush native audio before acknowledging success. They cannot recall samples already consumed by external applications. Device identity and package authenticity must not be inferred from a human-friendly name. Until WDK compilation, driver signing, installer, Windows Audio/PnP testing and external meeting-app reception are genuinely verified, the native target is not operational.
+**Capture-only source contract:** One WaveRT recording endpoint at 48 kHz PCM16 mono; at most eight independent capture readers, each with a separate read cursor; silent underflow and bounded 200 ms ring. A single privileged producer uses versioned METHOD_BUFFERED FILE_WRITE_DATA BEGIN/WRITE/FLUSH/END requests with checked lengths, session generation, source epoch and sequence; all readers observe new producer epochs without draining each other. STOP/Mute/Source Switch revokes queued kernel PCM before acknowledgement, but cannot recall speech already consumed by an external app.
 
-The physical microphone, optional Meeting Sound output, and calling application's microphone and speaker are independent selections. Neither the virtual route nor Meeting Sound changes the calling application's speaker. Required and incoming audio lanes never mix or silently substitute their endpoints. Endpoint-wide loopback may include audio from unrelated processes.
+**Security boundary:** The current control-device DACL grants SYSTEM/elevated Administrator access only, not regular Windows users. It must not be weakened to World/Interactive write. A reviewed least-privilege broker and paced audio output under the existing Rust Meeting owner are still required. Native Rust IOCTL source is present but not wired to normal Meeting Start. Separate WDK, PnP provisioning, driver signing, installer rollback, device identity, clock drift and actual receiver tests remain unexecuted.
+
+Physical microphone, incoming Meeting Sound and calling-app microphone/speaker remain independent. There is no raw-mic or speaker fallback. Windows endpoint-wide loopback may capture unrelated processes.
 
 ### PR-070 — Outbound content
 **MUST:** When `TranslateIT Audio` is selected, output only translated English speech from the selected Meeting voice. Raw physical microphone speech must never be an automatic fallback for a failed translation. When `Original Microphone` is explicitly selected, send raw mic PCM directly to the same virtual microphone without AI, ASR, translation, TTS or discretionary processing. The two sources must not be mixed.

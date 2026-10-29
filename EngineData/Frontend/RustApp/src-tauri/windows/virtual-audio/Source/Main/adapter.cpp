@@ -22,7 +22,8 @@ Abstract:
 #include "definitions.h"
 #include "endpoints.h"
 #include "minipairs.h"
-#include "pcm_bridge.h"
+#include "capture_pcm.h"
+#include "capture_control_device.h"
 
 typedef void (*fnPcDriverUnload) (PDRIVER_OBJECT);
 fnPcDriverUnload gPCDriverUnloadRoutine = NULL;
@@ -98,6 +99,7 @@ Environment:
 
     DPF(D_TERSE, ("[DriverUnload]"));
 
+    TranslateITControlShutdown();
     ReleaseRegistryStringBuffer();
 
     if (DriverObject == NULL)
@@ -328,7 +330,7 @@ Return Value:
     //
     // Never persist meeting PCM through the original sample file writer.
     g_DoNotCreateDataFiles = 1;
-    TranslateITBridgeInitialize();
+    TranslateITCaptureInitialize();
 
     // Tell the class driver to initialize the driver.
     //
@@ -340,9 +342,13 @@ Return Value:
         DPF(D_ERROR, ("PcInitializeAdapterDriver failed, 0x%x", ntStatus)),
         Done);
 
-    //
-    // To intercept stop/remove/surprise-remove.
-    //
+    ntStatus = TranslateITControlInitialize(DriverObject);
+    IF_FAILED_ACTION_JUMP(
+        ntStatus,
+        DPF(D_ERROR, ("TranslateIT control-device setup failed 0x%x", ntStatus)),
+        Done);
+
+    // Preserve the PortCls PnP dispatcher with explicit capture revocation.
     DriverObject->MajorFunction[IRP_MJ_PNP] = PnpHandler;
 
     //
@@ -456,170 +462,6 @@ PowerControlCallback
     UNREFERENCED_PARAMETER(Context);
     
     return STATUS_NOT_IMPLEMENTED;
-}
-
-#pragma code_seg("PAGE")
-NTSTATUS 
-InstallEndpointRenderFilters(
-    _In_ PDEVICE_OBJECT     _pDeviceObject, 
-    _In_ PIRP               _pIrp, 
-    _In_ PADAPTERCOMMON     _pAdapterCommon,
-    _In_ PENDPOINT_MINIPAIR _pAeMiniports
-    )
-{
-    NTSTATUS                    ntStatus                = STATUS_SUCCESS;
-    PUNKNOWN                    unknownTopology         = NULL;
-    PUNKNOWN                    unknownWave             = NULL;
-    PPORTCLSETWHELPER           pPortClsEtwHelper       = NULL;
-#ifdef _USE_IPortClsRuntimePower
-    PPORTCLSRUNTIMEPOWER        pPortClsRuntimePower    = NULL;
-#endif // _USE_IPortClsRuntimePower
-    PPORTCLSStreamResourceManager pPortClsResMgr        = NULL;
-    PPORTCLSStreamResourceManager2 pPortClsResMgr2      = NULL;
-
-    PAGED_CODE();
-    
-    UNREFERENCED_PARAMETER(_pDeviceObject);
-
-    ntStatus = _pAdapterCommon->InstallEndpointFilters(
-        _pIrp,
-        _pAeMiniports,
-        NULL,
-        &unknownTopology,
-        &unknownWave,
-        NULL, NULL);
-
-    if (unknownWave) // IID_IPortClsEtwHelper and IID_IPortClsRuntimePower interfaces are only exposed on the WaveRT port.
-    {
-        ntStatus = unknownWave->QueryInterface (IID_IPortClsEtwHelper, (PVOID *)&pPortClsEtwHelper);
-        if (NT_SUCCESS(ntStatus))
-        {
-            _pAdapterCommon->SetEtwHelper(pPortClsEtwHelper);
-            ASSERT(pPortClsEtwHelper != NULL);
-            pPortClsEtwHelper->Release();
-        }
-
-#ifdef _USE_IPortClsRuntimePower
-        // Let's get the runtime power interface on PortCls.  
-        ntStatus = unknownWave->QueryInterface(IID_IPortClsRuntimePower, (PVOID *)&pPortClsRuntimePower);
-        if (NT_SUCCESS(ntStatus))
-        {
-            // This interface would typically be stashed away for later use.  Instead,
-            // let's just send an empty control with GUID_NULL.
-            NTSTATUS ntStatusTest =
-                pPortClsRuntimePower->SendPowerControl
-                (
-                    _pDeviceObject,
-                    &GUID_NULL,
-                    NULL,
-                    0,
-                    NULL,
-                    0,
-                    NULL
-                );
-
-            if (NT_SUCCESS(ntStatusTest) || STATUS_NOT_IMPLEMENTED == ntStatusTest || STATUS_NOT_SUPPORTED == ntStatusTest)
-            {
-                ntStatus = pPortClsRuntimePower->RegisterPowerControlCallback(_pDeviceObject, &PowerControlCallback, NULL);
-                if (NT_SUCCESS(ntStatus))
-                {
-                    ntStatus = pPortClsRuntimePower->UnregisterPowerControlCallback(_pDeviceObject);
-                }
-            }
-            else
-            {
-                ntStatus = ntStatusTest;
-            }
-
-            pPortClsRuntimePower->Release();
-        }
-#endif // _USE_IPortClsRuntimePower
-
-        //
-        // Test: add and remove current thread as streaming audio resource.  
-        // In a real driver you should only add interrupts and driver-owned threads 
-        // (i.e., do NOT add the current thread as streaming resource).
-        //
-        // testing IPortClsStreamResourceManager:
-        ntStatus = unknownWave->QueryInterface(IID_IPortClsStreamResourceManager, (PVOID *)&pPortClsResMgr);
-        if (NT_SUCCESS(ntStatus))
-        {
-            PCSTREAMRESOURCE_DESCRIPTOR res;
-            PCSTREAMRESOURCE hRes = NULL;
-            PDEVICE_OBJECT pdo = NULL;
-
-            PcGetPhysicalDeviceObject(_pDeviceObject, &pdo);
-            PCSTREAMRESOURCE_DESCRIPTOR_INIT(&res);
-            res.Pdo = pdo;
-            res.Type = ePcStreamResourceThread;
-            res.Resource.Thread = PsGetCurrentThread();
-            
-            NTSTATUS ntStatusTest = pPortClsResMgr->AddStreamResource(NULL, &res, &hRes);
-            if (NT_SUCCESS(ntStatusTest))
-            {
-                pPortClsResMgr->RemoveStreamResource(hRes);
-                hRes = NULL;
-            }
-
-            pPortClsResMgr->Release();
-            pPortClsResMgr = NULL;
-        }
-        
-        // testing IPortClsStreamResourceManager2:
-        ntStatus = unknownWave->QueryInterface(IID_IPortClsStreamResourceManager2, (PVOID *)&pPortClsResMgr2);
-        if (NT_SUCCESS(ntStatus))
-        {
-            PCSTREAMRESOURCE_DESCRIPTOR res;
-            PCSTREAMRESOURCE hRes = NULL;
-            PDEVICE_OBJECT pdo = NULL;
-
-            PcGetPhysicalDeviceObject(_pDeviceObject, &pdo);
-            PCSTREAMRESOURCE_DESCRIPTOR_INIT(&res);
-            res.Pdo = pdo;
-            res.Type = ePcStreamResourceThread;
-            res.Resource.Thread = PsGetCurrentThread();
-            
-            NTSTATUS ntStatusTest = pPortClsResMgr2->AddStreamResource2(pdo, NULL, &res, &hRes);
-            if (NT_SUCCESS(ntStatusTest))
-            {
-                pPortClsResMgr2->RemoveStreamResource(hRes);
-                hRes = NULL;
-            }
-
-            pPortClsResMgr2->Release();
-            pPortClsResMgr2 = NULL;
-        }
-    }
-
-    SAFE_RELEASE(unknownTopology);
-    SAFE_RELEASE(unknownWave);
-
-    return ntStatus;
-}
-
-#pragma code_seg("PAGE")
-NTSTATUS 
-InstallAllRenderFilters(
-    _In_ PDEVICE_OBJECT _pDeviceObject, 
-    _In_ PIRP           _pIrp, 
-    _In_ PADAPTERCOMMON _pAdapterCommon
-    )
-{
-    NTSTATUS            ntStatus;
-    PENDPOINT_MINIPAIR* ppAeMiniports   = g_RenderEndpoints;
-    
-    PAGED_CODE();
-
-    for(ULONG i = 0; i < g_cRenderEndpoints; ++i, ++ppAeMiniports)
-    {
-        ntStatus = InstallEndpointRenderFilters(_pDeviceObject, _pIrp, _pAdapterCommon, *ppAeMiniports);
-        IF_FAILED_JUMP(ntStatus, Exit);
-    }
-    
-    ntStatus = STATUS_SUCCESS;
-
-Exit:
-    return ntStatus;
 }
 
 #pragma code_seg("PAGE")
@@ -745,16 +587,11 @@ Return Value:
     IF_FAILED_JUMP(ntStatus, Exit);
 
     //
-    // Install wave+topology filters for render devices
-    //
-    ntStatus = InstallAllRenderFilters(DeviceObject, Irp, pAdapterCommon);
-    IF_FAILED_JUMP(ntStatus, Exit);
-
-    //
     // Install wave+topology filters for capture devices
     //
     ntStatus = InstallAllCaptureFilters(DeviceObject, Irp, pAdapterCommon);
     IF_FAILED_JUMP(ntStatus, Exit);
+    TranslateITCaptureSetOnline();
 
 Exit:
 
@@ -826,6 +663,7 @@ Return Value:
     case IRP_MN_REMOVE_DEVICE:
     case IRP_MN_SURPRISE_REMOVAL:
     case IRP_MN_STOP_DEVICE:
+        TranslateITCaptureInvalidateAll();
         ext = static_cast<PortClassDeviceContext*>(_DeviceObject->DeviceExtension);
 
         if (ext->m_pCommon != NULL)

@@ -1,38 +1,97 @@
-# TranslateIT Virtual Audio — unaccepted paired-source prototype
+# TranslateIT Capture-Only Windows Microphone — Source Candidate
 
-**Status: historical design/reference only — NOT ADMITTED to Meeting routing or packaging.** This paired-render/capture source tree has never been built, signed, installed or tested as a native TranslateIT driver. The current product selects only the approved standard VB-CABLE provider. Do not bundle, auto-install or bypass Windows driver-security protections to run this prototype.
+**State: STATIC_SOURCE only.** This repository contains an uncompiled,
+unsigned, uninstalled native driver candidate. It does **not** change the
+current TranslateIT Meeting route: the standard licensed VB-CABLE pair remains
+the only selected and packaged provider. Do not auto-install this source or
+ask end users to disable Secure Boot / Windows driver protections.
 
-The accepted **next native target** is a *capture-only* Windows microphone endpoint backed by a single authorized Rust Meeting producer. It must not expose the separate `TranslateIT Microphone Feed` render endpoint. The capture-only implementation requires an explicit, access-controlled kernel/user-mode PCM transfer and generation-bound lifecycle, and is **not implemented in this prototype**. The paired sample remains only as reviewable source/provenance and may be retired when the replacement is complete.
+## Provenance
 
-## Provenance and licence
+Adapted from Microsoft's Windows driver sample
+`Windows-driver-samples/audio/simpleaudiosample` pinned at commit
+`f4c1ff842b6a0001152f44cb61788b216a1c7627`. Original and derivative
+source is governed by `LICENSE.MS-PL`; the unedited original sample README
+is `UPSTREAM_README.md`. Microsoft does not sign or endorse this derivative.
 
-Derived from the official Microsoft `Windows-driver-samples/audio/simpleaudiosample` WaveRT code, pinned at `f4c1ff842b6a0001152f44cb61788b216a1c7627`. Original source is distributed under the **Microsoft Public License (MS-PL)**, reproduced unchanged in `LICENSE.MS-PL`. The upstream documentation is `UPSTREAM_README.md`; changes to this derivative are authored by OpenITStudios. A derivative source is not a Microsoft-certified/signed driver.
+The previous *paired render/capture* prototype is preserved in Git history
+(commit `6085c839925a83ae35426749e558252033c8391e`), **not** exposed as
+another active driver. The current candidate has a different PnP identity and
+service/package identity to avoid accidental upgrade collisions.
 
-## Two prototype Windows endpoints (not supported)
+## Endpoint and authority
 
-| Endpoint | Type | Intended client |
+| Object | Source | Audience |
 | --- | --- | --- |
-| `TranslateIT Microphone Feed` | Windows playback/render device | Existing Rust CPAL output (Original or English translation) |
-| `TranslateIT Meeting Microphone` | Windows microphone/capture device | Zoom / Teams / Discord / meeting application |
+| TranslateIT Meeting Microphone | WaveRT capture-only mic | Meeting applications via normal Windows capture |
+| TranslateITMicControl | Separate secured device object | Currently SYSTEM / elevated Administrators only |
+| Rust native_capture_transport.rs | Windows DeviceIoControl client | Unaccepted candidate; not used by production Meeting |
 
-Windows kernel source formats: **48,000 Hz, signed PCM16, 2 channels** on both endpoints. The paired WaveRT audio streams share a **bounded 200 ms, nonpaged, frame-aligned** PCM ring. Capture underflow returns silence, overflow discards oldest samples. The bridge has no user-mode IOCTL, cloud engine, independent AI service, or raw-audio file writer.
+No virtual speaker, no virtual render/feed endpoint, no second translation
+worker and no file-backed meeting audio. Normal audio applications can
+open the Windows microphone; they must not gain a PCM writer handle from the
+microphone endpoint.
 
-Rust does **not** admit these prototype endpoint names as a Meeting route. It may list their names for diagnostics, but the current supported legacy provider has exclusive route selection. A native audio endpoint cannot be accepted from a display-name match or a successful local callback alone.
+Driver build entry: `TranslateITMic.sln`. The WDK project outputs
+`TranslateITMic.sys`; `Source/Main/TranslateITMic.inx` generates the
+matching INF and package catalog `TranslateITMic.cat`. Hardware ID:
+`ROOT\TranslateITCaptureMic`. The exact endpoint friendly name is declared
+using the custom capture topology GUID and INF MediaCategories registration;
+the actual Windows display name must still be observed on a target host.
 
-## WDK solution / released-provider boundary
+## PCM contract
 
-`TranslateITVA.sln` and the original WDK project files are source only. The intended production package is a properly Microsoft-trusted signed `TranslateITVA.sys`, generated `TranslateITVA.inf`, and `TranslateITVA.cat`. Generated, unsigned or test-signed outputs are not bundled in this Git commit.
+- One privileged writer handles BEGIN / WRITE / FLUSH / END / STATUS.
+- Version 1, **48,000 Hz, signed PCM16, mono** (2 bytes per frame).
+- Each WRITE contains at most **960 frames / 20 ms**; no pointer, size,
+  generation, epoch or sequence from user mode is trusted without validation.
+- Ring capacity is **9,600 frames / 200 ms**; it is a maximum bound, not
+  a guaranteed 200 ms latency. Underflow yields silence. Oldest history is
+  overwritten on overflow, without allocating in audio callbacks.
+- Up to eight capture streams use separate logical cursors into the same
+  timestamp-ordered sample history. Closing one reader does not drain or
+  reset audio for another.
+- Wrong writer file, generation, source epoch or packet sequence is rejected;
+  FLUSH revokes the current admission and makes queued frames unreadable.
+  Re-BEGIN on the same control handle requires an advanced epoch. Closing the
+  writer or stopping/removing PnP ownership revokes it independently.
+  A control handle is bound to the PnP device epoch observed at CREATE;
+  after device STOP/START, an already-open handle cannot reopen the writer.
+- The driver cannot retract buffers already handed to Windows or other
+  applications. The native acceptance phase must measure the remaining tail
+  after Mute/Stop and ensure no subsequent old frames re-enter.
 
-Official Windows SDK/WDK + Visual Studio are required for a pinned native build. Exact Windows 10/11 support, driver verifier/static code analysis, HLK/required Microsoft signing route, INF/CAT installation, reboot/recovery/uninstall, real endpoint display names, both stream formats, long-session clock drift and lip/speech timing, Mute/Original/TranslateIT switching, speaker isolation, and actual Meeting receiver output **remain UNKNOWN / NOT EXECUTED**. Record proof only in the existing coordinated Windows acceptance owner.
+The input layer may contain other formats, but conversion/resampling to the
+exact PCM16 mono contract must occur *before* this backend. The Rust client
+does **not** schedule or resample audio by itself and is intentionally not
+connected to the production playback path until its native acceptance gate.
 
-The already approved standard VB-CABLE provider remains the only released installer payload and the only selected Meeting route. Source adoption does not authorize mixing drivers in setup or rebranding VB-Audio devices.
+## Privilege and product blocker
 
-## Capture-only target contract (design; not executable proof)
+The control device uses `IoCreateDeviceSecure` with a **custom** class GUID
+and DACL `D:P(A;;GA;;;SY)(A;;GA;;;BA)`. There is no write grant to
+World, Authenticated Users, Interactive Users or a public pipe. Control IOCTLs
+also require FILE_WRITE_DATA and METHOD_BUFFERED.
 
-- Exactly one Windows capture/recording endpoint, with stable Windows device identity independently of its friendly name; no native render/feed endpoint is registered.
-- One Rust Meeting output owner writes bounded, checked PCM16 mono 48 kHz blocks over an authenticated, single-producer local channel. The native driver neither translates nor captures the physical microphone.
-- A writer session is bound to the live Meeting generation and source epoch. Invalid, stale, duplicate or unowned writes are denied; Stop/Mute/Source Switch revokes that stream and flushes all queued native frames before success is acknowledged. Already delivered frames in another application's buffer cannot be retroactively recalled.
-- Multiple legitimate Windows capture clients (e.g. two call apps) must consume the same audio independently; never let one client drain another client's samples.
-- Absent producer or buffer underrun means silence. Overrun is bounded and explicitly observable, not a growing latency queue. No raw audio files, global publicly writable device access, cloud fallback, device name-based trust, or default speaker hijack.
-- Windows PnP instance provisioning, signing, rollback/removal, clean-install and device-loss handling require separate verified implementation. This source tree is not that implementation.
+A normal non-elevated TranslateIT application **cannot** open this control
+device. This is deliberate fail-closed behavior in the source candidate, **not
+a completed end-user solution**. The next product security boundary is a
+reviewed least-privilege broker/authorization transport under the existing
+single Rust Meeting output owner. Do not lower the DACL or embed shared static
+secrets in the app to simulate authorization.
 
+## Required higher-context proof
+
+All remain **UNKNOWN / NOT EXECUTED**: WDK x64/ARM64 compiler/link, WDK
+code analysis, INF/CAT syntax and Microsoft-required driver signing,
+non-admin authorization broker, actual PnP root-device provisioning,
+Windows 10/11 endpoint name, WASAPI capture/driver IOCTL roundtrip,
+simultaneous capture clients, device lifecycle, drift/latency, Mute/Stop
+tail, physical mic isolation, crash/restart/rollback/uninstall, and real
+Zoom/Teams receiver reception. These checks belong to the existing single
+integrated TARGET_WINDOWS acceptance runbook, not to GitHub CI or per-commit
+manual user testing.
+
+The native candidate is never deployed in the existing
+`TranslateIT-Setup.exe` + `TranslateIT-Payload.7z` flow until separately
+approved and genuinely signed/tested. VB-Audio's device/brand is not renamed.

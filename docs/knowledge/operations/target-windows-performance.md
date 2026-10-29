@@ -525,37 +525,15 @@ This section is an acceptance procedure, not target-Windows evidence. It covers 
 
 No OS or meeting application checks were executed here. Test the complete path, repeated session generations, physical device loss and long-session resources in the existing grouped exact-SHA Windows acceptance.
 
-## Native capture-only microphone — gated implementation/acceptance
+## Native capture-only microphone — source candidate / not activated
 
-**Status: DESIGN TARGET; NOT IMPLEMENTED / NOT EXECUTED.** The earlier paired
-Microsoft WaveRT-derived source at `src-tauri/windows/virtual-audio/` is a
-retained, nonselectable study and must not enter the Setup/payload. It has no
-proved WDK, kernel security, endpoint, installed-driver or reception behavior.
+The derived MS-PL WaveRT source under `src-tauri/windows/virtual-audio/` now declares exactly one recording endpoint. It has a separate `TranslateITMic` service/INF/catalog/PnP identity, bounded 48 kHz PCM16 mono ring, eight independent capture cursors, a privileged control device and versioned kernel IOCTLs. The Rust client `engine/audio/native_capture_transport.rs` serializes BEGIN/WRITE/FLUSH/END and STATUS, but is not selected by normal Meeting. This is **STATIC_SOURCE only** — not a working, signed, installed or accepted Windows driver.
 
-Source admission for the capture-only replacement must establish:
-1. One actual PnP capture endpoint, no virtual render/feed endpoint. Correct
-   KS/topology/INF device naming and identity are inspected on the target OS.
-2. One exclusive authorized user-mode producer, distinct from capture readers.
-   Privileged device access and IPC are scoped, all requests bounded/validated,
-   no open writable global driver interface, and no user-controlled kernel
-   pointers. Failed authorization produces silence, not hidden fallback.
-3. Explicit 48 kHz PCM16 mono format, versioned bounded frame submission,
-   generation, source epoch, ordered sequence, session ownership, flush/mute/
-   stop acknowledgement and an independent read cursor for every capture
-   client. Last writable generation cannot replay on Unmute or Restart.
-4. Verified lifecycle on PnP stop/remove, driver unload, sleep/resume,
-   app crash, audio-client closure and duplicate/pending writer admission.
+**Source-level acceptance:** Confirm the INF and minipairs have no render endpoint; the custom MediaCategories name GUID matches mic topology; the control DACL is exactly SYS/Admin-only; METHOD_BUFFERED write requests require FILE_WRITE_DATA; frame length is at most 20 ms; queue 200 ms; all inputs are bounds-checked; wrong generation/epoch/sequence or caller file fail closed; a control handle from an earlier PnP epoch cannot reopen after STOP/START; PnP removal and handle cleanup invalidate writers; multiple capture clients never share one read cursor. C and Rust protocol layouts must match. A source marker is not compiler/native proof.
 
-The existing coordinated TARGET_WINDOWS phase owns one exact-SHA native
-build/package and Windows acceptance. After compiling the driver with matching
-SDK/WDK and checking real INF/CAT/SYS and signing requirements, record actual
-Sound Settings presence of the recording endpoint, genuine Rust-to-driver PCM
-roundtrip, silence/underflow, overflow, clock drift, Mute/Stop/source switching,
-Original and translated voice delivery in a separate receiving meeting app,
-two simultaneous capture consumers, safe install/update/uninstall/reboot,
-and valid device identity across refresh. A source marker or CPAL callback is
-not receiver proof. Unperformed checks remain UNKNOWN / NOT EXECUTED.
+**Coordinated native acceptance, NOT EXECUTED:** matching WDK/Cargo/Node builds, driver static analysis, legitimate signing policy, PnP root-device provisioning, actual Windows Sound recording endpoint friendly name, independent two-app capture, real 48 kHz PCM roundtrip, underrun/overrun and clock drift, Stop/Mute/source switch with no stale replay, sleep/restart/driver removal, app crash, installer clean install/update/rollback and external receiver hearing. Measure the unavoidable already-consumed audio tail; a Flush cannot retract it.
 
+**Product admission blocker:** The kernel control device is currently accessible only to SYSTEM/elevated Administrators. A non-admin TranslateIT process cannot send PCM until a separate least-privilege authorization/broker is reviewed and implemented. Do not grant World/Interactive write, run testsigning on an end-user PC, bundle this unsigned driver, dispatch suspended CI, or claim driver PASS without real native evidence. The approved standard VB-CABLE route remains the sole supported Meeting provider.
 ## Supported virtual provider / no silent fallback (2026-10-11 source candidate)
 
 Confirm the **currently supported** route discovery allows only the standard VB-CABLE playback/recording matched pair (CABLE Input / CABLE Output, VB-Audio Virtual Cable). Test a host with Voicemeeter, VB-CABLE A+B and/or other virtual cables **without the standard pair**: Meeting preflight must report missing virtual route rather than silently selecting those devices. With the standard pair installed alongside other providers, the standard pair alone must be selected. Keep packaging under the standard VB-CABLE license/provenance policy; do not add a second provider/driver. A functional CPAL output callback and actual meeting-app audio reception remain separate native checks, not consequences of static name matching.
