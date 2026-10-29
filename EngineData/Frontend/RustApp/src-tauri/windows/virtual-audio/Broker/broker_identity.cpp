@@ -50,6 +50,15 @@ struct Impersonation {
 };
 
 bool SidAndLogonMatch(HANDLE threadToken, HANDLE processToken) {
+    // Identification-only tokens can expose a name but cannot prove that
+    // the broker is genuinely operating in the local caller's context.
+    SECURITY_IMPERSONATION_LEVEL level = SecurityAnonymous;
+    DWORD levelBytes = 0;
+    if (!GetTokenInformation(threadToken, TokenImpersonationLevel, &level,
+                             sizeof(level), &levelBytes)
+        || levelBytes != sizeof(level) || level < SecurityImpersonation)
+        return false;
+
     auto tokenUser = [](HANDLE token, std::vector<UCHAR>& buffer) {
         DWORD bytes = 0;
         GetTokenInformation(token, TokenUser, nullptr, 0, &bytes);
@@ -62,7 +71,32 @@ bool SidAndLogonMatch(HANDLE threadToken, HANDLE processToken) {
     if (!tokenUser(threadToken, a) || !tokenUser(processToken, b)) return false;
     const auto left = reinterpret_cast<const TOKEN_USER*>(a.data());
     const auto right = reinterpret_cast<const TOKEN_USER*>(b.data());
-    if (!EqualSid(left->User.Sid, right->User.Sid)) return false;
+    if (!left->User.Sid || !right->User.Sid
+        || !IsValidSid(left->User.Sid) || !IsValidSid(right->User.Sid)
+        || !EqualSid(left->User.Sid, right->User.Sid)) return false;
+
+    // Same user and logon is insufficient for a duplicated pipe handle:
+    // a low-integrity process can have the same SID and AuthenticationId
+    // as the medium-integrity desktop executable. Require the actual
+    // sender's integrity SID to match that process as well.
+    auto tokenIntegrity = [](HANDLE token, std::vector<UCHAR>& buffer) {
+        DWORD bytes = 0;
+        GetTokenInformation(token, TokenIntegrityLevel, nullptr, 0, &bytes);
+        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER
+            || bytes < sizeof(TOKEN_MANDATORY_LABEL) || bytes > 4096) return false;
+        buffer.resize(bytes);
+        if (!GetTokenInformation(token, TokenIntegrityLevel,
+                                 buffer.data(), bytes, &bytes)) return false;
+        const auto label = reinterpret_cast<const TOKEN_MANDATORY_LABEL*>(buffer.data());
+        return label->Label.Sid && IsValidSid(label->Label.Sid);
+    };
+    std::vector<UCHAR> ilSender, ilProcess;
+    if (!tokenIntegrity(threadToken, ilSender)
+        || !tokenIntegrity(processToken, ilProcess)) return false;
+    const auto senderLabel = reinterpret_cast<const TOKEN_MANDATORY_LABEL*>(ilSender.data());
+    const auto processLabel = reinterpret_cast<const TOKEN_MANDATORY_LABEL*>(ilProcess.data());
+    if (!EqualSid(senderLabel->Label.Sid, processLabel->Label.Sid)) return false;
+
     TOKEN_STATISTICS ls = {}, ps = {};
     DWORD size = 0;
     if (!GetTokenInformation(threadToken, TokenStatistics, &ls, sizeof(ls), &size)
@@ -167,6 +201,25 @@ bool BrokerClientIdentity::IsLive(HANDLE pipe) const {
     return GetNamedPipeClientProcessId(pipe, &currentPid) && currentPid == pid_
         && GetNamedPipeClientSessionId(pipe, &currentSession)
         && currentSession == session_;
+}
+
+bool BrokerClientIdentity::SenderTokenMatches(HANDLE pipe) const {
+    if (!IsLive(pipe)) return false;
+    ScopedHandle processToken;
+    if (!OpenProcessToken(process_, TOKEN_QUERY, &processToken.handle))
+        return false;
+
+    // Named-pipe impersonation represents the last bytes READ on this
+    // server connection, not necessarily the process that created it.
+    // This comparison MUST follow every complete request (header/payload).
+    Impersonation impersonation;
+    if (!impersonation.start(pipe)) return false;
+    ScopedHandle senderToken;
+    const bool match =
+        OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &senderToken.handle)
+        && SidAndLogonMatch(senderToken.handle, processToken.handle);
+    if (!impersonation.finish()) return false;
+    return match && IsLive(pipe);
 }
 
 DWORD AuthenticatePipeClient(HANDLE pipe, BrokerClientIdentity& result) {

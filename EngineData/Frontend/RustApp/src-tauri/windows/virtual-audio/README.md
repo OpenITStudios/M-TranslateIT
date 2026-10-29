@@ -130,7 +130,15 @@ It does not translate, mix, record or own Meeting sessions.
 - Pipe SDDL: `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x0012008B;;;AU)`.
   Authenticated users get read/write-data only, not the pipe-create right.
 - The broker impersonates the connected pipe client and checks user SID,
-  logon authentication ID, Windows session and process identity.
+  logon authentication ID, Windows session and process identity. It also
+  requires an impersonation token at SecurityImpersonation level or higher
+  and an integrity SID matching the approved desktop process token.
+- For every subsequent request, the broker re-impersonates the context of
+  the last named-pipe read twice: after the header and after the payload
+  (or the header again for empty payloads). A mismatching sender denies
+  the operation before privileged DeviceIoControl. Rust explicitly opens
+  the pipe with SECURITY_SQOS_PRESENT / SECURITY_IMPERSONATION; the initial
+  process PID by itself is not treated as proof of every later writer.
 - It requires the actual client executable path inside a machine-protected
   Program Files installation and a SHA-256 match against
   `HKLM\SOFTWARE\OpenITStudios\TranslateIT\ApprovedDesktopSha256`
@@ -140,7 +148,8 @@ It does not translate, mix, record or own Meeting sessions.
 - Server I/O is cancelable during Stop; the initial handshake and packet
   bodies have finite deadlines. Rust IPC uses overlapped operations and
   per-transaction deadlines. The broker limits PCM burst rate while the
-  existing Meeting worker can use its 20-ms pacing helper.
+  existing Meeting worker can use its 20-ms pacing helper. Burst credits
+  saturate before any elapsed-microsecond multiplication after long suspend.
 - Disconnecting a pipe releases the broker's kernel FILE_OBJECT,
   triggering scoped writer cleanup. Neither native Mute nor Stop may
   claim success without the relevant FLUSH acknowledgement.
@@ -157,13 +166,14 @@ No installer currently provisions the approved executable hash, registers
 the Windows service or installs this broker executable. Consequently
 the new IPC path remains a source candidate, not a usable microphone.
 The trusted package installer must first verify its signed payload and
-enforce a non-user-writable installation directory. Hash checking does
-not protect against malicious code injection into an authorized process,
-or reuse of a duplicated pipe handle while the original trusted process
-remains alive;
-service privileges, SCM access, signer identity, update invalidation,
-reparse/hardlink threats, session isolation and device lifecycle remain
-native-security acceptance requirements.
+enforce a non-user-writable installation directory. Hash checking and matching security tokens
+do not prove which executable wrote every byte on a byte-mode pipe:
+a same-user, same-logon, same-integrity process with a duplicated handle
+or injected code inside an approved process may remain indistinguishable.
+Signed installer provenance, protection of the running executable/image
+(not only its current on-disk hash), SCM permissions, service privileges,
+reparse/hardlink threats, update invalidation and cross-session isolation
+remain mandatory native-security acceptance requirements.
 ## Required higher-context proof
 
 All remain **UNKNOWN / NOT EXECUTED**: WDK x64/ARM64 compiler/link, WDK

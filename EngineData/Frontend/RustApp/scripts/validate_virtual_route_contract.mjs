@@ -518,8 +518,11 @@ requireMarkers(source.brokerIdentity, "SCM/install publisher-controlled admissio
   "OpenThreadToken", "OpenProcessToken",
   "SidAndLogonMatch", "QueryFullProcessImageNameW",
   "ImageHashApproved", "ApprovedDesktopSha256",
-  "BrokerClientIdentity::IsLive", "result.process_ = process.handle;",
-  "WaitForSingleObject(process_, 0)",
+  "BrokerClientIdentity::IsLive", "BrokerClientIdentity::SenderTokenMatches",
+  "TokenImpersonationLevel", "TokenIntegrityLevel", "SecurityImpersonation",
+  "level < SecurityImpersonation",
+  "EqualSid(senderLabel->Label.Sid, processLabel->Label.Sid)",
+  "result.process_ = process.handle;", "WaitForSingleObject(process_, 0)",
   "SOFTWARE\\\\OpenITStudios\\\\TranslateIT",
   "CompareStringOrdinal",
 ]);
@@ -530,7 +533,37 @@ requireMarkers(source.brokerService, "single privileged transport worker only", 
   "io.WatchPeerProcess(client.ProcessHandle())", "client.IsLive(pipe)",
   "BrokerDriver driver;", "BrokerPipeIo io(pipe.h, g_stop);",
   "TI_BROKER_REPLY", "ProducerClock",
+  "const ULONGLONG boundedUs =", "if (!client.SenderTokenMatches(pipe))",
 ]);
+// An authenticated connection is NOT authorization for every later packet.
+// The named-pipe impersonation token follows the most recent server-side read;
+// verify the sender after header and again after the body, before any privileged
+// DeviceIoControl is forwarded. Header-only STATUS/FLUSH still gets a check.
+const brokerHandlerStart = source.brokerService.indexOf("DWORD handleClient(");
+const brokerHandlerEnd = source.brokerService.indexOf("DWORD WINAPI worker(", brokerHandlerStart);
+const brokerHandler = source.brokerService.slice(brokerHandlerStart, brokerHandlerEnd);
+const senderChecks = [...brokerHandler.matchAll(/if \(!client\.SenderTokenMatches\(pipe\)\)/g)]
+  .map(x => x.index);
+const hdrRead = brokerHandler.indexOf("if (!firstRequest && !io.ReadExactly(&request");
+const bodyRead = brokerHandler.indexOf("if (!io.ReadExactly(payload.data(), request.PayloadBytes");
+const privilegedWrite = brokerHandler.indexOf("status = driver.Send(request.Operation");
+if (brokerHandlerStart < 0 || brokerHandlerEnd <= brokerHandlerStart
+    || senderChecks.length !== 2
+    || hdrRead < 0 || bodyRead < 0 || privilegedWrite < 0
+    || !(hdrRead < senderChecks[0] && senderChecks[0] < bodyRead)
+    || !(bodyRead < senderChecks[1] && senderChecks[1] < privilegedWrite)) {
+  throw new Error("Broker must authenticate EACH named-pipe header and payload before kernel forwarding");
+}
+const senderValidation = source.brokerIdentity.slice(
+  source.brokerIdentity.indexOf("bool BrokerClientIdentity::SenderTokenMatches"),
+  source.brokerIdentity.indexOf("DWORD AuthenticatePipeClient("));
+if (!senderValidation.includes("Impersonation impersonation;")
+    || !senderValidation.includes("SidAndLogonMatch(senderToken.handle, processToken.handle)")
+    || !senderValidation.includes("if (!impersonation.finish()) return false;")
+    || !senderValidation.includes("return match && IsLive(pipe);")) {
+  throw new Error("Broker sender validation must re-impersonate and restore security context");
+}
+
 requireMarkers(source.brokerIo, "cancelable bounded server IPC", [
   "WaitForMultipleObjects", "CancelIoEx",
   "GetOverlappedResult", "WaitForSingleObject(stop_, 0)",
@@ -551,7 +584,9 @@ requireMarkers(source.nativeRustPipe, "non-admin service identity before PCM sen
   "OpenServiceW", "QueryServiceStatusEx",
   "GetNamedPipeServerProcessId", "verify_service_process(&file)?",
   "CLIENT_ACCESS: u32 = 0x0012_008B",
-  "FILE_FLAG_OVERLAPPED", "GetOverlappedResult",
+  "FILE_FLAG_OVERLAPPED", "SECURITY_SQOS_PRESENT",
+  "SECURITY_IMPERSONATION", "GetOverlappedResult",
+  ".custom_flags(FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IMPERSONATION)",
   "CancelIoEx", "fn transfer(",
   "pub fn submit(&mut self", "pub fn flush(&mut self)",
   "pub fn end(mut self)", "fn poison(&mut self)",

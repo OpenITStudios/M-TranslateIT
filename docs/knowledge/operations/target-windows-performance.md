@@ -546,10 +546,16 @@ Source acceptance:
 2. Broker control access stays SYS/Admin only. Named-pipe SDDL grants
    AU `0x0012008B` read/write-data but not FILE_CREATE_PIPE_INSTANCE;
    remote connections are rejected; pipe server is first-instance-only.
-3. The broker checks connected PID, session, impersonated token SID/logon
-   against process token, image path in machine-protected Program Files
-   and the admin-provisioned 32-byte HKLM ApprovedDesktopSha256 receipt.
-   Authentication failure or absent receipt denies ALL privileged writes.
+3. The broker checks connected PID, session, impersonated token SID/logon,
+   TokenIntegrityLevel and TokenImpersonationLevel against the trusted process
+   token; minimum accepted level is SecurityImpersonation. It also checks
+   process image path in machine-protected Program Files and the
+   admin-provisioned 32-byte HKLM ApprovedDesktopSha256 receipt.
+   Revalidate the last named-pipe read sender after each request header and
+   payload, before BEGIN/WRITE/FLUSH/END/STATUS can reach the privileged
+   kernel IOCTL. The client explicitly requests SECURITY_SQOS_PRESENT /
+   SECURITY_IMPERSONATION; unknown token, weaker impersonation, changed
+   integrity or absent installer trust must fail closed.
 4. Rust checks the pipe server PID against a running exclusive Windows SCM
    service process before BEGIN. Framed requests and replies, kernel I/O
    and 20-ms pacing are bounded; late/revoked generations cannot continue
@@ -585,8 +591,13 @@ One coordinated, revision-pinned TARGET_WINDOWS acceptance (not run):
   name, unrelated same-user app, wrong token SID/logon/session, remote pipe,
   installer hash absence/tamper, service restart/crash, blocked client
   reads/writes, timed-out/malformed IPC replies, client exit with an
-  inherited pipe HANDLE, same-user pipe duplication while the trusted
-  process is still alive, replayed requests, endpoint PnP loss and forced Stop.
+  inherited pipe HANDLE, cross-integrity duplicated named-pipe handles,
+  downgraded SecurityIdentification or anonymous token, sender changes
+  between header and payload, replayed requests, endpoint PnP loss
+  and forced Stop. A same-user/same-logon/same-integrity duplicated handle
+  or code injected into the trusted executable can still appear identical:
+  its rejection is NOT proven by SID/integrity/hash checks alone. Validate
+  installer-backed image provenance and process isolation independently.
 - Validate both WaveRT buffer APIs using only 1/2 notification events, 48 kHz
   mono PCM16 frame-aligned sizes and bounded 96,000-byte DMA allocations.
   Confirm zeroed initial buffer pages, mapped-page failure cleanup, valid

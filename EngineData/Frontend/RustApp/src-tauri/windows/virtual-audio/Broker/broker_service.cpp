@@ -72,7 +72,13 @@ public:
         // Token bucket: permits short scheduling jitter, never an unbounded
         // backlog. A legitimate new utterance may follow many seconds of
         // silence without being mislabeled as stale.
-        const ULONGLONG credit = (ULONGLONG(elapsedUs) * kSampleRate) / 1000000ull;
+        // Saturate before multiplying: a multi-day suspend should refill
+        // 40 ms of tokens, not overflow elapsed-microseconds * sample-rate.
+        const ULONGLONG fullRefillUs =
+            (kBurstFrames * 1000000ull + kSampleRate - 1ull) / kSampleRate;
+        const ULONGLONG boundedUs = (ULONGLONG)elapsedUs > fullRefillUs
+            ? fullRefillUs : (ULONGLONG)elapsedUs;
+        const ULONGLONG credit = (boundedUs * kSampleRate) / 1000000ull;
         tokens_ = credit >= kBurstFrames - tokens_ ? kBurstFrames : tokens_ + credit;
         updated_ = now;
         if (count > tokens_) return false;
@@ -105,6 +111,8 @@ DWORD handleClient(BrokerPipeIo& io, HANDLE pipe) {
         if (!client.IsLive(pipe)) return ERROR_ACCESS_DENIED;
         if (!firstRequest && !io.ReadExactly(&request, sizeof(request), INFINITE)) return ERROR_BROKEN_PIPE;
         firstRequest = false;
+        // Check the sender associated with the most recent header bytes.
+        if (!client.SenderTokenMatches(pipe)) return ERROR_ACCESS_DENIED;
         if (request.Magic != TI_BROKER_MAGIC || request.Version != TI_BROKER_VERSION
             || request.Reserved != 0 || request.PayloadBytes > kMaxPayload
             || request.Operation < TiBrokerBegin || request.Operation > TiBrokerStatus)
@@ -113,6 +121,10 @@ DWORD handleClient(BrokerPipeIo& io, HANDLE pipe) {
         if (!client.IsLive(pipe)) return ERROR_ACCESS_DENIED;
         std::array<UCHAR, TI_BROKER_MAX_PAYLOAD> payload = {};
         if (!io.ReadExactly(payload.data(), request.PayloadBytes, 2500)) return ERROR_BROKEN_PIPE;
+        // The payload may be the last data READ from a different process
+        // sharing this pipe. Reject a changed SID/logon/integrity context
+        // before any privileged DeviceIoControl, including WRITE and FLUSH.
+        if (!client.SenderTokenMatches(pipe)) return ERROR_ACCESS_DENIED;
 
         // The broker is a bounded forwarder, never the session owner.
         // Kernel owns the generation/epoch/file/sequence authority; this

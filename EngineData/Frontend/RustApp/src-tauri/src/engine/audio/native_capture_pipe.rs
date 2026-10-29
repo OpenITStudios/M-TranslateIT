@@ -22,6 +22,10 @@ const MAGIC: u32 = 0x5242_4954; // little-endian TIBR
 const VERSION: u16 = 1;
 const MAX_PAYLOAD: usize = 1952;
 const FILE_FLAG_OVERLAPPED: u32 = 0x4000_0000;
+// SECURITY_SQOS_PRESENT + SECURITY_IMPERSONATION express the sender's
+// impersonation contract explicitly instead of relying on Win32 defaults.
+const SECURITY_SQOS_PRESENT: u32 = 0x0010_0000;
+const SECURITY_IMPERSONATION: u32 = 0x0002_0000;
 const ERROR_IO_PENDING: i32 = 997;
 const WAIT_OBJECT_0: u32 = 0;
 const WAIT_TIMEOUT: u32 = 258;
@@ -309,7 +313,7 @@ impl NativeCapturePipeSession {
         let bytes = begin_bytes(generation, epoch)?;
         let mut options = OpenOptions::new();
         options.read(true).write(true).access_mode(CLIENT_ACCESS)
-            .custom_flags(FILE_FLAG_OVERLAPPED);
+            .custom_flags(FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IMPERSONATION);
         let mut file = options.open(PIPE)?;
         verify_service_process(&file)?;
         transact(&mut file, BEGIN, &bytes)?;
@@ -410,6 +414,8 @@ mod tests {
         assert!(request_bytes(WRITE, &[0u8; MAX_PAYLOAD + 1]).is_err());
         assert!(request_bytes(0, &[]).is_err());
         assert_eq!(CLIENT_ACCESS & 0x0004, 0, "client cannot create pipe instance");
+        assert_eq!(SECURITY_SQOS_PRESENT | SECURITY_IMPERSONATION, 0x0012_0000);
+        assert_eq!(FILE_FLAG_OVERLAPPED & SECURITY_SQOS_PRESENT, 0);
     }
 
     #[test]

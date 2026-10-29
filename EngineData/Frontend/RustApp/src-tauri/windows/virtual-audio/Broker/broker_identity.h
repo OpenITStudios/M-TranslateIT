@@ -13,6 +13,9 @@ public:
 
     HANDLE ProcessHandle() const { return process_; }
     bool IsLive(HANDLE pipe) const;
+    // Revalidate the security token of the LAST pipe read before forwarding
+    // any privileged request; the original creator PID is not sender proof.
+    bool SenderTokenMatches(HANDLE pipe) const;
 private:
     friend DWORD AuthenticatePipeClient(HANDLE pipe, BrokerClientIdentity& result);
     HANDLE process_ = nullptr;
