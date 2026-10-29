@@ -268,6 +268,12 @@ fn transact(file: &File, operation: u16, payload: &[u8]) -> io::Result<Vec<u8>> 
     Ok(body)
 }
 
+// A matching status is only a producer-state consistency check, not proof
+// that another application's recording endpoint actually received sound.
+fn status_matches_session(active: bool, status: &NativeCaptureStatus) -> bool {
+    status.producer_active == active
+}
+
 /// A single connection is one authenticated capture writer, not an AI owner.
 pub struct NativeCapturePipeSession {
     // Failure to read a reply is not proof that the kernel rejected an IOCTL.
@@ -355,7 +361,16 @@ impl NativeCapturePipeSession {
     pub fn status(&mut self) -> io::Result<NativeCaptureStatus> {
         let reply = self.exchange(STATUS, &[])?;
         match parse_status(&reply) {
-            Ok(status) => Ok(status),
+            Ok(status) if status_matches_session(self.active, &status) => Ok(status),
+            Ok(_) => {
+                // A well-formed STATUS with a different producer-active state
+                // is still evidence that our Meeting-owned stream is stale.
+                self.poison();
+                Err(io::Error::new(
+                    ErrorKind::InvalidData,
+                    "native_capture:producer_state_mismatch",
+                ))
+            }
             Err(error) => {
                 self.poison(); // Invalid reply is also protocol desynchronization.
                 Err(error)
@@ -395,6 +410,19 @@ mod tests {
         assert!(request_bytes(WRITE, &[0u8; MAX_PAYLOAD + 1]).is_err());
         assert!(request_bytes(0, &[]).is_err());
         assert_eq!(CLIENT_ACCESS & 0x0004, 0, "client cannot create pipe instance");
+    }
+
+    #[test]
+    fn a_mismatched_producer_status_cannot_confirm_this_session() {
+        let report = NativeCaptureStatus {
+            producer_active: false,
+            buffered_frames: 0,
+            accepted_frames: 0,
+            overwritten_frames: 0,
+            underrun_frames: 0,
+        };
+        assert!(status_matches_session(false, &report));
+        assert!(!status_matches_session(true, &report));
     }
 
     #[test]

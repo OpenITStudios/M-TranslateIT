@@ -70,6 +70,12 @@ pub fn send_paced(
         }
         if !authorized(generation, source_epoch) { return Err(interrupted()); }
         send(chunk)?;
+        // A synchronous broker request may have accepted the last packet
+        // while Stop/Mute/source-switch revoked the Meeting authority.
+        // Never report a completed submission from a stale generation/epoch.
+        // The caller must FLUSH/close the native owner on this failure; the
+        // check cannot recall frames already consumed by another application.
+        if !authorized(generation, source_epoch) { return Err(interrupted()); }
         summary.frames_submitted += chunk.len();
         summary.chunks_submitted += 1;
     }
@@ -97,6 +103,24 @@ mod tests {
         assert_eq!(result.frames_submitted, 1_921);
         assert_eq!(result.chunks_submitted, 3);
     }
+    #[test]
+    fn revoked_during_last_packet_is_not_reported_as_success() {
+        use std::cell::Cell;
+        let live = Cell::new(true);
+        let mut sent = 0usize;
+        let result = send_paced(
+            7, 2, &[2i16; FRAMES_PER_PACKET],
+            |generation, epoch| generation == 7 && epoch == 2 && live.get(),
+            |chunk| {
+                sent += chunk.len();
+                live.set(false); // Stop/Source Switch during a synchronous WRITE.
+                Ok(())
+            },
+        );
+        assert_eq!(sent, FRAMES_PER_PACKET);
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::Interrupted);
+    }
+
     #[test]
     fn revoked_session_sends_no_audio() {
         let mut sent = 0;

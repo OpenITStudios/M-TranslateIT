@@ -549,9 +549,12 @@ Source acceptance:
    service process before BEGIN. Framed requests and replies, kernel I/O
    and 20-ms pacing are bounded; late/revoked generations cannot continue
    sending, and any uncertain native FLUSH is a failed Mute/Stop.
-   An IPC timeout, missing/malformed reply or kernel transport fault must
-   poison the Rust session, close its pipe and reject subsequent writes,
-   resume attempts or false Stop success.
+   An IPC timeout, missing/malformed reply, producer STATUS inconsistency
+   or kernel transport fault must poison the Rust session, close its pipe
+   and reject subsequent writes, resume attempts or false Stop success.
+   Source generation/epoch is also checked after each synchronous PCM
+   write, including the final packet; an authority revoked during that
+   write must not be reported as successful outbound submission.
 5. Service shutdown cancels blocked pipe I/O and closes the kernel writer;
    the broker holds a SYNCHRONIZE handle for its authenticated client and
    rejects further requests when that exact process exits, including when

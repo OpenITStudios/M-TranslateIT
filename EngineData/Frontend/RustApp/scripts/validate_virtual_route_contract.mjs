@@ -321,6 +321,8 @@ requireMarkers(source.nativeRustPipe, "non-admin service identity before PCM sen
   "pub fn end(mut self)", "fn poison(&mut self)",
   "self.file.take()", "native_capture:stop_unverified",
   "failed_control_transport_is_sticky_and_never_acknowledges_stop",
+  "native_capture:producer_state_mismatch",
+  "a_mismatched_producer_status_cannot_confirm_this_session",
 ]);
 requireMarkers(source.nativeRustPacing, "reuse one Meeting worker with bounded PCM", [
   "pub fn send_paced(", "FnMut(u64, u64) -> bool",
@@ -328,6 +330,7 @@ requireMarkers(source.nativeRustPacing, "reuse one Meeting worker with bounded P
   "MAX_LATENESS", "thread::sleep(",
   "if !authorized(generation, source_epoch) { return Err(interrupted()); }",
   "revoked_session_sends_no_audio",
+  "revoked_during_last_packet_is_not_reported_as_success",
 ]);
 forbidMarkers(source.brokerService, "broker must not become a second translation engine", [
   "start_helper_bridge(", "synthesize(", "launch_worker(",
