@@ -91,6 +91,14 @@ the actual Windows display name must still be observed on a target host.
   occurs only afterward at PASSIVE_LEVEL, once, for the matching MDL.
   The destructor does not preempt PortCls's Free*Buffer callback during
   surprise removal. Functions that manipulate the spinlock are nonpaged.
+- WaveRT GetReadPacket now snapshots packet counter, buffer size, state,
+  position, notification count and last-read packet under that same
+  position spinlock, rejecting detached DMA or incomplete packets before
+  dividing. The packet timestamp is the sampling instant of the FIRST
+  sample, not the end of the packet. Conversion from 100-ns units to
+  QPC ticks uses split whole-second/fractional arithmetic to avoid
+  overflowing long-session timestamps; a time/packet inconsistency
+  fails closed instead of returning a fabricated capture timestamp.
 
 The input layer may contain other formats, but conversion/resampling to the
 exact PCM16 mono contract must occur *before* this backend. The Rust client

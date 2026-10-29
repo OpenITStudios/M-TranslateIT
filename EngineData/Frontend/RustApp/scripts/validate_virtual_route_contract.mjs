@@ -419,6 +419,48 @@ for (const signature of [
   }
 }
 
+requireMarkers(source.nativeStream, "capture packet atomicity and correct first-sample QPC", [
+  "CapturePacketFirstSampleByte(1, 960) == 0",
+  "CapturePacketFirstSampleByte(2, 960) == 960",
+  "static BOOLEAN CaptureHnsToQpc(",
+  "const ULONGLONG seconds = hns / hnsPerSecond;",
+  "const ULONGLONG fractionalTicks =",
+  "m_ulDmaBufferSize % m_ulNotificationsPerBuffer != 0",
+  "status = STATUS_DATA_LATE_ERROR;",
+  "m_ulLastOsReadPacket = readyPacket;",
+]);
+forbidMarkers(source.nativeStream, "obsolete packet timestamp and unsigned underflow", [
+  "packetCounter * (m_ulDmaBufferSize / m_ulNotificationsPerBuffer)",
+  "timeOfAvailablePacketInHns * m_ullPerformanceCounterFrequency",
+  "ullLinearPosition + carryForwardBytes - linearPositionOfAvailablePacket",
+]);
+// Free*Buffer resets cyclic DMA dimensions under m_PositionSpinLock. If
+// GetReadPacket releases that lock before its packet-size division or
+// last-read update, a concurrent free can trigger division by zero or
+// advertise a stale packet even if its initial mode check succeeded.
+const captureGetReadPacket = waveRtOwnerSlice(
+  "NTSTATUS CMiniportWaveRTStream::GetReadPacket",
+  "NTSTATUS CMiniportWaveRTStream::SetWritePacket");
+const captureReadLock = captureGetReadPacket.indexOf("KeAcquireSpinLock(&m_PositionSpinLock");
+const captureReadUnlock = captureGetReadPacket.indexOf("KeReleaseSpinLock(&m_PositionSpinLock");
+for (const operation of [
+  "m_ulDmaBufferSize % m_ulNotificationsPerBuffer",
+  "m_ulDmaBufferSize / m_ulNotificationsPerBuffer",
+  "CapturePacketFirstSampleByte(completed, packetBytes)",
+  "m_ulLastOsReadPacket = readyPacket;",
+]) {
+  const at = captureGetReadPacket.indexOf(operation);
+  if (captureReadLock < 0 || at <= captureReadLock
+      || captureReadUnlock <= at) {
+    throw new Error("GetReadPacket must keep DMA and packet state locked: " + operation);
+  }
+}
+if (!captureGetReadPacket.includes("if (!m_ulNotificationsPerBuffer)")
+    || !captureGetReadPacket.includes("!m_pDmaMdl || !m_pDmaBuffer")
+    || !captureGetReadPacket.includes("CaptureHnsToQpc(")) {
+  throw new Error("GetReadPacket lacks fail-closed buffer/clock admission");
+}
+
 forbidMarkers(source.nativeStream, "legacy paired-PCM/tone playback", [
   "TranslateITBridgeRead(", "TranslateITBridgeWrite(",
   "m_ToneGenerator.GenerateSine(m_pDmaBuffer",

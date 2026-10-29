@@ -859,22 +859,42 @@ NTSTATUS CMiniportWaveRTStream::GetPosition
 }
 
 //=============================================================================
-// CMiniportWaveRTStream::GetReadPacket
-//
-//  Returns information about the next packet for the OS to read.
-//
-// Return value
-//
-//  Returns STATUS_DEVICE_NOT_READY if no new packets are available.
-//
-// IRQL - PASSIVE_LEVEL
-//
-// Remarks
-//  Although called at passive level, this routine is non-paged code because
-//  it is called in the streaming path where page faults should be avoided.
-//
-// ISSUE-2014/10/4 Will this work correctly across pause/play?
+// WaveRT GetReadPacket: one coherent snapshot of capture packet, DMA buffer,
+// position, time and last-read state. PortCls can Free*Buffer concurrently,
+// so none of the buffer divisors may be read after releasing the same lock.
 #pragma code_seg()
+static constexpr ULONGLONG CapturePacketFirstSampleByte(
+    ULONGLONG completedPackets, ULONG packetSizeBytes)
+{
+    return (completedPackets - 1ull) * packetSizeBytes;
+}
+static_assert(CapturePacketFirstSampleByte(1, 960) == 0
+    && CapturePacketFirstSampleByte(2, 960) == 960,
+    "WaveRT capture packet timestamp refers to the FIRST sample");
+
+// Convert an absolute 100-ns timestamp to raw QPC ticks. Multiplying the
+// full 100-ns value by the QPC frequency before dividing overflows after
+// sufficiently long uptime, even when the final answer fits in 64 bits.
+// Split into whole seconds and fractional ticks, with checked arithmetic.
+static BOOLEAN CaptureHnsToQpc(
+    ULONGLONG hns, ULONGLONG frequency, ULONGLONG* result)
+{
+    constexpr ULONGLONG hnsPerSecond = 10000000ull;
+    if (!result || !frequency || frequency > MAXULONGLONG / hnsPerSecond)
+        return FALSE;
+    const ULONGLONG seconds = hns / hnsPerSecond;
+    const ULONGLONG fractionHns = hns % hnsPerSecond;
+    if (seconds > MAXULONGLONG / frequency)
+        return FALSE;
+    const ULONGLONG wholeTicks = seconds * frequency;
+    const ULONGLONG fractionalTicks =
+        (fractionHns * frequency) / hnsPerSecond;
+    if (wholeTicks > MAXULONGLONG - fractionalTicks)
+        return FALSE;
+    *result = wholeTicks + fractionalTicks;
+    return TRUE;
+}
+
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS CMiniportWaveRTStream::GetReadPacket
 (
@@ -884,81 +904,113 @@ NTSTATUS CMiniportWaveRTStream::GetReadPacket
     _Out_ BOOL* MoreData
 )
 {
-    ULONG availablePacketNumber;
-    ULONG droppedPackets;
+    if (!PacketNumber || !Flags || !PerformanceCounterValue || !MoreData)
+        return STATUS_INVALID_PARAMETER;
 
-    // The call must be from event driven mode
-    if (m_ulNotificationsPerBuffer == 0)
-    {
-        return STATUS_NOT_SUPPORTED;
-    }
-
-    *Flags = 0;
-
-    if (m_KsState < KSSTATE_PAUSE)
-    {
-        return STATUS_INVALID_DEVICE_STATE;
-    }
-
+    // No allocations, waiting, PortCls calls or pageable work while locked.
+    // Free*Buffer uses m_PositionSpinLock to detach the MDL and clear these
+    // fields; STOP also resets packet counters under this same lock.
     KIRQL oldIrql;
     KeAcquireSpinLock(&m_PositionSpinLock, &oldIrql);
-
-    LONGLONG packetCounter = m_llPacketCounter;
-    ULONGLONG ullLinearPosition = m_ullLinearPosition;
-    ULONGLONG hnsElapsedTimeCarryForward = m_hnsElapsedTimeCarryForward;
-    ULONGLONG ullDmaTimeStamp = m_ullDmaTimeStamp;
-
+    NTSTATUS status = STATUS_SUCCESS;
+    if (!m_ulNotificationsPerBuffer)
+    {
+        status = STATUS_NOT_SUPPORTED;
+    }
+    else if (!m_pDmaMdl || !m_pDmaBuffer || !m_ulDmaBufferSize
+        || !m_ulDmaMovementRate || m_ullPerformanceCounterFrequency.QuadPart <= 0
+        || m_ulDmaBufferSize % m_ulNotificationsPerBuffer != 0)
+    {
+        status = STATUS_DEVICE_NOT_READY;
+    }
+    else if (m_KsState < KSSTATE_PAUSE)
+    {
+        status = STATUS_INVALID_DEVICE_STATE;
+    }
+    else if (m_llPacketCounter <= 0)
+    {
+        status = STATUS_DEVICE_NOT_READY;
+    }
+    else
+    {
+        const ULONGLONG completed = (ULONGLONG)m_llPacketCounter;
+        const ULONG packetBytes = m_ulDmaBufferSize / m_ulNotificationsPerBuffer;
+        if (!packetBytes || completed - 1ull > MAXULONGLONG / packetBytes)
+        {
+            status = STATUS_INTEGER_OVERFLOW;
+        }
+        else
+        {
+            const ULONG readyPacket = (ULONG)(completed - 1ull);
+            if (readyPacket == m_ulLastOsReadPacket)
+            {
+                status = STATUS_DEVICE_NOT_READY;
+            }
+            else
+            {
+                const ULONGLONG packetStartBytes =
+                    CapturePacketFirstSampleByte(completed, packetBytes);
+                const ULONGLONG carryBytes =
+                    (m_hnsElapsedTimeCarryForward * m_ulDmaMovementRate) / 10000000ull;
+                if (m_ullLinearPosition > MAXULONGLONG - carryBytes)
+                {
+                    status = STATUS_INTEGER_OVERFLOW;
+                }
+                else
+                {
+                    const ULONGLONG currentBytes =
+                        m_ullLinearPosition + carryBytes;
+                    // When time advanced more than a complete cyclic buffer
+                    // during suspend/stall, the producer discards stale DMA.
+                    // No valid first-sample timestamp exists for the skipped
+                    // packet: fail closed rather than underflowing arithmetic.
+                    if (packetStartBytes > currentBytes
+                        || currentBytes - packetStartBytes > m_ulDmaBufferSize)
+                    {
+                        status = STATUS_DATA_LATE_ERROR;
+                    }
+                    else
+                    {
+                        const ULONGLONG deltaBytes = currentBytes - packetStartBytes;
+                        // deltaBytes is bounded to one DMA cycle (<= 96 kB),
+                        // so this multiplication cannot overflow uint64.
+                        const ULONGLONG deltaHns =
+                            (deltaBytes * 10000000ull) / m_ulDmaMovementRate;
+                        if (deltaHns > m_ullDmaTimeStamp)
+                        {
+                            status = STATUS_DATA_LATE_ERROR;
+                        }
+                        else
+                        {
+                            ULONGLONG qpcValue = 0;
+                            const ULONGLONG firstSampleHns =
+                                m_ullDmaTimeStamp - deltaHns;
+                            if (!CaptureHnsToQpc(
+                                firstSampleHns,
+                                (ULONGLONG)m_ullPerformanceCounterFrequency.QuadPart,
+                                &qpcValue))
+                            {
+                                status = STATUS_INTEGER_OVERFLOW;
+                            }
+                            else
+                            {
+                                *PacketNumber = readyPacket;
+                                *Flags = 0;
+                                *PerformanceCounterValue = qpcValue;
+                                *MoreData = FALSE;
+                                m_ulLastOsReadPacket = readyPacket;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     KeReleaseSpinLock(&m_PositionSpinLock, oldIrql);
-
-    // The 0-based number of the last completed packet
-    // FUTURE-2014/10/27 Update to allow different numbers of packets per WaveRT buffer
-    availablePacketNumber = LODWORD(packetCounter - 1);  // Note this might be ULONG_MAX if called during the first packet
-
-    // If no new packets are available...
-    if (availablePacketNumber == m_ulLastOsReadPacket)
-    {
-        return STATUS_DEVICE_NOT_READY;
-    }
-
-    // If more than one packet has transferred since the last packet read by
-    // the OS, then those were dropped. That is, a glitch occurred.
-    droppedPackets = availablePacketNumber - m_ulLastOsReadPacket - 1;
-    if (droppedPackets > 0)
-    {
-        // Trace a glitch
-    }
-
-    // Return next packet number to be read
-    *PacketNumber = availablePacketNumber;
-
-    // Compute and return timestamp corresponding to the end of the available packet. In a real hardware
-    // driver, the timestamp would be computed in a driver and hardware specific manner. In this sample
-    // driver, it is extrapolated from the sample driver's internal simulated position correlation
-    // [m_ullLinearPosition @ m_ullDmaTimeStamp] and the sample's internal 64-bit packet counter, subtracting
-    // 1 from the packet counter to compute the time at the start of that last completed packet.
-    ULONGLONG linearPositionOfAvailablePacket = packetCounter * (m_ulDmaBufferSize / m_ulNotificationsPerBuffer);
-    // Need to divide by (1000 * 10000 because m_ulDmaMovementRate is average bytes per sec
-    ULONGLONG carryForwardBytes = (hnsElapsedTimeCarryForward * m_ulDmaMovementRate) / 10000000;
-    ULONGLONG deltaLinearPosition = ullLinearPosition + carryForwardBytes - linearPositionOfAvailablePacket;
-    ULONGLONG deltaTimeInHns = deltaLinearPosition * 10000000 / m_ulDmaMovementRate;
-    ULONGLONG timeOfAvailablePacketInHns = ullDmaTimeStamp - deltaTimeInHns;
-    ULONGLONG timeOfAvailablePacketInQpc = timeOfAvailablePacketInHns * m_ullPerformanceCounterFrequency.QuadPart / 10000000;
-
-    *PerformanceCounterValue = timeOfAvailablePacketInQpc;
-
-    // No flags are defined yet
-    *Flags = 0;
-
-    // This sample does not internally buffer data so there is never more data
-    // than revealed by the results from this routine.
-    *MoreData = FALSE;
-
-    // Update the last packet read by the OS
-    m_ulLastOsReadPacket = availablePacketNumber;
-
-    return STATUS_SUCCESS;
+    return status;
 }
 
+//=============================================================================
 #pragma code_seg()
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS CMiniportWaveRTStream::SetWritePacket

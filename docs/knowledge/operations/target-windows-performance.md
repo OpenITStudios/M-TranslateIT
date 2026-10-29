@@ -605,6 +605,15 @@ One coordinated, revision-pinned TARGET_WINDOWS acceptance (not run):
   precede FreePagesFromMdl at PASSIVE_LEVEL after the position lock releases.
   Include concurrent PortCls Free*Buffer and PnP stop/rebalance/removal,
   and checked IRQL/page-fault verification of all spinlock-owning routines.
+  In particular, race GetReadPacket with both Free*Buffer methods: packet
+  buffer divisors, notification count and last-read advancement must remain
+  coherent under the same stream spinlock, never divide by zero, and must
+  reject invalidated DMA. Check capture packet 0 starts at first-sample byte
+  0, packet 1 at one packet-size offset, and QPC timestamps reflect the
+  sampling instant of those first samples. Include 72-hour+ simulated
+  uptime without 64-bit multiplication overflow, backwards QPC, and
+  catch-up exceeding one DMA cycle; do not report missed packets as
+  successfully captured audio.
 - Verify real 48 kHz PCM16 captured by Zoom/Teams with multiple independent
   receivers; silence underflow, overwrite/jitter/clock drift, speech timing,
   Original/Translated source changes, Mute/Stop queue flush and bounded
