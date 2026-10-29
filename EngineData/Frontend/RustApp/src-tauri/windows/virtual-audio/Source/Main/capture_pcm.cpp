@@ -193,8 +193,20 @@ NTSTATUS TranslateITCaptureRevoke(PFILE_OBJECT file, ULONGLONG openedDeviceEpoch
     // re-enter after the generation changes between dispatch and kernel work.
     if (!openedDeviceEpoch || !g_online || openedDeviceEpoch != g_deviceEpoch) {
         status = STATUS_DEVICE_NOT_READY;
-    } else if (g_writer != file || !g_started) {
+    } else if (g_writer != file) {
         status = STATUS_ACCESS_DENIED;
+    } else if (!g_started) {
+        // FLUSH acknowledged silence but deliberately retained this writer.
+        // Only END with that exact last generation/epoch may release the
+        // reserved FILE_OBJECT. Duplicate FLUSH or stale END cannot succeed.
+        if (!releaseWriter) {
+            status = STATUS_ACCESS_DENIED;
+        } else if (request->Generation != g_lastGeneration
+            || request->SourceEpoch != g_lastSourceEpoch) {
+            status = STATUS_INVALID_DEVICE_STATE;
+        } else {
+            invalidateLocked(TRUE);
+        }
     } else if (request->Generation != g_generation || request->SourceEpoch != g_sourceEpoch) {
         status = STATUS_INVALID_DEVICE_STATE;
     } else {

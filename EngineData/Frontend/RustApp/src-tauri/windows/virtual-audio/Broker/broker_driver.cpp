@@ -12,6 +12,7 @@ DWORD BrokerDriver::Open() {
                           0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (handle_ == INVALID_HANDLE_VALUE) return GetLastError();
     producerActive_ = false;
+    writerLeased_ = false;
     return ERROR_SUCCESS;
 }
 
@@ -38,7 +39,9 @@ DWORD BrokerDriver::Send(USHORT operation, const UCHAR* data, ULONG bytes,
         code = TI_CAPTURE_IOCTL_FLUSH;
         break;
     case TiBrokerEnd:
-        if (!producerActive_ || bytes != sizeof(TI_CAPTURE_REVOKE))
+        // END must still ACK after FLUSH; the exact writer lease remains
+        // allocated even though PCM submission is no longer active.
+        if (!writerLeased_ || bytes != sizeof(TI_CAPTURE_REVOKE))
             return ERROR_INVALID_PARAMETER;
         code = TI_CAPTURE_IOCTL_END;
         break;
@@ -58,8 +61,15 @@ DWORD BrokerDriver::Send(USHORT operation, const UCHAR* data, ULONG bytes,
         return GetLastError();
 
     if (resultLen != outputSize) return ERROR_INVALID_DATA;
-    if (operation == TiBrokerBegin) producerActive_ = true;
-    if (operation == TiBrokerFlush || operation == TiBrokerEnd) producerActive_ = false;
+    if (operation == TiBrokerBegin) {
+        writerLeased_ = true;
+        producerActive_ = true;
+    }
+    if (operation == TiBrokerFlush) producerActive_ = false;
+    if (operation == TiBrokerEnd) {
+        writerLeased_ = false;
+        producerActive_ = false;
+    }
     if (replyBytes) *replyBytes = resultLen;
     return ERROR_SUCCESS;
 }
@@ -70,5 +80,6 @@ void BrokerDriver::Close() {
     // the queue. Never claim an explicit Stop ACK just from process cleanup.
     CloseHandle(handle_);
     handle_ = INVALID_HANDLE_VALUE;
+    writerLeased_ = false;
     producerActive_ = false;
 }

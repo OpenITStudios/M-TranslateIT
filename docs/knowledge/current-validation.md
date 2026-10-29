@@ -21,6 +21,14 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Kernel/broker END acknowledgement after FLUSH — 2026-10-30
+
+**Pinned source parent:** `325cc8141b01b714dbe35891e58262614d541662` on `Local`. The earlier broker/kernel state permitted FLUSH to retain the writer FILE_OBJECT while clearing active PCM, but both broker `BrokerDriver::Send(TiBrokerEnd)` and kernel `TranslateITCaptureRevoke` rejected END when PCM was no longer active. Both Rust native `end()` methods skipped the END request in that state and could report Stop success solely from implicit handle cleanup.
+
+**Source candidate:** The kernel accepts exactly one matching generation/source-epoch END after FLUSH for the original FILE_OBJECT under the existing PnP/PCM spinlock, while rejecting duplicate FLUSH, stale identity, different writer and stale PnP handles. The broker now differentiates reserved writer lease from active PCM; successful BEGIN grants both, FLUSH clears only active PCM, and END explicitly releases the lease. Both Rust candidate transports always require an END response, even after FLUSH; a missing response cannot be reported as Stop success. The existing virtual-route validator includes cross-owner source contracts, and one Rust regression case covers missing END ACK with inactive PCM. No driver activation, provider change, wire version, new worker/service or additional test harness was added.
+
+**Proof ceiling: STATIC_SOURCE only.** Source-level contract markers and logic ordering reviewed on the pinned parent/candidate tree. WDK/C++/Rust/Node compilation and execution, GitHub CI, installed Windows/PnP, kernel IOCTL behavior, Mute/Stop tail and meeting receiver all remain **UNKNOWN / NOT EXECUTED**. Existing integrated native acceptance now includes FLUSH → END and wrong-epoch/wrong-writer/race cases; the document is a test plan, not test results.
+
 ### Native capture-only broker and WaveRT source boundary — 2026-10-29
 
 **Current `Local` source identity:** `7bec29bb8ec6247a123af6d19faead85143af164`. The capture-only WaveRT microphone, PCM/IOCTL protocol, authenticated SYSTEM broker, Rust pipe adapter and 20-ms pacing helper are present **as unadmitted source candidates**. The native provider is not the Meeting-selected route; the standard VB-CABLE pair remains the only admitted provider. The latest broker change rechecks security identity after each named-pipe header and payload, but checking user/logon/integrity plus the executable's **on-disk** hash does not establish the executing image that wrote each message. Same-user duplicated handles/injection, installed service privileges/ACLs and signed installer trust are unresolved.

@@ -16,5 +16,7 @@ public:
     void Close();
 private:
     HANDLE handle_ = INVALID_HANDLE_VALUE;
+    // FLUSH stops PCM, but keeps this same FILE_OBJECT lease for resume or END.
+    bool writerLeased_ = false;
     bool producerActive_ = false;
 };

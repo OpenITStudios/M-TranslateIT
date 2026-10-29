@@ -570,7 +570,15 @@ Source acceptance:
    Source generation/epoch is also checked after each synchronous PCM
    write, including the final packet; an authority revoked during that
    write must not be reported as successful outbound submission.
-5. Service shutdown cancels blocked pipe I/O and closes the kernel writer;
+5. FLUSH makes PCM inactive but retains the exact writer FILE_OBJECT lease.
+   END must release that lease with an explicit ACK even after successful FLUSH.
+   Reject duplicate FLUSH, wrong-file END and stale generation/source epochs
+   for both active and flushed writers, including concurrent PnP Stop/Start.
+   The broker must track lease ownership separately from PCM activity, and
+   both native Rust transports must require END acknowledgement after Mute.
+   An uncertain/missing END response is NOT successful Stop; kernel CLEANUP
+   remains an unacknowledged fail-safe.
+6. Service shutdown cancels blocked pipe I/O and closes the kernel writer;
    the broker holds a SYNCHRONIZE handle for its authenticated client and
    rejects further requests when that exact process exits, including when
    a pipe handle was retained by another process. Old PnP control handles,
@@ -606,6 +614,11 @@ One coordinated, revision-pinned TARGET_WINDOWS acceptance (not run):
   or code injected into the trusted executable can still appear identical:
   its rejection is NOT proven by SID/integrity/hash checks alone. Validate
   installer-backed image provenance and process isolation independently.
+- In the same revision-pinned native session, exercise BEGIN → WRITE →
+  FLUSH → STATUS(inactive) → END(ACK); also BEGIN → END and FLUSH →
+  BEGIN(new epoch) → END. Confirm an END after FLUSH releases the writer,
+  while duplicate FLUSH, stale epoch END, a different FILE_OBJECT's END and
+  PnP Stop/Start all fail closed without false Stop, leaked lease or old PCM.
 - Validate both WaveRT buffer APIs using only 1/2 notification events, 48 kHz
   mono PCM16 frame-aligned sizes and bounded 96,000-byte DMA allocations.
   Confirm zeroed initial buffer pages, mapped-page failure cleanup, valid

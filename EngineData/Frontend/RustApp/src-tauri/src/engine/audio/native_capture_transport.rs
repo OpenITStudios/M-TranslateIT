@@ -194,14 +194,12 @@ impl NativeCaptureSession {
     /// Final Stop explicitly releases the writer. If this fails, the caller
     /// must retain/close the owner and must NOT claim that Stop succeeded.
     pub fn end(mut self) -> io::Result<()> {
-        // Consuming self also closes the control handle after a prior FLUSH;
-        // its kernel CLEANUP revokes the reserved single-writer lease.
-        if self.active {
-            let packet = revoke_bytes(self.generation, self.source_epoch)?;
-            send_control(&self.file, IOCTL_END, &packet, &mut [])?;
-            self.active = false;
-        }
-        // File::drop also invokes the kernel CLEANUP fail-safe if needed.
+        // An earlier FLUSH only acknowledged silence, not final writer
+        // release. Require an explicit END ACK for both active and flushed
+        // sessions. Drop/CLEANUP is a fail-safe, not successful Stop proof.
+        let packet = revoke_bytes(self.generation, self.source_epoch)?;
+        send_control(&self.file, IOCTL_END, &packet, &mut [])?;
+        self.active = false;
         Ok(())
     }
 

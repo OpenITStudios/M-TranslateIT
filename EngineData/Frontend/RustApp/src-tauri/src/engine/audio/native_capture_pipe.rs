@@ -388,13 +388,13 @@ impl NativeCapturePipeSession {
         if self.poisoned {
             return Err(io::Error::new(ErrorKind::BrokenPipe, "native_capture:stop_unverified"));
         }
-        if self.active {
-            let bytes = revoke_bytes(self.generation, self.source_epoch)?;
-            self.exchange(END, &bytes)?;
-            self.active = false;
-        }
-        // Closing the pipe immediately makes the broker close its driver
-        // handle, which triggers kernel CLEANUP for the exact writer.
+        // FLUSH ACK only proves the audio is silent, not that the writer
+        // lease was released. END requires its own kernel/broker acknowledgement
+        // even if self.active is already false after FLUSH.
+        let bytes = revoke_bytes(self.generation, self.source_epoch)?;
+        self.exchange(END, &bytes)?;
+        self.active = false;
+        // Kernel CLEANUP on close remains a fail-safe, not a Stop ACK.
         Ok(())
     }
 }
@@ -447,5 +447,20 @@ mod tests {
         assert!(session.file.is_none());
         assert!(session.resume(7, 3).is_err());
         assert!(session.end().is_err(), "no kernel FLUSH/END ACK was received");
+    }
+
+    #[test]
+    fn flushed_writer_cannot_report_stop_without_explicit_end_ack() {
+        // A successful FLUSH already set active=false. An absent pipe
+        // represents a missing END response and may never become Ok(()).
+        let session = NativeCapturePipeSession {
+            file: None,
+            generation: 7,
+            source_epoch: 2,
+            next_sequence: 1,
+            active: false,
+            poisoned: false,
+        };
+        assert!(session.end().is_err(), "FLUSH is not an END acknowledgement");
     }
 }

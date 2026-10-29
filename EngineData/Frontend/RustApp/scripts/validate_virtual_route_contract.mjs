@@ -27,6 +27,7 @@ const files = {
   nativeRustPacing: resolve(root, "src-tauri/src/engine/audio/native_capture_pacing.rs"),
   brokerProtocol: resolve(root, "src-tauri/windows/virtual-audio/Broker/broker_protocol.h"),
   brokerDevice: resolve(root, "src-tauri/windows/virtual-audio/Broker/broker_driver.cpp"),
+  brokerDeviceHeader: resolve(root, "src-tauri/windows/virtual-audio/Broker/broker_driver.h"),
   brokerIdentity: resolve(root, "src-tauri/windows/virtual-audio/Broker/broker_identity.cpp"),
   brokerIdentityHeader: resolve(root, "src-tauri/windows/virtual-audio/Broker/broker_identity.h"),
   brokerIo: resolve(root, "src-tauri/windows/virtual-audio/Broker/broker_io.cpp"),
@@ -513,6 +514,45 @@ requireMarkers(source.brokerDevice, "only privileged forwarding to captured PnP 
   "TI_CAPTURE_IOCTL_END", "TI_CAPTURE_IOCTL_STATUS",
   "CloseHandle(handle_)", "producerActive_",
 ]);
+// END after FLUSH requires an explicit ACK at every owner; the file lease is
+// distinct from active PCM. Source checks are not C++/Rust or Windows tests.
+requireMarkers(source.brokerDeviceHeader, "reserved broker writer after FLUSH", [
+  "bool writerLeased_ = false;",
+  "bool producerActive_ = false;",
+]);
+requireMarkers(source.brokerDevice, "broker END after FLUSH", [
+  "case TiBrokerEnd:",
+  "if (!writerLeased_ || bytes != sizeof(TI_CAPTURE_REVOKE))",
+  "writerLeased_ = true;",
+  "if (operation == TiBrokerFlush) producerActive_ = false;",
+  "if (operation == TiBrokerEnd) {",
+  "writerLeased_ = false;",
+]);
+requireMarkers(source.nativePcm, "kernel epoch-bound END after FLUSH", [
+  "} else if (g_writer != file) {",
+  "} else if (!g_started) {",
+  "if (!releaseWriter) {",
+  "request->Generation != g_lastGeneration",
+  "request->SourceEpoch != g_lastSourceEpoch",
+  "invalidateLocked(TRUE);",
+  "openedDeviceEpoch != g_deviceEpoch",
+]);
+requireMarkers(source.nativeRustPipe, "explicit broker Stop after FLUSH", [
+  "flushed_writer_cannot_report_stop_without_explicit_end_ack",
+  "self.exchange(END, &bytes)?;",
+]);
+const pipeEndMethod = source.nativeRustPipe.slice(
+  source.nativeRustPipe.indexOf("pub fn end(mut self) -> io::Result<()>"),
+  source.nativeRustPipe.indexOf("#[cfg(test)]"));
+const directEndMethod = source.nativeRust.slice(
+  source.nativeRust.indexOf("pub fn end(mut self) -> io::Result<()>"),
+  source.nativeRust.indexOf("/// Aggregate non-sensitive driver counters;"));
+if (!pipeEndMethod.includes("self.exchange(END, &bytes)?;")
+    || pipeEndMethod.includes("if self.active {")
+    || !directEndMethod.includes("send_control(&self.file, IOCTL_END, &packet, &mut [])?;")
+    || directEndMethod.includes("if self.active {")) {
+  throw new Error("Native Stop must require END ACK after FLUSH, not just after active PCM");
+}
 requireMarkers(source.brokerIdentity, "SCM/install publisher-controlled admission", [
   "GetNamedPipeClientProcessId", "GetNamedPipeClientSessionId",
   "ImpersonateNamedPipeClient", "RevertToSelf",

@@ -59,6 +59,9 @@ the actual Windows display name must still be observed on a target host.
   reset audio for another.
 - Wrong writer file, generation, source epoch or packet sequence is rejected;
   FLUSH revokes the current admission and makes queued frames unreadable.
+  FLUSH retains the same FILE_OBJECT writer lease: an exact-epoch END must
+  still be acknowledged to release that lease, even without active PCM.
+  A duplicate FLUSH, stale END or END from a different writer is rejected.
   Re-BEGIN on the same control handle requires an advanced epoch. Closing the
   writer or stopping/removing PnP ownership revokes it independently.
   A control handle is bound to the PnP device epoch observed at CREATE.
@@ -157,9 +160,12 @@ It does not translate, mix, record or own Meeting sessions.
   per-transaction deadlines. The broker limits PCM burst rate while the
   existing Meeting worker can use its 20-ms pacing helper. Burst credits
   saturate before any elapsed-microsecond multiplication after long suspend.
-- Disconnecting a pipe releases the broker's kernel FILE_OBJECT,
-  triggering scoped writer cleanup. Neither native Mute nor Stop may
-  claim success without the relevant FLUSH acknowledgement.
+- FLUSH/Mute requires a confirmed kernel FLUSH response; final END/Stop
+  separately requires a confirmed kernel END response even after FLUSH.
+  The broker distinguishes a reserved writer lease from active PCM, and
+  both Rust transports send END regardless of prior Mute. Disconnecting
+  a pipe triggers kernel FILE_OBJECT cleanup as a fail-safe only; a missing
+  END response must not be presented as a successful Stop.
 - The broker retains the authorized client's real process HANDLE, with
   SYNCHRONIZE access, after authentication. An exited client terminates
   the pipe even if a duplicate/inherited pipe handle remains open; the
