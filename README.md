@@ -8,7 +8,6 @@
 
 ```text
 Meeting
-Text
 My Voice
 Settings
 ```
@@ -27,6 +26,8 @@ Indonesian speech
 → TranslateIT Meeting Microphone
 → meeting application
 ```
+
+**Current route versus product target:** the only admitted Meeting output path on `Local` uses the standard **VB-CABLE** pair: TranslateIT renders to `CABLE Input`, and the receiving meeting application selects `CABLE Output` (VB-Audio Virtual Cable) as its microphone. The branded **TranslateIT Meeting Microphone** is a capture-only native driver *source candidate*, not installed, selected, or validated as a Windows endpoint. A source-level route match or a Live label cannot prove that Zoom/Teams received audio. See [native audio candidate](EngineData/Frontend/RustApp/src-tauri/windows/virtual-audio/README.md) and [approved provider boundary](EngineData/Backend/RuntimeAssets/AudioProvider/VBCABLE/README.md).
 
 Optional incoming assistance:
 
@@ -92,7 +93,7 @@ Historical development material is retained by Git history rather than exposed a
 
 ## Start here and file ownership
 
-For ChatGPT source work use GitHub branch `Local`: `AGENTS.md` → `GITHUB_RULES.md` → [Documentation](docs/README.md) → canonical owner → source review → STOP. **No cloud inference or unrestricted hosted builds; the temporary owner-approved Windows source CI on `Local` is the only automatic Actions exception.** Local Windows build and acceptance are one later integrated phase, not incremental PC tasks.
+For ChatGPT source work use GitHub branch `Local`: `AGENTS.md` → `GITHUB_RULES.md` → [Documentation](docs/README.md) → canonical owner → source review → STOP. **No cloud inference or hosted CI/builds. All nine GitHub Actions workflows are paused under the owner override of 2026-10-20; even manual dispatch is disabled.** Local Windows build and acceptance are one later integrated phase, not incremental PC tasks.
 
 | Root path | Single responsibility | Detail |
 |---|---|---|
@@ -158,7 +159,7 @@ PIN
 
 ## GitHub Actions policy
 
-The temporary owner-approved **TranslateIT Windows Local Validation** workflow automatically checks each pushed `Local` SHA and is also manually dispatchable. Other quality and release workflows remain manual-only. A successful matching Windows run is **source, compiler and unit-test proof** only; it does not establish actual installed-app, private AI model inference, GPU/microphone/VB-CABLE reception, installer, or clean-machine behavior. `main` remains final-only and unchanged. Publication and promotion require separate approval.
+All nine GitHub Actions workflows are currently **inactive**: their jobs are disabled, and the previously automatic `Local` push trigger was removed on 2026-10-20. Do not dispatch or re-enable them without explicit owner approval. Earlier successful runs are historical, SHA-scoped evidence, **not** test results for the current code. GitHub source inspection supplies `STATIC_SOURCE` evidence only; installed-app, GPU/audio-route, driver, and clean-machine claims require separately authorized target-Windows acceptance. `main` remains final-only; publication and promotion need explicit approval.
 
 ## Branch model
 

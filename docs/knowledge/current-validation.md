@@ -21,6 +21,12 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Native capture-only broker and WaveRT source boundary — 2026-10-29
+
+**Current `Local` source identity:** `7bec29bb8ec6247a123af6d19faead85143af164`. The capture-only WaveRT microphone, PCM/IOCTL protocol, authenticated SYSTEM broker, Rust pipe adapter and 20-ms pacing helper are present **as unadmitted source candidates**. The native provider is not the Meeting-selected route; the standard VB-CABLE pair remains the only admitted provider. The latest broker change rechecks security identity after each named-pipe header and payload, but checking user/logon/integrity plus the executable's **on-disk** hash does not establish the executing image that wrote each message. Same-user duplicated handles/injection, installed service privileges/ACLs and signed installer trust are unresolved.
+
+**Proof:** `STATIC_SOURCE` from the pinned source and relevant commit; no WDK/C++/Rust/Node compiler run, GitHub CI, broker service installation, Windows driver/endpoint enumeration, WASAPI/PCM receiver tests or real Zoom/Teams reception on this SHA. These all remain **UNKNOWN / NOT EXECUTED**. Source-only modifications or doc synchronization do not upgrade historical tests to current executable PASS. Required native acceptance remains in the existing [target-Windows runbook](./operations/target-windows-performance.md).
+
 ### Consolidated Meeting Stop native owner and integrated acceptance admission — 2026-10-29
 
 **Pinned source:** `OpenITStudios/M-TranslateIT:Local` parent `b2d8eda84b75db374f8e8760d6b1caca6bc99a9e`. Cross-owner source review covered the existing Meeting Start/Stop lifecycle, Python helper authority, finalized Silero/PCM ingress and ASR/TTS session-scoped temporary files, outbound/incoming consumer, playback, optional Meeting Sound, transcript writer, product lifecycle/Close and `application_runtime/shutdown.rs::finish_app_exit`. The existing integrated Windows source/build/package/installed acceptance owner is `docs/knowledge/operations/target-windows-performance.md`, which already groups Meeting scenarios into five flows and requires locked revision provenance; no parallel harness or acceptance registry is needed.
