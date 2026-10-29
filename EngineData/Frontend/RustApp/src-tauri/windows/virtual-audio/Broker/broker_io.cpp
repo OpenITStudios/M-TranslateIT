@@ -10,18 +10,21 @@ BrokerPipeIo::~BrokerPipeIo() {
 }
 
 bool BrokerPipeIo::Wait(OVERLAPPED& overlapped, DWORD timeoutMs, DWORD& transferred) {
-    const HANDLE handles[] = { stop_, event_ };
-    DWORD result = WaitForMultipleObjects(2, handles, FALSE, timeoutMs);
-    if (result == WAIT_OBJECT_0 + 1
+    const HANDLE handles[3] = { stop_, peer_ ? peer_ : event_, event_ };
+    const DWORD count = peer_ ? 3 : 2;
+    const DWORD eventIndex = peer_ ? 2 : 1;
+    const DWORD result = WaitForMultipleObjects(count, handles, FALSE, timeoutMs);
+    if (result == WAIT_OBJECT_0 + eventIndex
         && GetOverlappedResult(pipe_, &overlapped, &transferred, FALSE))
         return true;
 
-    error_ = result == WAIT_OBJECT_0 ? ERROR_OPERATION_ABORTED :
-        result == WAIT_TIMEOUT ? ERROR_TIMEOUT : GetLastError();
+    error_ = result == WAIT_OBJECT_0 ? ERROR_OPERATION_ABORTED
+        : (peer_ && result == WAIT_OBJECT_0 + 1) ? ERROR_ACCESS_DENIED
+        : result == WAIT_TIMEOUT ? ERROR_TIMEOUT : GetLastError();
     CancelIoEx(pipe_, &overlapped);
     DWORD ignored = 0;
-    // Wait for cancellation/completion before the stack OVERLAPPED and
-    // buffers are destroyed. No pending kernel write can outlive this call.
+    // Preserve OVERLAPPED/event/buffer until Windows completes cancellation,
+    // even if a peer died or STOP was signaled concurrently.
     GetOverlappedResult(pipe_, &overlapped, &ignored, TRUE);
     return false;
 }

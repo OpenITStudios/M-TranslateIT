@@ -549,9 +549,15 @@ Source acceptance:
    service process before BEGIN. Framed requests and replies, kernel I/O
    and 20-ms pacing are bounded; late/revoked generations cannot continue
    sending, and any uncertain native FLUSH is a failed Mute/Stop.
+   An IPC timeout, missing/malformed reply or kernel transport fault must
+   poison the Rust session, close its pipe and reject subsequent writes,
+   resume attempts or false Stop success.
 5. Service shutdown cancels blocked pipe I/O and closes the kernel writer;
-   old PnP control handles, stale source epochs, duplicate send sequences
-   and a second writer remain prohibited. The broker does not launch
+   the broker holds a SYNCHRONIZE handle for its authenticated client and
+   rejects further requests when that exact process exits, including when
+   a pipe handle was retained by another process. Old PnP control handles,
+   stale source epochs, duplicate send sequences and a second writer
+   remain prohibited. The broker does not launch
    a second AI engine, Meeting session or fallback audio route.
 
 One coordinated, revision-pinned TARGET_WINDOWS acceptance (not run):
@@ -565,7 +571,9 @@ One coordinated, revision-pinned TARGET_WINDOWS acceptance (not run):
 - Verify service hardening/SCM DACL, non-admin client access, spoofed pipe
   name, unrelated same-user app, wrong token SID/logon/session, remote pipe,
   installer hash absence/tamper, service restart/crash, blocked client
-  reads/writes, replayed requests, endpoint PnP loss and forced Stop.
+  reads/writes, timed-out/malformed IPC replies, client exit with an
+  inherited pipe HANDLE, same-user pipe duplication while the trusted
+  process is still alive, replayed requests, endpoint PnP loss and forced Stop.
 - Verify real 48 kHz PCM16 captured by Zoom/Teams with multiple independent
   receivers; silence underflow, overwrite/jitter/clock drift, speech timing,
   Original/Translated source changes, Mute/Stop queue flush and bounded

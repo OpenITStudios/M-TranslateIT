@@ -270,14 +270,35 @@ fn transact(file: &File, operation: u16, payload: &[u8]) -> io::Result<Vec<u8>> 
 
 /// A single connection is one authenticated capture writer, not an AI owner.
 pub struct NativeCapturePipeSession {
-    file: File,
+    // Failure to read a reply is not proof that the kernel rejected an IOCTL.
+    // Closing the pipe is the only safe local recovery: the broker then drops
+    // its owning driver FILE_OBJECT and the kernel invalidates queued samples.
+    file: Option<File>,
     generation: u64,
     source_epoch: u64,
     next_sequence: u64,
     active: bool,
+    poisoned: bool,
 }
 
 impl NativeCapturePipeSession {
+    fn poison(&mut self) {
+        self.active = false;
+        self.poisoned = true;
+        self.file.take(); // No retry on a desynchronized, uncertain pipe.
+    }
+
+    fn exchange(&mut self, operation: u16, payload: &[u8]) -> io::Result<Vec<u8>> {
+        let result = match self.file.as_ref() {
+            Some(file) if !self.poisoned => transact(file, operation, payload),
+            _ => Err(io::Error::new(ErrorKind::BrokenPipe, "native_capture:pipe_unavailable")),
+        };
+        if result.is_err() {
+            self.poison();
+        }
+        result
+    }
+
     pub fn begin(generation: u64, epoch: u64) -> io::Result<Self> {
         let bytes = begin_bytes(generation, epoch)?;
         let mut options = OpenOptions::new();
@@ -286,37 +307,44 @@ impl NativeCapturePipeSession {
         let mut file = options.open(PIPE)?;
         verify_service_process(&file)?;
         transact(&mut file, BEGIN, &bytes)?;
-        Ok(Self { file, generation, source_epoch: epoch, next_sequence: 1, active: true })
+        Ok(Self {
+            file: Some(file),
+            generation,
+            source_epoch: epoch,
+            next_sequence: 1,
+            active: true,
+            poisoned: false,
+        })
     }
 
     pub fn submit(&mut self, samples: &[i16]) -> io::Result<()> {
-        if !self.active || self.next_sequence == u64::MAX {
+        if !self.active || self.poisoned || self.next_sequence == u64::MAX {
             return Err(io::Error::new(ErrorKind::InvalidInput, "native_capture:invalid_writer_state"));
         }
         let bytes = frame_bytes(self.generation, self.source_epoch, self.next_sequence, samples)?;
-        transact(&mut self.file, WRITE, &bytes)?;
+        self.exchange(WRITE, &bytes)?;
         self.next_sequence += 1;
         Ok(())
     }
 
     pub fn flush(&mut self) -> io::Result<()> {
-        if !self.active {
+        if !self.active || self.poisoned {
             return Err(io::Error::new(ErrorKind::InvalidInput, "native_capture:writer_not_active"));
         }
         let bytes = revoke_bytes(self.generation, self.source_epoch)?;
-        transact(&mut self.file, FLUSH, &bytes)?;
+        self.exchange(FLUSH, &bytes)?;
         self.active = false;
         Ok(())
     }
 
     pub fn resume(&mut self, generation: u64, epoch: u64) -> io::Result<()> {
-        if self.active || generation < self.generation
+        if self.poisoned || self.active || generation < self.generation
             || (generation == self.generation && epoch <= self.source_epoch)
         {
             return Err(io::Error::new(ErrorKind::InvalidInput, "native_capture:resume_epoch_invalid"));
         }
         let bytes = begin_bytes(generation, epoch)?;
-        transact(&mut self.file, BEGIN, &bytes)?;
+        self.exchange(BEGIN, &bytes)?;
         self.generation = generation;
         self.source_epoch = epoch;
         self.next_sequence = 1;
@@ -325,14 +353,25 @@ impl NativeCapturePipeSession {
     }
 
     pub fn status(&mut self) -> io::Result<NativeCaptureStatus> {
-        let reply = transact(&mut self.file, STATUS, &[])?;
-        parse_status(&reply)
+        let reply = self.exchange(STATUS, &[])?;
+        match parse_status(&reply) {
+            Ok(status) => Ok(status),
+            Err(error) => {
+                self.poison(); // Invalid reply is also protocol desynchronization.
+                Err(error)
+            }
+        }
     }
 
     pub fn end(mut self) -> io::Result<()> {
+        // A prior timed-out FLUSH/WRITE did not acknowledge kernel cleanup.
+        // Never turn Drop of a poisoned pipe into a successful native Stop.
+        if self.poisoned {
+            return Err(io::Error::new(ErrorKind::BrokenPipe, "native_capture:stop_unverified"));
+        }
         if self.active {
             let bytes = revoke_bytes(self.generation, self.source_epoch)?;
-            transact(&mut self.file, END, &bytes)?;
+            self.exchange(END, &bytes)?;
             self.active = false;
         }
         // Closing the pipe immediately makes the broker close its driver
@@ -356,5 +395,23 @@ mod tests {
         assert!(request_bytes(WRITE, &[0u8; MAX_PAYLOAD + 1]).is_err());
         assert!(request_bytes(0, &[]).is_err());
         assert_eq!(CLIENT_ACCESS & 0x0004, 0, "client cannot create pipe instance");
+    }
+
+    #[test]
+    fn failed_control_transport_is_sticky_and_never_acknowledges_stop() {
+        let mut session = NativeCapturePipeSession {
+            file: None,
+            generation: 7,
+            source_epoch: 2,
+            next_sequence: 1,
+            active: true,
+            poisoned: false,
+        };
+        assert!(session.submit(&[0, 1]).is_err());
+        assert!(session.poisoned);
+        assert!(!session.active);
+        assert!(session.file.is_none());
+        assert!(session.resume(7, 3).is_err());
+        assert!(session.end().is_err(), "no kernel FLUSH/END ACK was received");
     }
 }

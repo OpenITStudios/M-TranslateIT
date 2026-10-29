@@ -282,13 +282,16 @@ requireMarkers(source.brokerIdentity, "SCM/install publisher-controlled admissio
   "OpenThreadToken", "OpenProcessToken",
   "SidAndLogonMatch", "QueryFullProcessImageNameW",
   "ImageHashApproved", "ApprovedDesktopSha256",
+  "BrokerClientIdentity::IsLive", "result.process_ = process.handle;",
+  "WaitForSingleObject(process_, 0)",
   "SOFTWARE\\\\OpenITStudios\\\\TranslateIT",
   "CompareStringOrdinal",
 ]);
 requireMarkers(source.brokerService, "single privileged transport worker only", [
   "StartServiceCtrlDispatcherW", "TranslateITMicBroker",
   "PIPE_REJECT_REMOTE_CLIENTS", "FILE_FLAG_FIRST_PIPE_INSTANCE",
-  "FILE_FLAG_OVERLAPPED", "AuthenticatePipeClient(pipe)",
+  "FILE_FLAG_OVERLAPPED", "AuthenticatePipeClient(pipe, client)",
+  "io.WatchPeerProcess(client.ProcessHandle())", "client.IsLive(pipe)",
   "BrokerDriver driver;", "BrokerPipeIo io(pipe.h, g_stop);",
   "TI_BROKER_REPLY", "ProducerClock",
 ]);
@@ -296,6 +299,7 @@ requireMarkers(source.brokerIo, "cancelable bounded server IPC", [
   "WaitForMultipleObjects", "CancelIoEx",
   "GetOverlappedResult", "WaitForSingleObject(stop_, 0)",
   "BrokerPipeIo::ReadExactly", "BrokerPipeIo::WriteExactly",
+  "const DWORD count = peer_ ? 3 : 2;",
 ]);
 requireMarkers(source.brokerProject, "broker Win32 build target", [
   "TranslateITMicBroker", "broker_identity.cpp",
@@ -314,7 +318,9 @@ requireMarkers(source.nativeRustPipe, "non-admin service identity before PCM sen
   "FILE_FLAG_OVERLAPPED", "GetOverlappedResult",
   "CancelIoEx", "fn transfer(",
   "pub fn submit(&mut self", "pub fn flush(&mut self)",
-  "pub fn end(mut self)",
+  "pub fn end(mut self)", "fn poison(&mut self)",
+  "self.file.take()", "native_capture:stop_unverified",
+  "failed_control_transport_is_sticky_and_never_acknowledges_stop",
 ]);
 requireMarkers(source.nativeRustPacing, "reuse one Meeting worker with bounded PCM", [
   "pub fn send_paced(", "FnMut(u64, u64) -> bool",

@@ -155,7 +155,22 @@ bool ImageHashApproved(const std::wstring& path) {
 }
 } // namespace
 
-DWORD AuthenticatePipeClient(HANDLE pipe) {
+BrokerClientIdentity::~BrokerClientIdentity() {
+    if (process_) CloseHandle(process_);
+}
+
+bool BrokerClientIdentity::IsLive(HANDLE pipe) const {
+    if (!process_ || !pid_ || !session_ || !pipe
+        || WaitForSingleObject(process_, 0) != WAIT_TIMEOUT) return false;
+    ULONG currentPid = 0;
+    ULONG currentSession = 0;
+    return GetNamedPipeClientProcessId(pipe, &currentPid) && currentPid == pid_
+        && GetNamedPipeClientSessionId(pipe, &currentSession)
+        && currentSession == session_;
+}
+
+DWORD AuthenticatePipeClient(HANDLE pipe, BrokerClientIdentity& result) {
+    if (result.process_) return ERROR_INVALID_STATE;
     ULONG pid = 0;
     if (!GetNamedPipeClientProcessId(pipe, &pid) || !pid) return ERROR_ACCESS_DENIED;
     ScopedHandle process;
@@ -187,5 +202,11 @@ DWORD AuthenticatePipeClient(HANDLE pipe) {
     if (!ExpectedDesktopPath(expectedPath)
         || !ExactlySamePath(std::wstring(processName.data(), length), expectedPath)
         || !ImageHashApproved(expectedPath)) return ERROR_ACCESS_DENIED;
+    // Keep SYNCHRONIZE authority for the exact process that passed all
+    // identity checks. This prevents PID reuse and detects process exit.
+    result.process_ = process.handle;
+    result.pid_ = pid;
+    result.session_ = processSession;
+    process.handle = nullptr;
     return ERROR_SUCCESS;
 }

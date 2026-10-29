@@ -11,6 +11,9 @@ public:
     BrokerPipeIo& operator=(const BrokerPipeIo&) = delete;
 
     bool Ready() const { return event_ != nullptr; }
+    // Peer HANDLE is held by BrokerClientIdentity until this connection ends.
+    // Never close it here; this is a borrowed liveness notification.
+    void WatchPeerProcess(HANDLE peer) { peer_ = peer; }
     bool Connect();
     bool ReadExactly(void* destination, DWORD bytes, DWORD timeoutMs);
     bool WriteExactly(const void* source, DWORD bytes, DWORD timeoutMs);
@@ -21,5 +24,6 @@ private:
     HANDLE pipe_;
     HANDLE stop_;
     HANDLE event_;
+    HANDLE peer_ = nullptr;
     DWORD error_ = ERROR_SUCCESS;
 };

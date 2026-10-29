@@ -91,8 +91,10 @@ DWORD handleClient(BrokerPipeIo& io, HANDLE pipe) {
 
     // Windows named-pipe impersonation only identifies the LAST READ request.
     // Do not open the privileged kernel control handle before this succeeds.
-    const DWORD authentication = AuthenticatePipeClient(pipe);
+    BrokerClientIdentity client;
+    const DWORD authentication = AuthenticatePipeClient(pipe, client);
     if (authentication != ERROR_SUCCESS) return authentication;
+    io.WatchPeerProcess(client.ProcessHandle());
 
     BrokerDriver driver;
     DWORD status = driver.Open();
@@ -100,6 +102,7 @@ DWORD handleClient(BrokerPipeIo& io, HANDLE pipe) {
     ProducerClock clock;
     bool firstRequest = true;
     while (!quitting()) {
+        if (!client.IsLive(pipe)) return ERROR_ACCESS_DENIED;
         if (!firstRequest && !io.ReadExactly(&request, sizeof(request), INFINITE)) return ERROR_BROKEN_PIPE;
         firstRequest = false;
         if (request.Magic != TI_BROKER_MAGIC || request.Version != TI_BROKER_VERSION
@@ -107,6 +110,7 @@ DWORD handleClient(BrokerPipeIo& io, HANDLE pipe) {
             || request.Operation < TiBrokerBegin || request.Operation > TiBrokerStatus)
             return ERROR_INVALID_DATA;
 
+        if (!client.IsLive(pipe)) return ERROR_ACCESS_DENIED;
         std::array<UCHAR, TI_BROKER_MAX_PAYLOAD> payload = {};
         if (!io.ReadExactly(payload.data(), request.PayloadBytes, 2500)) return ERROR_BROKEN_PIPE;
 
@@ -128,6 +132,9 @@ DWORD handleClient(BrokerPipeIo& io, HANDLE pipe) {
                 || !clock.CanWrite(bytes / kFrameBytes))
                 return ERROR_INVALID_DATA;
         }
+        // Revoke the privileged forwarding path immediately if the process
+        // that passed the original image/SID/session check has terminated.
+        if (!client.IsLive(pipe)) return ERROR_ACCESS_DENIED;
         std::array<UCHAR, sizeof(TI_CAPTURE_STATUS)> response = {};
         ULONG responseBytes = ULONG(response.size());
         status = driver.Send(request.Operation, payload.data(), request.PayloadBytes,

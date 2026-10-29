@@ -108,13 +108,23 @@ It does not translate, mix, record or own Meeting sessions.
 - Disconnecting a pipe releases the broker's kernel FILE_OBJECT,
   triggering scoped writer cleanup. Neither native Mute nor Stop may
   claim success without the relevant FLUSH acknowledgement.
+- The broker retains the authorized client's real process HANDLE, with
+  SYNCHRONIZE access, after authentication. An exited client terminates
+  the pipe even if a duplicate/inherited pipe handle remains open; the
+  per-operation peer wait also interrupts blocked I/O on process death.
+- The Rust client poisons a pipe after timeout, transport error, missing
+  kernel response or invalid status reply: it closes the connection,
+  forbids resume or subsequent PCM, and never reports Stop as confirmed.
+  A **new** authenticated Meeting/source epoch is required after failure.
 
 No installer currently provisions the approved executable hash, registers
 the Windows service or installs this broker executable. Consequently
 the new IPC path remains a source candidate, not a usable microphone.
 The trusted package installer must first verify its signed payload and
 enforce a non-user-writable installation directory. Hash checking does
-not protect against malicious code injection into an authorized process;
+not protect against malicious code injection into an authorized process,
+or reuse of a duplicated pipe handle while the original trusted process
+remains alive;
 service privileges, SCM access, signer identity, update invalidation,
 reparse/hardlink threats, session isolation and device lifecycle remain
 native-security acceptance requirements.
