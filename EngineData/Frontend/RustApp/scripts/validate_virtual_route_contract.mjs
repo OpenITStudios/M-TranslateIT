@@ -10,6 +10,7 @@ const files = {
   outboundPipeline: resolve(root, "src-tauri/src/commands/meeting_session/outbound_pipeline.rs"),
   playbackRuntime: resolve(root, "src-tauri/src/commands/meeting_session/playback_runtime.rs"),
   route: resolve(root, "src-tauri/src/commands/virtual_mic_route.rs"),
+  pairSelection: resolve(root, "src-tauri/src/commands/virtual_mic_route/pair_selection.rs"),
   nativeInf: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/TranslateITVA.inx"),
   nativeBridge: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/pcm_bridge.cpp"),
   nativeStream: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/minwavertstream.cpp"),
@@ -96,22 +97,28 @@ requireMarkers(source.meetingOutputRuntime, "native Meeting output runtime", [
   "decode_wav_bytes",
   "prepare_output_samples",
 ]);
-requireMarkers(source.route, "matched read-only Meeting route", [
+requireMarkers(source.route, "one lifecycle owner and extracted pure selector", [
   "pub fn prepare_current_virtual_mic_route_for_meeting()",
   "pub fn bind_prepared_virtual_mic_route_to_generation",
   "pub fn get_virtual_mic_route_selection()",
   "pub fn get_virtual_mic_route_contract_status()",
+  'mod pair_selection;',
+  "select_route_pair(&devices.output_devices, &devices.input_devices)",
+]);
+requireMarkers(source.pairSelection, "approved provider selection", [
   "fn matched_pair_identity(",
   "fn matched_pair_candidates(",
   "fn primary_vb_cable_pair(",
-  "TRANSLATEIT_NATIVE_PAIR_ID",
-  "TranslateIT Microphone Feed",
-  "TranslateIT Meeting Microphone",
-  "virtual_mic:translateit_native_pair_incomplete",
   "fn reject_ambiguous_pair(",
   "let selected = if primary.len() == 1",
+  "virtual_mic:unaccepted_native_candidate",
+  "prototype_names_can_never_activate_the_native_route",
 ]);
-forbidMarkers(source.route, "unexpected virtual provider auto-fallback", [
+forbidMarkers(source.pairSelection, "native prototype cannot be selected by name", [
+  "TRANSLATEIT_NATIVE_PAIR_ID",
+  'return Some(TRANSLATEIT_NATIVE_PAIR_ID.to_string())',
+]);
+forbidMarkers(source.pairSelection, "unexpected virtual provider auto-fallback", [
   'normalized.contains("voicemeeter")',
   '|| normalized.contains("virtual cable")',
   "else if candidates.len() == 1",
@@ -159,4 +166,4 @@ requireMarkers(source.nativeRenderFormat, "48 kHz stereo PCM16 render", [
   "SPEAKER_HOST_MIN_SAMPLE_RATE                48000",
 ]);
 
-console.log("[virtual-route] Meeting session orchestration, guarded output facade, and native CPAL delivery ownership are explicit; Rust owns one matched generation-bound virtual pair, and retired Python/manual route owners are absent.");
+console.log("[virtual-route] Legacy standard VB-CABLE remains the only admitted Meeting route; the native paired-source prototype is unaccepted, pair selection has no lifecycle state, and capture-only is a separate gated target.");

@@ -525,28 +525,37 @@ This section is an acceptance procedure, not target-Windows evidence. It covers 
 
 No OS or meeting application checks were executed here. Test the complete path, repeated session generations, physical device loss and long-session resources in the existing grouped exact-SHA Windows acceptance.
 
-## Native paired TranslateIT microphone — new source candidate (2026-10-29)
+## Native capture-only microphone — gated implementation/acceptance
 
-**Native driver acceptance has NOT been performed.** The source under
-`src-tauri/windows/virtual-audio/` is an adapted MS-PL Microsoft WaveRT
-sample, not a packaged/signed provider. Preserve the current released VB-CABLE
-source and its provenance until the exact driver package is accepted.
+**Status: DESIGN TARGET; NOT IMPLEMENTED / NOT EXECUTED.** The earlier paired
+Microsoft WaveRT-derived source at `src-tauri/windows/virtual-audio/` is a
+retained, nonselectable study and must not enter the Setup/payload. It has no
+proved WDK, kernel security, endpoint, installed-driver or reception behavior.
 
-During one authorized integrated Windows session: build the pinned WDK
-solution, verify the INF/CAT/SYS, obtain appropriate Microsoft driver signing,
-and verify the actual Sound Settings device names `TranslateIT Microphone Feed`
-(render) and `TranslateIT Meeting Microphone` (capture). Send real 48 kHz
-stereo PCM16 through CPAL and independently record the resulting paired
-capture; verify silence underflow, bounded overflow, clock drift, source
-switches, Mute, Stop/Close, repeated start, device restarts, Windows 10/11,
-and external Zoom/Teams reception. Reject duplicate/partial native pairs;
-the legacy cable may be used only when both native endpoints are absent.
-No speaker fallback, fabricated delivery receipt, test-signed production
-install or bundled unsigned kernel driver. Separately validate installer
-elevation, restart/rollback, uninstaller device ownership and licensing
-before replacing the released provider. All checks are UNKNOWN/NOT EXECUTED
-until the exact scenario runs on target Windows.
+Source admission for the capture-only replacement must establish:
+1. One actual PnP capture endpoint, no virtual render/feed endpoint. Correct
+   KS/topology/INF device naming and identity are inspected on the target OS.
+2. One exclusive authorized user-mode producer, distinct from capture readers.
+   Privileged device access and IPC are scoped, all requests bounded/validated,
+   no open writable global driver interface, and no user-controlled kernel
+   pointers. Failed authorization produces silence, not hidden fallback.
+3. Explicit 48 kHz PCM16 mono format, versioned bounded frame submission,
+   generation, source epoch, ordered sequence, session ownership, flush/mute/
+   stop acknowledgement and an independent read cursor for every capture
+   client. Last writable generation cannot replay on Unmute or Restart.
+4. Verified lifecycle on PnP stop/remove, driver unload, sleep/resume,
+   app crash, audio-client closure and duplicate/pending writer admission.
+
+The existing coordinated TARGET_WINDOWS phase owns one exact-SHA native
+build/package and Windows acceptance. After compiling the driver with matching
+SDK/WDK and checking real INF/CAT/SYS and signing requirements, record actual
+Sound Settings presence of the recording endpoint, genuine Rust-to-driver PCM
+roundtrip, silence/underflow, overflow, clock drift, Mute/Stop/source switching,
+Original and translated voice delivery in a separate receiving meeting app,
+two simultaneous capture consumers, safe install/update/uninstall/reboot,
+and valid device identity across refresh. A source marker or CPAL callback is
+not receiver proof. Unperformed checks remain UNKNOWN / NOT EXECUTED.
 
 ## Supported virtual provider / no silent fallback (2026-10-11 source candidate)
 
-Confirm the **legacy fallback** route discovery allows only the standard VB-CABLE playback/recording matched pair (CABLE Input / CABLE Output, VB-Audio Virtual Cable). Test a host with Voicemeeter, VB-CABLE A+B and/or other virtual cables **without the standard pair**: Meeting preflight must report missing virtual route rather than silently selecting those devices. With the standard pair installed alongside other providers, the standard pair alone must be selected. Keep packaging under the standard VB-CABLE license/provenance policy; do not add a second provider/driver. A functional CPAL output callback and actual meeting-app audio reception remain separate native checks, not consequences of static name matching.
+Confirm the **currently supported** route discovery allows only the standard VB-CABLE playback/recording matched pair (CABLE Input / CABLE Output, VB-Audio Virtual Cable). Test a host with Voicemeeter, VB-CABLE A+B and/or other virtual cables **without the standard pair**: Meeting preflight must report missing virtual route rather than silently selecting those devices. With the standard pair installed alongside other providers, the standard pair alone must be selected. Keep packaging under the standard VB-CABLE license/provenance policy; do not add a second provider/driver. A functional CPAL output callback and actual meeting-app audio reception remain separate native checks, not consequences of static name matching.

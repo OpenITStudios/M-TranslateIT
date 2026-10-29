@@ -107,7 +107,7 @@ Domain algorithms remain in their domain modules; ApplicationRuntime coordinates
 | Canonical speech presence / callback-to-CPU transport | `engine/audio/silero.rs`, `finalized_utterance.rs` + `speech_ingress.rs`, `pcm_handoff.rs`; `vad.rs` energy diagnostics do not own production speech admission |
 | Optional Meeting Sound capture | `engine/audio/meeting_sound_capture.rs` |
 | Meeting output delivery | `engine/audio/meeting_output*.rs` |
-| Virtual microphone route | `commands/virtual_mic_route.rs` |
+| Virtual microphone route / session binding | `commands/virtual_mic_route.rs` (one lifecycle owner); pure approved-pair selection in `commands/virtual_mic_route/pair_selection.rs` |
 | Device/settings persistence | `commands/settings.rs` + `engine/settings.rs` |
 
 ## Local AI / voice

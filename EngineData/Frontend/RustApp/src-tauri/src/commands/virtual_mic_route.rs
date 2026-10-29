@@ -10,6 +10,10 @@ use crate::engine::runtime_state::{latest_runtime_session_state, APPLICATION_MEE
 use super::audio::{list_audio_devices, AudioDeviceListReport, AudioDeviceSummary};
 use super::helper_bridge_runtime::unix_ms;
 
+#[path = "virtual_mic_route/pair_selection.rs"]
+mod pair_selection;
+use pair_selection::{matched_pair_identity, reject_ambiguous_pair, select_route_pair, RouteSelection};
+
 
 #[derive(Debug, Clone, Serialize)]
 pub struct VirtualMicRouteContractStatus {
@@ -38,23 +42,6 @@ struct MeetingVirtualMicRouteSelection {
     input_device: String,
 }
 
-#[derive(Debug, Clone)]
-struct RoutePairCandidate {
-    pair_id: String,
-    output_device: String,
-    input_device: String,
-}
-
-#[derive(Debug, Clone)]
-struct RouteSelection {
-    route_pair_id: Option<String>,
-    selected_output_device: Option<String>,
-    selected_input_device: Option<String>,
-    output_device_found: bool,
-    input_device_found: bool,
-    blocker: String,
-}
-
 static MEETING_VIRTUAL_MIC_ROUTE_SELECTION: OnceLock<
     Mutex<Option<MeetingVirtualMicRouteSelection>>,
 > = OnceLock::new();
@@ -80,183 +67,6 @@ fn device_names(devices: &[AudioDeviceSummary]) -> Vec<String> {
 
 fn named_device_exists(devices: &[AudioDeviceSummary], name: &str) -> bool {
     devices.iter().any(|device| device.name == name)
-}
-
-const TRANSLATEIT_RENDER_ENDPOINT: &str = "TranslateIT Microphone Feed";
-const TRANSLATEIT_CAPTURE_ENDPOINT: &str = "TranslateIT Meeting Microphone";
-const TRANSLATEIT_NATIVE_PAIR_ID: &str = "windows_virtual_pair:translateit-native-v1";
-
-fn supported_virtual_pair_provider(name: &str) -> bool {
-    // The current packaged route is the *standard* VB-CABLE, not VB-CABLE
-    // A+B/C+D, Voicemeeter's mixer buses, or a different virtual-audio driver.
-    // Those providers have distinct drivers/topologies and must never become
-    // an implicit fallback simply because a playback/recording name matches.
-    let normalized = name.to_ascii_lowercase();
-    normalized.contains("vb-audio virtual cable")
-        && (normalized.starts_with("cable input")
-            || normalized.starts_with("cable output"))
-}
-
-fn endpoint_pair_identity(name: &str, expected_role: &str) -> Option<String> {
-    if !supported_virtual_pair_provider(name) {
-        return None;
-    }
-    let normalized = name.to_ascii_lowercase();
-    let tokens = normalized
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty())
-        .collect::<Vec<_>>();
-    if !tokens.contains(&expected_role) {
-        return None;
-    }
-    let identity = tokens
-        .into_iter()
-        .filter(|token| !matches!(*token, "input" | "output"))
-        .collect::<Vec<_>>()
-        .join("-");
-    (!identity.is_empty()).then_some(identity)
-}
-
-fn matched_pair_identity(output_device: &str, input_device: &str) -> Option<String> {
-    // Only the exact two device names owned by the signed native driver
-    // qualify. Arbitrary virtual drivers must never become implicit routes.
-    if output_device == TRANSLATEIT_RENDER_ENDPOINT
-        && input_device == TRANSLATEIT_CAPTURE_ENDPOINT
-    {
-        return Some(TRANSLATEIT_NATIVE_PAIR_ID.to_string());
-    }
-    // Virtual-cable naming is role-inverted from TranslateIT's point of view:
-    // TTS is rendered to the cable playback-side "Input" endpoint and the meeting
-    // application selects the paired recording-side "Output" endpoint as microphone.
-    let output_identity = endpoint_pair_identity(output_device, "input")?;
-    let input_identity = endpoint_pair_identity(input_device, "output")?;
-    (output_identity == input_identity).then(|| format!("windows_virtual_pair:{output_identity}"))
-}
-
-fn matched_pair_candidates(
-    output_devices: &[AudioDeviceSummary],
-    input_devices: &[AudioDeviceSummary],
-) -> Vec<RoutePairCandidate> {
-    let mut candidates = Vec::new();
-    for output in output_devices {
-        for input in input_devices {
-            let Some(pair_id) = matched_pair_identity(&output.name, &input.name) else {
-                continue;
-            };
-            if candidates
-                .iter()
-                .any(|candidate: &RoutePairCandidate| candidate.pair_id == pair_id)
-            {
-                continue;
-            }
-            candidates.push(RoutePairCandidate {
-                pair_id,
-                output_device: output.name.clone(),
-                input_device: input.name.clone(),
-            });
-        }
-    }
-    candidates.sort_by(|left, right| left.pair_id.cmp(&right.pair_id));
-    candidates
-}
-
-// Discovery and actual stream preparation must agree. A name collision
-// cannot be used to claim a ready matched route.
-fn reject_ambiguous_pair(
-    mut selection: RouteSelection,
-    devices: &AudioDeviceListReport,
-) -> RouteSelection {
-    let output_collision = selection
-        .selected_output_device
-        .as_ref()
-        .is_some_and(|name| devices.ambiguous_output_names.contains(name));
-    let input_collision = selection
-        .selected_input_device
-        .as_ref()
-        .is_some_and(|name| devices.ambiguous_input_names.contains(name));
-    if output_collision || input_collision {
-        selection.blocker = "virtual_mic:matched_route_pair_ambiguous".to_string();
-    }
-    selection
-}
-
-fn primary_vb_cable_pair(candidate: &RoutePairCandidate) -> bool {
-    let output = candidate.output_device.to_ascii_lowercase();
-    let input = candidate.input_device.to_ascii_lowercase();
-    output.starts_with("cable input")
-        && input.starts_with("cable output")
-        && output.contains("vb-audio virtual cable")
-        && input.contains("vb-audio virtual cable")
-}
-
-fn select_route_pair(
-    output_devices: &[AudioDeviceSummary],
-    input_devices: &[AudioDeviceSummary],
-) -> RouteSelection {
-    // Native is preferred only when the two exact Windows endpoints exist.
-    // An incomplete installation blocks Meeting rather than silently falling
-    // back to VB-CABLE or moving an active Meeting to a different device.
-    let native_output = output_devices.iter().any(|d| d.name == TRANSLATEIT_RENDER_ENDPOINT);
-    let native_input = input_devices.iter().any(|d| d.name == TRANSLATEIT_CAPTURE_ENDPOINT);
-    if native_output || native_input {
-        if native_output && native_input {
-            return RouteSelection {
-                route_pair_id: Some(TRANSLATEIT_NATIVE_PAIR_ID.to_string()),
-                selected_output_device: Some(TRANSLATEIT_RENDER_ENDPOINT.to_string()),
-                selected_input_device: Some(TRANSLATEIT_CAPTURE_ENDPOINT.to_string()),
-                output_device_found: true,
-                input_device_found: true,
-                blocker: String::new(),
-            };
-        }
-        return RouteSelection {
-            route_pair_id: None,
-            selected_output_device: None,
-            selected_input_device: None,
-            output_device_found: native_output,
-            input_device_found: native_input,
-            blocker: "virtual_mic:translateit_native_pair_incomplete".to_string(),
-        };
-    }
-    // Preserve the currently packaged standard VB-CABLE route until a
-    // Microsoft-trusted signed native driver passes target-Windows acceptance.
-    let candidates = matched_pair_candidates(output_devices, input_devices);
-    let primary = candidates
-        .iter()
-        .filter(|candidate| primary_vb_cable_pair(candidate))
-        .collect::<Vec<_>>();
-    // Only the standard VB-CABLE pair is automatically supported.
-    // Never activate a different mixer/cable if the installed standard pair is
-    // absent or ambiguous.
-    let selected = if primary.len() == 1 {
-        primary.first().copied()
-    } else {
-        None
-    };
-
-    if let Some(candidate) = selected {
-        return RouteSelection {
-            route_pair_id: Some(candidate.pair_id.clone()),
-            selected_output_device: Some(candidate.output_device.clone()),
-            selected_input_device: Some(candidate.input_device.clone()),
-            output_device_found: true,
-            input_device_found: true,
-            blocker: String::new(),
-        };
-    }
-
-    RouteSelection {
-        route_pair_id: None,
-        selected_output_device: None,
-        selected_input_device: None,
-        output_device_found: false,
-        input_device_found: false,
-        blocker: if primary.is_empty() {
-            "virtual_mic:matched_route_pair_missing".to_string()
-        } else {
-            "virtual_mic:matched_route_pair_ambiguous".to_string()
-        },
-    }
 }
 
 fn active_application_meeting_generation() -> Option<u64> {
@@ -307,6 +117,8 @@ fn next_action_for_blocker(blocker: &str) -> String {
         "use_prepared_route_for_native_meeting_output".to_string()
     } else if blocker.contains("ambiguous") {
         "resolve_ambiguous_virtual_microphone_endpoints".to_string()
+    } else if blocker == "virtual_mic:unaccepted_native_candidate" {
+        "install_or_enable_approved_virtual_audio_provider".to_string()
     } else if blocker.contains("selected") || blocker.contains("generation") {
         "restore_prepared_virtual_audio_route_pair".to_string()
     } else {
@@ -535,118 +347,8 @@ pub fn get_virtual_mic_route_contract_status() -> VirtualMicRouteContractStatus 
 }
 
 #[cfg(test)]
-mod b3_route_hot_path_tests {
-    use super::{
-        reject_ambiguous_pair, select_route_pair, status_from_selection, RouteSelection,
-    };
-    use crate::commands::audio::{AudioDeviceListReport, AudioDeviceSummary};
-
-    #[test]
-    fn automatic_route_accepts_only_the_standard_vb_cable_pair() {
-        let make = |name: &str| AudioDeviceSummary {
-            id: name.to_string(),
-            name: name.to_string(),
-            is_default: false,
-        };
-        let standard = select_route_pair(
-            &[make("CABLE Input (VB-Audio Virtual Cable)")],
-            &[make("CABLE Output (VB-Audio Virtual Cable)")],
-        );
-        assert!(standard.blocker.is_empty());
-        assert!(standard.route_pair_id.is_some());
-
-        for (playback, recording) in [
-            ("Voicemeeter Input (VB-Audio Voicemeeter VAIO)", "Voicemeeter Output (VB-Audio Voicemeeter VAIO)"),
-            ("CABLE-A Input (VB-Audio Cable A)", "CABLE-A Output (VB-Audio Cable A)"),
-            ("Virtual Cable Input", "Virtual Cable Output"),
-        ] {
-            let not_standard = select_route_pair(&[make(playback)], &[make(recording)]);
-            assert_eq!(not_standard.blocker, "virtual_mic:matched_route_pair_missing");
-            assert!(not_standard.route_pair_id.is_none());
-        }
-    }
-
-    #[test]
-    fn native_pair_is_preferred_over_legacy_vb_cable() {
-        let make = |name: &str| AudioDeviceSummary {
-            id: name.to_string(), name: name.to_string(), is_default: false,
-        };
-        let selected = select_route_pair(
-            &[make("CABLE Input (VB-Audio Virtual Cable)"), make(super::TRANSLATEIT_RENDER_ENDPOINT)],
-            &[make("CABLE Output (VB-Audio Virtual Cable)"), make(super::TRANSLATEIT_CAPTURE_ENDPOINT)],
-        );
-        assert_eq!(selected.route_pair_id.as_deref(), Some(super::TRANSLATEIT_NATIVE_PAIR_ID));
-        assert_eq!(selected.selected_input_device.as_deref(), Some(super::TRANSLATEIT_CAPTURE_ENDPOINT));
-        assert_eq!(selected.selected_output_device.as_deref(), Some(super::TRANSLATEIT_RENDER_ENDPOINT));
-    }
-
-    #[test]
-    fn incomplete_native_pair_never_falls_back_to_legacy() {
-        let make = |name: &str| AudioDeviceSummary {
-            id: name.to_string(), name: name.to_string(), is_default: false,
-        };
-        let selected = select_route_pair(
-            &[make(super::TRANSLATEIT_RENDER_ENDPOINT), make("CABLE Input (VB-Audio Virtual Cable)")],
-            &[make("CABLE Output (VB-Audio Virtual Cable)")],
-        );
-        assert_eq!(selected.blocker, "virtual_mic:translateit_native_pair_incomplete");
-        assert!(selected.route_pair_id.is_none());
-    }
-
-    #[test]
-    fn ambiguous_native_render_name_is_not_ready() {
-        let make = |name: &str| AudioDeviceSummary {
-            id: name.to_string(), name: name.to_string(), is_default: false,
-        };
-        let native = select_route_pair(
-            &[make(super::TRANSLATEIT_RENDER_ENDPOINT)],
-            &[make(super::TRANSLATEIT_CAPTURE_ENDPOINT)],
-        );
-        let inventory = AudioDeviceListReport {
-            ok: true,
-            input_devices: vec![make(super::TRANSLATEIT_CAPTURE_ENDPOINT)],
-            output_devices: vec![make(super::TRANSLATEIT_RENDER_ENDPOINT)],
-            ambiguous_input_names: vec![],
-            ambiguous_output_names: vec![super::TRANSLATEIT_RENDER_ENDPOINT.to_string()],
-            blocker: String::new(),
-            note: String::new(),
-        };
-        assert_eq!(
-            reject_ambiguous_pair(native, &inventory).blocker,
-            "virtual_mic:matched_route_pair_ambiguous"
-        );
-    }
-
-    #[test]
-    fn duplicate_virtual_output_name_cannot_claim_route_ready() {
-        let make = |name: &str| AudioDeviceSummary {
-            id: name.to_string(),
-            name: name.to_string(),
-            is_default: false,
-        };
-        let inventory = AudioDeviceListReport {
-            ok: true,
-            input_devices: vec![make("CABLE Output (VB-Audio Virtual Cable)")],
-            output_devices: vec![make("CABLE Input (VB-Audio Virtual Cable)")],
-            ambiguous_input_names: vec![],
-            ambiguous_output_names: vec!["CABLE Input (VB-Audio Virtual Cable)".to_string()],
-            blocker: String::new(),
-            note: String::new(),
-        };
-        let selection = RouteSelection {
-            route_pair_id: Some("windows_virtual_pair:vb-audio-virtual-cable".to_string()),
-            selected_output_device: Some("CABLE Input (VB-Audio Virtual Cable)".to_string()),
-            selected_input_device: Some("CABLE Output (VB-Audio Virtual Cable)".to_string()),
-            output_device_found: true,
-            input_device_found: true,
-            blocker: String::new(),
-        };
-        let result = status_from_selection(
-            vec![], vec![], reject_ambiguous_pair(selection, &inventory), "collision_test",
-        );
-        assert!(!result.route_ready);
-        assert_eq!(result.blocker, "virtual_mic:matched_route_pair_ambiguous");
-    }
+mod route_status_tests {
+    use super::{status_from_selection, RouteSelection};
 
     #[test]
     fn internal_route_status_does_not_write_evidence() {
@@ -661,9 +363,8 @@ mod b3_route_hot_path_tests {
                 input_device_found: false,
                 blocker: "virtual_mic:matched_route_pair_missing".to_string(),
             },
-            "b3_internal_route_status",
+            "internal_route_status",
         );
-
         assert!(status.evidence_path.is_none());
         assert!(!status.route_ready);
     }

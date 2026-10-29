@@ -209,34 +209,30 @@ Indonesian speech
 ### Canonical Meeting audio topology
 
 ```text
-MEETING OUTBOUND — ONE SELECTED SOURCE
-Physical spoken microphone (selected Windows capture endpoint)
-  -> [Original] direct mono PCM passthrough (no AI/ASR/translation/TTS)
-  -> [TranslateIT] finalized speech / local ID->EN AI / selected English Meeting voice TTS
-  -> ONE Rust-selected playback route:
-       Native candidate: TranslateIT Microphone Feed (Windows render)
-           -> TranslateIT Meeting Microphone (Windows capture)
-       Supported legacy: CABLE Input (VB-Audio render)
-           -> CABLE Output (VB-Audio capture)
-  -> meeting application's microphone INPUT
+CURRENT SUPPORTED MEETING OUTBOUND (one selected source)
+Physical spoken microphone (selected Windows input)
+  -> [Original] direct PCM passthrough, no AI/ASR/translation/TTS
+  -> [TranslateIT] finalized Indonesian speech -> local English TTS
+  -> one Rust-owned output -> standard VB-CABLE CABLE Input (render)
+  -> paired CABLE Output (recording) -> calling application's microphone input
 
-OPTIONAL INCOMING (text captions only)
-Meeting application's physical speaker/headset OUTPUT
-  -> Windows endpoint loopback capture (same selected Meeting Sound endpoint)
-  -> finalized English speech / local EN->ID translation
-  -> text captions (not an output microphone)
+TARGET NATIVE CAPTURE-ONLY (NOT YET IMPLEMENTED/ACCEPTED)
+Same existing Rust Meeting source and generation/epoch owner
+  -> checked user-mode PCM transport with exclusive writer + atomic Flush
+  -> TranslateIT Meeting Microphone (single Windows recording endpoint)
+  -> calling application's microphone input
+No extra Windows playback/feed endpoint and no parallel Meeting engine.
 
-INDEPENDENT SETTINGS
-TranslateIT Microphone = spoken physical input to AI
-TranslateIT Meeting Sound = optional capture of existing meeting-app speaker output
-Meeting-app Microphone = TranslateIT Meeting Microphone or supported CABLE Output
-Meeting-app Speaker = physical headset/speakers (chosen inside the calling app)
+OPTIONAL INCOMING (UNCHANGED)
+Calling application's physical speaker/headset output
+  -> Windows endpoint loopback -> local EN->ID captions only
 ```
 
-The Windows driver—not a frontend alias—determines the actual recording endpoint name. A complete uniquely named TranslateIT native pair is preferred; a partially installed or ambiguous pair blocks required Meeting Start, never silently chooses a different route. Until the native source is compiled, appropriately signed, packaged and accepted on Windows, the shipped provider remains standard VB-CABLE under its existing license/provenance. Neither named endpoint discovery nor a local render callback proves audio reception by another application.
+The supported route is the standard licensed VB-CABLE pair; its endpoint names are inverted from TranslateIT's perspective. The earlier Microsoft WaveRT-derived paired native prototype remains source-reference only, **not admitted to Meeting selection, not bundled or production signed**. An apparent `TranslateIT Meeting Microphone` name cannot prove driver provenance, route readiness or capture reception. Presence of a prototype native device must not hijack a valid VB-CABLE route. If no supported provider exists, Start fails closed.
 
-Neither TranslateIT's Meeting Sound selector nor its virtual microphone route changes the calling application's speaker setting. VB-CABLE names are inverted relative to the application: CABLE Input is playback, CABLE Output is recording. Required and optional lanes never exchange raw buffers or become fallback devices for each other. Existing endpoint-wide loopback is not process-only capture and may include other applications' sound.
+**Native target contract:** One Windows capture endpoint; no second virtual playback endpoint. One Rust Meeting output authority with an exclusive, access-controlled local PCM writer; bounded 48 kHz PCM16 mono frames converted before kernel admission; explicit generation + source epoch + monotonic sequence; safe multi-reader capture without cross-consumer draining; silent underflow; bounded, observable overflow. Stop, Mute and source switches must invalidate old sessions and flush native audio before acknowledging success. They cannot recall samples already consumed by external applications. Device identity and package authenticity must not be inferred from a human-friendly name. Until WDK compilation, driver signing, installer, Windows Audio/PnP testing and external meeting-app reception are genuinely verified, the native target is not operational.
 
+The physical microphone, optional Meeting Sound output, and calling application's microphone and speaker are independent selections. Neither the virtual route nor Meeting Sound changes the calling application's speaker. Required and incoming audio lanes never mix or silently substitute their endpoints. Endpoint-wide loopback may include audio from unrelated processes.
 
 ### PR-070 — Outbound content
 **MUST:** When `TranslateIT Audio` is selected, output only translated English speech from the selected Meeting voice. Raw physical microphone speech must never be an automatic fallback for a failed translation. When `Original Microphone` is explicitly selected, send raw mic PCM directly to the same virtual microphone without AI, ASR, translation, TTS or discretionary processing. The two sources must not be mixed.
@@ -245,7 +241,7 @@ Neither TranslateIT's Meeting Sound selector nor its virtual microphone route ch
 **MUST:** Physical microphone remain outbound ASR capture source.
 
 ### PR-072 — Meeting Microphone
-**MUST:** Provide TranslateIT Meeting Microphone or a functionally equivalent supported Windows endpoint selectable by meeting applications.
+**MUST:** Provide a supported Windows microphone endpoint for the calling application. The native product target is one branded capture endpoint; until that target passes native acceptance, the supported VB-CABLE recording endpoint satisfies this capability without being renamed as TranslateIT.
 
 ### PR-072A — Simple outbound source selection
 **MUST:** One virtual Meeting microphone remain selected in the calling application while users choose between `Original Microphone` and `TranslateIT Audio` inside TranslateIT. Original must be able to Start with only an available physical mic and supported virtual route, without loading translation models. Translation requires its existing AI and selected voice verification. Changing sources during a Live session must reject stale queued speech and release the previous source safely; a failed translation never silently sends Original audio. The selector is not a general audio mixer, device picker, speech effect, or separate Meeting session owner.
