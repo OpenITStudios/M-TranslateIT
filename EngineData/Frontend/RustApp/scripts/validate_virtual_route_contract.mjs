@@ -17,6 +17,9 @@ const files = {
   nativePcm: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/capture_pcm.cpp"),
   nativeAdapter: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/adapter.cpp"),
   nativeMiniPairs: resolve(root, "src-tauri/windows/virtual-audio/Source/Filters/minipairs.h"),
+  nativeCaptureTopology: resolve(root, "src-tauri/windows/virtual-audio/Source/Filters/micarray1toptable.h"),
+  nativeCaptureTopologyImpl: resolve(root, "src-tauri/windows/virtual-audio/Source/Filters/micarraytopo.cpp"),
+  nativeCaptureTopologyHeader: resolve(root, "src-tauri/windows/virtual-audio/Source/Filters/micarraytopo.h"),
   nativeProject: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/Main.vcxproj"),
   nativeRust: resolve(root, "src-tauri/src/engine/audio/native_capture_transport.rs"),
   nativeRustPipe: resolve(root, "src-tauri/src/engine/audio/native_capture_pipe.rs"),
@@ -171,6 +174,41 @@ requireMarkers(source.nativeMiniPairs, "one registered WaveRT capture minipair",
 ]);
 forbidMarkers(source.nativeMiniPairs, "obsolete render minipair", [
   "g_RenderEndpoints", "SpeakerMiniports",
+]);
+requireMarkers(source.nativeCaptureTopology, "truthful mono virtual microphone topology", [
+  "&KSNODETYPE_MICROPHONE,",
+  "MICARRAY1_CUSTOM_NAME",
+  "MicArray1TopoMiniportFilterDescriptor",
+  "NULL,                                          // No fabricated physical microphone properties",
+  "MicArray1PropertiesMute",
+  "MicArray1PropertiesVolume",
+]);
+forbidMarkers(source.nativeCaptureTopology, "physical microphone array and jack properties", [
+  "KSNODETYPE_MICROPHONE_ARRAY",
+  "KSPROPERTY_AUDIO_MIC_ARRAY_GEOMETRY",
+  "KSPROPERTY_AUDIO_MIC_SNR",
+  "KSPROPERTY_AUDIO_MIC_SENSITIVITY2",
+  "KSPROPERTY_JACK_DESCRIPTION",
+  "AutomationMicArray1TopoFilter",
+]);
+forbidMarkers(source.nativeCaptureTopologyImpl, "fictional mic-array geometry and sensor calibration", [
+  "PropertyHandlerMicArrayGeometry",
+  "PropertyHandlerMicProperties",
+  "PropertyHandlerJackDescription",
+  "MICARRAY_SENSITIVITY",
+  "MICARRAY_SNR",
+  "FloatToFixedPoint16_16",
+  "PropertyHandler_MicArrayTopoFilter",
+]);
+forbidMarkers(source.nativeCaptureTopologyHeader, "obsolete physical microphone entrypoints", [
+  "PropertyHandlerMicArrayGeometry",
+  "PropertyHandlerMicProperties",
+  "PropertyHandlerJackDescription",
+  "PropertyHandler_MicArrayTopoFilter",
+]);
+requireMarkers(source.nativeCaptureTopologyImpl, "supported generic microphone topology properties", [
+  "PropertyHandler_MicArrayTopology",
+  "pMiniport->PropertyHandlerGeneric(PropertyRequest)",
 ]);
 requireMarkers(source.nativeProject, "WDK driver and secure-device linker", [
   "wdmsec.lib", 'ClCompile Include="capture_pcm.cpp"',

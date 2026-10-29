@@ -61,7 +61,7 @@ PCPIN_DESCRIPTOR MicArray1TopoMiniportPins[] =
         MicArray1TopoPinDataRangePointersBridge,                   // DataRanges
         KSPIN_DATAFLOW_IN,                            // DataFlow
         KSPIN_COMMUNICATION_NONE,                     // Communication
-        &KSNODETYPE_MICROPHONE_ARRAY,                 // Category
+        &KSNODETYPE_MICROPHONE,                       // Standard microphone input category
         &MICARRAY1_CUSTOM_NAME,                       // Name
         0                                             // Reserved
       }
@@ -151,50 +151,17 @@ PCCONNECTION_DESCRIPTOR MicArray1TopoMiniportConnections[] =
 
 
 
+// A software-only virtual microphone does not claim mic-array geometry,
+// physical jack presence, real-world SNR or analog microphone sensitivity.
+// Keep the supported software volume/mute topology nodes only.
+
 //=============================================================================
-static
-PCPROPERTY_ITEM MicArray1PropertiesTopoFilter[] =
-{
-    {
-        &KSPROPSETID_Jack,
-        KSPROPERTY_JACK_DESCRIPTION,
-        KSPROPERTY_TYPE_GET | KSPROPERTY_TYPE_BASICSUPPORT,
-        PropertyHandler_MicArrayTopoFilter
-    },
-    {
-        &KSPROPSETID_Jack,
-        KSPROPERTY_JACK_DESCRIPTION2,
-        KSPROPERTY_TYPE_GET | KSPROPERTY_TYPE_BASICSUPPORT,
-        PropertyHandler_MicArrayTopoFilter
-    },
-    {
-        &KSPROPSETID_Audio,
-        KSPROPERTY_AUDIO_MIC_ARRAY_GEOMETRY,
-        KSPROPERTY_TYPE_GET | KSPROPERTY_TYPE_BASICSUPPORT,
-        PropertyHandler_MicArrayTopoFilter
-    },
-    {
-        &KSPROPSETID_Audio,
-        KSPROPERTY_AUDIO_MIC_SNR,
-        KSPROPERTY_TYPE_GET | KSPROPERTY_TYPE_BASICSUPPORT,
-        PropertyHandler_MicArrayTopoFilter
-    },
-    {
-        &KSPROPSETID_Audio,
-        KSPROPERTY_AUDIO_MIC_SENSITIVITY2,
-        KSPROPERTY_TYPE_GET | KSPROPERTY_TYPE_BASICSUPPORT,
-        PropertyHandler_MicArrayTopoFilter
-    }
-};
-
-DEFINE_PCAUTOMATION_TABLE_PROP(AutomationMicArray1TopoFilter, MicArray1PropertiesTopoFilter);
-
 //=============================================================================
 static
 PCFILTER_DESCRIPTOR MicArray1TopoMiniportFilterDescriptor =
 {
   0,                                            // Version
-  &AutomationMicArray1TopoFilter,               // AutomationTable
+  NULL,                                          // No fabricated physical microphone properties
   sizeof(PCPIN_DESCRIPTOR),                     // PinSize
   SIZEOF_ARRAY(MicArray1TopoMiniportPins),      // PinCount
   MicArray1TopoMiniportPins,                    // Pins

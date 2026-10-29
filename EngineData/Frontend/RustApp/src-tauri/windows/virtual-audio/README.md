@@ -31,7 +31,10 @@ service/package identity to avoid accidental upgrade collisions.
 | Rust native_capture_pacing.rs | 20 ms paced PCM helper for the existing Meeting worker | Source only; no Meeting caller |
 
 No virtual speaker, no virtual render/feed endpoint, no second translation
-worker and no file-backed meeting audio. Normal audio applications can
+worker and no file-backed meeting audio. The capture topology advertises a
+**standard mono microphone**, not a physical microphone array; it intentionally
+does not publish fabricated array geometry, jack-placement, sensitivity or SNR
+capabilities from Microsoft's original hardware-oriented sample. Normal audio applications can
 open the Windows microphone; they must not gain a PCM writer handle from the
 microphone endpoint.
 

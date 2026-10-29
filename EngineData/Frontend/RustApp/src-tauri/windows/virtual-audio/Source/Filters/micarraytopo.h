@@ -52,25 +52,8 @@ public:
 
     IMP_IMiniportTopology;
 
-    NTSTATUS            PropertyHandlerMicArrayGeometry
-    (
-        _In_ PPCPROPERTY_REQUEST  PropertyRequest
-    );
-
-    NTSTATUS            PropertyHandlerMicProperties
-    (
-        _In_ PPCPROPERTY_REQUEST  PropertyRequest
-    );
-
-    NTSTATUS            PropertyHandlerJackDescription
-    (
-        _In_ PPCPROPERTY_REQUEST  PropertyRequest
-    );
-
-    NTSTATUS            PropertyHandlerJackDescription2
-    (
-        _In_ PPCPROPERTY_REQUEST  PropertyRequest
-    );
+    // Only the generic volume/mute topology is offered. A virtual
+    // microphone cannot report physical array geometry or jack placement.
 
 protected:
     eDeviceType     m_DeviceType;
@@ -91,7 +74,6 @@ CreateMicArrayMiniportTopology(
     _In_            PENDPOINT_MINIPAIR                      MiniportPair
 );
 
-NTSTATUS PropertyHandler_MicArrayTopoFilter(_In_ PPCPROPERTY_REQUEST PropertyRequest);
 NTSTATUS PropertyHandler_MicArrayTopology(_In_ PPCPROPERTY_REQUEST PropertyRequest);
 
 #endif // _SIMPLEAUDIOSAMPLE_MICARRAYTOPO_H_

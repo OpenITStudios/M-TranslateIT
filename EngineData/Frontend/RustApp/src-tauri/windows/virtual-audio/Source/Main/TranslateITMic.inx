@@ -60,7 +60,7 @@ HKR,Drivers\wave\wdmaud.drv,Description,,%TRANSLATEITMIC_SA.DeviceDesc%
 HKR,Drivers\mixer\wdmaud.drv,Description,,%TRANSLATEITMIC_SA.DeviceDesc%
 
 ;======================================================
-; capture interfaces: mic array (internal: front)
+; recording interfaces: mono virtual microphone
 ;======================================================
 [TRANSLATEITMIC.I.WaveMicArray1]
 AddReg=TRANSLATEITMIC.I.WaveMicArray1.AddReg
@@ -91,7 +91,7 @@ AddReg=TRANSLATEITMIC_SA.AddReg
 
 [TRANSLATEITMIC_SA.NT.Interfaces]
 ;
-; Interfaces for microphone array 1 (internal: front) capture endpoint.
+; Interfaces for the single virtual microphone capture endpoint.
 ;
 AddInterface=%KSCATEGORY_AUDIO%,    %KSNAME_WaveMicArray1%, TRANSLATEITMIC.I.WaveMicArray1
 AddInterface=%KSCATEGORY_REALTIME%, %KSNAME_WaveMicArray1%, TRANSLATEITMIC.I.WaveMicArray1

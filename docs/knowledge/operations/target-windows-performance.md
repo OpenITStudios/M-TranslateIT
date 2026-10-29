@@ -538,6 +538,11 @@ Source acceptance:
 1. INF/KS expose exactly one recording endpoint, correct custom-name GUID,
    separate device/service identity and no render endpoint; kernel IOCTL
    ABI remains bounded, versioned and file/epoch/sequence scoped.
+   The virtual mono capture bridge must use KSNODETYPE_MICROPHONE rather
+   than KSNODETYPE_MICROPHONE_ARRAY, with no fictional array geometry,
+   physical jack, hardware SNR or sensitivity properties. Confirm the
+   resulting Windows friendly name and actual capture-client behavior
+   during the deferred native acceptance.
 2. Broker control access stays SYS/Admin only. Named-pipe SDDL grants
    AU `0x0012008B` read/write-data but not FILE_CREATE_PIPE_INSTANCE;
    remote connections are rejected; pipe server is first-instance-only.
