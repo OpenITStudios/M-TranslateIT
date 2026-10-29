@@ -587,6 +587,16 @@ One coordinated, revision-pinned TARGET_WINDOWS acceptance (not run):
   reads/writes, timed-out/malformed IPC replies, client exit with an
   inherited pipe HANDLE, same-user pipe duplication while the trusted
   process is still alive, replayed requests, endpoint PnP loss and forced Stop.
+- Validate both WaveRT buffer APIs using only 1/2 notification events, 48 kHz
+  mono PCM16 frame-aligned sizes and bounded 96,000-byte DMA allocations.
+  Confirm zeroed initial buffer pages, mapped-page failure cleanup, valid
+  sample-frame presentation positions, and no modulo-by-zero on late release.
+  Test QPC backwards jumps, 60-second to multi-hour timing gaps, sleep/resume
+  and callback stalls: position arithmetic must not overflow or cause a DPC
+  catch-up storm, and the reader must silence/drop stale audio rather than
+  replay it after a full cyclic buffer was missed. In particular test direct
+  RUN-to-STOP (without PAUSE) and PAUSE-to-RUN: the notification timer must
+  not emit packets after STOP and both transitions must zero old DMA samples.
 - Verify real 48 kHz PCM16 captured by Zoom/Teams with multiple independent
   receivers; silence underflow, overwrite/jitter/clock drift, speech timing,
   Original/Translated source changes, Mute/Stop queue flush and bounded

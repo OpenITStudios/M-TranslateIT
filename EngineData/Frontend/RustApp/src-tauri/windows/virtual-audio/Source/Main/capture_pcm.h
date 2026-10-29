@@ -19,6 +19,12 @@ NTSTATUS TranslateITCaptureStatus(_In_ ULONGLONG openedDeviceEpoch, _Out_ TI_CAP
 //
 // Read performs no allocation or I/O and is safe at DISPATCH_LEVEL.
 // Each capture stream must provide its own independent cursor and serial.
+// A WaveRT stream that missed more than one full DMA cycle must not replay
+// old Meeting PCM as if it were a new capture period.
+void TranslateITCaptureDiscardStaleFrames(
+    _Inout_ ULONGLONG* nextFrame,
+    _Inout_ ULONGLONG* observedSerial);
+
 void TranslateITCaptureRead(
     _Out_writes_bytes_(bytes) UCHAR* destination,
     _In_ ULONG bytes,

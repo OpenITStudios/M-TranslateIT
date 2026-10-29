@@ -299,6 +299,54 @@ requireMarkers(source.nativeStream, "WaveRT independent PCM capture", [
   "&m_TranslateITCaptureReadFrame",
   "&m_TranslateITCaptureSerial",
 ]);
+// Source-side regression contract for mono WaveRT after long PnP suspend,
+// scheduler delay or a backwards QPC change. No executable Windows proof.
+requireMarkers(source.nativeStream, "64-bit and bounded WaveRT DMA arithmetic", [
+  "static_assert(kMaxCaptureDmaBytes == 96000u",
+  "CaptureDisplacementNumerator(96000u, 60000u, 0u)",
+  "const ULONGLONG elapsedMs = elapsedHns / 10000ull;",
+  "const ULONGLONG advancedBytes = byteNumerator / 1000ull;",
+  "if (!m_pDmaBuffer || !m_ulDmaBufferSize || !m_ulDmaMovementRate)",
+  "if (advancedBytes > m_ulDmaBufferSize)",
+  "RtlZeroMemory(m_pDmaBuffer, m_ulDmaBufferSize);",
+  "TranslateITCaptureDiscardStaleFrames(",
+  "m_hnsDPCTimeCarryForward = elapsedHns % periodHns;",
+  "if (nowHns < _this->m_ullLastDPCTimeStamp)",
+  "ullPresentationPosition / blockAlign",
+  "RequestedSize_ > kMaxCaptureDmaBytes",
+  "RtlZeroMemory(m_pDmaBuffer, RequestedSize_);",
+  "NotificationCount_ != 1 && NotificationCount_ != 2",
+  "m_KsState == KSSTATE_RUN && m_ulNotificationIntervalMs > 0",
+  "if (_this->m_KsState != KSSTATE_RUN)",
+  "Stop revokes any sample bytes",
+  "No stale microphone samples",
+]);
+forbidMarkers(source.nativeStream, "legacy overflowing DMA/notification computations", [
+  "ULONG TimeElapsedInMS = (ULONG)",
+  "m_ulDmaMovementRate * TimeElapsedInMS",
+  "ullPresentationPosition * m_pWfExt->Format.nSamplesPerSec",
+  "m_hnsDPCTimeCarryForward = hnsCurrentTime -",
+]);
+requireMarkers(source.nativePcm, "late WaveRT reader cannot replay buffered speech", [
+  "void TranslateITCaptureDiscardStaleFrames(",
+  "*nextFrame = g_written;",
+  "*observedSerial = g_serial;",
+]);
+requireMarkers(source.nativePcmHeader, "WaveRT reader resync contract", [
+  "void TranslateITCaptureDiscardStaleFrames(",
+]);
+if ((source.nativeStream.match(/RtlZeroMemory\(m_pDmaBuffer, RequestedSize_\);/g) ?? []).length !== 2) {
+  throw new Error("Both WaveRT DMA allocation paths must initialize mapped audio pages");
+}
+for (const transport of ["case KSSTATE_STOP:", "case KSSTATE_RUN:"]) {
+  const index = source.nativeStream.indexOf(transport);
+  const next = source.nativeStream.indexOf("case KSSTATE_", index + transport.length);
+  const slice = source.nativeStream.slice(index, next < 0 ? undefined : next);
+  if (index < 0 || !slice.includes("RtlZeroMemory(m_pDmaBuffer, m_ulDmaBufferSize);")) {
+    throw new Error(`WaveRT ${transport} must silence old mapped audio`);
+  }
+}
+
 forbidMarkers(source.nativeStream, "legacy paired-PCM/tone playback", [
   "TranslateITBridgeRead(", "TranslateITBridgeWrite(",
   "m_ToneGenerator.GenerateSine(m_pDmaBuffer",

@@ -7,6 +7,24 @@
 #include "capture_pcm.h"
 #define MINWAVERTSTREAM_POOLTAG 'SRWM'
 
+// A virtual capture miniport must never map arbitrarily large client DMA
+// allocations and then zero/fill them under a DISPATCH_LEVEL spinlock.
+// 48 kHz PCM16 mono => at most one second / 96,000 bytes per buffer.
+static constexpr ULONG kMaxCaptureDmaBytes =
+    TI_CAPTURE_RATE_HZ * TI_CAPTURE_CHANNELS * (TI_CAPTURE_SAMPLE_BITS / 8u);
+static_assert(kMaxCaptureDmaBytes == 96000u, "bounded mono DMA allocation");
+
+// Keep 64-bit intermediate math for long sleep/resume gaps. The position
+// itself remains a byte count; cyclic wrapping happens only at the end.
+static constexpr ULONGLONG CaptureDisplacementNumerator(
+    ULONG bytesPerSecond, ULONGLONG elapsedMs, ULONG byteCarry)
+{
+    return (ULONGLONG)bytesPerSecond * elapsedMs + byteCarry;
+}
+static_assert(CaptureDisplacementNumerator(96000u, 60000u, 0u) / 1000u
+    == 5760000ull, "one-minute gap cannot wrap 32-bit arithmetic");
+
+
 #pragma warning (disable : 4127)
 
 //=============================================================================
@@ -404,18 +422,36 @@ NTSTATUS CMiniportWaveRTStream::AllocateBufferWithNotification
 
     ULONG ulBufferDurationMs = 0;
 
-    if ( (0 == RequestedSize_) || (RequestedSize_ < m_pWfExt->Format.nBlockAlign) )
-    { 
-        return STATUS_UNSUCCESSFUL; 
+    if (!m_pWfExt || !m_pWfExt->Format.nBlockAlign
+        || !RequestedSize_ || RequestedSize_ < m_pWfExt->Format.nBlockAlign)
+    {
+        return STATUS_INVALID_PARAMETER;
     }
-    
-    if ((NotificationCount_ == 0) || (RequestedSize_ % NotificationCount_ != 0))
+
+    // The WaveRT notification contract admits one or two notifications
+    // per cyclic buffer; other counts must never reach the time math.
+    if ((NotificationCount_ != 1 && NotificationCount_ != 2)
+        || RequestedSize_ % NotificationCount_ != 0)
     {
         return STATUS_INVALID_PARAMETER;
     }
 
     RequestedSize_ -= RequestedSize_ % (m_pWfExt->Format.nBlockAlign);
-    
+    if (!RequestedSize_ || RequestedSize_ > kMaxCaptureDmaBytes
+        || RequestedSize_ % NotificationCount_ != 0
+        || !m_ulDmaMovementRate)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // An event interval of zero would disable the notification timer and
+    // strand a capture client without any delivered packets.
+    const ULONGLONG durationMs =
+        ((ULONGLONG)RequestedSize_ * 1000ull) / m_ulDmaMovementRate;
+    if (durationMs < NotificationCount_)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     if (!m_bCapture && (!g_DoNotCreateDataFiles))
     {
         NTSTATUS ntStatus;
@@ -456,9 +492,17 @@ NTSTATUS CMiniportWaveRTStream::AllocateBufferWithNotification
     //  A WaveRT miniport driver should not require software access to the audio buffer itself."
     //   
     m_pDmaBuffer = (BYTE*)m_pPortStream->MapAllocatedPages(pBufferMdl, MmCached);
+    if (m_pDmaBuffer == NULL)
+    {
+        m_pPortStream->FreePagesFromMdl(pBufferMdl);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    // A newly mapped page must never be exposed as microphone audio before
+    // the first capture tick. At most 96 kB is cleared at PASSIVE_LEVEL.
+    RtlZeroMemory(m_pDmaBuffer, RequestedSize_);
     m_ulNotificationsPerBuffer = NotificationCount_;
     m_ulDmaBufferSize = RequestedSize_;
-    ulBufferDurationMs = (RequestedSize_ * 1000) / m_ulDmaMovementRate;
+    ulBufferDurationMs = (ULONG)durationMs;
     m_ulNotificationIntervalMs = ulBufferDurationMs / NotificationCount_;
 
     *AudioBufferMdl_ = pBufferMdl;
@@ -658,12 +702,18 @@ _Out_   MEMORY_CACHING_TYPE    *CacheType_
 {
     PAGED_CODE();
 
-    if ((0 == RequestedSize_) || (RequestedSize_ < m_pWfExt->Format.nBlockAlign))
+    if (!m_pWfExt || !m_pWfExt->Format.nBlockAlign
+        || !RequestedSize_ || RequestedSize_ < m_pWfExt->Format.nBlockAlign)
     {
-        return STATUS_UNSUCCESSFUL;
+        return STATUS_INVALID_PARAMETER;
     }
 
     RequestedSize_ -= RequestedSize_ % (m_pWfExt->Format.nBlockAlign);
+    if (!RequestedSize_ || RequestedSize_ > kMaxCaptureDmaBytes
+        || !m_ulDmaMovementRate)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     PHYSICAL_ADDRESS highAddress;
     highAddress.HighPart = 0;
@@ -692,6 +742,14 @@ _Out_   MEMORY_CACHING_TYPE    *CacheType_
     //  A WaveRT miniport driver should not require software access to the audio buffer itself."
     //   
     m_pDmaBuffer = (BYTE*)m_pPortStream->MapAllocatedPages(pBufferMdl, MmCached);
+    if (m_pDmaBuffer == NULL)
+    {
+        m_pPortStream->FreePagesFromMdl(pBufferMdl);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    // A newly mapped page must never be exposed as microphone audio before
+    // the first capture tick. At most 96 kB is cleared at PASSIVE_LEVEL.
+    RtlZeroMemory(m_pDmaBuffer, RequestedSize_);
 
     m_ulDmaBufferSize = RequestedSize_;
     m_ulNotificationsPerBuffer = 0;
@@ -1033,7 +1091,11 @@ NTSTATUS CMiniportWaveRTStream::GetPresentationPosition(_Out_  KSAUDIO_PRESENTAT
         return status;
     }
 
-    _pPresentationPosition->u64PositionInBlocks = ullPresentationPosition * m_pWfExt->Format.nSamplesPerSec / m_pWfExt->Format.nAvgBytesPerSec;
+    // A position in blocks is bytes / blockAlign; multiplication by the
+    // sample rate can wrap 64-bit after long capture sessions.
+    const ULONG blockAlign = m_pWfExt->Format.nBlockAlign;
+    if (!blockAlign) return STATUS_INVALID_DEVICE_STATE;
+    _pPresentationPosition->u64PositionInBlocks = ullPresentationPosition / blockAlign;
     _pPresentationPosition->u64QPCPosition = (UINT64)timeStamp.QuadPart;
 
     return STATUS_SUCCESS;
@@ -1110,9 +1172,12 @@ NTSTATUS CMiniportWaveRTStream::SetState
     switch (State_)
     {
         case KSSTATE_STOP:
-            if (m_KsState == KSSTATE_ACQUIRE)
+            // A RUN -> STOP transition may bypass PAUSE. Cancel the WaveRT
+            // notification timer before releasing DMA state or stream buffers.
+            if (m_KsState == KSSTATE_RUN && m_ulNotificationIntervalMs > 0)
             {
-                // Acquire stream resources
+                ExCancelTimer(m_pNotificationTimer, NULL);
+                KeFlushQueuedDpcs();
             }
             KeAcquireSpinLock(&m_PositionSpinLock, &oldIrql);
             // Reset DMA
@@ -1120,10 +1185,19 @@ NTSTATUS CMiniportWaveRTStream::SetState
             m_ullPlayPosition = 0;
             m_ullWritePosition = 0;
             m_ullLinearPosition = 0;
-    m_TranslateITCaptureReadFrame = 0;
-    m_TranslateITCaptureSerial = 0;
+            m_TranslateITCaptureReadFrame = 0;
+            m_TranslateITCaptureSerial = 0;
             m_ullPresentationPosition = 0;
-            
+            m_hnsElapsedTimeCarryForward = 0;
+            m_hnsDPCTimeCarryForward = 0;
+            m_byteDisplacementCarryForward = 0;
+            if (m_bCapture && m_pDmaBuffer && m_ulDmaBufferSize)
+            {
+                // Stop revokes any sample bytes already stored in the
+                // Windows cyclic buffer (not just the producer FIFO).
+                RtlZeroMemory(m_pDmaBuffer, m_ulDmaBufferSize);
+            }
+
             // Reset OS read/write positions
             m_ulLastOsReadPacket = ULONG_MAX;
             m_ulCurrentWritePosition = 0;
@@ -1161,20 +1235,8 @@ NTSTATUS CMiniportWaveRTStream::SetState
                     ExCancelTimer(m_pNotificationTimer, NULL);
                     KeFlushQueuedDpcs(); 
 
-                    // If pin is transitioning from RUN, save the time since last buffer completion event was sent 
-                    // so if the pin goes to RUN state again we can send the buffer completion event at correct time.
-                    if (m_ullLastDPCTimeStamp > 0)
-                    {
-                        LARGE_INTEGER qpc;
-                        LARGE_INTEGER qpcFrequency;
-                        LONGLONG  hnsCurrentTime;
-
-                        qpc = KeQueryPerformanceCounter(&qpcFrequency);
-
-                        // Convert ticks to 100ns units.
-                        hnsCurrentTime = KSCONVERT_PERFORMANCE_TIME(m_ullPerformanceCounterFrequency.QuadPart, qpc);
-                        m_hnsDPCTimeCarryForward = hnsCurrentTime - m_ullLastDPCTimeStamp + m_hnsDPCTimeCarryForward;
-                    }
+                    // Pending notification carry is discarded on the next
+                    // RUN; it must not accumulate suspended CPU time.
                 }
             }
             // This call updates the linear buffer and presentation positions.
@@ -1182,6 +1244,15 @@ NTSTATUS CMiniportWaveRTStream::SetState
             break;
 
         case KSSTATE_RUN:
+            if (m_bCapture && m_pDmaBuffer && m_ulDmaBufferSize)
+            {
+                // No stale microphone samples may appear before the first
+                // admitted packet after resume/source switch.
+                RtlZeroMemory(m_pDmaBuffer, m_ulDmaBufferSize);
+            }
+            // A resumed stream starts a new notification epoch, not a burst
+            // of timer events accrued during a long OS pause.
+            m_hnsDPCTimeCarryForward = 0;
             // Reset only THIS client's cursor, not every capture reader.
             m_TranslateITCaptureReadFrame = 0;
             m_TranslateITCaptureSerial = 0;
@@ -1242,51 +1313,69 @@ VOID CMiniportWaveRTStream::UpdatePosition
     _In_ LARGE_INTEGER ilQPC
 )
 {
-    // Convert ticks to 100ns units.
-    LONGLONG  hnsCurrentTime = KSCONVERT_PERFORMANCE_TIME(m_ullPerformanceCounterFrequency.QuadPart, ilQPC);
-    
-    // Calculate the time elapsed since the last call to GetPosition() or since the
-    // DMA engine started.  Note that the division by 10000 to convert to milliseconds
-    // may cause us to lose some of the time, so we will carry the remainder forward 
-    // to the next GetPosition() call.
-    //
-    ULONG TimeElapsedInMS = (ULONG)(hnsCurrentTime - m_ullDmaTimeStamp + m_hnsElapsedTimeCarryForward)/10000;
-    
-    // Carry forward the remainder of this division so we don't fall behind with our position too much.
-    //
-    m_hnsElapsedTimeCarryForward = (hnsCurrentTime - m_ullDmaTimeStamp + m_hnsElapsedTimeCarryForward) % 10000;
-    
-    // Calculate how many bytes in the DMA buffer would have been processed in the elapsed
-    // time.  Note that the division by 1000 to convert to milliseconds may cause us to 
-    // lose some bytes, so we will carry the remainder forward to the next GetPosition() call.
-    //
-    // need to divide by 1000 because m_ulDmaMovementRate is average bytes per sec.
+    const LONGLONG converted = KSCONVERT_PERFORMANCE_TIME(
+        m_ullPerformanceCounterFrequency.QuadPart, ilQPC);
+    if (converted < 0) return;
+    const ULONGLONG nowHns = (ULONGLONG)converted;
+    if (nowHns < m_ullDmaTimeStamp)
+    {
+        // Clock discontinuity: do not cast a negative interval into a huge
+        // forward displacement or replay buffered speech.
+        m_ullDmaTimeStamp = nowHns;
+        m_hnsElapsedTimeCarryForward = 0;
+        m_byteDisplacementCarryForward = 0;
+        if (m_bCapture)
+        {
+            if (m_pDmaBuffer && m_ulDmaBufferSize)
+            {
+                RtlZeroMemory(m_pDmaBuffer, m_ulDmaBufferSize);
+            }
+            TranslateITCaptureDiscardStaleFrames(
+                &m_TranslateITCaptureReadFrame, &m_TranslateITCaptureSerial);
+        }
+        return;
+    }
+    if (!m_pDmaBuffer || !m_ulDmaBufferSize || !m_ulDmaMovementRate)
+    {
+        // Buffer allocation/release is not an audio event. Avoid modulo 0.
+        m_ullDmaTimeStamp = nowHns;
+        m_hnsElapsedTimeCarryForward = 0;
+        m_byteDisplacementCarryForward = 0;
+        return;
+    }
+    const ULONGLONG elapsedHns =
+        nowHns - m_ullDmaTimeStamp + m_hnsElapsedTimeCarryForward;
+    const ULONGLONG elapsedMs = elapsedHns / 10000ull;
+    m_hnsElapsedTimeCarryForward = elapsedHns % 10000ull;
 
-    ULONG ByteDisplacement = ((m_ulDmaMovementRate * TimeElapsedInMS) + m_byteDisplacementCarryForward) / 1000 ;
-    m_byteDisplacementCarryForward = ((m_ulDmaMovementRate * TimeElapsedInMS) + m_byteDisplacementCarryForward) % 1000;
+    const ULONGLONG byteNumerator = CaptureDisplacementNumerator(
+        m_ulDmaMovementRate, elapsedMs, m_byteDisplacementCarryForward);
+    const ULONGLONG advancedBytes = byteNumerator / 1000ull;
+    m_byteDisplacementCarryForward = (ULONG)(byteNumerator % 1000ull);
 
-    // Increment presentation position even after last buffer is rendered.
-    m_ullPresentationPosition += ByteDisplacement;
-
+    // Always advance the logical sample clock, even when a delayed tick has
+    // skipped multiple cyclic buffers. Do NOT fill the skipped duration
+    // under the spinlock: drop stale PCM and explicitly silence the complete
+    // bounded buffer instead.
+    m_ullPresentationPosition += advancedBytes;
     if (m_bCapture)
     {
-        // Fill capture DMA with independently read admitted PCM.
-        WriteBytes(ByteDisplacement);
+        if (advancedBytes > m_ulDmaBufferSize)
+        {
+            RtlZeroMemory(m_pDmaBuffer, m_ulDmaBufferSize);
+            TranslateITCaptureDiscardStaleFrames(
+                &m_TranslateITCaptureReadFrame, &m_TranslateITCaptureSerial);
+        }
+        else
+        {
+            WriteBytes((ULONG)advancedBytes);
+        }
     }
-    // Increment the DMA position by the number of bytes displaced since the last
-    // call to UpdatePosition() and ensure we properly wrap at buffer length.
-    //
+    const ULONG cyclicBytes = (ULONG)(advancedBytes % m_ulDmaBufferSize);
     m_ullPlayPosition = m_ullWritePosition =
-        (m_ullWritePosition + ByteDisplacement) % m_ulDmaBufferSize;
-    
-    // m_ullDmaTimeStamp is updated in both GetPostion and GetLinearPosition calls
-    // so m_ullLinearPosition needs to be updated accordingly here
-    //
-    m_ullLinearPosition += ByteDisplacement;
-    
-    // Update the DMA time stamp for the next call to GetPosition()
-    //
-    m_ullDmaTimeStamp = hnsCurrentTime;
+        (m_ullWritePosition + cyclicBytes) % m_ulDmaBufferSize;
+    m_ullLinearPosition += advancedBytes;
+    m_ullDmaTimeStamp = nowHns;
 }
 
 //=============================================================================
@@ -1438,6 +1527,8 @@ TimerNotifyRT
         return;
     }
 
+    // Must be declared before any goto End to avoid skipped initializers.
+    PADAPTERCOMMON pAdapterComm = NULL;
     KIRQL oldIrql;
     KeAcquireSpinLock(&_this->m_PositionSpinLock, &oldIrql);
 
@@ -1446,18 +1537,40 @@ TimerNotifyRT
     // Convert ticks to 100ns units.
     LONGLONG  hnsCurrentTime = KSCONVERT_PERFORMANCE_TIME(_this->m_ullPerformanceCounterFrequency.QuadPart, qpc);
 
-    // Calculate the time elapsed since the last we ran DPC that matched Notification interval. Note that the division by 10000 
-    // to convert to milliseconds may cause us to lose some of the time, so we will carry the remainder forward.
-
-    ULONG TimeElapsedInMS = (ULONG)(hnsCurrentTime - _this->m_ullLastDPCTimeStamp + _this->m_hnsDPCTimeCarryForward)/10000;
-
-    if (TimeElapsedInMS >= _this->m_ulNotificationIntervalMs)
+    // Do not advance a capture packet or signal events on an in-flight
+    // cancelled timer callback after PAUSE/STOP. The position spinlock is
+    // the same one that protects transport state changes.
+    if (_this->m_KsState != KSSTATE_RUN)
     {
-        // Carry forward the time greater than notification interval to adjust time to signal next buffer completion event accordingly.
-        _this->m_hnsDPCTimeCarryForward = hnsCurrentTime - _this->m_ullLastDPCTimeStamp + _this->m_hnsDPCTimeCarryForward - (_this->m_ulNotificationIntervalMs * 10000);
-        // Save the last time DPC ran at notification interval
-        _this->m_ullLastDPCTimeStamp = hnsCurrentTime;
-        bufferCompleted = TRUE;
+        goto End;
+    }
+
+    // Use a nested scope so early goto End never skips initialization of
+    // local C++ variables (MSVC C2362). Only one notification per callback.
+    if (hnsCurrentTime >= 0 && _this->m_ulNotificationIntervalMs != 0)
+    {
+        const ULONGLONG nowHns = (ULONGLONG)hnsCurrentTime;
+        if (nowHns < _this->m_ullLastDPCTimeStamp)
+        {
+            _this->m_ullLastDPCTimeStamp = nowHns;
+            _this->m_hnsDPCTimeCarryForward = 0;
+        }
+        else
+        {
+            const ULONGLONG elapsedHns =
+                nowHns - _this->m_ullLastDPCTimeStamp
+                + _this->m_hnsDPCTimeCarryForward;
+            const ULONGLONG periodHns =
+                (ULONGLONG)_this->m_ulNotificationIntervalMs * 10000ull;
+            if (elapsedHns >= periodHns)
+            {
+                // Discard whole missed notification intervals; retaining
+                // them would spam clients after a long sleep or DPC stall.
+                _this->m_hnsDPCTimeCarryForward = elapsedHns % periodHns;
+                _this->m_ullLastDPCTimeStamp = nowHns;
+                bufferCompleted = TRUE;
+            }
+        }
     }
 
     if (!bufferCompleted && !_this->m_bEoSReceived)
@@ -1472,12 +1585,7 @@ TimerNotifyRT
         _this->m_llPacketCounter++;
     }
 
-    if (_this->m_KsState != KSSTATE_RUN)
-    {
-        goto End;
-    }
-    
-    PADAPTERCOMMON  pAdapterComm = _this->m_pMiniport->GetAdapterCommObj();
+    pAdapterComm = _this->m_pMiniport->GetAdapterCommObj();
 
     // Simple buffer underrun detection.
     if (!_this->IsCurrentWaveRTWritePositionUpdated() && !_this->m_bEoSReceived)

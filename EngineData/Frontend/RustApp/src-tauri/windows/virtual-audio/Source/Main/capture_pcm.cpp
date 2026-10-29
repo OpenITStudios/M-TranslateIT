@@ -229,6 +229,16 @@ NTSTATUS TranslateITCaptureStatus(ULONGLONG openedDeviceEpoch, TI_CAPTURE_STATUS
     return status;
 }
 
+void TranslateITCaptureDiscardStaleFrames(
+    ULONGLONG* nextFrame, ULONGLONG* observedSerial) {
+    if (!g_initialized || !nextFrame || !observedSerial) return;
+    KIRQL irql;
+    KeAcquireSpinLock(&g_lock, &irql);
+    *nextFrame = g_written;    // Any buffered old speech belongs to missed time.
+    *observedSerial = g_serial; // Next capture reads accept NEW PCM only.
+    KeReleaseSpinLock(&g_lock, irql);
+}
+
 void TranslateITCaptureRead(UCHAR* destination, ULONG bytes,
     ULONGLONG* nextFrame, ULONGLONG* observedSerial) {
     if (!destination || !bytes) return;

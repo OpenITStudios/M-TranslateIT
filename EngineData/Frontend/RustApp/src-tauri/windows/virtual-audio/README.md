@@ -69,6 +69,18 @@ the actual Windows display name must still be observed on a target host.
 - The driver cannot retract buffers already handed to Windows or other
   applications. The native acceptance phase must measure the remaining tail
   after Mute/Stop and ensure no subsequent old frames re-enter.
+- Capture DMA allocation is bounded to **96,000 bytes (one second)** for
+  the fixed 48 kHz PCM16 mono format. Event mode accepts only one or two
+  notifications per buffer, and each successfully mapped buffer is zeroed
+  before it becomes visible to a Windows capture client.
+- Position and notification arithmetic now keeps 64-bit intermediates and
+  bounded carry remainders. A backwards QPC discontinuity resynchronizes the
+  capture reader; a delayed position update spanning more than one cyclic
+  buffer zeros the bounded DMA region and drops old PCM rather than looping
+  through potentially minutes of stale speech under a kernel spinlock.
+  Direct RUN-to-STOP cancels pending notifications; STOP and RUN clear
+  mapped capture samples before the next session. These are **source
+  contracts**, not measured latency or sleep/resume proof.
 
 The input layer may contain other formats, but conversion/resampling to the
 exact PCM16 mono contract must occur *before* this backend. The Rust client
