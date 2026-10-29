@@ -143,6 +143,13 @@ It does not translate, mix, record or own Meeting sessions.
   Program Files installation and a SHA-256 match against
   `HKLM\SOFTWARE\OpenITStudios\TranslateIT\ApprovedDesktopSha256`
   (32-byte REG_BINARY). Missing hash or mismatched executable denies access.
+- Hashing now uses one `GENERIC_READ / FILE_SHARE_READ` HANDLE on the approved
+  desktop executable, retained inside the authenticated broker connection until
+  disconnect. A conflicting existing writer/delete opener fails admission;
+  normal subsequent write/rename/delete opens are blocked during that session.
+  This is **on-disk file stability**, not proof of an already loaded executable
+  image, code injection resistance, or a different same-identity pipe writer.
+  Updates to installed executable bytes must wait for broker disconnect.
 - The ordinary Rust client checks the running Windows SCM service PID
   against the actual pipe server PID before transmitting PCM.
 - Server I/O is cancelable during Stop; the initial handshake and packet

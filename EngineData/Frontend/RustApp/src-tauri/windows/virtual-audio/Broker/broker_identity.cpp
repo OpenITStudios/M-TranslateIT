@@ -133,11 +133,11 @@ bool ExpectedDesktopPath(std::wstring& expected) {
     return true;
 }
 
-bool Sha256File(const std::wstring& path, std::array<UCHAR, kHashBytes>& digest) {
-    ScopedHandle file;
-    file.handle = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
-                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file.handle == INVALID_HANDLE_VALUE) return false;
+bool Sha256File(HANDLE file, std::array<UCHAR, kHashBytes>& digest) {
+    // Hash the same file object retained for this authenticated pipe.
+    if (!file || file == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER beginning = {};
+    if (!SetFilePointerEx(file, beginning, nullptr, FILE_BEGIN)) return false;
     BCRYPT_ALG_HANDLE algorithm = nullptr;
     BCRYPT_HASH_HANDLE hash = nullptr;
     bool ok = false;
@@ -155,7 +155,7 @@ bool Sha256File(const std::wstring& path, std::array<UCHAR, kHashBytes>& digest)
         DWORD received = 0;
         bool readOk = true;
         for (;;) {
-            if (!ReadFile(file.handle, chunk.data(), DWORD(chunk.size()), &received, nullptr)) {
+            if (!ReadFile(file, chunk.data(), DWORD(chunk.size()), &received, nullptr)) {
                 readOk = false;
                 break;
             }
@@ -172,7 +172,7 @@ bool Sha256File(const std::wstring& path, std::array<UCHAR, kHashBytes>& digest)
     return ok;
 }
 
-bool ImageHashApproved(const std::wstring& path) {
+bool ImageHashApproved(HANDLE file) {
     std::array<UCHAR, kHashBytes> expected = {};
     DWORD length = DWORD(expected.size());
     DWORD kind = 0;
@@ -180,7 +180,7 @@ bool ImageHashApproved(const std::wstring& path) {
                      RRF_RT_REG_BINARY, &kind, expected.data(), &length) != ERROR_SUCCESS
         || length != expected.size()) return false;
     std::array<UCHAR, kHashBytes> actual = {};
-    if (!Sha256File(path, actual)) return false;
+    if (!Sha256File(file, actual)) return false;
     UCHAR difference = 0;
     for (size_t i = 0; i < expected.size(); ++i) {
         difference |= actual[i] ^ expected[i];
@@ -190,11 +190,13 @@ bool ImageHashApproved(const std::wstring& path) {
 } // namespace
 
 BrokerClientIdentity::~BrokerClientIdentity() {
+    if (approvedImage_ != INVALID_HANDLE_VALUE) CloseHandle(approvedImage_);
     if (process_) CloseHandle(process_);
 }
 
 bool BrokerClientIdentity::IsLive(HANDLE pipe) const {
-    if (!process_ || !pid_ || !session_ || !pipe
+    if (!process_ || approvedImage_ == INVALID_HANDLE_VALUE
+        || !pid_ || !session_ || !pipe
         || WaitForSingleObject(process_, 0) != WAIT_TIMEOUT) return false;
     ULONG currentPid = 0;
     ULONG currentSession = 0;
@@ -253,8 +255,20 @@ DWORD AuthenticatePipeClient(HANDLE pipe, BrokerClientIdentity& result) {
         || !length || length >= processName.size()) return ERROR_ACCESS_DENIED;
     std::wstring expectedPath;
     if (!ExpectedDesktopPath(expectedPath)
-        || !ExactlySamePath(std::wstring(processName.data(), length), expectedPath)
-        || !ImageHashApproved(expectedPath)) return ERROR_ACCESS_DENIED;
+        || !ExactlySamePath(std::wstring(processName.data(), length), expectedPath))
+        return ERROR_ACCESS_DENIED;
+
+    ScopedHandle image;
+    // Hash and retain one on-disk file object; refuse existing write/delete
+    // openers and block new ordinary replacements while the pipe is alive.
+    image.handle = CreateFileW(expectedPath.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                               nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (image.handle == INVALID_HANDLE_VALUE || !ImageHashApproved(image.handle))
+        return ERROR_ACCESS_DENIED;
+
+    // Still not proof of the loaded image or each same-user pipe writer.
+    result.approvedImage_ = image.handle;
+    image.handle = INVALID_HANDLE_VALUE;
     // Keep SYNCHRONIZE authority for the exact process that passed all
     // identity checks. This prevents PID reuse and detects process exit.
     result.process_ = process.handle;

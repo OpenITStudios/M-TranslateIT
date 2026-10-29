@@ -551,6 +551,10 @@ Source acceptance:
    token; minimum accepted level is SecurityImpersonation. It also checks
    process image path in machine-protected Program Files and the
    admin-provisioned 32-byte HKLM ApprovedDesktopSha256 receipt.
+   Hash the executable via one read-only HANDLE without write/delete sharing
+   and retain the same HANDLE throughout the authenticated pipe session.
+   This protects ordinary on-disk replacement after hashing but does not
+   establish loaded executable-image or same-identity writer provenance.
    Revalidate the last named-pipe read sender after each request header and
    payload, before BEGIN/WRITE/FLUSH/END/STATUS can reach the privileged
    kernel IOCTL. The client explicitly requests SECURITY_SQOS_PRESENT /
@@ -587,6 +591,10 @@ One coordinated, revision-pinned TARGET_WINDOWS acceptance (not run):
   then atomically provision the matching HKLM `ApprovedDesktopSha256`;
   upgrading/deleting an app must invalidate stale trust without granting
   any user permission to edit the trusted hash or service executable.
+  With an authenticated broker session active, verify that incompatible
+  executable write/delete/rename attempts fail; a conflicting existing opener
+  must reject broker admission. Only update after confirmed disconnect.
+  This does not independently attest the loaded process executable.
 - Verify service hardening/SCM DACL, non-admin client access, spoofed pipe
   name, unrelated same-user app, wrong token SID/logon/session, remote pipe,
   installer hash absence/tamper, service restart/crash, blocked client

@@ -28,6 +28,7 @@ const files = {
   brokerProtocol: resolve(root, "src-tauri/windows/virtual-audio/Broker/broker_protocol.h"),
   brokerDevice: resolve(root, "src-tauri/windows/virtual-audio/Broker/broker_driver.cpp"),
   brokerIdentity: resolve(root, "src-tauri/windows/virtual-audio/Broker/broker_identity.cpp"),
+  brokerIdentityHeader: resolve(root, "src-tauri/windows/virtual-audio/Broker/broker_identity.h"),
   brokerIo: resolve(root, "src-tauri/windows/virtual-audio/Broker/broker_io.cpp"),
   brokerService: resolve(root, "src-tauri/windows/virtual-audio/Broker/broker_service.cpp"),
   brokerProject: resolve(root, "src-tauri/windows/virtual-audio/Broker/TranslateITMicBroker.vcxproj"),
@@ -539,6 +540,34 @@ requireMarkers(source.brokerService, "single privileged transport worker only", 
 // The named-pipe impersonation token follows the most recent server-side read;
 // verify the sender after header and again after the body, before any privileged
 // DeviceIoControl is forwarded. Header-only STATUS/FLUSH still gets a check.
+// Preserve a single SHA-verified image HANDLE for the connection, rather
+// than reopening by path and releasing it before privileged requests.
+requireMarkers(source.brokerIdentityHeader, "pinned broker desktop image", [
+  "HANDLE approvedImage_ = INVALID_HANDLE_VALUE;",
+]);
+requireMarkers(source.brokerIdentity, "hash-approved desktop image lifetime", [
+  "bool Sha256File(HANDLE file,",
+  "SetFilePointerEx(file, beginning, nullptr, FILE_BEGIN)",
+  "bool ImageHashApproved(HANDLE file)",
+  "Sha256File(file, actual)",
+  "if (approvedImage_ != INVALID_HANDLE_VALUE) CloseHandle(approvedImage_)",
+  "approvedImage_ == INVALID_HANDLE_VALUE",
+  "image.handle = CreateFileW(expectedPath.c_str(), GENERIC_READ, FILE_SHARE_READ,",
+  "ImageHashApproved(image.handle)",
+  "result.approvedImage_ = image.handle;",
+  "image.handle = INVALID_HANDLE_VALUE;",
+]);
+const imageAdmission = source.brokerIdentity.slice(
+  source.brokerIdentity.indexOf("DWORD AuthenticatePipeClient("));
+const imageOpen = imageAdmission.indexOf("image.handle = CreateFileW(expectedPath.c_str(), GENERIC_READ, FILE_SHARE_READ,");
+const sameFileHash = imageAdmission.indexOf("ImageHashApproved(image.handle)");
+const retainImage = imageAdmission.indexOf("result.approvedImage_ = image.handle;");
+const retainProcess = imageAdmission.indexOf("result.process_ = process.handle;");
+if ([imageOpen, sameFileHash, retainImage, retainProcess].some(i => i < 0)
+    || !(imageOpen < sameFileHash && sameFileHash < retainImage && retainImage < retainProcess)
+    || source.brokerIdentity.includes("ImageHashApproved(expectedPath)")) {
+  throw new Error("Broker must hash and retain the same approved image HANDLE before process admission");
+}
 const brokerHandlerStart = source.brokerService.indexOf("DWORD handleClient(");
 const brokerHandlerEnd = source.brokerService.indexOf("DWORD WINAPI worker(", brokerHandlerStart);
 const brokerHandler = source.brokerService.slice(brokerHandlerStart, brokerHandlerEnd);

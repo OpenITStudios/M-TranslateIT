@@ -18,6 +18,9 @@ public:
     bool SenderTokenMatches(HANDLE pipe) const;
 private:
     friend DWORD AuthenticatePipeClient(HANDLE pipe, BrokerClientIdentity& result);
+    // Retain the same approved on-disk image for the lifetime of this pipe.
+    // Read-only sharing is not attestation of a process's loaded image.
+    HANDLE approvedImage_ = INVALID_HANDLE_VALUE;
     HANDLE process_ = nullptr;
     ULONG pid_ = 0;
     ULONG session_ = 0;
