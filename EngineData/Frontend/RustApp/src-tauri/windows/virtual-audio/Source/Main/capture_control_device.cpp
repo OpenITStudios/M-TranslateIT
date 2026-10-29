@@ -53,29 +53,31 @@ NTSTATUS onDeviceControl(PDEVICE_OBJECT device, PIRP irp) {
 
     if (!file) return finish(irp, STATUS_INVALID_HANDLE);
     const ULONGLONG openedEpoch = (ULONGLONG)(ULONG_PTR)file->FsContext;
-    const ULONGLONG currentEpoch = TranslateITCaptureDeviceEpoch();
-    if (!currentEpoch || openedEpoch != currentEpoch)
-        return finish(irp, STATUS_DEVICE_NOT_READY);
+    // A handle with no valid CREATE admission cannot submit IOCTLs.
+    // The authoritative epoch check happens inside each capture operation
+    // under the SAME spinlock used by PnP revoke and writer admission.
+    if (!openedEpoch) return finish(irp, STATUS_DEVICE_NOT_READY);
     // IOCTL access bits additionally enforce FILE_READ_DATA or FILE_WRITE_DATA.
     // All frame parsing must use the actual SYSTEM_BUFFER length, never a
     // payload length or pointer provided by an untrusted caller.
     switch (code) {
     case TI_CAPTURE_IOCTL_BEGIN:
         if (!buffer || input != sizeof(TI_CAPTURE_BEGIN)) return finish(irp, STATUS_INVALID_PARAMETER);
-        return finish(irp, TranslateITCaptureBegin(file, (const TI_CAPTURE_BEGIN*)buffer));
+        return finish(irp, TranslateITCaptureBegin(file, openedEpoch, (const TI_CAPTURE_BEGIN*)buffer));
     case TI_CAPTURE_IOCTL_WRITE:
         if (!buffer || input < FIELD_OFFSET(TI_CAPTURE_WRITE, Data))
             return finish(irp, STATUS_INVALID_PARAMETER);
-        return finish(irp, TranslateITCaptureWrite(file, (const TI_CAPTURE_WRITE*)buffer, input));
+        return finish(irp, TranslateITCaptureWrite(file, openedEpoch, (const TI_CAPTURE_WRITE*)buffer, input));
     case TI_CAPTURE_IOCTL_FLUSH:
     case TI_CAPTURE_IOCTL_END:
         if (!buffer || input != sizeof(TI_CAPTURE_REVOKE)) return finish(irp, STATUS_INVALID_PARAMETER);
-        return finish(irp, TranslateITCaptureRevoke(file, (const TI_CAPTURE_REVOKE*)buffer,
+        return finish(irp, TranslateITCaptureRevoke(file, openedEpoch, (const TI_CAPTURE_REVOKE*)buffer,
             code == TI_CAPTURE_IOCTL_END ? TRUE : FALSE));
-    case TI_CAPTURE_IOCTL_STATUS:
+    case TI_CAPTURE_IOCTL_STATUS: {
         if (!buffer || output < sizeof(TI_CAPTURE_STATUS)) return finish(irp, STATUS_BUFFER_TOO_SMALL);
-        TranslateITCaptureStatus((TI_CAPTURE_STATUS*)buffer);
-        return finish(irp, STATUS_SUCCESS, sizeof(TI_CAPTURE_STATUS));
+        const NTSTATUS status = TranslateITCaptureStatus(openedEpoch, (TI_CAPTURE_STATUS*)buffer);
+        return finish(irp, status, NT_SUCCESS(status) ? sizeof(TI_CAPTURE_STATUS) : 0);
+    }
     default:
         return finish(irp, STATUS_INVALID_DEVICE_REQUEST);
     }

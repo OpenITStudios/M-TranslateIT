@@ -8,11 +8,15 @@ void TranslateITCaptureSetOnline();
 ULONGLONG TranslateITCaptureDeviceEpoch();
 void TranslateITCaptureInvalidateAll();
 void TranslateITCaptureCloseWriter(_In_ PFILE_OBJECT file);
-NTSTATUS TranslateITCaptureBegin(_In_ PFILE_OBJECT file, _In_ const TI_CAPTURE_BEGIN* request);
-NTSTATUS TranslateITCaptureWrite(_In_ PFILE_OBJECT file, _In_ const TI_CAPTURE_WRITE* request, _In_ ULONG inputBytes);
-NTSTATUS TranslateITCaptureRevoke(_In_ PFILE_OBJECT file, _In_ const TI_CAPTURE_REVOKE* request, _In_ BOOLEAN releaseWriter);
-void TranslateITCaptureStatus(_Out_ TI_CAPTURE_STATUS* report);
+NTSTATUS TranslateITCaptureBegin(_In_ PFILE_OBJECT file, _In_ ULONGLONG openedDeviceEpoch, _In_ const TI_CAPTURE_BEGIN* request);
+NTSTATUS TranslateITCaptureWrite(_In_ PFILE_OBJECT file, _In_ ULONGLONG openedDeviceEpoch, _In_ const TI_CAPTURE_WRITE* request, _In_ ULONG inputBytes);
+NTSTATUS TranslateITCaptureRevoke(_In_ PFILE_OBJECT file, _In_ ULONGLONG openedDeviceEpoch, _In_ const TI_CAPTURE_REVOKE* request, _In_ BOOLEAN releaseWriter);
+NTSTATUS TranslateITCaptureStatus(_In_ ULONGLONG openedDeviceEpoch, _Out_ TI_CAPTURE_STATUS* report);
 
+// IOCTL calls compare openedDeviceEpoch with the current PnP epoch WHILE
+// holding the same PCM spinlock that gates writer/session changes. A separate
+// pre-check in a dispatch routine is insufficient during Stop/Start.
+//
 // Read performs no allocation or I/O and is safe at DISPATCH_LEVEL.
 // Each capture stream must provide its own independent cursor and serial.
 void TranslateITCaptureRead(

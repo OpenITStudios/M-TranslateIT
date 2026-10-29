@@ -565,7 +565,12 @@ Source acceptance:
    rejects further requests when that exact process exits, including when
    a pipe handle was retained by another process. Old PnP control handles,
    stale source epochs, duplicate send sequences and a second writer
-   remain prohibited. The broker does not launch
+   remain prohibited. Specifically, force a Stop/Start race between dispatch
+   of BEGIN, WRITE, FLUSH/END or STATUS and their kernel spinlock entry:
+   every stale handle must get DEVICE_NOT_READY; STATUS must not return
+   any success bytes. The source must check the PnP generation under the
+   same PCM spinlock used by revoke and writer admission, not just at IRP
+   dispatch time. The broker does not launch
    a second AI engine, Meeting session or fallback audio route.
 
 One coordinated, revision-pinned TARGET_WINDOWS acceptance (not run):

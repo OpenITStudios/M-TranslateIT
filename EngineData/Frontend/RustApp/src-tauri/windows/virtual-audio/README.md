@@ -61,8 +61,11 @@ the actual Windows display name must still be observed on a target host.
   FLUSH revokes the current admission and makes queued frames unreadable.
   Re-BEGIN on the same control handle requires an advanced epoch. Closing the
   writer or stopping/removing PnP ownership revokes it independently.
-  A control handle is bound to the PnP device epoch observed at CREATE;
-  after device STOP/START, an already-open handle cannot reopen the writer.
+  A control handle is bound to the PnP device epoch observed at CREATE.
+  BEGIN, WRITE, FLUSH/END and STATUS now compare that epoch with the
+  *current* PnP epoch while holding the same spinlock as the producer
+  state and PnP revocation. A Stop/Start between dispatch and PCM work
+  therefore cannot let an old handle resume or submit stale frames.
 - The driver cannot retract buffers already handed to Windows or other
   applications. The native acceptance phase must measure the remaining tail
   after Mute/Stop and ensure no subsequent old frames re-enter.

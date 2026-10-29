@@ -15,6 +15,7 @@ const files = {
   nativeProtocol: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/capture_control_protocol.h"),
   nativeControl: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/capture_control_device.cpp"),
   nativePcm: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/capture_pcm.cpp"),
+  nativePcmHeader: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/capture_pcm.h"),
   nativeAdapter: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/adapter.cpp"),
   nativeMiniPairs: resolve(root, "src-tauri/windows/virtual-audio/Source/Filters/minipairs.h"),
   nativeCaptureTopology: resolve(root, "src-tauri/windows/virtual-audio/Source/Filters/micarray1toptable.h"),
@@ -246,7 +247,42 @@ requireMarkers(source.nativePcm, "session owned PCM and independent readers", [
   "*observedSerial != g_serial",
   "RtlZeroMemory(destination, bytes)", "g_online",
   "g_deviceEpoch", "TranslateITCaptureDeviceEpoch()",
+  "openedDeviceEpoch != g_deviceEpoch",
   "TranslateITCaptureRead(",
+]);
+requireMarkers(source.nativePcmHeader, "atomic PnP epoch passed to PCM operations", [
+  "TranslateITCaptureBegin(_In_ PFILE_OBJECT file, _In_ ULONGLONG openedDeviceEpoch",
+  "TranslateITCaptureWrite(_In_ PFILE_OBJECT file, _In_ ULONGLONG openedDeviceEpoch",
+  "TranslateITCaptureRevoke(_In_ PFILE_OBJECT file, _In_ ULONGLONG openedDeviceEpoch",
+  "TranslateITCaptureStatus(_In_ ULONGLONG openedDeviceEpoch",
+]);
+requireMarkers(source.nativeControl, "every IOCTL forwards its opened PnP epoch", [
+  "TranslateITCaptureBegin(file, openedEpoch,",
+  "TranslateITCaptureWrite(file, openedEpoch,",
+  "TranslateITCaptureRevoke(file, openedEpoch,",
+  "TranslateITCaptureStatus(openedEpoch,",
+  "case TI_CAPTURE_IOCTL_STATUS: {",
+  "NT_SUCCESS(status) ? sizeof(TI_CAPTURE_STATUS) : 0",
+]);
+// A marker anywhere in a file is insufficient: each operation must check
+// the opened PnP generation *after* taking the same spinlock that governs
+// Stop/Start revocation and PCM writer admission.
+for (const operation of [
+  "TranslateITCaptureBegin",
+  "TranslateITCaptureWrite",
+  "TranslateITCaptureRevoke",
+  "TranslateITCaptureStatus",
+]) {
+  const start = source.nativePcm.indexOf(`NTSTATUS ${operation}(`);
+  const lock = source.nativePcm.indexOf("KeAcquireSpinLock(&g_lock, &irql);", start);
+  const unlock = source.nativePcm.indexOf("KeReleaseSpinLock(&g_lock, irql);", lock);
+  if (start < 0 || lock < 0 || unlock < 0
+      || !source.nativePcm.slice(lock, unlock).includes("openedDeviceEpoch != g_deviceEpoch")) {
+    throw new Error(`Native PCM ${operation} must validate PnP epoch inside the writer spinlock`);
+  }
+}
+forbidMarkers(source.nativeControl, "stale dispatch-only PnP epoch checks", [
+  "const ULONGLONG currentEpoch = TranslateITCaptureDeviceEpoch();",
 ]);
 requireMarkers(source.nativeAdapter, "driver install and PnP lifecycle", [
   "TranslateITCaptureInitialize();",

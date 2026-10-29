@@ -93,7 +93,7 @@ void TranslateITCaptureCloseWriter(PFILE_OBJECT file) {
     KeReleaseSpinLock(&g_lock, irql);
 }
 
-NTSTATUS TranslateITCaptureBegin(PFILE_OBJECT file, const TI_CAPTURE_BEGIN* request) {
+NTSTATUS TranslateITCaptureBegin(PFILE_OBJECT file, ULONGLONG openedDeviceEpoch, const TI_CAPTURE_BEGIN* request) {
     if (!g_initialized) return STATUS_DEVICE_NOT_READY;
     if (!file || !request || request->Version != TI_CAPTURE_PROTOCOL_VERSION
         || request->SampleRateHz != TI_CAPTURE_RATE_HZ
@@ -104,7 +104,9 @@ NTSTATUS TranslateITCaptureBegin(PFILE_OBJECT file, const TI_CAPTURE_BEGIN* requ
     KIRQL irql;
     KeAcquireSpinLock(&g_lock, &irql);
     NTSTATUS status = STATUS_SUCCESS;
-    if (!g_online) {
+    // PnP Stop/Start and IOCTL admission share g_lock: no stale handle can
+    // re-enter after the generation changes between dispatch and kernel work.
+    if (!openedDeviceEpoch || !g_online || openedDeviceEpoch != g_deviceEpoch) {
         status = STATUS_DEVICE_NOT_READY;
     } else if ((g_writer && g_writer != file) || g_started) {
         status = STATUS_DEVICE_BUSY;
@@ -130,7 +132,7 @@ NTSTATUS TranslateITCaptureBegin(PFILE_OBJECT file, const TI_CAPTURE_BEGIN* requ
     return status;
 }
 
-NTSTATUS TranslateITCaptureWrite(PFILE_OBJECT file, const TI_CAPTURE_WRITE* request, ULONG inputBytes) {
+NTSTATUS TranslateITCaptureWrite(PFILE_OBJECT file, ULONGLONG openedDeviceEpoch, const TI_CAPTURE_WRITE* request, ULONG inputBytes) {
     constexpr ULONG headerBytes = FIELD_OFFSET(TI_CAPTURE_WRITE, Data);
     if (!g_initialized) return STATUS_DEVICE_NOT_READY;
     if (!file || !request || inputBytes < headerBytes
@@ -144,7 +146,9 @@ NTSTATUS TranslateITCaptureWrite(PFILE_OBJECT file, const TI_CAPTURE_WRITE* requ
     KIRQL irql;
     KeAcquireSpinLock(&g_lock, &irql);
     NTSTATUS status = STATUS_SUCCESS;
-    if (!g_online) {
+    // PnP Stop/Start and IOCTL admission share g_lock: no stale handle can
+    // re-enter after the generation changes between dispatch and kernel work.
+    if (!openedDeviceEpoch || !g_online || openedDeviceEpoch != g_deviceEpoch) {
         status = STATUS_DEVICE_NOT_READY;
     } else if (!g_started || g_writer != file) {
         status = STATUS_ACCESS_DENIED;
@@ -176,7 +180,7 @@ NTSTATUS TranslateITCaptureWrite(PFILE_OBJECT file, const TI_CAPTURE_WRITE* requ
     return status;
 }
 
-NTSTATUS TranslateITCaptureRevoke(PFILE_OBJECT file, const TI_CAPTURE_REVOKE* request, BOOLEAN releaseWriter) {
+NTSTATUS TranslateITCaptureRevoke(PFILE_OBJECT file, ULONGLONG openedDeviceEpoch, const TI_CAPTURE_REVOKE* request, BOOLEAN releaseWriter) {
     if (!g_initialized) return STATUS_DEVICE_NOT_READY;
     if (!file || !request || request->Version != TI_CAPTURE_PROTOCOL_VERSION
         || request->Reserved != 0 || !request->Generation || !request->SourceEpoch) {
@@ -185,7 +189,9 @@ NTSTATUS TranslateITCaptureRevoke(PFILE_OBJECT file, const TI_CAPTURE_REVOKE* re
     KIRQL irql;
     KeAcquireSpinLock(&g_lock, &irql);
     NTSTATUS status = STATUS_SUCCESS;
-    if (!g_online) {
+    // PnP Stop/Start and IOCTL admission share g_lock: no stale handle can
+    // re-enter after the generation changes between dispatch and kernel work.
+    if (!openedDeviceEpoch || !g_online || openedDeviceEpoch != g_deviceEpoch) {
         status = STATUS_DEVICE_NOT_READY;
     } else if (g_writer != file || !g_started) {
         status = STATUS_ACCESS_DENIED;
@@ -200,21 +206,27 @@ NTSTATUS TranslateITCaptureRevoke(PFILE_OBJECT file, const TI_CAPTURE_REVOKE* re
     return status;
 }
 
-void TranslateITCaptureStatus(TI_CAPTURE_STATUS* report) {
-    if (!report) return;
+NTSTATUS TranslateITCaptureStatus(ULONGLONG openedDeviceEpoch, TI_CAPTURE_STATUS* report) {
+    if (!report) return STATUS_INVALID_PARAMETER;
     RtlZeroMemory(report, sizeof(*report));
-    report->Version = TI_CAPTURE_PROTOCOL_VERSION;
-    report->CapacityFrames = TI_CAPTURE_FIFO_FRAMES;
-    if (!g_initialized) return;
+    if (!g_initialized) return STATUS_DEVICE_NOT_READY;
     KIRQL irql;
     KeAcquireSpinLock(&g_lock, &irql);
-    report->ProducerActive = g_started ? 1u : 0u;
-    report->BufferedFrames = (ULONG)(g_written < TI_CAPTURE_FIFO_FRAMES
-        ? g_written : TI_CAPTURE_FIFO_FRAMES);
-    report->AcceptedFrames = g_acceptedFrames;
-    report->OverwrittenFrames = g_overwrittenFrames;
-    report->UnderrunFrames = g_underrunFrames;
+    NTSTATUS status = STATUS_SUCCESS;
+    if (!openedDeviceEpoch || !g_online || openedDeviceEpoch != g_deviceEpoch) {
+        status = STATUS_DEVICE_NOT_READY;
+    } else {
+        report->Version = TI_CAPTURE_PROTOCOL_VERSION;
+        report->CapacityFrames = TI_CAPTURE_FIFO_FRAMES;
+        report->ProducerActive = g_started ? 1u : 0u;
+        report->BufferedFrames = (ULONG)(g_written < TI_CAPTURE_FIFO_FRAMES
+            ? g_written : TI_CAPTURE_FIFO_FRAMES);
+        report->AcceptedFrames = g_acceptedFrames;
+        report->OverwrittenFrames = g_overwrittenFrames;
+        report->UnderrunFrames = g_underrunFrames;
+    }
     KeReleaseSpinLock(&g_lock, irql);
+    return status;
 }
 
 void TranslateITCaptureRead(UCHAR* destination, ULONG bytes,
