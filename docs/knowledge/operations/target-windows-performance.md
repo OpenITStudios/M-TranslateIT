@@ -597,6 +597,14 @@ One coordinated, revision-pinned TARGET_WINDOWS acceptance (not run):
   replay it after a full cyclic buffer was missed. In particular test direct
   RUN-to-STOP (without PAUSE) and PAUSE-to-RUN: the notification timer must
   not emit packets after STOP and both transitions must zero old DMA samples.
+  Verify concurrent event registration/unregistration and callback delivery
+  under Driver Verifier, no use-after-free or missing event-list cleanup,
+  with ExDeleteTimer(Cancel+Wait) completed before releasing the miniport.
+  Verify exactly one buffer MDL owner in each of the two Free*Buffer paths:
+  duplicate or mismatched Free must not double-unmap/free, and unmap must
+  precede FreePagesFromMdl at PASSIVE_LEVEL after the position lock releases.
+  Include concurrent PortCls Free*Buffer and PnP stop/rebalance/removal,
+  and checked IRQL/page-fault verification of all spinlock-owning routines.
 - Verify real 48 kHz PCM16 captured by Zoom/Teams with multiple independent
   receivers; silence underflow, overwrite/jitter/clock drift, speech timing,
   Original/Translated source changes, Mute/Stop queue flush and bounded

@@ -81,6 +81,16 @@ the actual Windows display name must still be observed on a target host.
   Direct RUN-to-STOP cancels pending notifications; STOP and RUN clear
   mapped capture samples before the next session. These are **source
   contracts**, not measured latency or sleep/resume proof.
+- The timer is deleted with Cancel+Wait before the stream releases its
+  miniport and notification state. Register/Unregister of WaveRT events
+  uses the same spinlock as the timer callback, and remaining event
+  nodes are drained on stream teardown.
+- Polling and event-driven WaveRT buffer APIs both track the exact
+  PortCls-provided MDL and release it through one source owner. The
+  DMA pointer is detached under the position spinlock; mapping unmap/free
+  occurs only afterward at PASSIVE_LEVEL, once, for the matching MDL.
+  The destructor does not preempt PortCls's Free*Buffer callback during
+  surprise removal. Functions that manipulate the spinlock are nonpaged.
 
 The input layer may contain other formats, but conversion/resampling to the
 exact PCM16 mono contract must occur *before* this backend. The Rust client

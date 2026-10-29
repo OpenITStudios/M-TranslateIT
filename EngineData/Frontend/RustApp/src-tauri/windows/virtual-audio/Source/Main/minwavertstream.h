@@ -87,6 +87,7 @@ protected:
     BOOLEAN                     m_bUnregisterStream;
     ULONG                       m_ulDmaBufferSize;
     BYTE*                       m_pDmaBuffer;
+    PMDL                        m_pDmaMdl; // Exact MDL returned to PortCls; one buffer per stream.
     ULONG                       m_ulNotificationsPerBuffer;
     KSSTATE                     m_KsState;
     PKTIMER                     m_pTimer;
@@ -167,6 +168,11 @@ private:
     (
         _In_ ULONG ByteDisplacement
     );
+
+    // PortCls invokes either Free*Buffer callback on normal close/rebalance.
+    // Only this owner detaches the DMA pointer under m_PositionSpinLock;
+    // UnmapAllocatedPages/FreePagesFromMdl occur AFTER releasing the lock.
+    VOID ReleaseDmaBuffer(_In_opt_ PMDL Mdl_);
         
     VOID UpdatePosition
     (

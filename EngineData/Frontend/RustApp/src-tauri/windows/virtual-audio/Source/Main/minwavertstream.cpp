@@ -32,7 +32,7 @@ static_assert(CaptureDisplacementNumerator(96000u, 60000u, 0u) / 1000u
 //=============================================================================
 
 //=============================================================================
-#pragma code_seg("PAGE")
+#pragma code_seg() // Nonpaged: protects shared stream state with m_PositionSpinLock
 CMiniportWaveRTStream::~CMiniportWaveRTStream
 ( 
     void 
@@ -51,7 +51,40 @@ Return Value:
 
 --*/
 {
-    PAGED_CODE();
+
+    // ExDeleteTimer(Cancel=TRUE, Wait=TRUE) must complete BEFORE releasing
+    // m_pMiniport, notification events or any state TimerNotifyRT reads.
+    // The callback can run at DISPATCH_LEVEL while the destructor is at PASSIVE.
+    if (m_pNotificationTimer)
+    {
+        ExDeleteTimer(m_pNotificationTimer, TRUE, TRUE, NULL);
+        m_pNotificationTimer = NULL;
+    }
+    KeFlushQueuedDpcs();
+
+    // PortCls owns the Free*Buffer callback ordering (including surprise
+    // removal); the destructor must not free an MDL behind its back.
+    ASSERT(m_pDmaMdl == NULL);
+
+    // No timer callback can access the notification list now. Drain any
+    // registrations PortCls did not explicitly unregister during teardown,
+    // and release the same nonpaged allocations as UnregisterNotificationEvent.
+    LIST_ENTRY retired;
+    InitializeListHead(&retired);
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&m_PositionSpinLock, &oldIrql);
+    while (!IsListEmpty(&m_NotificationList))
+    {
+        InsertTailList(&retired, RemoveHeadList(&m_NotificationList));
+    }
+    KeReleaseSpinLock(&m_PositionSpinLock, oldIrql);
+    while (!IsListEmpty(&retired))
+    {
+        NotificationListEntry* item = CONTAINING_RECORD(
+            RemoveHeadList(&retired), NotificationListEntry, ListEntry);
+        ExFreePoolWithTag(item, MINWAVERTSTREAM_POOLTAG);
+    }
+
     if (NULL != m_pMiniport)
     {
     
@@ -100,22 +133,6 @@ Return Value:
         ExFreePoolWithTag( m_pWfExt, MINWAVERTSTREAM_POOLTAG );
         m_pWfExt = NULL;
     }
-    if (m_pNotificationTimer)
-    {
-        ExDeleteTimer
-        (
-            m_pNotificationTimer, 
-            TRUE, // Cancel the timer if it is currently set.
-            TRUE, // Wait for the timer to finish expiring and for any callback to a ExTimerCallback routine to finish.
-            NULL
-         );
-    }
-
-    // Since we just cancelled the notification timer, wait for all queued 
-    // DPCs to complete before we free the notification DPC.
-    //
-    KeFlushQueuedDpcs();
-
     DPF_ENTER(("[CMiniportWaveRTStream::~CMiniportWaveRTStream]"));
 } // ~CMiniportWaveRTStream
 
@@ -218,6 +235,7 @@ Return Value:
     m_bCapture = FALSE;
     m_ulDmaBufferSize = 0;
     m_pDmaBuffer = NULL;
+    m_pDmaMdl = NULL;
     m_ulNotificationsPerBuffer = 0;
     m_KsState = KSSTATE_STOP;
     m_pTimer = NULL;
@@ -407,7 +425,7 @@ Return Value:
 } // NonDelegatingQueryInterface
 
 //=============================================================================
-#pragma code_seg("PAGE")
+#pragma code_seg() // Nonpaged: protects shared stream state with m_PositionSpinLock
 NTSTATUS CMiniportWaveRTStream::AllocateBufferWithNotification
 (
     _In_    ULONG               NotificationCount_,
@@ -418,7 +436,6 @@ NTSTATUS CMiniportWaveRTStream::AllocateBufferWithNotification
     _Out_   MEMORY_CACHING_TYPE *CacheType_
 )
 {
-    PAGED_CODE();
 
     ULONG ulBufferDurationMs = 0;
 
@@ -491,19 +508,33 @@ NTSTATUS CMiniportWaveRTStream::AllocateBufferWithNotification
     //
     //  A WaveRT miniport driver should not require software access to the audio buffer itself."
     //   
-    m_pDmaBuffer = (BYTE*)m_pPortStream->MapAllocatedPages(pBufferMdl, MmCached);
-    if (m_pDmaBuffer == NULL)
+    BYTE* mapped = (BYTE*)m_pPortStream->MapAllocatedPages(pBufferMdl, MmCached);
+    if (!mapped)
     {
         m_pPortStream->FreePagesFromMdl(pBufferMdl);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-    // A newly mapped page must never be exposed as microphone audio before
-    // the first capture tick. At most 96 kB is cleared at PASSIVE_LEVEL.
-    RtlZeroMemory(m_pDmaBuffer, RequestedSize_);
-    m_ulNotificationsPerBuffer = NotificationCount_;
-    m_ulDmaBufferSize = RequestedSize_;
+    RtlZeroMemory(mapped, RequestedSize_);
     ulBufferDurationMs = (ULONG)durationMs;
-    m_ulNotificationIntervalMs = ulBufferDurationMs / NotificationCount_;
+
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&m_PositionSpinLock, &oldIrql);
+    const BOOLEAN occupied = (m_pDmaMdl != NULL);
+    if (!occupied)
+    {
+        m_pDmaMdl = pBufferMdl;
+        m_pDmaBuffer = mapped;
+        m_ulNotificationsPerBuffer = NotificationCount_;
+        m_ulDmaBufferSize = RequestedSize_;
+        m_ulNotificationIntervalMs = ulBufferDurationMs / NotificationCount_;
+    }
+    KeReleaseSpinLock(&m_PositionSpinLock, oldIrql);
+    if (occupied)
+    {
+        m_pPortStream->UnmapAllocatedPages(mapped, pBufferMdl);
+        m_pPortStream->FreePagesFromMdl(pBufferMdl);
+        return STATUS_DEVICE_BUSY;
+    }
 
     *AudioBufferMdl_ = pBufferMdl;
     *ActualSize_ = RequestedSize_;
@@ -522,99 +553,96 @@ VOID CMiniportWaveRTStream::FreeBufferWithNotification
 )
 {
     UNREFERENCED_PARAMETER(Size_);
-
     PAGED_CODE();
-
-    if (Mdl_ != NULL)
-    {
-        if (m_pDmaBuffer != NULL)
-        {
-            m_pPortStream->UnmapAllocatedPages(m_pDmaBuffer, Mdl_);
-            m_pDmaBuffer = NULL;
-        }
-        
-        m_pPortStream->FreePagesFromMdl(Mdl_);
-    }
-    
-    m_ulDmaBufferSize = 0;
-    m_ulNotificationsPerBuffer = 0;
-
-    return;
+    ReleaseDmaBuffer(Mdl_);
 }
 
 //=============================================================================
-#pragma code_seg("PAGE")
+#pragma code_seg() // Nonpaged: protects shared stream state with m_PositionSpinLock
 NTSTATUS CMiniportWaveRTStream::RegisterNotificationEvent
 (
     _In_ PKEVENT NotificationEvent_
 )
 {
-    UNREFERENCED_PARAMETER(NotificationEvent_);
+    if (!NotificationEvent_)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
-    PAGED_CODE();
-
-    NotificationListEntry *nleNew = (NotificationListEntry*)ExAllocatePool2( 
-        POOL_FLAG_NON_PAGED,
-        sizeof(NotificationListEntry),
-        MINWAVERTSTREAM_POOLTAG);
-    if (NULL == nleNew)
+    NotificationListEntry* added = (NotificationListEntry*)ExAllocatePool2(
+        POOL_FLAG_NON_PAGED, sizeof(NotificationListEntry), MINWAVERTSTREAM_POOLTAG);
+    if (!added)
     {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
+    added->NotificationEvent = NotificationEvent_;
 
-    nleNew->NotificationEvent = NotificationEvent_;
-
-    // Fail if the notification event already exists in our list.
-    if (!IsListEmpty(&m_NotificationList))
+    NTSTATUS status = STATUS_SUCCESS;
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&m_PositionSpinLock, &oldIrql);
+    // TimerNotifyRT traverses this exact list with m_PositionSpinLock held.
+    // Check duplicates and publish entries atomically with that traversal.
+    for (PLIST_ENTRY cursor = m_NotificationList.Flink;
+         cursor != &m_NotificationList; cursor = cursor->Flink)
     {
-        PLIST_ENTRY leCurrent = m_NotificationList.Flink;
-        while (leCurrent != &m_NotificationList)
+        NotificationListEntry* item =
+            CONTAINING_RECORD(cursor, NotificationListEntry, ListEntry);
+        if (item->NotificationEvent == NotificationEvent_)
         {
-            NotificationListEntry* nleCurrent = CONTAINING_RECORD( leCurrent, NotificationListEntry, ListEntry);
-            if (nleCurrent->NotificationEvent == NotificationEvent_)
-            {
-                ExFreePoolWithTag( nleNew, MINWAVERTSTREAM_POOLTAG );
-                return STATUS_UNSUCCESSFUL;
-            }
-
-            leCurrent = leCurrent->Flink;
+            status = STATUS_OBJECT_NAME_COLLISION;
+            break;
         }
     }
+    if (NT_SUCCESS(status))
+    {
+        InsertTailList(&m_NotificationList, &added->ListEntry);
+    }
+    KeReleaseSpinLock(&m_PositionSpinLock, oldIrql);
 
-    InsertTailList(&m_NotificationList, &(nleNew->ListEntry));
-    
-    return STATUS_SUCCESS;
+    if (!NT_SUCCESS(status))
+    {
+        ExFreePoolWithTag(added, MINWAVERTSTREAM_POOLTAG);
+    }
+    return status;
 }
 
 //=============================================================================
-#pragma code_seg("PAGE")
+#pragma code_seg() // Nonpaged: protects shared stream state with m_PositionSpinLock
 NTSTATUS CMiniportWaveRTStream::UnregisterNotificationEvent
 (
     _In_ PKEVENT NotificationEvent_
 )
 {
-    UNREFERENCED_PARAMETER(NotificationEvent_);
-
-    PAGED_CODE();
-
-    if (!IsListEmpty(&m_NotificationList))
+    if (!NotificationEvent_)
     {
-        PLIST_ENTRY leCurrent = m_NotificationList.Flink;
-        while (leCurrent != &m_NotificationList)
-        {
-            NotificationListEntry* nleCurrent = CONTAINING_RECORD( leCurrent, NotificationListEntry, ListEntry);
-            if (nleCurrent->NotificationEvent == NotificationEvent_)
-            {
-                RemoveEntryList( leCurrent );
-                ExFreePoolWithTag( nleCurrent, MINWAVERTSTREAM_POOLTAG );
-                return STATUS_SUCCESS;
-            }
-
-            leCurrent = leCurrent->Flink;
-        }
+        return STATUS_INVALID_PARAMETER;
     }
 
-    return STATUS_NOT_FOUND;
+    NotificationListEntry* removed = NULL;
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&m_PositionSpinLock, &oldIrql);
+    for (PLIST_ENTRY cursor = m_NotificationList.Flink;
+         cursor != &m_NotificationList; cursor = cursor->Flink)
+    {
+        NotificationListEntry* item =
+            CONTAINING_RECORD(cursor, NotificationListEntry, ListEntry);
+        if (item->NotificationEvent == NotificationEvent_)
+        {
+            RemoveEntryList(cursor);
+            removed = item;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&m_PositionSpinLock, oldIrql);
+
+    if (!removed)
+    {
+        return STATUS_NOT_FOUND;
+    }
+    // The callback completed its protected list traversal before removal,
+    // so the node can now be safely freed outside the spinlock.
+    ExFreePoolWithTag(removed, MINWAVERTSTREAM_POOLTAG);
+    return STATUS_SUCCESS;
 }
 
 
@@ -671,26 +699,50 @@ _In_        ULONG       Size_
 )
 {
     UNREFERENCED_PARAMETER(Size_);
-
     PAGED_CODE();
+    ReleaseDmaBuffer(Mdl_);
+}
 
-    if (Mdl_ != NULL)
+// Exactly one DMA/MDL ownership owner for event and polling modes.
+// The PortCls Free*Buffer callback owns release; the destructor owns only
+// the notification timer and list. The callback may be pending, so detach
+// every DMA pointer under the same spinlock used by TimerNotifyRT and
+// UpdatePosition. PortCls mapping DDIs must run OUTSIDE this spinlock at
+// PASSIVE_LEVEL.
+#pragma code_seg() // Nonpaged: protects shared stream state with m_PositionSpinLock
+VOID CMiniportWaveRTStream::ReleaseDmaBuffer(_In_opt_ PMDL Mdl_)
+{
+    if (!Mdl_) return;
+
+    BYTE* mapped = NULL;
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&m_PositionSpinLock, &oldIrql);
+    if (m_pDmaMdl == Mdl_)
     {
-        if (m_pDmaBuffer != NULL)
-        {
-            m_pPortStream->UnmapAllocatedPages(m_pDmaBuffer, Mdl_);
-            m_pDmaBuffer = NULL;
-        }
-
-        m_pPortStream->FreePagesFromMdl(Mdl_);
+        mapped = m_pDmaBuffer;
+        m_pDmaBuffer = NULL;
+        m_pDmaMdl = NULL;
+        m_ulDmaBufferSize = 0;
+        m_ulNotificationsPerBuffer = 0;
+        m_ulNotificationIntervalMs = 0;
     }
+    KeReleaseSpinLock(&m_PositionSpinLock, oldIrql);
 
-    m_ulDmaBufferSize = 0;
-    m_ulNotificationsPerBuffer = 0;
+    if (!mapped)
+    {
+        // Duplicate/mismatched Free*Buffer: do not free arbitrary MDLs.
+        return;
+    }
+    if (m_pNotificationTimer)
+    {
+        ExCancelTimer(m_pNotificationTimer, NULL);
+    }
+    m_pPortStream->UnmapAllocatedPages(mapped, Mdl_);
+    m_pPortStream->FreePagesFromMdl(Mdl_);
 }
 
 //=============================================================================
-#pragma code_seg("PAGE")
+#pragma code_seg() // Nonpaged: protects shared stream state with m_PositionSpinLock
 NTSTATUS CMiniportWaveRTStream::AllocateAudioBuffer
 (
 _In_    ULONG                   RequestedSize_,
@@ -700,7 +752,6 @@ _Out_   ULONG                  *OffsetFromFirstPage_,
 _Out_   MEMORY_CACHING_TYPE    *CacheType_
 )
 {
-    PAGED_CODE();
 
     if (!m_pWfExt || !m_pWfExt->Format.nBlockAlign
         || !RequestedSize_ || RequestedSize_ < m_pWfExt->Format.nBlockAlign)
@@ -741,18 +792,32 @@ _Out_   MEMORY_CACHING_TYPE    *CacheType_
     //
     //  A WaveRT miniport driver should not require software access to the audio buffer itself."
     //   
-    m_pDmaBuffer = (BYTE*)m_pPortStream->MapAllocatedPages(pBufferMdl, MmCached);
-    if (m_pDmaBuffer == NULL)
+    BYTE* mapped = (BYTE*)m_pPortStream->MapAllocatedPages(pBufferMdl, MmCached);
+    if (!mapped)
     {
         m_pPortStream->FreePagesFromMdl(pBufferMdl);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-    // A newly mapped page must never be exposed as microphone audio before
-    // the first capture tick. At most 96 kB is cleared at PASSIVE_LEVEL.
-    RtlZeroMemory(m_pDmaBuffer, RequestedSize_);
+    RtlZeroMemory(mapped, RequestedSize_);
 
-    m_ulDmaBufferSize = RequestedSize_;
-    m_ulNotificationsPerBuffer = 0;
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&m_PositionSpinLock, &oldIrql);
+    const BOOLEAN occupied = (m_pDmaMdl != NULL);
+    if (!occupied)
+    {
+        m_pDmaMdl = pBufferMdl;
+        m_pDmaBuffer = mapped;
+        m_ulDmaBufferSize = RequestedSize_;
+        m_ulNotificationsPerBuffer = 0;
+        m_ulNotificationIntervalMs = 0;
+    }
+    KeReleaseSpinLock(&m_PositionSpinLock, oldIrql);
+    if (occupied)
+    {
+        m_pPortStream->UnmapAllocatedPages(mapped, pBufferMdl);
+        m_pPortStream->FreePagesFromMdl(pBufferMdl);
+        return STATUS_DEVICE_BUSY;
+    }
 
     *AudioBufferMdl_ = pBufferMdl;
     *ActualSize_ = RequestedSize_;

@@ -33,6 +33,7 @@ const files = {
   brokerProject: resolve(root, "src-tauri/windows/virtual-audio/Broker/TranslateITMicBroker.vcxproj"),
   nativeSolution: resolve(root, "src-tauri/windows/virtual-audio/TranslateITMic.sln"),
   nativeStream: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/minwavertstream.cpp"),
+  nativeStreamHeader: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/minwavertstream.h"),
   nativeCaptureFormat: resolve(root, "src-tauri/windows/virtual-audio/Source/Filters/micarraywavtable.h"),
   meetingOutput: resolve(root, "src-tauri/src/engine/audio/meeting_output.rs"),
   meetingOutputRuntime: resolve(root, "src-tauri/src/engine/audio/meeting_output_runtime.rs"),
@@ -314,7 +315,7 @@ requireMarkers(source.nativeStream, "64-bit and bounded WaveRT DMA arithmetic", 
   "if (nowHns < _this->m_ullLastDPCTimeStamp)",
   "ullPresentationPosition / blockAlign",
   "RequestedSize_ > kMaxCaptureDmaBytes",
-  "RtlZeroMemory(m_pDmaBuffer, RequestedSize_);",
+  "RtlZeroMemory(mapped, RequestedSize_);",
   "NotificationCount_ != 1 && NotificationCount_ != 2",
   "m_KsState == KSSTATE_RUN && m_ulNotificationIntervalMs > 0",
   "if (_this->m_KsState != KSSTATE_RUN)",
@@ -335,7 +336,7 @@ requireMarkers(source.nativePcm, "late WaveRT reader cannot replay buffered spee
 requireMarkers(source.nativePcmHeader, "WaveRT reader resync contract", [
   "void TranslateITCaptureDiscardStaleFrames(",
 ]);
-if ((source.nativeStream.match(/RtlZeroMemory\(m_pDmaBuffer, RequestedSize_\);/g) ?? []).length !== 2) {
+if ((source.nativeStream.match(/RtlZeroMemory\(mapped, RequestedSize_\);/g) ?? []).length !== 2) {
   throw new Error("Both WaveRT DMA allocation paths must initialize mapped audio pages");
 }
 for (const transport of ["case KSSTATE_STOP:", "case KSSTATE_RUN:"]) {
@@ -344,6 +345,77 @@ for (const transport of ["case KSSTATE_STOP:", "case KSSTATE_RUN:"]) {
   const slice = source.nativeStream.slice(index, next < 0 ? undefined : next);
   if (index < 0 || !slice.includes("RtlZeroMemory(m_pDmaBuffer, m_ulDmaBufferSize);")) {
     throw new Error(`WaveRT ${transport} must silence old mapped audio`);
+  }
+}
+
+requireMarkers(source.nativeStreamHeader, "single MDL owner for cyclic DMA", [
+  "PMDL                        m_pDmaMdl;",
+  "VOID ReleaseDmaBuffer(_In_opt_ PMDL Mdl_);",
+]);
+requireMarkers(source.nativeStream, "serialized WaveRT lifetime and callback list", [
+  "ExDeleteTimer(m_pNotificationTimer, TRUE, TRUE, NULL);",
+  "ASSERT(m_pDmaMdl == NULL);",
+  "ReleaseDmaBuffer(Mdl_);",
+  "m_pDmaMdl = pBufferMdl;",
+  "m_pPortStream->UnmapAllocatedPages(mapped, Mdl_);",
+  "m_pPortStream->FreePagesFromMdl(Mdl_);",
+  "STATUS_OBJECT_NAME_COLLISION",
+]);
+function waveRtOwnerSlice(signature, nextSignature) {
+  const from = source.nativeStream.indexOf(signature);
+  const until = source.nativeStream.indexOf(nextSignature, from + signature.length);
+  if (from < 0 || until <= from) throw new Error("Missing WaveRT owner: " + signature);
+  return source.nativeStream.slice(from, until);
+}
+const streamDestructor = waveRtOwnerSlice(
+  "CMiniportWaveRTStream::~CMiniportWaveRTStream", "} // ~CMiniportWaveRTStream");
+const eventRegister = waveRtOwnerSlice(
+  "NTSTATUS CMiniportWaveRTStream::RegisterNotificationEvent",
+  "NTSTATUS CMiniportWaveRTStream::UnregisterNotificationEvent");
+const eventUnregister = waveRtOwnerSlice(
+  "NTSTATUS CMiniportWaveRTStream::UnregisterNotificationEvent",
+  "NTSTATUS CMiniportWaveRTStream::GetClockRegister");
+const dmaRelease = waveRtOwnerSlice(
+  "VOID CMiniportWaveRTStream::ReleaseDmaBuffer",
+  "NTSTATUS CMiniportWaveRTStream::AllocateAudioBuffer");
+function assertUnderPositionLock(body, operation) {
+  const take = body.indexOf("KeAcquireSpinLock(&m_PositionSpinLock");
+  const action = body.indexOf(operation);
+  const unlock = body.indexOf("KeReleaseSpinLock(&m_PositionSpinLock");
+  if (take < 0 || action <= take || unlock <= action) {
+    throw new Error("Unprotected WaveRT operation: " + operation);
+  }
+}
+assertUnderPositionLock(streamDestructor, "RemoveHeadList(&m_NotificationList)");
+assertUnderPositionLock(eventRegister, "InsertTailList(&m_NotificationList");
+assertUnderPositionLock(eventUnregister, "RemoveEntryList(cursor)");
+assertUnderPositionLock(dmaRelease, "m_pDmaBuffer = NULL;");
+if (streamDestructor.indexOf("ExDeleteTimer(m_pNotificationTimer") < 0
+    || streamDestructor.indexOf("ExDeleteTimer(m_pNotificationTimer") >= streamDestructor.indexOf("m_pMiniport->StreamClosed")
+    || streamDestructor.indexOf("ExFreePoolWithTag(item") <= streamDestructor.indexOf("KeReleaseSpinLock(&m_PositionSpinLock")
+    || eventUnregister.indexOf("ExFreePoolWithTag(removed") <= eventUnregister.indexOf("KeReleaseSpinLock(&m_PositionSpinLock")
+    || dmaRelease.indexOf("UnmapAllocatedPages(mapped, Mdl_)") <= dmaRelease.indexOf("KeReleaseSpinLock(&m_PositionSpinLock")
+    || dmaRelease.indexOf("FreePagesFromMdl(Mdl_)") <= dmaRelease.indexOf("UnmapAllocatedPages(mapped, Mdl_)")) {
+  throw new Error("WaveRT shutdown/free order is not safe");
+}
+if ((source.nativeStream.match(/ReleaseDmaBuffer\(Mdl_\);/g) || []).length !== 2
+    || (source.nativeStream.match(/m_pDmaMdl = pBufferMdl;/g) || []).length !== 2) {
+  throw new Error("Event and polling WaveRT APIs must share their DMA owner");
+}
+for (const signature of [
+  "CMiniportWaveRTStream::~CMiniportWaveRTStream",
+  "CMiniportWaveRTStream::AllocateBufferWithNotification",
+  "CMiniportWaveRTStream::RegisterNotificationEvent",
+  "CMiniportWaveRTStream::UnregisterNotificationEvent",
+  "CMiniportWaveRTStream::ReleaseDmaBuffer",
+  "CMiniportWaveRTStream::AllocateAudioBuffer",
+]) {
+  const at = source.nativeStream.indexOf(signature);
+  const pragma = source.nativeStream.lastIndexOf("#pragma code_seg", at);
+  if (at < 0 || pragma < 0
+      || !source.nativeStream.slice(pragma, at).startsWith("#pragma code_seg()")
+      || source.nativeStream.slice(at, at + 210).includes("PAGED_CODE();")) {
+    throw new Error("Nonpaged WaveRT spinlock requirement failed: " + signature);
   }
 }
 
