@@ -501,6 +501,40 @@ forbidMarkers(
 requireMarkers(source.nativeProtocol, "shared kernel/user-mode ABI", [
   "TRANSLATEIT_USER_MODE", "static_assert(offsetof(TI_CAPTURE_WRITE, Data)",
 ]);
+// WRITE's ULONGLONG logical position must not wrap before the ring is
+// written; STATUS is strictly output-only even when called directly on the
+// privileged IOCTL rather than through the broker.
+requireMarkers(source.nativePcm, "bounded WRITE cursor and saturating telemetry", [
+  "__forceinline ULONGLONG saturatingCounterAdd(",
+  "g_written > MAXULONGLONG - frames",
+  "status = STATUS_INTEGER_OVERFLOW;",
+  "g_overwrittenFrames = saturatingCounterAdd(g_overwrittenFrames, after - before);",
+  "g_acceptedFrames = saturatingCounterAdd(g_acceptedFrames, frames);",
+  "g_underrunFrames = saturatingCounterAdd(g_underrunFrames, requested - copied);",
+]);
+const nativeWriteStart = source.nativePcm.indexOf("NTSTATUS TranslateITCaptureWrite(");
+const nativeWriteEnd = source.nativePcm.indexOf("NTSTATUS TranslateITCaptureRevoke(", nativeWriteStart);
+const nativeWrite = source.nativePcm.slice(nativeWriteStart, nativeWriteEnd);
+const cursorGuard = nativeWrite.indexOf("g_written > MAXULONGLONG - frames");
+const firstRingStore = nativeWrite.indexOf("g_samples[(g_written + i) % TI_CAPTURE_FIFO_FRAMES]");
+const firstCounterStore = nativeWrite.indexOf("g_overwrittenFrames = saturatingCounterAdd(");
+if (nativeWriteStart < 0 || nativeWriteEnd <= nativeWriteStart
+    || cursorGuard < 0 || firstRingStore < 0 || firstCounterStore < 0
+    || !(cursorGuard < firstCounterStore && cursorGuard < firstRingStore)) {
+  throw new Error("Kernel WRITE must check logical overflow before any PCM or counter mutation");
+}
+const nativeStatusStart = source.nativeControl.indexOf("case TI_CAPTURE_IOCTL_STATUS: {");
+const nativeStatusEnd = source.nativeControl.indexOf("    default:", nativeStatusStart);
+const nativeStatusCase = source.nativeControl.slice(nativeStatusStart, nativeStatusEnd);
+if (nativeStatusStart < 0 || nativeStatusEnd <= nativeStatusStart
+    || !nativeStatusCase.includes("if (input != 0) return finish(irp, STATUS_INVALID_PARAMETER);")
+    || !nativeStatusCase.includes("NT_SUCCESS(status) ? sizeof(TI_CAPTURE_STATUS) : 0")) {
+  throw new Error("Kernel STATUS must reject input and return no bytes on failure");
+}
+requireMarkers(source.nativeRust, "STATUS counter integrity contract and regression", [
+  "u64::from(buffered) > accepted || overwritten > accepted",
+  "status_rejects_malformed_reply_and_impossible_counters",
+]);
 requireMarkers(source.brokerProtocol, "fixed authenticated IPC framing", [
   "TI_BROKER_PIPE_NAME", "TI_BROKER_VERSION 1u",
   "TI_BROKER_MAX_PAYLOAD", "TI_BROKER_MAGIC",

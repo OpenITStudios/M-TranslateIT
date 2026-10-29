@@ -25,6 +25,13 @@ ULONGLONG g_acceptedFrames = 0;
 ULONGLONG g_overwrittenFrames = 0;
 ULONGLONG g_underrunFrames = 0;
 
+// Lifetime telemetry saturates instead of silently wrapping to zero after
+// extremely long operation. The logical reader cursor does NOT saturate:
+// WRITE rejects its overflow before any ring/counter mutation.
+__forceinline ULONGLONG saturatingCounterAdd(ULONGLONG value, ULONGLONG delta) {
+    return delta > MAXULONGLONG - value ? MAXULONGLONG : value + delta;
+}
+
 void invalidateLocked(BOOLEAN releaseWriter) {
     g_started = FALSE;
     g_written = 0;
@@ -143,6 +150,7 @@ NTSTATUS TranslateITCaptureWrite(PFILE_OBJECT file, ULONGLONG openedDeviceEpoch,
         || request->DataBytes != inputBytes - headerBytes
         || !request->Sequence) return STATUS_INVALID_PARAMETER;
 
+    const ULONG frames = request->DataBytes / sizeof(SHORT);
     KIRQL irql;
     KeAcquireSpinLock(&g_lock, &irql);
     NTSTATUS status = STATUS_SUCCESS;
@@ -158,22 +166,25 @@ NTSTATUS TranslateITCaptureWrite(PFILE_OBJECT file, ULONGLONG openedDeviceEpoch,
         status = STATUS_INVALID_DEVICE_STATE;
     } else if (g_expectedSequence == MAXULONGLONG) {
         status = STATUS_INTEGER_OVERFLOW;
+    } else if (g_written > MAXULONGLONG - frames) {
+        // Never wrap a cyclic reader's logical cursor. Reject before writing
+        // samples, changing statistics or advancing the expected sequence.
+        status = STATUS_INTEGER_OVERFLOW;
     } else {
-        const ULONG frames = request->DataBytes / sizeof(SHORT);
         // Count overwritten history (not assumed lost receiver frames).
         const ULONGLONG before = g_written > TI_CAPTURE_FIFO_FRAMES
             ? g_written - TI_CAPTURE_FIFO_FRAMES : 0;
         const ULONGLONG afterCount = g_written + frames;
         const ULONGLONG after = afterCount > TI_CAPTURE_FIFO_FRAMES
             ? afterCount - TI_CAPTURE_FIFO_FRAMES : 0;
-        g_overwrittenFrames += after - before;
+        g_overwrittenFrames = saturatingCounterAdd(g_overwrittenFrames, after - before);
         for (ULONG i = 0; i < frames; ++i) {
             SHORT sample = 0;
             RtlCopyMemory(&sample, request->Data + i * sizeof(SHORT), sizeof(SHORT));
             g_samples[(g_written + i) % TI_CAPTURE_FIFO_FRAMES] = sample;
         }
         g_written = afterCount;
-        g_acceptedFrames += frames;
+        g_acceptedFrames = saturatingCounterAdd(g_acceptedFrames, frames);
         ++g_expectedSequence;
     }
     KeReleaseSpinLock(&g_lock, irql);
@@ -283,7 +294,7 @@ void TranslateITCaptureRead(UCHAR* destination, ULONG bytes,
             RtlCopyMemory(destination + i * sizeof(SHORT), &sample, sizeof(SHORT));
         }
         *nextFrame += copied;
-        g_underrunFrames += requested - copied;
+        g_underrunFrames = saturatingCounterAdd(g_underrunFrames, requested - copied);
     }
     KeReleaseSpinLock(&g_lock, irql);
 }

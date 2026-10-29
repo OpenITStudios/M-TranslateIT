@@ -74,6 +74,9 @@ NTSTATUS onDeviceControl(PDEVICE_OBJECT device, PIRP irp) {
         return finish(irp, TranslateITCaptureRevoke(file, openedEpoch, (const TI_CAPTURE_REVOKE*)buffer,
             code == TI_CAPTURE_IOCTL_END ? TRUE : FALSE));
     case TI_CAPTURE_IOCTL_STATUS: {
+        // STATUS is output-only. METHOD_BUFFERED shares the same SystemBuffer
+        // for input/output; never accept an undocumented input payload.
+        if (input != 0) return finish(irp, STATUS_INVALID_PARAMETER);
         if (!buffer || output < sizeof(TI_CAPTURE_STATUS)) return finish(irp, STATUS_BUFFER_TOO_SMALL);
         const NTSTATUS status = TranslateITCaptureStatus(openedEpoch, (TI_CAPTURE_STATUS*)buffer);
         return finish(irp, status, NT_SUCCESS(status) ? sizeof(TI_CAPTURE_STATUS) : 0);

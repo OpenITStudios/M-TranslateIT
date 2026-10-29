@@ -578,7 +578,13 @@ Source acceptance:
    both native Rust transports must require END acknowledgement after Mute.
    An uncertain/missing END response is NOT successful Stop; kernel CLEANUP
    remains an unacknowledged fail-safe.
-6. Service shutdown cancels blocked pipe I/O and closes the kernel writer;
+6. WRITE must reject an overflowing 64-bit logical ring cursor before
+   mutating samples or advancing the packet sequence. Lifetime telemetry
+   counters saturate instead of wrapping; Rust STATUS rejects impossible
+   `BufferedFrames` or `OverwrittenFrames` above `AcceptedFrames`.
+   Native STATUS must reject a nonempty request buffer and keep error
+   `IoStatus.Information == 0` under concurrent PnP revoke.
+7. Service shutdown cancels blocked pipe I/O and closes the kernel writer;
    the broker holds a SYNCHRONIZE handle for its authenticated client and
    rejects further requests when that exact process exits, including when
    a pipe handle was retained by another process. Old PnP control handles,
@@ -619,6 +625,12 @@ One coordinated, revision-pinned TARGET_WINDOWS acceptance (not run):
   BEGIN(new epoch) → END. Confirm an END after FLUSH releases the writer,
   while duplicate FLUSH, stale epoch END, a different FILE_OBJECT's END and
   PnP Stop/Start all fail closed without false Stop, leaked lease or old PCM.
+- Validate STATUS with zero input and a 40-byte output, then reject
+  unexpected input, undersized output, impossible buffered/overwritten
+  values, and PnP-stale handles without success bytes. Verify overflow
+  handling through bounded checked-arithmetic fixtures/analysis; do not
+  wait for a multi-million-year live counter to overflow or label a static
+  source check as a native endurance pass.
 - Validate both WaveRT buffer APIs using only 1/2 notification events, 48 kHz
   mono PCM16 frame-aligned sizes and bounded 96,000-byte DMA allocations.
   Confirm zeroed initial buffer pages, mapped-page failure cleanup, valid

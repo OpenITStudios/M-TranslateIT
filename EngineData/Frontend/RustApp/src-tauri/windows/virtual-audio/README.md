@@ -51,6 +51,16 @@ the actual Windows display name must still be observed on a target host.
 - Version 1, **48,000 Hz, signed PCM16, mono** (2 bytes per frame).
 - Each WRITE contains at most **960 frames / 20 ms**; no pointer, size,
   generation, epoch or sequence from user mode is trusted without validation.
+  The kernel also rejects a `ULONGLONG` logical-frame cursor overflow with
+  `STATUS_INTEGER_OVERFLOW` **before** modifying PCM, statistics or sequence.
+  Lifetime accepted/overwritten/underrun diagnostics saturate at the 64-bit
+  maximum instead of wrapping to zero; this is a source guarantee, not a
+  measured endurance result.
+- STATUS has an empty request body and a fixed 40-byte response. The
+  privileged kernel now rejects a nonempty STATUS input; the Rust response
+  parser rejects impossible buffered/overwritten counts relative to accepted
+  frames. Kernel PnP/epoch checks and fail-closed response length remain
+  unchanged.
 - Ring capacity is **9,600 frames / 200 ms**; it is a maximum bound, not
   a guaranteed 200 ms latency. Underflow yields silence. Oldest history is
   overwritten on overflow, without allocating in audio callbacks.

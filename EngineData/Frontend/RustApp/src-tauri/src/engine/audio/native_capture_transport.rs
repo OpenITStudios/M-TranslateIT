@@ -230,14 +230,20 @@ pub(super) fn parse_status(bytes: &[u8]) -> io::Result<NativeCaptureStatus> {
     }
     let capacity = read_u32(8);
     let buffered = read_u32(12);
-    if buffered > capacity || read_u32(4) > 1 {
+    let accepted = read_u64(16);
+    let overwritten = read_u64(24);
+    // Kernel telemetry is lifetime-monotonic/saturating; buffered frames
+    // and overwritten history cannot exceed all accepted frames.
+    if buffered > capacity || read_u32(4) > 1
+        || u64::from(buffered) > accepted || overwritten > accepted
+    {
         return Err(io::Error::new(ErrorKind::InvalidData, "native_capture:status_values_invalid"));
     }
     Ok(NativeCaptureStatus {
         producer_active: read_u32(4) != 0,
         buffered_frames: buffered,
-        accepted_frames: read_u64(16),
-        overwritten_frames: read_u64(24),
+        accepted_frames: accepted,
+        overwritten_frames: overwritten,
         underrun_frames: read_u64(32),
     })
 }
@@ -280,5 +286,34 @@ mod tests {
         assert!(frame_bytes(42, 9, 1, &[0; MAX_FRAMES + 1]).is_err());
         assert!(frame_bytes(42, 9, 0, &[0]).is_err());
         assert!(begin_bytes(0, 1).is_err());
+    }
+
+    #[test]
+    fn status_rejects_malformed_reply_and_impossible_counters() {
+        let mut raw = [0u8; 40];
+        raw[0..4].copy_from_slice(&VERSION.to_le_bytes());
+        raw[8..12].copy_from_slice(&9_600u32.to_le_bytes());
+        raw[12..16].copy_from_slice(&3u32.to_le_bytes());
+        raw[16..24].copy_from_slice(&3u64.to_le_bytes());
+        assert!(parse_status(&raw).is_ok());
+        assert!(parse_status(&raw[..39]).is_err());
+
+        raw[4..8].copy_from_slice(&2u32.to_le_bytes());
+        assert!(parse_status(&raw).is_err(), "producer-active must be 0 or 1");
+        raw[4..8].fill(0);
+
+        raw[12..16].copy_from_slice(&9_601u32.to_le_bytes());
+        assert!(parse_status(&raw).is_err(), "buffer exceeds fixed ring capacity");
+        raw[12..16].copy_from_slice(&4u32.to_le_bytes());
+        assert!(parse_status(&raw).is_err(), "buffer exceeds accepted frames");
+        raw[12..16].copy_from_slice(&3u32.to_le_bytes());
+
+        raw[24..32].copy_from_slice(&4u64.to_le_bytes());
+        assert!(parse_status(&raw).is_err(), "overwritten exceeds accepted frames");
+        raw[24..32].copy_from_slice(&3u64.to_le_bytes());
+        assert!(parse_status(&raw).is_ok());
+
+        raw[0..4].copy_from_slice(&2u32.to_le_bytes());
+        assert!(parse_status(&raw).is_err(), "wrong protocol version");
     }
 }

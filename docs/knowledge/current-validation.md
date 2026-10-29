@@ -21,6 +21,14 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Native WRITE arithmetic and STATUS framing/counter integrity — 2026-10-30
+
+**Pinned source parent:** `bc4dc15310438169605b3925dd5c8ee72b31d450` on `Local`. The kernel `TranslateITCaptureWrite` computed `g_written + frames` and incremented cumulative counters without handling `ULONGLONG` overflow. A wrapped logical cursor could invalidate cyclic reader positions, and wrapped telemetry could report misleading low diagnostics. The privileged `TI_CAPTURE_IOCTL_STATUS` handler also ignored nonzero input bytes even though the broker's STATUS operation required zero-length input; the Rust status parser accepted counters showing more buffered or overwritten frames than lifetime accepted frames.
+
+**Source candidate:** Under the existing PnP/PCM spinlock, WRITE now checks `g_written > MAXULONGLONG - frames` and returns `STATUS_INTEGER_OVERFLOW` **before** modifying ring bytes, cumulative counters or expected sequence. Accepted, overwritten and underrun diagnostics use one non-allocating saturating 64-bit helper. Native STATUS rejects nonempty input with zero successful response bytes. The Rust parser rejects inconsistent buffered/overwritten-to-accepted counters; its existing test module has a focused negative fixture. The canonical route source-validator now checks overflow ordering, STATUS input rejection and parser markers. No new owner, wire schema/version, provider, CI job or runtime dependency was introduced.
+
+**Proof ceiling:** `STATIC_SOURCE` review only of source ownership, checked arithmetic, byte-length contracts and regression source; WDK/C++/Rust/Node compilation, regression execution, installed Windows service, driver, headset/microphone, PnP and Zoom/Teams receiver remain **UNKNOWN / NOT EXECUTED**. Microsoft METHOD_BUFFERED defines one shared SystemBuffer with separate `InputBufferLength` and `OutputBufferLength`; this is a source contract, not a measured device result. The single existing target-Windows runbook owns future integrated acceptance.
+
 ### Kernel/broker END acknowledgement after FLUSH — 2026-10-30
 
 **Pinned source parent:** `325cc8141b01b714dbe35891e58262614d541662` on `Local`. The earlier broker/kernel state permitted FLUSH to retain the writer FILE_OBJECT while clearing active PCM, but both broker `BrokerDriver::Send(TiBrokerEnd)` and kernel `TranslateITCaptureRevoke` rejected END when PCM was no longer active. Both Rust native `end()` methods skipped the END request in that state and could report Stop success solely from implicit handle cleanup.
