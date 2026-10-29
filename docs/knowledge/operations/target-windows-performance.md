@@ -525,6 +525,28 @@ This section is an acceptance procedure, not target-Windows evidence. It covers 
 
 No OS or meeting application checks were executed here. Test the complete path, repeated session generations, physical device loss and long-session resources in the existing grouped exact-SHA Windows acceptance.
 
+## Native paired TranslateIT microphone — new source candidate (2026-10-29)
+
+**Native driver acceptance has NOT been performed.** The source under
+`src-tauri/windows/virtual-audio/` is an adapted MS-PL Microsoft WaveRT
+sample, not a packaged/signed provider. Preserve the current released VB-CABLE
+source and its provenance until the exact driver package is accepted.
+
+During one authorized integrated Windows session: build the pinned WDK
+solution, verify the INF/CAT/SYS, obtain appropriate Microsoft driver signing,
+and verify the actual Sound Settings device names `TranslateIT Microphone Feed`
+(render) and `TranslateIT Meeting Microphone` (capture). Send real 48 kHz
+stereo PCM16 through CPAL and independently record the resulting paired
+capture; verify silence underflow, bounded overflow, clock drift, source
+switches, Mute, Stop/Close, repeated start, device restarts, Windows 10/11,
+and external Zoom/Teams reception. Reject duplicate/partial native pairs;
+the legacy cable may be used only when both native endpoints are absent.
+No speaker fallback, fabricated delivery receipt, test-signed production
+install or bundled unsigned kernel driver. Separately validate installer
+elevation, restart/rollback, uninstaller device ownership and licensing
+before replacing the released provider. All checks are UNKNOWN/NOT EXECUTED
+until the exact scenario runs on target Windows.
+
 ## Supported virtual provider / no silent fallback (2026-10-11 source candidate)
 
-Confirm the native Windows audio-route discovery allows **only the standard** VB-CABLE playback/recording matched pair (CABLE Input / CABLE Output, VB-Audio Virtual Cable). Test a host with Voicemeeter, VB-CABLE A+B and/or other virtual cables **without the standard pair**: Meeting preflight must report missing virtual route rather than silently selecting those devices. With the standard pair installed alongside other providers, the standard pair alone must be selected. Keep packaging under the standard VB-CABLE license/provenance policy; do not add a second provider/driver. A functional CPAL output callback and actual meeting-app audio reception remain separate native checks, not consequences of static name matching.
+Confirm the **legacy fallback** route discovery allows only the standard VB-CABLE playback/recording matched pair (CABLE Input / CABLE Output, VB-Audio Virtual Cable). Test a host with Voicemeeter, VB-CABLE A+B and/or other virtual cables **without the standard pair**: Meeting preflight must report missing virtual route rather than silently selecting those devices. With the standard pair installed alongside other providers, the standard pair alone must be selected. Keep packaging under the standard VB-CABLE license/provenance policy; do not add a second provider/driver. A functional CPAL output callback and actual meeting-app audio reception remain separate native checks, not consequences of static name matching.

@@ -213,8 +213,11 @@ MEETING OUTBOUND — ONE SELECTED SOURCE
 Physical spoken microphone (selected Windows capture endpoint)
   -> [Original] direct mono PCM passthrough (no AI/ASR/translation/TTS)
   -> [TranslateIT] finalized speech / local ID->EN AI / selected English Meeting voice TTS
-  -> ONE Rust-selected playback route to CABLE Input (VB-Audio playback endpoint)
-  -> paired CABLE Output (VB-Audio recording endpoint)
+  -> ONE Rust-selected playback route:
+       Native candidate: TranslateIT Microphone Feed (Windows render)
+           -> TranslateIT Meeting Microphone (Windows capture)
+       Supported legacy: CABLE Input (VB-Audio render)
+           -> CABLE Output (VB-Audio capture)
   -> meeting application's microphone INPUT
 
 OPTIONAL INCOMING (text captions only)
@@ -226,11 +229,13 @@ Meeting application's physical speaker/headset OUTPUT
 INDEPENDENT SETTINGS
 TranslateIT Microphone = spoken physical input to AI
 TranslateIT Meeting Sound = optional capture of existing meeting-app speaker output
-Meeting-app Microphone = CABLE Output (must be chosen inside the calling app)
+Meeting-app Microphone = TranslateIT Meeting Microphone or supported CABLE Output
 Meeting-app Speaker = physical headset/speakers (chosen inside the calling app)
 ```
 
-Neither TranslateIT's Meeting Sound selector nor its virtual microphone route changes the calling application's speaker setting. VB-CABLE device names are inverted relative to the application: CABLE Input is a Windows playback/render endpoint, and CABLE Output is a Windows recording/capture endpoint. Required and optional audio lanes never exchange raw buffers or become fallback devices for one another. Existing endpoint-wide loopback is not process-only capture and may include other applications' sound.
+The Windows driver—not a frontend alias—determines the actual recording endpoint name. A complete uniquely named TranslateIT native pair is preferred; a partially installed or ambiguous pair blocks required Meeting Start, never silently chooses a different route. Until the native source is compiled, appropriately signed, packaged and accepted on Windows, the shipped provider remains standard VB-CABLE under its existing license/provenance. Neither named endpoint discovery nor a local render callback proves audio reception by another application.
+
+Neither TranslateIT's Meeting Sound selector nor its virtual microphone route changes the calling application's speaker setting. VB-CABLE names are inverted relative to the application: CABLE Input is playback, CABLE Output is recording. Required and optional lanes never exchange raw buffers or become fallback devices for each other. Existing endpoint-wide loopback is not process-only capture and may include other applications' sound.
 
 
 ### PR-070 — Outbound content

@@ -10,6 +10,11 @@ const files = {
   outboundPipeline: resolve(root, "src-tauri/src/commands/meeting_session/outbound_pipeline.rs"),
   playbackRuntime: resolve(root, "src-tauri/src/commands/meeting_session/playback_runtime.rs"),
   route: resolve(root, "src-tauri/src/commands/virtual_mic_route.rs"),
+  nativeInf: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/TranslateITVA.inx"),
+  nativeBridge: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/pcm_bridge.cpp"),
+  nativeStream: resolve(root, "src-tauri/windows/virtual-audio/Source/Main/minwavertstream.cpp"),
+  nativeCaptureFormat: resolve(root, "src-tauri/windows/virtual-audio/Source/Filters/micarraywavtable.h"),
+  nativeRenderFormat: resolve(root, "src-tauri/windows/virtual-audio/Source/Filters/speakerwavtable.h"),
   meetingOutput: resolve(root, "src-tauri/src/engine/audio/meeting_output.rs"),
   meetingOutputRuntime: resolve(root, "src-tauri/src/engine/audio/meeting_output_runtime.rs"),
   audioMod: resolve(root, "src-tauri/src/engine/audio/mod.rs"),
@@ -99,6 +104,10 @@ requireMarkers(source.route, "matched read-only Meeting route", [
   "fn matched_pair_identity(",
   "fn matched_pair_candidates(",
   "fn primary_vb_cable_pair(",
+  "TRANSLATEIT_NATIVE_PAIR_ID",
+  "TranslateIT Microphone Feed",
+  "TranslateIT Meeting Microphone",
+  "virtual_mic:translateit_native_pair_incomplete",
   "fn reject_ambiguous_pair(",
   "let selected = if primary.len() == 1",
 ]);
@@ -120,6 +129,34 @@ forbidMarkers(source.registry, "mutating/manual route surface", [
   "set_preferred_virtual_mic_route_devices",
   "prepare_virtual_mic_output_route_runtime_stub",
   "dispatch_guarded_virtual_audio_route_provider",
+]);
+
+requireMarkers(source.nativeInf, "TranslateIT Windows endpoint branding", [
+  'TRANSLATEITVA.WaveSpeaker.szPname="TranslateIT Microphone Feed"',
+  'TRANSLATEITVA.WaveMicArray1.szPname="TranslateIT Meeting Microphone"',
+  "ROOT\\\\TranslateITVirtualAudio",
+]);
+requireMarkers(source.nativeBridge, "bounded native PCM bridge", [
+  "kFrameBytes = 4", "kBufferBytes = 38400",
+  "KeAcquireSpinLock", "RtlZeroMemory(destination, byteCount)",
+]);
+forbidMarkers(source.nativeBridge, "insecure custom user-mode driver channel", [
+  "DeviceIoControl(", "IOCTL_", "CreateFile(",
+]);
+requireMarkers(source.nativeStream, "paired native WaveRT stream transfer", [
+  "TranslateITBridgeRead(m_pDmaBuffer + bufferOffset, runWrite)",
+  "TranslateITBridgeWrite(m_pDmaBuffer + bufferOffset, runWrite)",
+  "ReadBytes(ByteDisplacement);",
+]);
+forbidMarkers(source.nativeStream, "sample test tone or raw audio file writer", [
+  "m_SaveData.WriteData(m_pDmaBuffer", "m_ToneGenerator.GenerateSine(m_pDmaBuffer",
+]);
+requireMarkers(source.nativeCaptureFormat, "48 kHz stereo PCM16 capture", [
+  "MICARRAY_16_BITS_PER_SAMPLE_PCM", "192000",
+]);
+requireMarkers(source.nativeRenderFormat, "48 kHz stereo PCM16 render", [
+  "SPEAKER_HOST_MIN_BITS_PER_SAMPLE            16",
+  "SPEAKER_HOST_MIN_SAMPLE_RATE                48000",
 ]);
 
 console.log("[virtual-route] Meeting session orchestration, guarded output facade, and native CPAL delivery ownership are explicit; Rust owns one matched generation-bound virtual pair, and retired Python/manual route owners are absent.");
