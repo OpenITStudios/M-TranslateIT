@@ -174,6 +174,7 @@ test("My Voice reference rationale is emitted by the existing selector and sourc
   assert.match(ui, /Why was this voice reference chosen\?/);
   assert.match(ui, /not proof of low noise, speaker identity, naturalness or superior voice quality/);
   assert.match(ui, /Listen to all eight generated samples before any approval/);
+  assert.match(ui, /or confirms that only one take was eligible/);
   assert.match(ui, /myVoiceBuildApi\.approve\(reviewedLineIds, qualityConfirmed, build\.evaluation_review_id\)/);
 });
 

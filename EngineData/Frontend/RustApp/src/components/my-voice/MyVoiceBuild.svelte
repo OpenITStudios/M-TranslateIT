@@ -723,7 +723,7 @@
             </p>
           {/if}
           <p class="mb-0 mt-2 text-xs leading-5 text-[var(--ti-text-muted)]">
-            This is the first rule that separated the selected take from the next-ranked take.
+            This explains the first difference from the next-ranked eligible take, or confirms that only one take was eligible.
             Selection is not proof of low noise, speaker identity, naturalness or superior voice quality.
             Listen to all eight generated samples before any approval.
           </p>
