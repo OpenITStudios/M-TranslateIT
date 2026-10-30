@@ -157,7 +157,9 @@ test("P1 Replay stops before microphone capture and rejects a changed review own
   assert.doesNotMatch(state, /recordingState\.pending_review !== next\.pending_review/);
   const start = page.slice(page.indexOf("async function startRecording()"),
     page.indexOf("async function stopRecording()"));
-  assert.ok(start.indexOf("stopReplay();") < start.indexOf("myVoiceApi.startTake("));
+  const stop = start.indexOf("stopAllMyVoiceAudio();");
+  const startCapture = start.indexOf("myVoiceApi.startTake(");
+  assert.ok(stop >= 0 && startCapture > stop, "both players must stop before microphone capture");
   const replay = page.slice(page.indexOf("async function replayTake("),
     page.indexOf("onMount(() =>"));
   assert.match(replay, /recordingStatusUnknown \|\| recordingState\.recording_line_id !== null/);
@@ -196,7 +198,10 @@ test("My Voice audio owners hand off playback before record and ignore stale pre
   assert.match(cancel, /buildPlaybackOwner\?\.stopPlayback\(\)/);
   const record = page.slice(page.indexOf("async function startRecording()"),
     page.indexOf("async function stopRecording()"));
-  assert.ok(record.indexOf("stopAllMyVoiceAudio();") < record.indexOf("myVoiceApi.startTake("));
+  const stopBoth = record.indexOf("stopAllMyVoiceAudio();");
+  const startCapture = record.indexOf("myVoiceApi.startTake(");
+  assert.ok(stopBoth >= 0 && startCapture > stopBoth,
+    "an absent Stop cannot pass the microphone ownership test");
   assert.match(page, /onclick=\{\(\) => openCreationStage\("record"\)\}>1\. Record/);
   assert.match(page, /onclick=\{\(\) => openCreationStage\("record"\)\}>\s*Record more/);
   for (const name of ["playSavedRecording", "previewBuiltin"]) {
