@@ -81,6 +81,66 @@
       "expected": "allow"
     },
     {
+      "id": "ai-translation-quality-evaluator",
+      "request": {
+        "mode": "bounded-maintenance",
+        "action": "write",
+        "scope": "local-ai-runtime-development",
+        "path": "tools/translation_quality/evaluate_translation_quality.py"
+      },
+      "expected": "allow"
+    },
+    {
+      "id": "ai-translation-quality-corpus",
+      "request": {
+        "mode": "standard-development",
+        "action": "write",
+        "scope": "local-ai-runtime-development",
+        "path": "tools/translation_quality/corpus/translation_quality_v1.json"
+      },
+      "expected": "allow"
+    },
+    {
+      "id": "ai-translation-quality-self-test",
+      "request": {
+        "mode": "bounded-maintenance",
+        "action": "write",
+        "scope": "local-ai-runtime-development",
+        "path": "tools/translation_quality/self_test.py"
+      },
+      "expected": "allow"
+    },
+    {
+      "id": "governance-cannot-edit-translation-quality",
+      "request": {
+        "mode": "standard-development",
+        "action": "write",
+        "scope": "governance",
+        "path": "tools/translation_quality/evaluate_translation_quality.py"
+      },
+      "expected": "ask"
+    },
+    {
+      "id": "plan-cannot-edit-translation-quality",
+      "request": {
+        "mode": "plan",
+        "action": "write",
+        "scope": "local-ai-runtime-development",
+        "path": "tools/translation_quality/evaluate_translation_quality.py"
+      },
+      "expected": "deny"
+    },
+    {
+      "id": "ai-quality-scope-not-general-audio-harness",
+      "request": {
+        "mode": "bounded-maintenance",
+        "action": "write",
+        "scope": "local-ai-runtime-development",
+        "path": "tools/audio_validation/worker_runner.py"
+      },
+      "expected": "ask"
+    },
+    {
       "id": "meeting-audio",
       "request": {
         "mode": "standard-development",
