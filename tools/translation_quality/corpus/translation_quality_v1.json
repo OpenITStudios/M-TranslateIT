@@ -3894,16 +3894,33 @@
       "preserve": [],
       "required_any": [
         [
-          "at least"
+          "at least two",
+          "two or more",
+          "a minimum of two",
+          "no fewer than two",
+          "at least 2",
+          "2 or more",
+          "minimum of 2"
         ],
         [
-          "two"
+          "reviewer",
+          "reviewers"
         ],
         [
-          "must"
+          "must",
+          "have to",
+          "need to"
+        ],
+        [
+          "agree",
+          "agreement"
         ]
       ],
-      "forbidden": [],
+      "forbidden": [
+        "must not agree",
+        "do not need to agree",
+        "don't need to agree"
+      ],
       "risk_tags": [
         "quantifier",
         "meaning"
@@ -3943,19 +3960,67 @@
       "preserve": [],
       "required_any": [
         [
-          "paling banyak",
-          "maksimal",
-          "maksimum",
-          "tidak lebih dari"
+          "paling banyak lima",
+          "maksimal lima",
+          "maksimum lima",
+          "tidak lebih dari lima",
+          "paling banyak 5",
+          "maksimal 5",
+          "maksimum 5",
+          "tidak lebih dari 5"
         ],
         [
-          "lima",
-          "5"
+          "item",
+          "butir"
         ],
         [
           "pending",
           "tertunda",
           "belum selesai"
+        ]
+      ],
+      "ordered_any": [
+        [
+          [
+            "paling banyak lima",
+            "maksimal lima",
+            "maksimum lima",
+            "tidak lebih dari lima",
+            "paling banyak 5",
+            "maksimal 5",
+            "maksimum 5",
+            "tidak lebih dari 5"
+          ],
+          [
+            "item",
+            "butir"
+          ],
+          [
+            "pending",
+            "tertunda",
+            "belum selesai"
+          ]
+        ],
+        [
+          [
+            "item",
+            "butir"
+          ],
+          [
+            "pending",
+            "tertunda",
+            "belum selesai"
+          ],
+          [
+            "paling banyak lima",
+            "maksimal lima",
+            "maksimum lima",
+            "tidak lebih dari lima",
+            "paling banyak 5",
+            "maksimal 5",
+            "maksimum 5",
+            "tidak lebih dari 5"
+          ]
         ]
       ],
       "forbidden": [
@@ -5111,6 +5176,32 @@
         [
           "had to",
           "must"
+        ]
+      ],
+      "ordered_any": [
+        [
+          [
+            "could be finished",
+            "can be finished"
+          ],
+          "friday",
+          "not",
+          [
+            "had to",
+            "must"
+          ]
+        ],
+        [
+          "not",
+          [
+            "had to",
+            "must"
+          ],
+          "friday",
+          [
+            "could be finished",
+            "can be finished"
+          ]
         ]
       ],
       "forbidden": [

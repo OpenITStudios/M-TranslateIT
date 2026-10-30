@@ -317,6 +317,33 @@ def main() -> int:
         for translated in altered_outputs:
             assert not evaluator.invariant_result(cases_by_id[case_id], translated)["critical_pass"], (case_id, translated)
 
+    # Bind quantifier magnitude and negated obligation to their actual clause.
+    quantifier_controls = (
+        ("id-en-quant-012",
+         ("At least two reviewers must agree.",
+          "Two or more reviewers have to agree."),
+         ("At least one reviewer must agree; two reviewers are informed.",
+          "At most two reviewers must agree.",
+          "At least two reviewers must not agree.")),
+        ("en-id-quant-011",
+         ("Paling banyak lima item boleh tetap pending.",
+          "Maksimal 5 item masih tertunda.",
+          "Item pending maksimal lima."),
+         ("Paling sedikit lima item boleh pending.",
+          "Maksimal enam item pending; lima item diproses.",
+          "Maksimal lima belas item pending.")),
+        ("id-en-modality-workplace-001",
+         ("They said it could be finished by Friday, not that it had to be finished by Friday.",
+          "Not that it had to be finished by Friday, but that it could be finished by Friday."),
+         ("They said it had to be finished by Friday, not that it could be finished by Friday.",
+          "They said it could be finished Friday, and it had to be finished Friday.")),
+    )
+    for case_id, faithful, changed_meaning in quantifier_controls:
+        for translated in faithful:
+            assert evaluator.invariant_result(cases_by_id[case_id], translated)["critical_pass"], (case_id, translated)
+        for translated in changed_meaning:
+            assert not evaluator.invariant_result(cases_by_id[case_id], translated)["critical_pass"], (case_id, translated)
+
     incoming_correction = next(case for case in corpus["cases"] if case["id"] == "en-id-correction-001")
     for valid in ("Saya bilang lima belas, bukan lima puluh.", "Bukan lima puluh, melainkan lima belas."):
         assert evaluator.invariant_result(incoming_correction, valid)["critical_pass"], valid
