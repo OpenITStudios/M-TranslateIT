@@ -218,7 +218,7 @@ Result format:
 }
 ```
 
-The fingerprint binds captured output to the exact corpus content. A missing fingerprint remains backward-compatible for standalone evaluation, but a supplied mismatched fingerprint makes the result set incomplete. Promotion comparison additionally requires non-empty `source_identity` for both baseline and candidate, so an otherwise clean comparison cannot authorize a change from unidentified runtime output.
+The fingerprint binds captured output to the exact corpus content. A missing fingerprint remains backward-compatible for standalone evaluation, but a supplied mismatched fingerprint makes the result set incomplete. **Promotion comparison requires both baseline and candidate to supply the matching corpus fingerprint and a non-empty `source_identity`.** Legacy unbound results can still be graded, but they cannot authorize promotion. Fingerprints bind declared corpus content, not independent proof that model inference actually ran.
 
 The report includes overall and per-group critical-invariant pass rates, risk-tag critical-pass rates, a lightweight character n-gram F1 regression signal, direction/category means, and per-case failures. These automated signals intentionally do not pretend to be semantic quality scores. Risk tags expose regressions across negation, numbers, entities, omission, hallucination, terminology, context and modality even when a category average looks healthy. Baseline comparison also reports per-group critical-pass-rate deltas so an average score increase cannot hide a newly weaker risk category. The n-gram score is not BLEU, COMET, or a substitute for linguistic evaluation.
 

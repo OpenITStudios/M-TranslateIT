@@ -245,6 +245,28 @@ def main() -> int:
     assert missing_provenance["promotion_provenance_complete"] is False
     assert missing_provenance["promotion_safe_on_declared_critical_invariants"] is False
 
+    # Unbound or mismatched source bundles may be graded, but not promoted,
+    # even if both translations are perfect and both runtime IDs are present.
+    for baseline_fp, candidate_fp in (
+        ("", fingerprint),
+        (fingerprint, ""),
+        ("0" * 64, fingerprint),
+        (fingerprint, "0" * 64),
+    ):
+        unbound = evaluator.compare_reports(
+            corpus, perfect, perfect,
+            baseline_corpus_fingerprint=baseline_fp,
+            candidate_corpus_fingerprint=candidate_fp,
+            baseline_source_identity="baseline-sha",
+            candidate_source_identity="candidate-sha",
+        )
+        assert unbound["critical_regressions"] == []
+        assert unbound["promotion_provenance_complete"] is False
+        assert unbound["promotion_safe_on_declared_critical_invariants"] is False
+        assert unbound["complete_result_sets"] is (
+            baseline_fp != "0" * 64 and candidate_fp != "0" * 64
+        )
+
     recovered = evaluator.compare_reports(
         corpus,
         candidate,

@@ -482,6 +482,17 @@ def compare_reports(
         )
         for key in risk_keys
     }
+    # Legacy result bundles without request fingerprints remain gradeable, but
+    # cannot prove the two result sets belong to this exact regression corpus.
+    promotion_provenance_complete = (
+        bool(baseline["source_identity"])
+        and bool(candidate["source_identity"])
+        and bool(baseline["result_corpus_fingerprint"])
+        and bool(candidate["result_corpus_fingerprint"])
+        and baseline["provenance_matches_corpus"]
+        and candidate["provenance_matches_corpus"]
+    )
+
     return {
         "schema": "translateit.translation_quality.comparison.v1",
         "selection": corpus.get("selection"),
@@ -509,20 +520,12 @@ def compare_reports(
         "group_critical_pass_rate_deltas": group_critical_pass_rate_deltas,
         "risk_tag_critical_pass_rate_deltas": risk_tag_critical_pass_rate_deltas,
         "case_score_deltas": score_deltas,
-        "promotion_provenance_complete": (
-            bool(baseline["source_identity"])
-            and bool(candidate["source_identity"])
-            and baseline["provenance_matches_corpus"]
-            and candidate["provenance_matches_corpus"]
-        ),
+        "promotion_provenance_complete": promotion_provenance_complete,
         "promotion_safe_on_declared_critical_invariants": (
             not corpus.get("selection")
             and baseline["complete_result_set"]
             and candidate["complete_result_set"]
-            and bool(baseline["source_identity"])
-            and bool(candidate["source_identity"])
-            and baseline["provenance_matches_corpus"]
-            and candidate["provenance_matches_corpus"]
+            and promotion_provenance_complete
             and candidate["verdict"] == "PASS"
             and not critical_regressions
         ),
