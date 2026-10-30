@@ -12,6 +12,28 @@ use super::super::voice_lab::{
 pub(super) const MAX_EVALUATION_WAV_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_FROZEN_TAKE_WAV_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_DATASET_MANIFEST_BYTES: u64 = 64 * 1024;
+const MAX_EVALUATION_MANIFEST_BYTES: u64 = 128 * 1024;
+
+// Read metadata used by routine My Voice status with a hard allocation cap.
+// Checking byte length AFTER fs::read can allocate an arbitrarily large local
+// file on each poll. A pre-open path check alone does not bound reads if the
+// file grows; cap the actual read from the opened handle as well.
+fn read_bounded_regular_file(path: &Path, min_bytes: u64, max_bytes: u64) -> Option<Vec<u8>> {
+    if min_bytes == 0 || max_bytes < min_bytes { return None; }
+    let info = fs::symlink_metadata(path).ok()?;
+    if !info.is_file() || info.file_type().is_symlink()
+        || info.len() < min_bytes || info.len() > max_bytes
+    {
+        return None;
+    }
+    let file = File::open(path).ok()?;
+    let opened = file.metadata().ok()?;
+    if !opened.is_file() || opened.len() != info.len() { return None; }
+    let mut bytes = Vec::new();
+    file.take(max_bytes.saturating_add(1)).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 == info.len()).then_some(bytes)
+}
+
 fn valid_sha256(value: &str) -> bool {
     value.len() == 64
         && value
@@ -308,14 +330,8 @@ pub(super) fn candidate_comparison(manifest: &EvaluationManifest) -> Vec<VoiceLa
 // copied from the SAME frozen, authorized training WAV into the actor package.
 // Invalid or legacy rationale disappears; the original Review remains usable.
 fn bounded_reference_sha_matches(path: &Path, digest: &str) -> bool {
-    let Ok(info) = fs::symlink_metadata(path) else { return false; };
-    if !info.is_file() || info.file_type().is_symlink()
-        || info.len() < 44 || info.len() > MAX_FROZEN_TAKE_WAV_BYTES
-    {
-        return false;
-    }
-    let Ok(bytes) = fs::read(path) else { return false; };
-    bytes.len() as u64 == info.len() && sha256_matches(&bytes, digest)
+    read_bounded_regular_file(path, 44, MAX_FROZEN_TAKE_WAV_BYTES)
+        .is_some_and(|bytes| sha256_matches(&bytes, digest))
 }
 
 // A rationale is meaningful only if its comparator could have been produced
@@ -352,15 +368,10 @@ pub(super) fn reference_selection_evidence(
         return None;
     }
     let dataset_manifest = paths.build_dataset_dir.join("dataset.json");
-    let info = fs::symlink_metadata(&dataset_manifest).ok()?;
-    if !info.is_file() || info.file_type().is_symlink()
-        || info.len() == 0 || info.len() > MAX_DATASET_MANIFEST_BYTES
-    {
-        return None;
-    }
-    let frozen: GuidedDatasetManifest = serde_json::from_slice(
-        &fs::read(dataset_manifest).ok()?
-    ).ok()?;
+    let frozen_bytes = read_bounded_regular_file(
+        &dataset_manifest, 1, MAX_DATASET_MANIFEST_BYTES
+    )?;
+    let frozen: GuidedDatasetManifest = serde_json::from_slice(&frozen_bytes).ok()?;
     if frozen.schema_version != VOICE_LAB_SCHEMA_VERSION
         || !frozen.authorized_voice_confirmed
         || receipt.eligible_take_count > frozen.takes.len()
@@ -375,15 +386,8 @@ pub(super) fn reference_selection_evidence(
     // A status refresh must not read an arbitrarily large or symlinked actor
     // manifest just to explain an OPTIONAL training reference choice.
     let actor_path = paths.candidate_actor_dir.join("actor.json");
-    let actor_meta = fs::symlink_metadata(&actor_path).ok()?;
-    if !actor_meta.is_file() || actor_meta.file_type().is_symlink()
-        || actor_meta.len() == 0 || actor_meta.len() > MAX_DATASET_MANIFEST_BYTES
-    {
-        return None;
-    }
-    let actor: serde_json::Value = serde_json::from_slice(
-        &fs::read(actor_path).ok()?
-    ).ok()?;
+    let actor_bytes = read_bounded_regular_file(&actor_path, 1, MAX_DATASET_MANIFEST_BYTES)?;
+    let actor: serde_json::Value = serde_json::from_slice(&actor_bytes).ok()?;
     if actor.get("reference_wav_file")?.as_str()? != "reference.wav"
         || actor.get("reference_text")?.as_str()? != take.exact_text
         || actor.get("reference_duration_ms")?.as_u64()? != receipt.duration_ms
@@ -457,15 +461,9 @@ pub(super) fn frozen_dataset_matches_current(
     current_takes: &[GuidedTakeContract],
 ) -> bool {
     let dataset_manifest = dataset_dir.join("dataset.json");
-    let Ok(info) = fs::symlink_metadata(&dataset_manifest) else {
-        return false;
-    };
-    if !info.is_file() || info.file_type().is_symlink()
-        || info.len() == 0 || info.len() > MAX_DATASET_MANIFEST_BYTES
-    {
-        return false;
-    }
-    let Ok(bytes) = fs::read(dataset_manifest) else {
+    let Some(bytes) = read_bounded_regular_file(
+        &dataset_manifest, 1, MAX_DATASET_MANIFEST_BYTES
+    ) else {
         return false;
     };
     let Ok(frozen) = serde_json::from_slice::<GuidedDatasetManifest>(&bytes) else {
@@ -489,10 +487,9 @@ pub(super) fn frozen_dataset_matches_current(
 
 pub(super) fn evaluation_manifest(paths: &VoiceLabStoragePaths) -> Option<EvaluationManifest> {
     let root = evaluation_dir(paths);
-    let bytes = fs::read(root.join("evaluation.json")).ok()?;
-    if bytes.is_empty() || bytes.len() > 128 * 1024 {
-        return None;
-    }
+    let bytes = read_bounded_regular_file(
+        &root.join("evaluation.json"), 1, MAX_EVALUATION_MANIFEST_BYTES
+    )?;
     let manifest = serde_json::from_slice::<EvaluationManifest>(&bytes).ok()?;
     if manifest.schema_version != VOICE_LAB_SCHEMA_VERSION
         || manifest.engine != VOICE_ACTOR_ENGINE
@@ -556,7 +553,9 @@ pub(super) fn reviewable_evaluation(
     current_takes: &[GuidedTakeContract],
 ) -> Option<EvaluationManifest> {
     let evaluation = evaluation_manifest(paths)?;
-    let actor_bytes = fs::read(paths.candidate_actor_dir.join("actor.json")).ok()?;
+    let actor_bytes = read_bounded_regular_file(
+        &paths.candidate_actor_dir.join("actor.json"), 1, MAX_DATASET_MANIFEST_BYTES
+    )?;
     let actor_json = serde_json::from_slice::<serde_json::Value>(&actor_bytes).ok()?;
     let matches_training = match archived_frozen_review_matches(paths) {
         Ok(Some(matches)) => matches,
@@ -636,6 +635,27 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn bounded_review_metadata_rejects_empty_and_oversized_files() {
+        let root = std::env::temp_dir().join(format!(
+            "translateit-review-bounded-{}-{:?}",
+            std::process::id(), std::thread::current().id()
+        ));
+        fs::create_dir_all(&root).expect("fixture root");
+        let path = root.join("evaluation.json");
+        fs::write(&path, b"{}").expect("small metadata");
+        assert_eq!(
+            read_bounded_regular_file(&path, 1, MAX_EVALUATION_MANIFEST_BYTES),
+            Some(b"{}".to_vec())
+        );
+        fs::write(&path, vec![b' '; (MAX_EVALUATION_MANIFEST_BYTES + 1) as usize])
+            .expect("oversized metadata");
+        assert!(read_bounded_regular_file(&path, 1, MAX_EVALUATION_MANIFEST_BYTES).is_none());
+        fs::write(&path, []).expect("empty metadata");
+        assert!(read_bounded_regular_file(&path, 1, MAX_EVALUATION_MANIFEST_BYTES).is_none());
+        fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
     #[test]

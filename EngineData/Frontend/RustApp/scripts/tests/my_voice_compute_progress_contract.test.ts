@@ -173,7 +173,7 @@ test("My Voice reference rationale is emitted by the existing selector and sourc
   assert.match(evaluation, /VoiceLabReferenceCriterion::LowerRelativeEdgeEnergy/);
   assert.match(evaluation, /!receipt\.quiet_edge_comparable/);
   assert.match(evaluation, /reference_receipt_coherent\(&receipt\)/);
-  assert.match(evaluation, /actor_meta\.len\(\) > MAX_DATASET_MANIFEST_BYTES/);
+  assert.match(evaluation, /read_bounded_regular_file\(&actor_path, 1, MAX_DATASET_MANIFEST_BYTES\)/);
   assert.match(evaluation, /optional_reference_reason_rejects_self_contradictory_rank_metadata/);
   assert.match(rustStatus, /reference_selection: Option<VoiceLabReferenceSelection>/);
   assert.match(rustStatus, /reference_selection_evidence\(&paths, review\)/);
@@ -183,6 +183,21 @@ test("My Voice reference rationale is emitted by the existing selector and sourc
   assert.match(ui, /Listen to all eight generated samples before any approval/);
   assert.match(ui, /or confirms that only one take was eligible/);
   assert.match(ui, /myVoiceBuildApi\.approve\(reviewedLineIds, qualityConfirmed, build\.evaluation_review_id\)/);
+});
+
+test("My Voice review metadata is size-bounded before reading the opened file", () => {
+  const evaluation = read("src-tauri/src/commands/voice_lab_build/evaluation.rs");
+  const start = evaluation.indexOf("fn read_bounded_regular_file(");
+  const end = evaluation.indexOf("fn valid_sha256(", start);
+  const boundedRead = evaluation.slice(start, end);
+  assert.ok(start >= 0 && end > start);
+  assert.match(boundedRead, /fs::symlink_metadata\(path\)/);
+  assert.match(boundedRead, /info\.len\(\) > max_bytes/);
+  assert.match(boundedRead, /file\.take\(max_bytes\.saturating_add\(1\)\)/);
+  assert.match(boundedRead, /bytes\.len\(\) as u64 == info\.len\(\)/);
+  assert.match(evaluation, /&root\.join\("evaluation\.json"\), 1, MAX_EVALUATION_MANIFEST_BYTES/);
+  assert.match(evaluation, /&paths\.candidate_actor_dir\.join\("actor\.json"\), 1, MAX_DATASET_MANIFEST_BYTES/);
+  assert.match(evaluation, /fn bounded_review_metadata_rejects_empty_and_oversized_files/);
 });
 
 test("manual Stop reuses the existing process owners and cannot claim success after cancellation", () => {

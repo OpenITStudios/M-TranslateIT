@@ -21,6 +21,14 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### My Voice integration admission: bounded status file reads — 2026-10-30
+
+**Pinned source parent:** `c84cefa5628f5a1dd6a35958144855c85b6c771e` on `Local`. The current `evaluation_manifest` loaded `evaluation.json` with `fs::read` *before* enforcing its 128-KiB bound; the main `reviewable_evaluation` read candidate `actor.json` with no size bound. Even an ordinary My Voice status refresh could therefore attempt excessive allocation on corrupted/oversized local files. P3 reference and frozen dataset checks also used size-before-`fs::read` patterns without a bounded actual read.
+
+**Bounded source fix:** One existing Rust evaluation owner now uses a bounded read helper that rejects empty, oversized, symlinked or nonregular metadata based on path metadata, checks the opened file's size, caps bytes read via `Read::take(max + 1)`, and requires returned length to match the checked length. Evaluation JSON retains its existing 128-KiB ceiling; actor and dataset manifest checks retain the existing 64-KiB ceiling; reference WAV explanation keeps its 4-MiB ceiling. This is a fail-closed source-read bound, not an OS-level guarantee against all concurrent file replacement. Review ID, eight selected WAV hashes, manual approval, training, engine and VB-CABLE are unchanged. The existing Rust test module and frontend contract test owner received targeted negative cases.
+
+**Proof ceiling:** `STATIC_SOURCE` only. The Rust/TS tests were authored but not executed; no Rust compile, dependency install, Python worker, Svelte typecheck, GPU, audio, installed Windows or Meeting receiver was run. Runtime integrity and model-quality acceptance remain **UNKNOWN / NOT EXECUTED**.
+
 ### My Voice P1–P3 contract consolidation — 2026-10-30
 
 **Pinned source parent:** `060860d6a42eff6b312010473c86a84d7344a1f3` on `Local`. Source review traced P1 guided-take advisory intervals through Rust and TypeScript, P2 eight-sentence checkpoint comparison from Python `candidate_evidence` through the canonical Rust review, and P3 reference-selection rationale from Python's original lexicographic ranker through the frozen source WAV and actor reference. The fixed synthetic Python review SHA-256 fingerprint was independently checked for its canonical compact sorted-key form; this is not a Rust compiler/runtime result.
