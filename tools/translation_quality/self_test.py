@@ -207,6 +207,62 @@ def main() -> int:
     ):
         assert not evaluator.invariant_result(file_size, reversed_meaning)["critical_pass"], reversed_meaning
 
+    # Preserve numeric roles and complete magnitudes, rather than accepting
+    # disjoint numbers and a negation cue in any order.
+    correction_roles = (
+        (
+            "id-en-num-011",
+            ("The correct version is 2.10.7, not 2.1.7.",
+             "Not 2.1.7; the correct version is 2.10.7."),
+            ("The correct version is 2.1.7, not 2.10.7.",
+             "Not 2.10.7; the correct version is 2.1.7."),
+        ),
+        (
+            "en-id-num-011",
+            ("Gunakan port 19132, bukan 19123.",
+             "Bukan 19123, gunakan port 19132."),
+            ("Gunakan port 19123, bukan 19132.",
+             "Bukan 19132, gunakan port 19123."),
+        ),
+    )
+    for case_id, faithful_outputs, reversed_outputs in correction_roles:
+        for translated in faithful_outputs:
+            assert evaluator.invariant_result(cases_by_id[case_id], translated)["critical_pass"], (case_id, translated)
+        for translated in reversed_outputs:
+            assert not evaluator.invariant_result(cases_by_id[case_id], translated)["critical_pass"], (case_id, translated)
+
+    numeric_values = (
+        (
+            "en-id-number-001",
+            ("Batas unggahnya adalah 250 MB per file.",
+             "Batas per file adalah MB 250."),
+            ("Batas unggahnya adalah 250.5 MB per file.",
+             "Batas unggahnya adalah 250,5 MB per file.",
+             "Batas unggahnya adalah -250 MB per file."),
+        ),
+        (
+            "id-en-num-010",
+            ("The total is 1,250 units with a tolerance of ±2%.",
+             "At ±2% tolerance, the total is 1250 units."),
+            ("The total is 1,250.5 units with a tolerance of ±2%.",
+             "The total is 1,2500 units with a tolerance of ±2%.",
+             "The total is -1250 units with a tolerance of ±2%."),
+        ),
+        (
+            "en-id-num-014",
+            ("Paket itu beratnya 2,75 kg.",
+             "Paket itu memiliki berat 2.75 kg."),
+            ("Paket itu beratnya 2,750 kg.",
+             "Paket itu beratnya 12,75 kg.",
+             "Paket itu beratnya -2,75 kg."),
+        ),
+    )
+    for case_id, faithful_outputs, altered_values in numeric_values:
+        for translated in faithful_outputs:
+            assert evaluator.invariant_result(cases_by_id[case_id], translated)["critical_pass"], (case_id, translated)
+        for translated in altered_values:
+            assert not evaluator.invariant_result(cases_by_id[case_id], translated)["critical_pass"], (case_id, translated)
+
     incoming_correction = next(case for case in corpus["cases"] if case["id"] == "en-id-correction-001")
     for valid in ("Saya bilang lima belas, bukan lima puluh.", "Bukan lima puluh, melainkan lima belas."):
         assert evaluator.invariant_result(incoming_correction, valid)["critical_pass"], valid

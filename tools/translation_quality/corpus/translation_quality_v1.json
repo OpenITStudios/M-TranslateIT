@@ -326,6 +326,16 @@
           "per file"
         ]
       ],
+      "ordered_any": [
+        [
+          "250",
+          "MB"
+        ],
+        [
+          "MB",
+          "250"
+        ]
+      ],
       "forbidden": [],
       "risk_tags": [
         "number",
@@ -2130,8 +2140,6 @@
         "The total is 1,250 units with a tolerance of ±2%."
       ],
       "preserve": [
-        "1",
-        "250",
         "±2%"
       ],
       "required_any": [
@@ -2140,6 +2148,32 @@
         ],
         [
           "tolerance"
+        ],
+        [
+          "1,250",
+          "1250"
+        ]
+      ],
+      "ordered_any": [
+        [
+          [
+            "1,250",
+            "1250"
+          ],
+          [
+            "unit",
+            "units"
+          ]
+        ],
+        [
+          [
+            "unit",
+            "units"
+          ],
+          [
+            "1,250",
+            "1250"
+          ]
         ]
       ],
       "forbidden": [],
@@ -2163,6 +2197,18 @@
       "required_any": [
         [
           "not"
+        ]
+      ],
+      "ordered_any": [
+        [
+          "2.10.7",
+          "not",
+          "2.1.7"
+        ],
+        [
+          "not",
+          "2.1.7",
+          "2.10.7"
         ]
       ],
       "forbidden": [],
@@ -2316,6 +2362,18 @@
           "bukan"
         ]
       ],
+      "ordered_any": [
+        [
+          "19132",
+          "bukan",
+          "19123"
+        ],
+        [
+          "bukan",
+          "19123",
+          "19132"
+        ]
+      ],
       "forbidden": [],
       "risk_tags": [
         "number",
@@ -2383,13 +2441,31 @@
         "Paket itu beratnya 2,75 kg."
       ],
       "preserve": [
-        "2",
-        "75",
         "kg"
       ],
       "required_any": [
         [
           "paket"
+        ],
+        [
+          "2,75",
+          "2.75"
+        ]
+      ],
+      "ordered_any": [
+        [
+          [
+            "2,75",
+            "2.75"
+          ],
+          "kg"
+        ],
+        [
+          "kg",
+          [
+            "2,75",
+            "2.75"
+          ]
         ]
       ],
       "forbidden": [],
