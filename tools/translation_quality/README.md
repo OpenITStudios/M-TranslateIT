@@ -244,6 +244,14 @@ it does not copy translations or rewrite the retained file. It never yields a
 promotion-ready comparison or evidence of newly executed model inference.
 An original result from a 190-case corpus cannot be silently treated as a
 complete result for a different 191-case corpus.
+
+The existing result loader rejects nonregular files and symlinks, files above
+16 MiB, more than 1,024 rows, outputs above 4,000 characters, unknown schemas,
+and rows or provenance fields with invalid types. Legacy result lists and
+fingerprint-free diagnostic grading remain readable, but cannot authorize
+promotion. Empty translations remain empty so they are graded as failures;
+`null` is not converted to the literal string `None`.
+
 ## Promotion rule
 
 For efficient iteration, follow [regression triage](HUMAN_EVALUATION.md#efficient-regression-triage)

@@ -403,6 +403,64 @@ def main() -> int:
         assert loaded["result_file_sha256"] == hashlib.sha256(result_bytes).hexdigest()
         assert evaluator.regrade_retained(original_corpus, corpus, loaded)["changed_cases"]
 
+        # Fail closed on malformed, oversized or shape-confused retained bundles.
+        bad_result_contents = (
+            (b"", "empty"),
+            (b"null", "object or list"),
+            (b"{}", "results must be a list"),
+            (b"[null]", "result row must be an object"),
+            (b'[{"case_id": 123, "translated_text": "hello"}]', "case_id must be"),
+            (b'[{"case_id": "example", "translated_text": null}]', "translated_text must be"),
+            (b'[{"case_id": "example", "translated_text": true}]', "translated_text must be"),
+            (b'[{"case_id": "example", "translated_text": "x"}, {"case_id": "example", "translated_text": "y"}]', "duplicate result case_id"),
+            (b'{"schema": "unknown", "results": []}', "unsupported result bundle schema"),
+            (b'{"corpus_fingerprint": null, "results": []}', "corpus_fingerprint must be"),
+            (b'{"source_identity": 123, "results": []}', "source_identity must be"),
+            (b'{"schema": "translateit.translation_quality.worker_run.v1", "execution_complete": false, "results": []}', "incomplete worker execution"),
+        )
+        for contents, expected_error in bad_result_contents:
+            result_file.write_bytes(contents)
+            try:
+                evaluator.load_result_bundle(result_file)
+            except ValueError as error:
+                assert expected_error in str(error), (expected_error, error)
+            else:
+                raise AssertionError(f"accepted invalid result bundle: {expected_error}")
+
+        result_file.write_text(json.dumps([
+            {"case_id": "example", "translated_text": "x" * (evaluator.MAX_RESULT_TEXT_CHARS + 1)}
+        ]), encoding="utf-8")
+        try:
+            evaluator.load_result_bundle(result_file)
+        except ValueError as error:
+            assert "translated_text exceeds size limit" in str(error)
+        else:
+            raise AssertionError("accepted oversized translated_text")
+
+        result_file.write_text(json.dumps([
+            {"case_id": str(index), "translated_text": "ok"}
+            for index in range(evaluator.MAX_RESULT_ROWS + 1)
+        ]), encoding="utf-8")
+        try:
+            evaluator.load_result_bundle(result_file)
+        except ValueError as error:
+            assert "too many result rows" in str(error)
+        else:
+            raise AssertionError("accepted excessive result rows")
+
+        with result_file.open("wb") as stream:
+            stream.truncate(evaluator.MAX_RESULT_BUNDLE_BYTES + 1)
+        try:
+            evaluator.load_result_bundle(result_file)
+        except ValueError as error:
+            assert "result bundle exceeds size limit" in str(error)
+        else:
+            raise AssertionError("accepted oversized result file")
+
+        # Empty output remains a legitimate completeness failure, not a stringified null.
+        result_file.write_text('[{"case_id": "empty", "translated_text": ""}]', encoding="utf-8")
+        assert evaluator.load_result_bundle(result_file)["results"] == {"empty": ""}
+
     stats = evaluator.corpus_stats(corpus)
     assert stats["case_count"] == validation["case_count"]
     assert stats["legacy_context_fixture_count"] == 3

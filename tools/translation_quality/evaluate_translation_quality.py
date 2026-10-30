@@ -9,6 +9,9 @@ from collections import defaultdict
 from pathlib import Path
 
 SCHEMA = "translateit.translation_quality.v1"
+MAX_RESULT_BUNDLE_BYTES = 16 * 1024 * 1024
+MAX_RESULT_ROWS = 1024
+MAX_RESULT_TEXT_CHARS = 4_000  # Current canonical worker output ceiling.
 
 
 def normalize(text: str) -> str:
@@ -285,35 +288,55 @@ def corpus_stats(corpus: dict) -> dict:
 
 
 def load_result_bundle(path: Path) -> dict:
-    raw_bytes = path.read_bytes()
+    # A captured report is untrusted input, even when it came from local tooling.
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("result bundle must be a regular non-symlink file")
+    with path.open("rb") as stream:
+        raw_bytes = stream.read(MAX_RESULT_BUNDLE_BYTES + 1)
+    if not raw_bytes:
+        raise ValueError("result bundle is empty")
+    if len(raw_bytes) > MAX_RESULT_BUNDLE_BYTES:
+        raise ValueError("result bundle exceeds size limit")
     raw = json.loads(raw_bytes.decode("utf-8"))
-    if isinstance(raw, dict) and raw.get("schema") == "translateit.translation_quality.worker_run.v1" and raw.get("execution_complete") is not True:
-        raise ValueError("incomplete worker execution cannot be used as a quality result bundle")
+    if not isinstance(raw, (list, dict)):
+        raise ValueError("result bundle must be an object or list")
+    if isinstance(raw, dict):
+        schema = raw.get("schema")
+        if schema is not None and schema != "translateit.translation_quality.worker_run.v1":
+            raise ValueError("unsupported result bundle schema")
+        if schema == "translateit.translation_quality.worker_run.v1" and raw.get("execution_complete") is not True:
+            raise ValueError("incomplete worker execution cannot be used as a quality result bundle")
+        for field in ("corpus_fingerprint", "source_identity"):
+            if field in raw and not isinstance(raw[field], str):
+                raise ValueError(f"result {field} must be a string")
     rows = raw.get("results") if isinstance(raw, dict) else raw
     if not isinstance(rows, list):
         raise ValueError("results must be a list or an object containing results")
+    if len(rows) > MAX_RESULT_ROWS:
+        raise ValueError("too many result rows")
     output: dict[str, str] = {}
     for row in rows:
-        case_id = str(row.get("case_id", "")).strip()
-        translated = str(row.get("translated_text", "")).strip()
-        if not case_id or case_id in output:
-            raise ValueError(f"invalid or duplicate result case_id: {case_id!r}")
-        output[case_id] = translated
+        if not isinstance(row, dict):
+            raise ValueError("each result row must be an object")
+        case_id = row.get("case_id")
+        translated = row.get("translated_text")
+        if not isinstance(case_id, str) or not case_id.strip():
+            raise ValueError("result case_id must be a nonempty string")
+        case_id = case_id.strip()
+        if case_id in output:
+            raise ValueError(f"duplicate result case_id: {case_id!r}")
+        if not isinstance(translated, str):
+            raise ValueError(f"{case_id}: translated_text must be a string")
+        if len(translated) > MAX_RESULT_TEXT_CHARS:
+            raise ValueError(f"{case_id}: translated_text exceeds size limit")
+        # Empty text is retained for normal FAIL grading; never synthesize "None".
+        output[case_id] = translated.strip()
     return {
         "results": output,
         "result_file_sha256": hashlib.sha256(raw_bytes).hexdigest(),
-        "corpus_fingerprint": (
-            str(raw.get("corpus_fingerprint", "")).strip()
-            if isinstance(raw, dict)
-            else ""
-        ),
-        "source_identity": (
-            str(raw.get("source_identity", "")).strip()
-            if isinstance(raw, dict)
-            else ""
-        ),
+        "corpus_fingerprint": (raw.get("corpus_fingerprint", "").strip() if isinstance(raw, dict) else ""),
+        "source_identity": (raw.get("source_identity", "").strip() if isinstance(raw, dict) else ""),
     }
-
 
 def load_results(path: Path) -> dict[str, str]:
     return load_result_bundle(path)["results"]
@@ -667,10 +690,13 @@ def main() -> int:
     if args.command == "regrade-retained":
         if args.original_corpus is None or args.results is None:
             parser.error("--original-corpus and --results required for retained regrading")
-        original = select_suite(load_corpus(args.original_corpus), args.suite)
-        bundle = load_result_bundle(args.results)
         try:
+            original = select_suite(load_corpus(args.original_corpus), args.suite)
+            bundle = load_result_bundle(args.results)
             report = regrade_retained(original, corpus, bundle)
+        except OSError:
+            print(json.dumps({"ok": False, "blocker": "retained_result_unreadable"}, indent=2))
+            return 1
         except ValueError as error:
             print(json.dumps({"ok": False, "blocker": str(error)}, ensure_ascii=False, indent=2))
             return 1
