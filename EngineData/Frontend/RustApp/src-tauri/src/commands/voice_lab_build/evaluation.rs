@@ -318,6 +318,23 @@ fn bounded_reference_sha_matches(path: &Path, digest: &str) -> bool {
     bytes.len() as u64 == info.len() && sha256_matches(&bytes, digest)
 }
 
+// A rationale is meaningful only if its comparator could have been produced
+// by the canonical Python lexicographic selector. Contradictory OPTIONAL
+// metadata is hidden; it never changes the selected actor or review gate.
+fn reference_receipt_coherent(receipt: &ReferenceSelectionReceipt) -> bool {
+    let only_eligible = matches!(receipt.criterion, VoiceLabReferenceCriterion::OnlyEligible);
+    let count_is_one = receipt.eligible_take_count == 1;
+    if only_eligible != count_is_one {
+        return false;
+    }
+    if matches!(receipt.criterion, VoiceLabReferenceCriterion::LowerRelativeEdgeEnergy)
+        && !receipt.quiet_edge_comparable
+    {
+        return false;
+    }
+    true
+}
+
 pub(super) fn reference_selection_evidence(
     paths: &VoiceLabStoragePaths,
     manifest: &EvaluationManifest,
@@ -330,6 +347,7 @@ pub(super) fn reference_selection_evidence(
         || !valid_sha256(&receipt.wav_sha256)
         || !(3_000..=10_000).contains(&receipt.duration_ms)
         || receipt.eligible_take_count == 0 || receipt.eligible_take_count > 128
+        || !reference_receipt_coherent(&receipt)
     {
         return None;
     }
@@ -354,8 +372,17 @@ pub(super) fn reference_selection_evidence(
     });
     let take = matching.next()?;
     if matching.next().is_some() { return None; }
+    // A status refresh must not read an arbitrarily large or symlinked actor
+    // manifest just to explain an OPTIONAL training reference choice.
+    let actor_path = paths.candidate_actor_dir.join("actor.json");
+    let actor_meta = fs::symlink_metadata(&actor_path).ok()?;
+    if !actor_meta.is_file() || actor_meta.file_type().is_symlink()
+        || actor_meta.len() == 0 || actor_meta.len() > MAX_DATASET_MANIFEST_BYTES
+    {
+        return None;
+    }
     let actor: serde_json::Value = serde_json::from_slice(
-        &fs::read(paths.candidate_actor_dir.join("actor.json")).ok()?
+        &fs::read(actor_path).ok()?
     ).ok()?;
     if actor.get("reference_wav_file")?.as_str()? != "reference.wav"
         || actor.get("reference_text")?.as_str()? != take.exact_text
@@ -828,6 +855,36 @@ mod tests {
         let report = manifest();
         assert!(report.reference_selection.is_none(),
             "legacy evaluation still has no reason instead of invented proof");
+    }
+
+    #[test]
+    fn optional_reference_reason_rejects_self_contradictory_rank_metadata() {
+        let mut receipt = ReferenceSelectionReceipt {
+            line_id: 1,
+            wav_file: "take_0001.wav".to_string(),
+            wav_sha256: "b".repeat(64),
+            duration_ms: 5_000,
+            eligible_take_count: 1,
+            criterion: VoiceLabReferenceCriterion::OnlyEligible,
+            quiet_edge_comparable: false,
+        };
+        assert!(reference_receipt_coherent(&receipt));
+
+        receipt.criterion = VoiceLabReferenceCriterion::LowerClippingFraction;
+        assert!(!reference_receipt_coherent(&receipt),
+            "one eligible recording cannot win a two-take comparison");
+
+        receipt.eligible_take_count = 2;
+        assert!(reference_receipt_coherent(&receipt));
+        receipt.criterion = VoiceLabReferenceCriterion::OnlyEligible;
+        assert!(!reference_receipt_coherent(&receipt),
+            "multiple eligible takes cannot claim only one source");
+
+        receipt.criterion = VoiceLabReferenceCriterion::LowerRelativeEdgeEnergy;
+        assert!(!reference_receipt_coherent(&receipt),
+            "a missing comparable quiet boundary cannot justify an edge-rank win");
+        receipt.quiet_edge_comparable = true;
+        assert!(reference_receipt_coherent(&receipt));
     }
 
     #[test]

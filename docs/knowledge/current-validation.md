@@ -21,6 +21,14 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### My Voice P1–P3 contract consolidation — 2026-10-30
+
+**Pinned source parent:** `060860d6a42eff6b312010473c86a84d7344a1f3` on `Local`. Source review traced P1 guided-take advisory intervals through Rust and TypeScript, P2 eight-sentence checkpoint comparison from Python `candidate_evidence` through the canonical Rust review, and P3 reference-selection rationale from Python's original lexicographic ranker through the frozen source WAV and actor reference. The fixed synthetic Python review SHA-256 fingerprint was independently checked for its canonical compact sorted-key form; this is not a Rust compiler/runtime result.
+
+**Demonstrated source gap and repair:** The optional P3 `reference_selection` receipt was accepted with contradictory metadata: `only_eligible` with more than one reported eligible take, a comparative criterion when only one take was reported, or `lower_relative_edge_energy` despite `quiet_edge_comparable=false`. The Rust evaluation owner now rejects these impossible combinations before rendering explanatory evidence. The optional `actor.json` read now refuses oversized, symlinked and non-regular files rather than risking an unbounded status-read merely for display. The My Voice copy labels the eligible count as training-reported; the existing selected reference WAV hash/dataset match remains required. Invalid optional explanation still does not block the eight-listen/human-approval gate or automatically select a voice.
+
+**Proof ceiling:** `STATIC_SOURCE` review of repository source and authored Rust/frontend regression contracts. No Python/Rust/TypeScript/Svelte build, unit execution, real audio recording/seek, GPU/voice quality or installed Windows test was performed. This does not independently verify recorded eligible counts or prove acoustic quality. All runtime claims remain **UNKNOWN / NOT EXECUTED** until the single authorized integration gate.
+
 ### My Voice frozen-reference selection rationale — 2026-10-30
 
 **Pinned source parent:** `1b7964fd641f3e5af232b79f028ed106b5447ff0` on `Local`. The existing pinned GPT-SoVITS V2ProPlus `select_reference` ranks only 3–10s eligible accepted recordings using a lexicographic tuple: clipping fraction, comparable relative quiet-edge energy, silence fraction, DC offset, median peer embedding cosine (tie-break), closeness to 5s and stable guided line ID. This was already the source decision; no selected-reference explanation was surfaced to My Voice Review.

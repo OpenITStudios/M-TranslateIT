@@ -168,6 +168,13 @@ test("My Voice reference rationale is emitted by the existing selector and sourc
   assert.match(evaluation, /paths\.build_dataset_dir\.join\(&receipt\.wav_file\)/);
   assert.match(evaluation, /paths\.candidate_actor_dir\.join\("reference\.wav"\)/);
   assert.match(evaluation, /bounded_reference_sha_matches\(/);
+  assert.match(evaluation, /fn reference_receipt_coherent\(/);
+  assert.match(evaluation, /only_eligible != count_is_one/);
+  assert.match(evaluation, /VoiceLabReferenceCriterion::LowerRelativeEdgeEnergy/);
+  assert.match(evaluation, /!receipt\.quiet_edge_comparable/);
+  assert.match(evaluation, /reference_receipt_coherent\(&receipt\)/);
+  assert.match(evaluation, /actor_meta\.len\(\) > MAX_DATASET_MANIFEST_BYTES/);
+  assert.match(evaluation, /optional_reference_reason_rejects_self_contradictory_rank_metadata/);
   assert.match(rustStatus, /reference_selection: Option<VoiceLabReferenceSelection>/);
   assert.match(rustStatus, /reference_selection_evidence\(&paths, review\)/);
   assert.match(bridge, /reference_selection\?: MyVoiceReferenceSelection \| null/);

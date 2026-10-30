@@ -714,7 +714,7 @@
         {#if build.reference_selection}
           <p class="mb-0 mt-2 text-sm leading-5 text-[var(--ti-text-muted)]">
             Guided line {build.reference_selection.line_id} · {formatDuration(build.reference_selection.duration_ms)} ·
-            {build.reference_selection.eligible_take_count} eligible recording(s) between 3 and 10 seconds.
+            {build.reference_selection.eligible_take_count} training-reported eligible recording(s) between 3 and 10 seconds.
           </p>
           <p class="mb-0 mt-2 text-sm leading-5">{referenceCriterionLabel(build.reference_selection.criterion)}</p>
           {#if !build.reference_selection.quiet_edge_comparable}
