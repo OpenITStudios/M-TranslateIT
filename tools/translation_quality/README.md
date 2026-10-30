@@ -222,6 +222,28 @@ The fingerprint binds captured output to the exact corpus content. A missing fin
 
 The report includes overall and per-group critical-invariant pass rates, risk-tag critical-pass rates, a lightweight character n-gram F1 regression signal, direction/category means, and per-case failures. These automated signals intentionally do not pretend to be semantic quality scores. Risk tags expose regressions across negation, numbers, entities, omission, hallucination, terminology, context and modality even when a category average looks healthy. Baseline comparison also reports per-group critical-pass-rate deltas so an average score increase cannot hide a newly weaker risk category. The n-gram score is not BLEU, COMET, or a substitute for linguistic evaluation.
 
+### Regrade captured output after a contract-only change
+
+When only corpus grading expectations change, a previous canonical-model output
+may be evaluated **without rerunning inference** only when its complete original
+corpus and current corpus emit the exact same ordered worker requests.
+Use the existing evaluator rather than copying the corpus fingerprint or
+altering the original result bundle:
+
+```powershell
+python tools/translation_quality/evaluate_translation_quality.py regrade-retained --corpus tools/translation_quality/corpus/translation_quality_v1.json --original-corpus <original-pinned-corpus.json> --results <original-complete-worker-result.json>
+```
+
+The original corpus must be recovered from the exact revision used for the
+captured result. The result bundle must declare that original corpus fingerprint,
+a source identity and a complete case set. Changed source text, direction,
+case ordering or any emitted request rejects regrading. The diagnostic report
+contains the original result file SHA-256, both corpus fingerprints, a fingerprint
+of identical requests, per-case changed grading signals and before/after counts;
+it does not copy translations or rewrite the retained file. It never yields a
+promotion-ready comparison or evidence of newly executed model inference.
+An original result from a 190-case corpus cannot be silently treated as a
+complete result for a different 191-case corpus.
 ## Promotion rule
 
 For efficient iteration, follow [regression triage](HUMAN_EVALUATION.md#efficient-regression-triage)

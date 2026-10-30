@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -337,6 +338,70 @@ def main() -> int:
     assert worsened["critical_regressions"] == [previous_case]
     assert worsened["critical_regression_details"][previous_case]["missing_concepts"] == [["previous"]]
     assert worsened["promotion_safe_on_declared_critical_invariants"] is False
+
+    # Regrade retained source-identical outputs without promoting the old run.
+    original_corpus = json.loads(json.dumps(corpus))
+    old_cases = {case["id"]: case for case in original_corpus["cases"]}
+    old_conversion = old_cases["id-en-number-002"]
+    old_conversion["preserve"] = ["12", "15"]
+    old_conversion["required_any"] = [["conversion"], ["not"]]
+    old_conversion.pop("ordered_any")
+    old_cases["en-id-number-002"].pop("ordered_any")
+    old_fingerprint = evaluator.corpus_fingerprint(original_corpus)
+    retained = {
+        "results": dict(perfect),
+        "corpus_fingerprint": old_fingerprint,
+        "source_identity": "historic-model-receipt",
+        "result_file_sha256": "a" * 64,  # Synthetic fixture, not inference proof.
+    }
+    retained["results"]["id-en-number-002"] = "The target is 12%, not 15% conversion."
+    retained["results"]["en-id-number-002"] = "Ukuran filenya 24 GB, bukan 2,4 GB."
+    report = evaluator.regrade_retained(original_corpus, corpus, retained)
+    assert report["request_equivalence"] == "EXACT_DECLARED_REQUESTS"
+    assert report["case_count"] == validation["case_count"]
+    assert report["before_quality_counts"]["PASS"] > report["after_quality_counts"]["PASS"]
+    assert {row["case_id"] for row in report["changed_cases"]} == {
+        "id-en-number-002", "en-id-number-002",
+    }
+    assert report["new_model_inference_executed"] is False
+    assert report["release_promotion_eligible"] is False
+    assert "translated_text" not in json.dumps(report)
+    assert evaluator.regrade_retained(corpus, corpus, {
+        **retained, "results": dict(perfect), "corpus_fingerprint": fingerprint,
+    })["changed_cases"] == []
+
+    altered_requests = json.loads(json.dumps(original_corpus))
+    altered_requests["cases"][0]["source"] += " Extra sentence."
+    for tampered_original, tampered_bundle, expected_error in (
+        (original_corpus, {**retained, "corpus_fingerprint": ""}, "fingerprint"),
+        (original_corpus, {**retained, "source_identity": ""}, "source identity"),
+        (original_corpus, {**retained, "result_file_sha256": ""}, "file digest"),
+        (original_corpus, {**retained, "results": {"missing": "output"}}, "result set"),
+        (altered_requests, {**retained,
+            "corpus_fingerprint": evaluator.corpus_fingerprint(altered_requests)}, "worker requests"),
+    ):
+        try:
+            evaluator.regrade_retained(tampered_original, corpus, tampered_bundle)
+        except ValueError as error:
+            assert expected_error in str(error), (expected_error, error)
+        else:
+            raise AssertionError(f"retained regrade accepted {expected_error}")
+
+    # The file digest identifies exactly the bytes parsed by the result loader.
+    with TemporaryDirectory() as folder:
+        result_file = Path(folder) / "retained.json"
+        result_bytes = json.dumps({
+            "source_identity": retained["source_identity"],
+            "corpus_fingerprint": old_fingerprint,
+            "results": [
+                {"case_id": ident, "translated_text": value}
+                for ident, value in retained["results"].items()
+            ],
+        }, ensure_ascii=False).encode("utf-8")
+        result_file.write_bytes(result_bytes)
+        loaded = evaluator.load_result_bundle(result_file)
+        assert loaded["result_file_sha256"] == hashlib.sha256(result_bytes).hexdigest()
+        assert evaluator.regrade_retained(original_corpus, corpus, loaded)["changed_cases"]
 
     stats = evaluator.corpus_stats(corpus)
     assert stats["case_count"] == validation["case_count"]

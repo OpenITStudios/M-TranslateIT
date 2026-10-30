@@ -285,7 +285,8 @@ def corpus_stats(corpus: dict) -> dict:
 
 
 def load_result_bundle(path: Path) -> dict:
-    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw_bytes = path.read_bytes()
+    raw = json.loads(raw_bytes.decode("utf-8"))
     if isinstance(raw, dict) and raw.get("schema") == "translateit.translation_quality.worker_run.v1" and raw.get("execution_complete") is not True:
         raise ValueError("incomplete worker execution cannot be used as a quality result bundle")
     rows = raw.get("results") if isinstance(raw, dict) else raw
@@ -300,6 +301,7 @@ def load_result_bundle(path: Path) -> dict:
         output[case_id] = translated
     return {
         "results": output,
+        "result_file_sha256": hashlib.sha256(raw_bytes).hexdigest(),
         "corpus_fingerprint": (
             str(raw.get("corpus_fingerprint", "")).strip()
             if isinstance(raw, dict)
@@ -536,6 +538,76 @@ def compare_reports(
     }
 
 
+def regrade_retained(original_corpus: dict, current_corpus: dict, bundle: dict) -> dict:
+    """Regrade identical requests, never certify new model execution or release."""
+    original_fingerprint = corpus_fingerprint(original_corpus)
+    current_fingerprint = corpus_fingerprint(current_corpus)
+    if not bundle.get("corpus_fingerprint") or bundle["corpus_fingerprint"] != original_fingerprint:
+        raise ValueError("retained result corpus fingerprint does not match original")
+    if not bundle.get("source_identity"):
+        raise ValueError("retained result source identity is required")
+    if not re.fullmatch(r"[0-9a-f]{64}", str(bundle.get("result_file_sha256", ""))):
+        raise ValueError("retained result file digest is required")
+    if not validate_corpus(original_corpus)["ok"] or not validate_corpus(current_corpus)["ok"]:
+        raise ValueError("retained regrade requires valid original and current corpora")
+
+    original_requests = emit_requests(original_corpus)["requests"]
+    current_requests = emit_requests(current_corpus)["requests"]
+    if original_requests != current_requests:
+        raise ValueError("retained regrade worker requests differ")
+    case_ids = [item["case_id"] for item in current_requests]
+    if len(bundle["results"]) != len(case_ids) or set(bundle["results"]) != set(case_ids):
+        raise ValueError("retained regrade requires the complete exact result set")
+
+    before = evaluate(
+        original_corpus, bundle["results"],
+        result_corpus_fingerprint=original_fingerprint,
+        source_identity=bundle["source_identity"],
+    )
+    # Preserve the ORIGINAL fingerprint when grading against changed contracts.
+    # The current-corpus evaluation therefore cannot masquerade as a fresh match.
+    after = evaluate(
+        current_corpus, bundle["results"],
+        result_corpus_fingerprint=original_fingerprint,
+        source_identity=bundle["source_identity"],
+    )
+    before_rows = {row["case_id"]: row for row in before["cases"]}
+    after_rows = {row["case_id"]: row for row in after["cases"]}
+    diagnostic_fields = (
+        "quality_status", "critical_pass", "missing_literals", "missing_concepts",
+        "forbidden_hits", "ordered_match", "char_ngram_f1",
+    )
+    changed_cases = []
+    for case_id in case_ids:
+        older = {field: before_rows[case_id][field] for field in diagnostic_fields}
+        newer = {field: after_rows[case_id][field] for field in diagnostic_fields}
+        if older != newer:
+            changed_cases.append({"case_id": case_id, "before": older, "after": newer})
+
+    request_bytes = json.dumps(
+        original_requests, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return {
+        "schema": "translateit.translation_quality.retained_regrade.v1",
+        "source_identity": bundle["source_identity"],
+        "retained_result_sha256": bundle["result_file_sha256"],
+        "original_corpus_fingerprint": original_fingerprint,
+        "current_corpus_fingerprint": current_fingerprint,
+        "identical_worker_requests_sha256": hashlib.sha256(request_bytes).hexdigest(),
+        "request_equivalence": "EXACT_DECLARED_REQUESTS",
+        "case_count": len(case_ids),
+        "before_quality_counts": before["quality_counts"],
+        "after_quality_counts": after["quality_counts"],
+        "changed_cases": changed_cases,
+        "new_model_inference_executed": False,
+        "release_promotion_eligible": False,
+        "note": (
+            "Regraded retained output against revised declared checks only. "
+            "Matching source requests do not independently authenticate historical "
+            "model execution, prove general semantic fidelity, or allow promotion."
+        ),
+    }
+
 def emit_requests(corpus: dict) -> dict:
     requests = []
     for case in corpus["cases"]:
@@ -571,9 +643,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "command",
-        choices=("validate-corpus", "stats", "emit-requests", "evaluate", "compare"),
+        choices=("validate-corpus", "stats", "emit-requests", "evaluate", "compare", "regrade-retained"),
     )
     parser.add_argument("--corpus", type=Path, required=True)
+    parser.add_argument("--original-corpus", type=Path)
     parser.add_argument("--suite", choices=("full", "fast"), default="full",
                         help="fast is diagnostic only; full is required for promotion comparison")
     parser.add_argument("--results", type=Path)
@@ -590,6 +663,18 @@ def main() -> int:
         return 0
     if args.command == "emit-requests":
         print(json.dumps(emit_requests(corpus), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "regrade-retained":
+        if args.original_corpus is None or args.results is None:
+            parser.error("--original-corpus and --results required for retained regrading")
+        original = select_suite(load_corpus(args.original_corpus), args.suite)
+        bundle = load_result_bundle(args.results)
+        try:
+            report = regrade_retained(original, corpus, bundle)
+        except ValueError as error:
+            print(json.dumps({"ok": False, "blocker": str(error)}, ensure_ascii=False, indent=2))
+            return 1
+        print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
     if args.command == "compare":
         if args.baseline is None or args.candidate is None:
