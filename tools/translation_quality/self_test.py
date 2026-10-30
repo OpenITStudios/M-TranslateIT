@@ -263,6 +263,60 @@ def main() -> int:
         for translated in altered_values:
             assert not evaluator.invariant_result(cases_by_id[case_id], translated)["critical_pass"], (case_id, translated)
 
+    # Complete numeric magnitudes, dates and start/end order matter more than
+    # isolated tokens; faithful punctuation/word-order variants remain accepted.
+    complete_numeric_cases = (
+        (
+            "id-en-num-014",
+            ("The discount is 7.5% for 40 tickets.",
+             "For 40 tickets, the discount is 7,5%."),
+            ("The discount is 75% for 40 tickets.",
+             "The discount is 7.5 for 40 tickets.",
+             "The discount is -7.5% for 40 tickets."),
+        ),
+        (
+            "en-id-num-010",
+            ("Batas anggarannya adalah USD 18.500.",
+             "Anggaran maksimal adalah 18500 USD."),
+            ("Batas anggarannya adalah USD 18.",
+             "Batas anggarannya adalah USD 18.500,5.",
+             "Anggarannya USD 18.500."),
+        ),
+        (
+            "id-en-date-001",
+            ("The server will be offline on 21 September 2026 at 19:30 WIB.",
+             "At 19.30 WIB on 21 September 2026, the server will shut down."),
+            ("The server will be offline on 21 September 2026 at 19:31 WIB.",
+             "The server will be offline on 21 October 2026 at 19:30 WIB."),
+        ),
+        (
+            "en-id-date-001",
+            ("Panggilan dimulai pukul 08:45 pada 3 Oktober 2026.",
+             "Pada 3 Oktober 2026, panggilan dimulai 8.45."),
+            ("Panggilan dimulai pukul 08:46 pada 3 Oktober 2026.",
+             "Panggilan dimulai pukul 08:45 pada 3 November 2026."),
+        ),
+        (
+            "id-en-time-002",
+            ("It starts at 08:45 and finishes around 10:15.",
+             "It starts at 8.45 and ends about 10.15."),
+            ("It starts at 10:15 and finishes around 08:45.",
+             "It starts at 08:40 and finishes around 10:15."),
+        ),
+        (
+            "en-id-num-012",
+            ("Batas waktunya adalah 28 September 2026 pukul 17:30 WIB.",
+             "Pada 17.30 WIB, 28 September 2026 adalah batas waktu."),
+            ("Batas waktunya adalah 28 September 2026 pukul 17:31 WIB.",
+             "Batas waktunya adalah 28 Oktober 2026 pukul 17:30 WIB."),
+        ),
+    )
+    for case_id, valid_outputs, altered_outputs in complete_numeric_cases:
+        for translated in valid_outputs:
+            assert evaluator.invariant_result(cases_by_id[case_id], translated)["critical_pass"], (case_id, translated)
+        for translated in altered_outputs:
+            assert not evaluator.invariant_result(cases_by_id[case_id], translated)["critical_pass"], (case_id, translated)
+
     incoming_correction = next(case for case in corpus["cases"] if case["id"] == "en-id-correction-001")
     for valid in ("Saya bilang lima belas, bukan lima puluh.", "Bukan lima puluh, melainkan lima belas."):
         assert evaluator.invariant_result(incoming_correction, valid)["critical_pass"], valid
