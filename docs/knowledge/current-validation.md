@@ -21,6 +21,14 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### My Voice PendingDraft replay identity and WAV read bound — 2026-10-30
+
+**Pinned source parent:** `337d8bdb7b49e17ddc32d1f95244de167110a4c0` on `Local`. The existing Rust `current_state()` clones its `GuidedTakeReview` on every state read. Svelte used JavaScript object-identity inequality, so an unchanged refresh could stop active Replay. Delayed audio responses compared only the guided line. The native replay command used `fs::read` after a size metadata check, which did not cap actual bytes if a local WAV grew during the read.
+
+**Bounded source change:** One monotonic, overflow-checked, process-local ID is assigned by the existing Rust PendingDraft owner when Stop or explicit Recovery publishes a new pending take. Review metadata and ID are read under the same existing mutex and returned together; unchanged refreshes keep the same ID. Existing Tauri Replay receives an expected ID, refuses a wrong/null ID for pending audio, and treats null as accepted-take request only. Svelte uses the ID instead of JSON object identity, fences out-of-order status replies and stale audio responses, and preserves its two-player playback cancellation. Replay now reads at most 8 MiB plus one byte from the opened handle, checks metadata/actual lengths, and retains existing recovered-draft SHA-256 verification of the returned bytes. This transient review ID is **not** an audio hash, speaker authorization, or persistent security credential. No new audio service, database, model, WAV mutation or approval path.
+
+**Proof ceiling:** `STATIC_SOURCE` review of current Rust/Tauri, Svelte/TypeScript, source regression contracts and the existing A9 acceptance text. Rust/Svelte typecheck, frontend/Rust/Python tests, replay playback, GPU training and native Windows Meeting were **NOT EXECUTED**. Same-length OS-level file substitution, native audio quality and actual UI behavior remain **UNKNOWN**.
+
 ### My Voice audio playback ownership and async handoff — 2026-10-30
 
 **Pinned source parent:** `740f1bc0202601d770c60711e70519b42a569edc` on `Local`. My Voice has one parent Audio element for Built-in, Saved and guided Replay, and an independently mounted `MyVoiceBuild.svelte` Audio element for Quick Preview and eight held-out evaluation samples. The parent previously called only its own `stopReplay()` before microphone capture or pane changes, leaving child playback active. Parent Built-in/Saved asynchronous WAV loads also lacked the existing request-revision check used by guided Replay, so a late response could start playback after mic ownership changed.

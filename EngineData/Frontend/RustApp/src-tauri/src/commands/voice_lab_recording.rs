@@ -1,6 +1,8 @@
 use serde::Serialize;
 use std::fs;
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use crate::engine::audio::guided_take::{
@@ -33,6 +35,33 @@ pub use storage_transaction::OrphanedGuidedDraft;
 
 const MAX_REPLAY_WAV_BYTES: u64 = 8 * 1024 * 1024;
 
+// Reject untrusted file size before allocation and cap actual opened-file
+// reads, even if the WAV grows after preflight. This is read-only Replay.
+fn read_bounded_replay_wav(path: &Path) -> Result<Vec<u8>, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|_| "voice_lab:take_audio_missing".to_string())?;
+    if !metadata.file_type().is_file() || metadata.len() < 44
+        || metadata.len() > MAX_REPLAY_WAV_BYTES
+    {
+        return Err("voice_lab:take_audio_invalid".to_string());
+    }
+    let file = fs::File::open(path)
+        .map_err(|_| "voice_lab:take_audio_read_failed".to_string())?;
+    let opened = file.metadata()
+        .map_err(|_| "voice_lab:take_audio_read_failed".to_string())?;
+    if !opened.is_file() || opened.len() != metadata.len() {
+        return Err("voice_lab:take_audio_changed_during_read".to_string());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_REPLAY_WAV_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|_| "voice_lab:take_audio_read_failed".to_string())?;
+    if bytes.len() as u64 != metadata.len() {
+        return Err("voice_lab:take_audio_changed_during_read".to_string());
+    }
+    Ok(bytes)
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct GuidedLineStatus {
     pub line_id: u32,
@@ -47,6 +76,8 @@ pub struct GuidedLineStatus {
 pub struct GuidedRecordingState {
     pub recording_line_id: Option<u32>,
     pub pending_review: Option<GuidedTakeReview>,
+    // A process-local PendingDraft ID, not consent or an audio fingerprint.
+    pub pending_review_id: Option<String>,
     pub orphaned_drafts: Vec<OrphanedGuidedDraft>,
     pub draft_recovery_error: Option<String>,
     pub lines: Vec<GuidedLineStatus>,
@@ -65,12 +96,23 @@ struct PendingDraft {
     path: PathBuf,
     native_rate_path: PathBuf,
     review: GuidedTakeReview,
+    review_id: String,
     // None for a freshly captured review whose files are owned by this
     // transaction; Some binds a recovered review to exact verified WAV bytes.
     recovered_identity: Option<RecoveredDraftIdentity>,
 }
 
 static PENDING_DRAFT: OnceLock<Mutex<Option<PendingDraft>>> = OnceLock::new();
+static NEXT_PENDING_REVIEW_ID: AtomicU64 = AtomicU64::new(0);
+
+fn next_pending_review_id() -> Result<String, String> {
+    // Only routing metadata. No persistent owner ledger or new security token.
+    // Never wrap and reuse a review ID during one running app process.
+    NEXT_PENDING_REVIEW_ID
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| value.checked_add(1))
+        .map(|value| format!("draft-{}", value + 1))
+        .map_err(|_| "voice_lab:pending_review_id_exhausted".to_string())
+}
 
 fn draft_store() -> &'static Mutex<Option<PendingDraft>> {
     PENDING_DRAFT.get_or_init(|| Mutex::new(None))
@@ -126,10 +168,15 @@ fn accepted_native_rate_path(line_id: u32) -> PathBuf {
 }
 
 fn current_state() -> GuidedRecordingState {
-    let pending_review = draft_store()
-        .lock()
-        .ok()
-        .and_then(|guard| guard.as_ref().map(|draft| draft.review.clone()));
+    // A status refresh creates a new JSON object; its pending owner ID must
+    // remain stable. Capture review and ID together under the same lock.
+    let (pending_review, pending_review_id) = match draft_store().lock() {
+        Ok(guard) => match guard.as_ref() {
+            Some(draft) => (Some(draft.review.clone()), Some(draft.review_id.clone())),
+            None => (None, None),
+        },
+        Err(_) => (None, None),
+    };
     // Status only discovers generated Draft filenames; it never promotes or
     // deletes audio from an interrupted session. Recovery revalidates both
     // WAVs after explicit user action.
@@ -145,6 +192,7 @@ fn current_state() -> GuidedRecordingState {
     GuidedRecordingState {
         recording_line_id: active_guided_take_line_id(),
         pending_review,
+        pending_review_id,
         orphaned_drafts,
         draft_recovery_error,
         lines: guided_lines()
@@ -407,6 +455,13 @@ pub fn stop_voice_lab_guided_take(line_id: u32) -> GuidedRecordingActionResult {
     }
     let draft = draft_path(line_id);
     let native_rate_draft = draft_native_rate_path(line_id);
+    let review_id = match next_pending_review_id() {
+        Ok(id) => id,
+        Err(error) => {
+            drop(guard);
+            return result(false, "draft_state_unavailable", error);
+        }
+    };
     // Both draft WAVs must be new, owned by this Stop and complete before
     // the review becomes visible. A failed second write may remove only the
     // native WAV successfully created by this exact attempt.
@@ -434,6 +489,7 @@ pub fn stop_voice_lab_guided_take(line_id: u32) -> GuidedRecordingActionResult {
         path: draft,
         native_rate_path: native_rate_draft,
         review,
+        review_id,
         recovered_identity: None,
     });
     drop(guard);
@@ -518,11 +574,19 @@ pub fn recover_voice_lab_guided_take(
     }
     // Recovery only restores the existing unaccepted review owner.
     // It never changes accepted recordings, archived samples or models.
+    let review_id = match next_pending_review_id() {
+        Ok(id) => id,
+        Err(error) => {
+            drop(guard);
+            return result(false, "draft_state_unavailable", error);
+        }
+    };
     *guard = Some(PendingDraft {
         line_id,
         path: review_path,
         native_rate_path: native_path,
         review,
+        review_id,
         recovered_identity: Some(recovered_identity),
     });
     drop(guard);
@@ -790,7 +854,10 @@ pub fn protect_voice_lab_legacy_recordings() -> Result<LegacyMigrationResult, St
 }
 
 #[tauri::command]
-pub fn get_voice_lab_guided_take_audio(line_id: u32) -> Result<tauri::ipc::Response, String> {
+pub fn get_voice_lab_guided_take_audio(
+    line_id: u32,
+    expected_review_id: Option<String>,
+) -> Result<tauri::ipc::Response, String> {
     if guided_text(line_id).is_none() {
         return Err("voice_lab:invalid_guided_line".to_string());
     }
@@ -802,6 +869,11 @@ pub fn get_voice_lab_guided_take_audio(line_id: u32) -> Result<tauri::ipc::Respo
         .lock()
         .map_err(|_| "voice_lab:guided_draft_state_unavailable".to_string())?;
     let pending = guard.as_ref().filter(|draft| draft.line_id == line_id);
+    // Null requests the accepted take; a live PendingDraft requires exactly
+    // its current ID. Reject stale requests before opening any audio file.
+    if pending.map(|draft| draft.review_id.as_str()) != expected_review_id.as_deref() {
+        return Err("voice_lab:replay_review_changed".to_string());
+    }
     if let Some(draft) = pending {
         if let Some(identity) = draft.recovered_identity.as_ref() {
             verify_recovered_draft_identity(
@@ -813,19 +885,7 @@ pub fn get_voice_lab_guided_take_audio(line_id: u32) -> Result<tauri::ipc::Respo
     }
     let path = pending.map(|draft| draft.path.clone())
         .unwrap_or_else(|| accepted_path(line_id));
-    let metadata = fs::symlink_metadata(&path)
-        .map_err(|_| "voice_lab:take_audio_missing".to_string())?;
-    if !metadata.file_type().is_file()
-        || metadata.len() < 44
-        || metadata.len() > MAX_REPLAY_WAV_BYTES
-    {
-        return Err("voice_lab:take_audio_invalid".to_string());
-    }
-    let bytes = fs::read(&path)
-        .map_err(|_| "voice_lab:take_audio_read_failed".to_string())?;
-    if bytes.len() as u64 != metadata.len() {
-        return Err("voice_lab:take_audio_changed_during_read".to_string());
-    }
+    let bytes = read_bounded_replay_wav(&path)?;
     if let Some(identity) = pending.and_then(|draft| draft.recovered_identity.as_ref()) {
         if !recovered_review_matches_bytes(identity, &bytes) {
             return Err("voice_lab:recovery:replay_bytes_changed".to_string());
@@ -837,7 +897,33 @@ pub fn get_voice_lab_guided_take_audio(line_id: u32) -> Result<tauri::ipc::Respo
 
 #[cfg(test)]
 mod review_advice_tests {
-    use super::unusually_short_for_line;
+    use super::{next_pending_review_id, read_bounded_replay_wav, unusually_short_for_line, MAX_REPLAY_WAV_BYTES};
+    use std::fs;
+
+    #[test]
+    fn pending_review_id_changes_for_each_published_draft() {
+        let first = next_pending_review_id().expect("first review");
+        let second = next_pending_review_id().expect("second review");
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn replay_read_is_bounded_before_and_during_file_open() {
+        let root = std::env::temp_dir().join(format!(
+            "translateit-replay-bounded-{}-{:?}",
+            std::process::id(), std::thread::current().id(),
+        ));
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join("take_0001.wav");
+        fs::write(&path, vec![0_u8; 44]).expect("valid-length fixture");
+        assert_eq!(read_bounded_replay_wav(&path).expect("bounded bytes").len(), 44);
+        fs::write(&path, vec![0_u8; 43]).expect("short fixture");
+        assert!(read_bounded_replay_wav(&path).is_err());
+        fs::write(&path, vec![0_u8; MAX_REPLAY_WAV_BYTES as usize + 1])
+            .expect("oversized fixture");
+        assert!(read_bounded_replay_wav(&path).is_err());
+        fs::remove_dir_all(root).expect("fixture cleanup");
+    }
 
     #[test]
     fn short_take_hint_is_conservative_and_does_not_require_asr() {

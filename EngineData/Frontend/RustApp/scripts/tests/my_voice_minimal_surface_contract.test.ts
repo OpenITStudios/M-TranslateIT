@@ -153,7 +153,8 @@ test("P1 Replay stops before microphone capture and rejects a changed review own
   const state = page.slice(page.indexOf("function applyState(next: GuidedRecordingState)"),
     page.indexOf("async function checkMicrophone()"));
   assert.match(state, /recordingState\.recording_line_id !== next\.recording_line_id/);
-  assert.match(state, /recordingState\.pending_review !== next\.pending_review/);
+  assert.match(state, /recordingState\.pending_review_id !== next\.pending_review_id/);
+  assert.doesNotMatch(state, /recordingState\.pending_review !== next\.pending_review/);
   const start = page.slice(page.indexOf("async function startRecording()"),
     page.indexOf("async function stopRecording()"));
   assert.ok(start.indexOf("stopReplay();") < start.indexOf("myVoiceApi.startTake("));
@@ -161,6 +162,23 @@ test("P1 Replay stops before microphone capture and rejects a changed review own
     page.indexOf("onMount(() =>"));
   assert.match(replay, /recordingStatusUnknown \|\| recordingState\.recording_line_id !== null/);
   assert.match(replay, /requestRevision !== replayRevision/);
+  assert.match(replay, /const expectedReviewId = pendingForThisLine \? recordingState\.pending_review_id : null/);
+  assert.match(replay, /myVoiceApi\.getTakeAudio\(lineId, expectedReviewId\)/);
+  assert.match(replay, /recordingState\.pending_review_id !== expectedReviewId/);
+  assert.match(voiceApi, /pending_review_id: string \| null/);
+  assert.match(voiceApi, /\{ lineId, expectedReviewId \}/);
+  assert.match(recording, /pending_review_id: Option<String>/);
+  assert.match(recording, /fn next_pending_review_id\(\)/);
+  assert.match(recording, /pending_review_id,\s*orphaned_drafts/);
+  assert.match(recording, /expected_review_id: Option<String>/);
+  assert.match(recording, /voice_lab:replay_review_changed/);
+  assert.match(recording, /pending\.map\(\|draft\| draft\.review_id\.as_str\(\)\) != expected_review_id\.as_deref\(\)/);
+  assert.match(recording, /read_bounded_replay_wav\(&path\)\?/);
+  assert.match(recording, /file\.take\(MAX_REPLAY_WAV_BYTES\.saturating_add\(1\)\)/);
+  assert.match(recording, /fn replay_read_is_bounded_before_and_during_file_open\(\)/);
+  assert.match(recording, /fn pending_review_id_changes_for_each_published_draft\(\)/);
+  assert.match(page, /const requestVersion = \+\+recordingReadVersion/);
+  assert.match(page, /requestVersion !== recordingReadVersion/);
 });
 
 test("My Voice audio owners hand off playback before record and ignore stale previews", () => {

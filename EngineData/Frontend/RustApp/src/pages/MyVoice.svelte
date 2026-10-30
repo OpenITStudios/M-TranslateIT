@@ -34,7 +34,7 @@
   } = $props();
 
   let recordingState = $state<GuidedRecordingState>({
-    recording_line_id: null, pending_review: null, orphaned_drafts: [],
+    recording_line_id: null, pending_review: null, pending_review_id: null, orphaned_drafts: [],
     draft_recovery_error: null, lines: [],
   });
   let selectedLineId = $state<number | null>(null);
@@ -44,6 +44,8 @@
   let loadingReplay = $state(false);
   // A pending WAV fetch cannot outlive Stop/Retry/Save/navigation of its owner.
   let replayRevision = 0;
+  // A stale read-only getState() must not overwrite a newer recording action.
+  let recordingReadVersion = 0;
   let buildRefreshRevision = $state(0);
   // Svelte 5 bind:this exposes only MyVoiceBuild's explicit stopPlayback().
   // No new playback service/controller is introduced.
@@ -514,15 +516,15 @@
 
   function applyState(next: GuidedRecordingState): void {
     if (disposed) return;
-    // A newly acquired microphone invalidates BOTH player owners.
+    // getState creates fresh JSON every time. The Rust PendingDraft ID is
+    // stable across harmless reads and changes on Stop/Recovery, even if the
+    // new audio has the same line and duration as the previous pending take.
     if (next.recording_line_id !== null
       && recordingState.recording_line_id !== next.recording_line_id) {
       stopAllMyVoiceAudio();
     } else if ((loadingReplay || replaying) &&
       (recordingState.recording_line_id !== next.recording_line_id ||
-       recordingState.pending_review !== next.pending_review)) {
-      // Preserve the conservative P1 pending-review guard until the verified
-      // WAV identity can be exposed without relying on object reference.
+       recordingState.pending_review_id !== next.pending_review_id)) {
       stopReplay();
     }
     recordingState = next;
@@ -669,6 +671,7 @@
     acceptedMayHaveChanged = false,
   ): Promise<void> {
     if (disposed) return;
+    recordingReadVersion += 1; // Action result is newer than pending reads.
     // Any recording mutation makes a previously inspected filesystem
     // snapshot stale. Never retain its 'verified' label after Save/Retry.
     acceptedFileInspection = null;
@@ -686,9 +689,10 @@
   }
 
   async function refresh(): Promise<void> {
+    const requestVersion = ++recordingReadVersion;
     try {
       const next = await myVoiceApi.getState();
-      if (disposed) return;
+      if (disposed || requestVersion !== recordingReadVersion) return;
       if (!next) {
         recordingStatusUnknown = true;
         stopAllMyVoiceAudio();
@@ -699,7 +703,7 @@
       recordingStatusUnknown = false;
       applyState(next);
     } catch {
-      if (!disposed) {
+      if (!disposed && requestVersion === recordingReadVersion) {
         recordingStatusUnknown = true;
         stopAllMyVoiceAudio();
         onRecordingChange(true);
@@ -922,18 +926,21 @@
       || selectedLineId === null || (replaying && startMs === null)) return;
     const lineId = selectedLineId;
     const review = recordingState.pending_review;
-    // Only a verified pending review may seek; never apply old timestamps to
-    // the accepted take sharing this guided line's ID.
-    if (startMs !== null && (!review || review.line_id !== lineId
+    const pendingForThisLine = review?.line_id === lineId;
+    const expectedReviewId = pendingForThisLine ? recordingState.pending_review_id : null;
+    // A pending draft requires its Rust owner ID; null is for accepted takes.
+    // Never seek to an interval from an unverified or changed pending review.
+    if (pendingForThisLine && !expectedReviewId) return;
+    if (startMs !== null && (!review || !pendingForThisLine || !expectedReviewId
       || !Number.isInteger(startMs) || startMs < 0 || startMs >= review.duration_ms)) return;
     stopReplay();
     const requestRevision = replayRevision;
     loadingReplay = true;
     try {
-      const bytes = await myVoiceApi.getTakeAudio(lineId);
+      const bytes = await myVoiceApi.getTakeAudio(lineId, expectedReviewId);
       if (disposed || requestRevision !== replayRevision || selectedLineId !== lineId
         || recordingStatusUnknown || recordingState.recording_line_id !== null
-        || recordingState.pending_review?.line_id !== (review?.line_id ?? undefined)) return;
+        || recordingState.pending_review_id !== expectedReviewId) return;
       if (!bytes) {
         onNotice("This recording isn't available for replay yet.");
         return;
@@ -974,6 +981,7 @@
     return () => {
       disposed = true;
       selectedVoiceReadVersion += 1;
+      recordingReadVersion += 1;
       stopAllMyVoiceAudio();
       onRecordingChange(false);
     };

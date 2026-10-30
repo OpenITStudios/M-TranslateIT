@@ -33,6 +33,8 @@ export type OrphanedGuidedDraft = {
 export type GuidedRecordingState = {
   recording_line_id: number | null;
   pending_review: GuidedTakeReview | null;
+  // Process-local Rust PendingDraft owner ID, not proof of audio integrity.
+  pending_review_id: string | null;
   orphaned_drafts: OrphanedGuidedDraft[];
   draft_recovery_error: string | null;
   lines: GuidedLineStatus[];
@@ -189,7 +191,7 @@ export const myVoiceApi = {
     return action ? normalizeAction(action) : unavailableAction("My Voice could not save the accepted take.");
   },
 
-  async getTakeAudio(lineId: number): Promise<ArrayBuffer | null> {
-    return runCommand<ArrayBuffer>("get_voice_lab_guided_take_audio", { lineId });
+  async getTakeAudio(lineId: number, expectedReviewId: string | null): Promise<ArrayBuffer | null> {
+    return runCommand<ArrayBuffer>("get_voice_lab_guided_take_audio", { lineId, expectedReviewId });
   },
 };
