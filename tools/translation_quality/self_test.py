@@ -221,6 +221,8 @@ def main() -> int:
              "Bukan 19132, gunakan port 19123."),
         ),
     )
+    # In decimal-comma notation 2,750 kg equals 2,75 kg. A lexical
+    # REVIEW for that faithful precision variant is not a meaning error.
     numeric_values = (
         (
             "en-id-number-001",
@@ -239,7 +241,7 @@ def main() -> int:
         (
             "en-id-num-014",
             ("Paket itu memiliki berat 2.75 kg.",),
-            ("Paket itu beratnya 2,750 kg.",
+            ("Paket itu beratnya 2,76 kg.",
              "Paket itu beratnya 12,75 kg.",
              "Paket itu beratnya -2,75 kg."),
         ),
