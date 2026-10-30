@@ -182,7 +182,6 @@ def main() -> int:
     # isolated numerals and negation words alone.
     conversion = cases_by_id["id-en-number-002"]
     for faithful in (
-        "The conversion target is 12.5%, not 15%.",
         "The conversion target is 12,5%, not 15%.",
         "Not 15%, but 12.5% is the conversion target.",
     ):
@@ -196,7 +195,6 @@ def main() -> int:
 
     file_size = cases_by_id["en-id-number-002"]
     for faithful in (
-        "Ukuran filenya 2,4 GB, bukan 24 GB.",
         "Ukuran filenya 2.4 GB, bukan 24 GB.",
         "Bukan 24 GB, melainkan 2,4 GB ukuran filenya.",
     ):
@@ -212,72 +210,53 @@ def main() -> int:
     correction_roles = (
         (
             "id-en-num-011",
-            ("The correct version is 2.10.7, not 2.1.7.",
-             "Not 2.1.7; the correct version is 2.10.7."),
+            ("Not 2.1.7; the correct version is 2.10.7.",),
             ("The correct version is 2.1.7, not 2.10.7.",
              "Not 2.10.7; the correct version is 2.1.7."),
         ),
         (
             "en-id-num-011",
-            ("Gunakan port 19132, bukan 19123.",
-             "Bukan 19123, gunakan port 19132."),
+            ("Bukan 19123, gunakan port 19132.",),
             ("Gunakan port 19123, bukan 19132.",
              "Bukan 19132, gunakan port 19123."),
         ),
     )
-    for case_id, faithful_outputs, reversed_outputs in correction_roles:
-        for translated in faithful_outputs:
-            assert evaluator.invariant_result(cases_by_id[case_id], translated)["critical_pass"], (case_id, translated)
-        for translated in reversed_outputs:
-            assert not evaluator.invariant_result(cases_by_id[case_id], translated)["critical_pass"], (case_id, translated)
-
     numeric_values = (
         (
             "en-id-number-001",
-            ("Batas unggahnya adalah 250 MB per file.",
-             "Batas per file adalah MB 250."),
+            ("Batas per file adalah MB 250.",),
             ("Batas unggahnya adalah 250.5 MB per file.",
              "Batas unggahnya adalah 250,5 MB per file.",
              "Batas unggahnya adalah -250 MB per file."),
         ),
         (
             "id-en-num-010",
-            ("The total is 1,250 units with a tolerance of ±2%.",
-             "At ±2% tolerance, the total is 1250 units."),
+            ("At ±2% tolerance, the total is 1250 units.",),
             ("The total is 1,250.5 units with a tolerance of ±2%.",
              "The total is 1,2500 units with a tolerance of ±2%.",
              "The total is -1250 units with a tolerance of ±2%."),
         ),
         (
             "en-id-num-014",
-            ("Paket itu beratnya 2,75 kg.",
-             "Paket itu memiliki berat 2.75 kg."),
+            ("Paket itu memiliki berat 2.75 kg.",),
             ("Paket itu beratnya 2,750 kg.",
              "Paket itu beratnya 12,75 kg.",
              "Paket itu beratnya -2,75 kg."),
         ),
     )
-    for case_id, faithful_outputs, altered_values in numeric_values:
-        for translated in faithful_outputs:
-            assert evaluator.invariant_result(cases_by_id[case_id], translated)["critical_pass"], (case_id, translated)
-        for translated in altered_values:
-            assert not evaluator.invariant_result(cases_by_id[case_id], translated)["critical_pass"], (case_id, translated)
-
     # Complete numeric magnitudes, dates and start/end order matter more than
     # isolated tokens; faithful punctuation/word-order variants remain accepted.
     complete_numeric_cases = (
         (
             "id-en-num-014",
-            ("The discount is 7.5% for 40 tickets.",
-             "For 40 tickets, the discount is 7,5%."),
+            ("For 40 tickets, the discount is 7,5%.",),
             ("The discount is 75% for 40 tickets.",
              "The discount is 7.5 for 40 tickets.",
              "The discount is -7.5% for 40 tickets."),
         ),
         (
             "en-id-num-010",
-            ("Batas anggarannya adalah USD 18.500.",
-             "Anggaran maksimal adalah 18500 USD."),
+            ("Anggaran maksimal adalah 18500 USD.",),
             ("Batas anggarannya adalah USD 18.",
              "Batas anggarannya adalah USD 18.500,5.",
              "Anggarannya USD 18.500."),
@@ -291,59 +270,51 @@ def main() -> int:
         ),
         (
             "en-id-date-001",
-            ("Panggilan dimulai pukul 08:45 pada 3 Oktober 2026.",
-             "Pada 3 Oktober 2026, panggilan dimulai 8.45."),
+            ("Pada 3 Oktober 2026, panggilan dimulai 8.45.",),
             ("Panggilan dimulai pukul 08:46 pada 3 Oktober 2026.",
              "Panggilan dimulai pukul 08:45 pada 3 November 2026."),
         ),
         (
             "id-en-time-002",
-            ("It starts at 08:45 and finishes around 10:15.",
-             "It starts at 8.45 and ends about 10.15."),
+            ("It starts at 8.45 and ends about 10.15.",),
             ("It starts at 10:15 and finishes around 08:45.",
              "It starts at 08:40 and finishes around 10:15."),
         ),
         (
             "en-id-num-012",
-            ("Batas waktunya adalah 28 September 2026 pukul 17:30 WIB.",
-             "Pada 17.30 WIB, 28 September 2026 adalah batas waktu."),
+            ("Pada 17.30 WIB, 28 September 2026 adalah batas waktu.",),
             ("Batas waktunya adalah 28 September 2026 pukul 17:31 WIB.",
              "Batas waktunya adalah 28 Oktober 2026 pukul 17:30 WIB."),
         ),
     )
-    for case_id, valid_outputs, altered_outputs in complete_numeric_cases:
-        for translated in valid_outputs:
-            assert evaluator.invariant_result(cases_by_id[case_id], translated)["critical_pass"], (case_id, translated)
-        for translated in altered_outputs:
-            assert not evaluator.invariant_result(cases_by_id[case_id], translated)["critical_pass"], (case_id, translated)
-
     # Bind quantifier magnitude and negated obligation to their actual clause.
     quantifier_controls = (
         ("id-en-quant-012",
-         ("At least two reviewers must agree.",
-          "Two or more reviewers have to agree."),
+         ("Two or more reviewers have to agree.",),
          ("At least one reviewer must agree; two reviewers are informed.",
           "At most two reviewers must agree.",
           "At least two reviewers must not agree.",
           "At least two reviewers need to disagree.",
           "At least two reviewers do not have to agree.")),
         ("en-id-quant-011",
-         ("Paling banyak lima item boleh tetap pending.",
-          "Maksimal 5 item masih tertunda.",
+         ("Maksimal 5 item masih tertunda.",
           "Item pending maksimal 5."),
          ("Paling sedikit lima item boleh pending.",
           "Maksimal enam item pending; lima item diproses.",
           "Maksimal lima belas item pending.",
           "Item pending maksimal lima belas.")),
         ("id-en-modality-workplace-001",
-         ("They said it could be finished by Friday, not that it had to be finished by Friday.",
-          "Not that it had to be finished by Friday, but that it could be finished by Friday.",
+         ("Not that it had to be finished by Friday, but that it could be finished by Friday.",
           "They said it could be finished by Friday, not that it must be finished by Friday."),
          ("They said it had to be finished by Friday, not that it could be finished by Friday.",
           "They said it could be finished Friday, and it had to be finished Friday.",
           "They said it could be finished by Friday, not that it must be finished by Friday, but it must be finished by Friday.")),
     )
-    for case_id, faithful, changed_meaning in quantifier_controls:
+    # First references are covered by the full perfect-result evaluation above.
+    # Exercise distinct faithful variants and meaning-changing controls once.
+    for case_id, faithful, changed_meaning in (
+        *correction_roles, *numeric_values, *complete_numeric_cases, *quantifier_controls
+    ):
         for translated in faithful:
             assert evaluator.invariant_result(cases_by_id[case_id], translated)["critical_pass"], (case_id, translated)
         for translated in changed_meaning:
@@ -358,7 +329,7 @@ def main() -> int:
     assert reverse_spelled["ordered_match"] is False
 
     incoming_correction = next(case for case in corpus["cases"] if case["id"] == "en-id-correction-001")
-    for valid in ("Saya bilang lima belas, bukan lima puluh.", "Bukan lima puluh, melainkan lima belas."):
+    for valid in ("Bukan lima puluh, melainkan lima belas.",):
         assert evaluator.invariant_result(incoming_correction, valid)["critical_pass"], valid
     for reversed_meaning in ("Saya bilang lima puluh, bukan lima belas.", "Bukan lima belas, melainkan lima puluh."):
         assert not evaluator.invariant_result(incoming_correction, reversed_meaning)["critical_pass"], reversed_meaning
@@ -367,7 +338,7 @@ def main() -> int:
     assert not evaluator.invariant_result(spoken_number, "The correct number is one hundred and fifty, not one hundred and twenty-five.")["critical_pass"]
 
     correction = next(case for case in corpus["cases"] if case["id"] == "id-en-correction-001")
-    for valid in ("I mean Thursday, not Tuesday.", "Not Tuesday, but Thursday."):
+    for valid in ("Not Tuesday, but Thursday.",):
         assert evaluator.invariant_result(correction, valid)["critical_pass"], valid
     for reversed_meaning in ("I mean Tuesday, not Thursday.", "Not Thursday, but Tuesday."):
         assert not evaluator.invariant_result(correction, reversed_meaning)["critical_pass"], reversed_meaning
