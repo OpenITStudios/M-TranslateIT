@@ -21,6 +21,14 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### P1/P2 reviewed WAV identity and audio lifecycle repair — 2026-10-30
+
+**Pinned source parent:** `5027e3575b5b9c2542488333f83b085c8556bf09`. The Python worker computes `review_id` as a SHA-256 of compact sorted-key JSON containing engine revision, selection method, candidate ID and eight ordered `[line_id, WAV sha256]` pairs. The Rust reader previously checked the ID's hex shape but did not recompute its binding. Modified selected WAV receipts with a retained ID could therefore reuse earlier eight-listen UI state. P1 Start could also begin microphone capture while saved Replay audio was still playing or loading.
+
+**Source repair:** The existing Rust evaluation owner now checks the exact sorted-key SHA-256 fingerprint before admitting Review, using the same Windows CNG digest owner as bounded WAV verification. A fixed cross-language synthetic Python digest fixture tests changed hashes, order and candidate ID. The P1 UI stops pending/playing audio before capture, invalidates Replay when recording ownership or Pending Review changes and closes audio on unknown recording status. The existing P2 horizontal comparison table has keyboard focus and a descriptive accessible region. Training, selected WAV contents, model choice, human eight-listen/manual approval, native route and CI are unchanged.
+
+**Proof ceiling:** Source-only static review plus authored regression cases (`STATIC_SOURCE`). No Rust/TypeScript/Svelte compilation, source test execution, installed Windows playback/capture, focus navigation, GPU/quality or meeting receiver evidence. The fingerprint is consistency binding, not authentication of a fully maliciously re-authored local package; these areas remain **UNKNOWN / NOT EXECUTED**.
+
 ### My Voice matched held-out candidate metrics (2026-10-30)
 
 **Pinned source parent:** `1c58280e61a21f762881486bfee8a9e94666732b`. The pinned GPT-SoVITS worker already evaluates 2–3 checkpoints on the same eight authored held-out English lines and writes `candidate_evidence` with WER, speaker similarity, artifact flags and WAV hashes to the existing `evaluation.json`. Before this change, Rust exposed only the selected checkpoint's samples, and My Voice Review provided listening controls without explaining the numeric checkpoint comparison.

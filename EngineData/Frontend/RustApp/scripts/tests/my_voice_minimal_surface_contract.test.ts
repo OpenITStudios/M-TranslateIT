@@ -149,6 +149,20 @@ test("timestamped review reuses guided-take evidence and the current verified Re
   assert.doesNotMatch(page, /getAudioQuality\(|new Worker\(|startCapture\(/);
 });
 
+test("P1 Replay stops before microphone capture and rejects a changed review owner", () => {
+  const state = page.slice(page.indexOf("function applyState(next: GuidedRecordingState)"),
+    page.indexOf("async function checkMicrophone()"));
+  assert.match(state, /recordingState\.recording_line_id !== next\.recording_line_id/);
+  assert.match(state, /recordingState\.pending_review !== next\.pending_review/);
+  const start = page.slice(page.indexOf("async function startRecording()"),
+    page.indexOf("async function stopRecording()"));
+  assert.ok(start.indexOf("stopReplay();") < start.indexOf("myVoiceApi.startTake("));
+  const replay = page.slice(page.indexOf("async function replayTake("),
+    page.indexOf("onMount(() =>"));
+  assert.match(replay, /recordingStatusUnknown \|\| recordingState\.recording_line_id !== null/);
+  assert.match(replay, /requestRevision !== replayRevision/);
+});
+
 test("accepted WAV inspection is read-only and backed by exact immutable archive receipts", () => {
   assert.match(voiceApi, /inspect_voice_lab_accepted_take_recovery/);
   assert.match(voiceApi, /type AcceptedTakeRecoveryInspection/);

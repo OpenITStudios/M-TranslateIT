@@ -137,6 +137,20 @@ test("My Voice compares matched held-out evidence without changing candidate app
   assert.doesNotMatch(ui, /selectCandidate\(|switchCheckpoint\(/);
 });
 
+test("P2 selected review ID hashes the actual ordered selected WAV receipts", () => {
+  const evaluation = read("src-tauri/src/commands/voice_lab_build/evaluation.rs");
+  const worker = read("../../Backend/LocalWorker/WorkerRuntime/voice_lab_gpt_sovits_build.py");
+  assert.match(worker, /json\.dumps\(review_fingerprint, sort_keys=True, separators=/);
+  assert.match(evaluation, /fn selected_review_fingerprint_matches\(manifest: &EvaluationManifest\)/);
+  assert.match(evaluation, /std::collections::BTreeMap::new\(\)/);
+  assert.match(evaluation, /sha256_matches\(&bytes, &manifest\.review_id\)/);
+  assert.match(evaluation, /if !selected_review_fingerprint_matches\(&manifest\) \{/);
+  assert.match(evaluation, /fn review_id_must_bind_exact_selected_wav_hashes_and_order\(\)/);
+  assert.match(evaluation, /ddca43c82f3e8ab8955ad17f391169932fad1eb7d7f4bba0068c5eeb233d5da9/);
+  const ui = read("src/components/my-voice/MyVoiceBuild.svelte");
+  assert.match(ui, /role="region" aria-label="Checkpoint comparison metrics, scroll horizontally" tabindex="0"/);
+});
+
 test("manual Stop reuses the existing process owners and cannot claim success after cancellation", () => {
   const native = read("src-tauri/src/commands/voice_lab_build.rs");
   const receipts = read("src-tauri/src/commands/voice_lab_build/receipts.rs");

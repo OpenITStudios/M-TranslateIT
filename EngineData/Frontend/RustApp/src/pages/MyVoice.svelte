@@ -491,6 +491,13 @@
 
   function applyState(next: GuidedRecordingState): void {
     if (disposed) return;
+    // A new pending Draft may share line ID and duration with the last one.
+    // Never let stale fetched/playing audio survive a verified owner update.
+    if ((loadingReplay || replaying) &&
+      (recordingState.recording_line_id !== next.recording_line_id ||
+       recordingState.pending_review !== next.pending_review)) {
+      stopReplay();
+    }
     recordingState = next;
     chooseDefaultLine(next);
     onRecordingChange(next.recording_line_id !== null);
@@ -656,6 +663,7 @@
       if (disposed) return;
       if (!next) {
         recordingStatusUnknown = true;
+        stopReplay();
         onRecordingChange(true);
         onNotice("Couldn't check recording status. Select Retry status.");
         return;
@@ -665,6 +673,7 @@
     } catch {
       if (!disposed) {
         recordingStatusUnknown = true;
+        stopReplay();
         onRecordingChange(true);
         onNotice("Couldn't check recording status. Select Retry status.");
       }
@@ -712,6 +721,8 @@
       onNotice("Confirm that this is your voice, or that you have permission to use it.");
       return;
     }
+    // Stop saved audio (and a pending WAV read) BEFORE microphone capture.
+    stopReplay();
     busy = true;
     try {
       selectedPane = "record";
@@ -880,6 +891,7 @@
     try {
       const bytes = await myVoiceApi.getTakeAudio(lineId);
       if (disposed || requestRevision !== replayRevision || selectedLineId !== lineId
+        || recordingStatusUnknown || recordingState.recording_line_id !== null
         || recordingState.pending_review?.line_id !== (review?.line_id ?? undefined)) return;
       if (!bytes) {
         onNotice("This recording isn't available for replay yet.");

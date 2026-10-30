@@ -160,6 +160,30 @@ pub(super) struct EvaluationManifest {
 // current selected WAV hash, recognizer text, score and artifact flag.
 // These are reported measurements, not independent verification of unselected
 // audio files, identity, naturalness or the previously approved Meeting voice.
+// The worker's review_id is SHA256 of Python compact sorted-key JSON containing
+// engine_revision, selection_method, candidate_id and ordered selected WAV hashes.
+// Reject a stale review ID rather than letting different audio reuse "Listened".
+fn selected_review_fingerprint_matches(manifest: &EvaluationManifest) -> bool {
+    if !valid_sha256(&manifest.review_id)
+        || manifest.samples.len() != HELD_OUT_LINES.len()
+        || manifest.samples.iter().any(|sample| !valid_sha256(&sample.sha256))
+    {
+        return false;
+    }
+    let audio = manifest.samples.iter()
+        .map(|sample| (sample.line_id, sample.sha256.as_str()))
+        .collect::<Vec<_>>();
+    // BTreeMap is sorted even if serde_json's preserve_order feature is used
+    // elsewhere. Tuple serialization yields Python's [line_id, sha256] arrays.
+    let mut fingerprint = std::collections::BTreeMap::new();
+    fingerprint.insert("audio", serde_json::json!(audio));
+    fingerprint.insert("candidate_id", serde_json::json!(&manifest.selected_candidate_id));
+    fingerprint.insert("engine_revision", serde_json::json!(&manifest.engine_revision));
+    fingerprint.insert("selection_method", serde_json::json!(&manifest.selection_method));
+    let Ok(bytes) = serde_json::to_vec(&fingerprint) else { return false; };
+    sha256_matches(&bytes, &manifest.review_id)
+}
+
 pub(super) fn candidate_comparison(manifest: &EvaluationManifest) -> Vec<VoiceLabCandidateComparison> {
     let Some(raw) = manifest.candidate_evidence.clone() else {
         return Vec::new();
@@ -381,6 +405,11 @@ pub(super) fn evaluation_manifest(paths: &VoiceLabStoragePaths) -> Option<Evalua
             return None;
         }
     }
+    // File-byte integrity is separately checked on playback/approval, but
+    // metadata must first bind the review identity to the selected WAV hashes.
+    if !selected_review_fingerprint_matches(&manifest) {
+        return None;
+    }
     Some(manifest)
 }
 
@@ -574,6 +603,26 @@ mod tests {
         assert!(valid_sha256(&manifest.samples[0].sha256));
         assert!(!valid_sha256(&"G".repeat(64)));
         assert!(!valid_sha256(&"a".repeat(63)));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn review_id_must_bind_exact_selected_wav_hashes_and_order() {
+        let mut report = manifest();
+        // Independent Python canonical JSON fixture:
+        // hashlib.sha256(json.dumps(fingerprint, sort_keys=True,
+        //   separators=(",", ":")).encode()).hexdigest()
+        report.review_id =
+            "ddca43c82f3e8ab8955ad17f391169932fad1eb7d7f4bba0068c5eeb233d5da9".into();
+        assert!(selected_review_fingerprint_matches(&report));
+        report.samples[0].sha256 = "a".repeat(64);
+        assert!(!selected_review_fingerprint_matches(&report));
+        report.samples[0].sha256 = "b".repeat(64);
+        report.samples.swap(0, 1);
+        assert!(!selected_review_fingerprint_matches(&report));
+        report.samples.swap(0, 1);
+        report.selected_candidate_id = "s6-g10".into();
+        assert!(!selected_review_fingerprint_matches(&report));
     }
 
     #[test]
