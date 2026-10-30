@@ -163,6 +163,40 @@ test("P1 Replay stops before microphone capture and rejects a changed review own
   assert.match(replay, /requestRevision !== replayRevision/);
 });
 
+test("My Voice audio owners hand off playback before record and ignore stale previews", () => {
+  assert.match(build, /export function stopPlayback\(\): void/);
+  assert.match(build, /if \(!playbackEnabled \|\| voiceChangesLocked\) stopAudio\(\)/);
+  assert.match(build, /onBeforePlayback\?\.\(\);/);
+  assert.match(build, /!playbackEnabled \|\| voiceChangesLocked \|\| busy/);
+  assert.match(page, /let buildPlaybackOwner = \$state/);
+  assert.match(page, /<MyVoiceBuild bind:this=\{buildPlaybackOwner\}/);
+  assert.match(page, /onBeforePlayback=\{\(\) => stopReplay\(\)\}/);
+  assert.match(page, /playbackEnabled=\{creatorOpen && !showRecordPanel/);
+  const cancel = page.slice(page.indexOf("function stopAllMyVoiceAudio()"),
+    page.indexOf("function openCreationStage("));
+  assert.match(cancel, /stopReplay\(\)/);
+  assert.match(cancel, /buildPlaybackOwner\?\.stopPlayback\(\)/);
+  const record = page.slice(page.indexOf("async function startRecording()"),
+    page.indexOf("async function stopRecording()"));
+  assert.ok(record.indexOf("stopAllMyVoiceAudio();") < record.indexOf("myVoiceApi.startTake("));
+  assert.match(page, /onclick=\{\(\) => openCreationStage\("record"\)\}>1\. Record/);
+  assert.match(page, /onclick=\{\(\) => openCreationStage\("record"\)\}>\s*Record more/);
+  for (const name of ["playSavedRecording", "previewBuiltin"]) {
+    const first = page.indexOf(`async function ${name}(`);
+    const next = page.indexOf("\n  async function ", first + 1);
+    const code = page.slice(first, next < 0 ? undefined : next);
+    assert.match(code, /stopAllMyVoiceAudio\(\)/);
+    assert.match(code, /const requestRevision = replayRevision/);
+    assert.match(code, /requestRevision !== replayRevision/);
+    assert.match(code, /requestRevision === replayRevision/);
+    assert.match(code, /audio === player/);
+  }
+  const reviewPlayback = build.slice(build.indexOf("async function playEvaluation("),
+    build.indexOf("  $effect(() => {", build.indexOf("async function playEvaluation(")));
+  assert.match(reviewPlayback, /!playbackEnabled \|\| voiceChangesLocked/);
+  assert.match(reviewPlayback, /onBeforePlayback\?\.\(\)/);
+});
+
 test("accepted WAV inspection is read-only and backed by exact immutable archive receipts", () => {
   assert.match(voiceApi, /inspect_voice_lab_accepted_take_recovery/);
   assert.match(voiceApi, /type AcceptedTakeRecoveryInspection/);

@@ -18,6 +18,8 @@
     onTrainingComputeEligibility,
     refreshRevision = 0,
     voiceChangesLocked = false,
+    playbackEnabled = true,
+    onBeforePlayback,
   }: {
     onNotice: (message: string) => void;
     onMeetingVoiceChanged: (message?: string) => void | Promise<void>;
@@ -26,6 +28,8 @@
     onTrainingComputeEligibility?: (allowed: boolean) => void;
     refreshRevision?: number;
     voiceChangesLocked?: boolean;
+    playbackEnabled?: boolean;
+    onBeforePlayback?: () => void;
   } = $props();
 
   let build = $state<MyVoiceBuildStatus>({
@@ -156,6 +160,18 @@
     if (audioUrl) URL.revokeObjectURL(audioUrl);
     audioUrl = null;
   }
+
+  // Svelte 5 component instance export: MyVoice owns the only cross-pane
+  // playback handoff. This invalidates active audio AND delayed WAV replies.
+  export function stopPlayback(): void {
+    stopAudio();
+  }
+
+  $effect(() => {
+    // The component remains mounted while its parent hides the Create/Review
+    // pane. Neither a hidden pane nor an owned microphone can play old audio.
+    if (!playbackEnabled || voiceChangesLocked) stopAudio();
+  });
 
   function schedulePoll(): void {
     if (timer) clearTimeout(timer);
@@ -394,7 +410,10 @@
   }
 
   async function playQuickPreview(): Promise<void> {
-    if (busy || statusCheckUnavailable || quickPreviewBusy || quickPreviewLoading || !quickPreviewReady || audio !== null) return;
+    if (!playbackEnabled || voiceChangesLocked || busy || statusCheckUnavailable
+      || quickPreviewBusy || quickPreviewLoading || evaluationLoadingLineId !== null
+      || !quickPreviewReady || audio !== null) return;
+    onBeforePlayback?.(); // Stop the parent player's current or in-flight WAV.
     const requestVersion = ++audioRequestVersion;
     quickPreviewLoading = true;
     let bytes: ArrayBuffer | null;
@@ -541,7 +560,9 @@
   }
 
   async function playEvaluation(lineId: number): Promise<void> {
-    if (busy || statusCheckUnavailable || evaluationLoadingLineId !== null || audio !== null) return;
+    if (!playbackEnabled || voiceChangesLocked || busy || statusCheckUnavailable
+      || quickPreviewLoading || evaluationLoadingLineId !== null || audio !== null) return;
+    onBeforePlayback?.(); // A verified evaluation preview owns audio focus.
     const reviewId = build.evaluation_review_id;
     const expectedSha256 = build.evaluation_samples.find((sample) => sample.line_id === lineId)?.sha256;
     if (!reviewId || !expectedSha256) return;

@@ -45,6 +45,9 @@
   // A pending WAV fetch cannot outlive Stop/Retry/Save/navigation of its owner.
   let replayRevision = 0;
   let buildRefreshRevision = $state(0);
+  // Svelte 5 bind:this exposes only MyVoiceBuild's explicit stopPlayback().
+  // No new playback service/controller is introduced.
+  let buildPlaybackOwner = $state<{ stopPlayback: () => void } | undefined>(undefined);
   let audio: HTMLAudioElement | null = null;
   let audioUrl: string | null = null;
   let builtinPendingId = $state<BuiltinVoiceId | null>(null);
@@ -212,7 +215,7 @@
         buildStatusUnavailable || buildSnapshot?.active || buildSnapshot?.preview_active ||
         buildSnapshot?.evaluation_ready || activeStage === "review" || voiceChangesLocked) return;
     improvementStarting = true;
-    stopReplay();
+    stopAllMyVoiceAudio();
     try {
       const result = await myVoiceBuildApi.improve([...improvementIds], improvementAuthorized);
       if (disposed) return;
@@ -239,31 +242,41 @@
   }
 
   async function playSavedRecording(id: string): Promise<void> {
-    if (busy || replaying || savedPlayingId || voiceChangesLocked ||
-        isRecording || activeStage === "review" || buildSnapshot?.active ||
-        buildSnapshot?.preview_active) return;
-    stopReplay();
+    if (busy || replaying || savedPlayingId || voiceChangesLocked
+      || recordingStatusUnknown || isRecording || activeStage === "review"
+      || buildSnapshot?.active || buildSnapshot?.preview_active) return;
+    stopAllMyVoiceAudio();
+    const requestRevision = replayRevision;
     savedPlayingId = id;
     try {
       const bytes = await myVoiceApi.getSavedRecordingAudio(id);
-      if (disposed) return;
+      if (disposed || requestRevision !== replayRevision || savedPlayingId !== id
+        || isRecording || recordingStatusUnknown || voiceChangesLocked
+        || activeStage === "review") return;
       if (!bytes) {
-        onNotice("Couldn't verify this saved recording. The file may need attention.");
         stopReplay();
+        onNotice("Couldn't verify this saved recording. The file may need attention.");
         return;
       }
       audioUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
-      audio = new Audio(audioUrl);
+      const player = new Audio(audioUrl);
+      audio = player;
       replaying = true;
-      audio.onended = stopReplay;
-      audio.onerror = () => {
-        stopReplay();
-        onNotice("This saved recording couldn't be played.");
+      player.onended = () => {
+        if (audio === player && requestRevision === replayRevision) stopReplay();
       };
-      await audio.play();
+      player.onerror = () => {
+        if (audio === player && requestRevision === replayRevision) {
+          stopReplay();
+          onNotice("This saved recording couldn't be played.");
+        }
+      };
+      await player.play();
     } catch {
-      if (!disposed) onNotice("Couldn't play this saved recording. Try again.");
-      stopReplay();
+      if (!disposed && requestRevision === replayRevision) {
+        stopReplay();
+        onNotice("Couldn't play this saved recording. Try again.");
+      }
     }
   }
 
@@ -357,41 +370,50 @@
   }
 
   async function previewBuiltin(voiceId: BuiltinVoiceId): Promise<void> {
-    if (busy || replaying || builtinPreviewing) return;
-    stopReplay();
+    if (busy || replaying || builtinPreviewing || voiceChangesLocked
+      || recordingStatusUnknown || isRecording || pendingLineId !== null
+      || buildSnapshot?.active || buildSnapshot?.preview_active) return;
+    stopAllMyVoiceAudio();
+    const requestRevision = replayRevision;
     builtinPreviewing = voiceId;
     try {
       const bytes = await myVoiceBuildApi.getBuiltinPreviewAudio(voiceId);
-      if (disposed) return;
+      if (disposed || requestRevision !== replayRevision
+        || builtinPreviewing !== voiceId || voiceChangesLocked
+        || recordingStatusUnknown || isRecording || pendingLineId !== null) return;
       if (!bytes) {
-        builtinPreviewing = null;
+        stopReplay();
         onNotice("This built-in voice preview is unavailable.");
         return;
       }
-      const blob = new Blob([bytes], { type: "audio/wav" });
-      audioUrl = URL.createObjectURL(blob);
-      audio = new Audio(audioUrl);
+      audioUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+      const player = new Audio(audioUrl);
+      audio = player;
       replaying = true;
-      audio.onended = () => {
-        stopReplay();
-        builtinPreviewing = null;
+      player.onended = () => {
+        if (audio === player && requestRevision === replayRevision) stopReplay();
       };
-      audio.onerror = () => {
-        stopReplay();
-        builtinPreviewing = null;
-        onNotice("This built-in voice preview couldn't be played.");
+      player.onerror = () => {
+        if (audio === player && requestRevision === replayRevision) {
+          stopReplay();
+          onNotice("This built-in voice preview couldn't be played.");
+        }
       };
-      await audio.play();
-      onNotice(`Previewing ${builtinLabel(voiceId)}.`);
+      await player.play();
+      if (audio === player && requestRevision === replayRevision) {
+        onNotice(`Previewing ${builtinLabel(voiceId)}.`);
+      }
     } catch {
-      stopReplay();
-      builtinPreviewing = null;
-      onNotice("This built-in voice preview couldn't be played.");
+      if (!disposed && requestRevision === replayRevision) {
+        stopReplay();
+        onNotice("This built-in voice preview couldn't be played.");
+      }
     }
   }
 
   async function selectBuiltin(voiceId: BuiltinVoiceId, confirmed = false): Promise<void> {
     if (busy || !selectedVoiceVerified || voiceChangesLocked || buildStatusUnavailable || buildSnapshot?.active || buildSnapshot?.preview_active || recordingStatusUnknown || isRecording || pendingLineId !== null) return;
+    stopAllMyVoiceAudio();
     busy = true;
     let nativeSelectionConfirmed = false;
     try {
@@ -439,6 +461,7 @@
 
   async function selectStoredPersonalVoice(): Promise<void> {
     if (busy || !selectedVoiceVerified || voiceChangesLocked || buildStatusUnavailable || buildSnapshot?.active || buildSnapshot?.preview_active || recordingStatusUnknown || isRecording || pendingLineId !== null) return;
+    stopAllMyVoiceAudio();
     busy = true;
     let nativeSelectionConfirmed = false;
     try {
@@ -491,11 +514,15 @@
 
   function applyState(next: GuidedRecordingState): void {
     if (disposed) return;
-    // A new pending Draft may share line ID and duration with the last one.
-    // Never let stale fetched/playing audio survive a verified owner update.
-    if ((loadingReplay || replaying) &&
+    // A newly acquired microphone invalidates BOTH player owners.
+    if (next.recording_line_id !== null
+      && recordingState.recording_line_id !== next.recording_line_id) {
+      stopAllMyVoiceAudio();
+    } else if ((loadingReplay || replaying) &&
       (recordingState.recording_line_id !== next.recording_line_id ||
        recordingState.pending_review !== next.pending_review)) {
+      // Preserve the conservative P1 pending-review guard until the verified
+      // WAV identity can be exposed without relying on object reference.
       stopReplay();
     }
     recordingState = next;
@@ -624,6 +651,7 @@
     acceptedFileInspection = null;
     inspectedAcceptedLineId = null;
     recordingStatusUnknown = true;
+    stopAllMyVoiceAudio();
     onRecordingChange(true);
     onNotice(message);
     await refresh();
@@ -663,7 +691,7 @@
       if (disposed) return;
       if (!next) {
         recordingStatusUnknown = true;
-        stopReplay();
+        stopAllMyVoiceAudio();
         onRecordingChange(true);
         onNotice("Couldn't check recording status. Select Retry status.");
         return;
@@ -673,7 +701,7 @@
     } catch {
       if (!disposed) {
         recordingStatusUnknown = true;
-        stopReplay();
+        stopAllMyVoiceAudio();
         onRecordingChange(true);
         onNotice("Couldn't check recording status. Select Retry status.");
       }
@@ -721,8 +749,9 @@
       onNotice("Confirm that this is your voice, or that you have permission to use it.");
       return;
     }
-    // Stop saved audio (and a pending WAV read) BEFORE microphone capture.
-    stopReplay();
+    // Stop active/in-flight audio in BOTH mounted players synchronously
+    // BEFORE the native microphone is allowed to acquire capture ownership.
+    stopAllMyVoiceAudio();
     busy = true;
     try {
       selectedPane = "record";
@@ -876,6 +905,18 @@
     audioUrl = null;
   }
 
+  // The child remains mounted while its panel is hidden. Component exports
+  // let the page stop it directly; the child only owns its own Audio element.
+  function stopAllMyVoiceAudio(): void {
+    stopReplay();
+    buildPlaybackOwner?.stopPlayback();
+  }
+
+  function openCreationStage(pane: "record" | "create" | "review"): void {
+    stopAllMyVoiceAudio();
+    selectedPane = pane;
+  }
+
   async function replayTake(startMs: number | null = null): Promise<void> {
     if (busy || recordingStatusUnknown || loadingReplay || isRecording
       || selectedLineId === null || (replaying && startMs === null)) return;
@@ -933,7 +974,7 @@
     return () => {
       disposed = true;
       selectedVoiceReadVersion += 1;
-      stopReplay();
+      stopAllMyVoiceAudio();
       onRecordingChange(false);
     };
   });
@@ -978,7 +1019,7 @@
     <button type="button" class="ti-button ti-button-secondary"
       aria-controls="my-voice-create-workspace" aria-expanded={creatorOpen}
       disabled={creatorNeedsAttention}
-      onclick={() => { creatorOpen = !creatorOpen; }}>
+      onclick={() => { if (creatorOpen) stopAllMyVoiceAudio(); creatorOpen = !creatorOpen; }}>
       {creatorNeedsAttention ? "Creation in progress" : creatorOpen ? "Hide creation steps" : "Create My Voice"}
     </button>
   </div>
@@ -995,17 +1036,17 @@
       <button type="button" aria-current={activeStage === "record" ? "step" : undefined}
         class={activeStage === "record" ? "rounded-full border border-[var(--ti-border-strong)] bg-[var(--ti-surface-raised)] px-3 py-2 text-[var(--ti-text)]" : "rounded-full px-3 py-2 text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)]"}
         disabled={busy || recordingStatusUnknown || isRecording || pendingLineId !== null}
-        onclick={() => { selectedPane = "record"; }}>1. Record</button>
+        onclick={() => openCreationStage("record")}>1. Record</button>
       <ChevronRight size={14} class="text-[var(--ti-text-soft)]" aria-hidden="true" />
       <button type="button" aria-current={activeStage === "create" ? "step" : undefined}
         class={activeStage === "create" ? "rounded-full border border-[var(--ti-border-strong)] bg-[var(--ti-surface-raised)] px-3 py-2 text-[var(--ti-text)]" : "rounded-full px-3 py-2 text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)]"}
         disabled={busy || recordingStatusUnknown || buildStatusUnavailable || isRecording || pendingLineId !== null || buildSnapshot?.active === true || buildSnapshot?.preview_active === true || buildSnapshot?.evaluation_ready === true}
-        onclick={() => { selectedPane = "create"; }}>2. Create</button>
+        onclick={() => openCreationStage("create")}>2. Create</button>
       <ChevronRight size={14} class="text-[var(--ti-text-soft)]" aria-hidden="true" />
       <button type="button" aria-current={activeStage === "review" ? "step" : undefined}
         class={activeStage === "review" ? "rounded-full border border-[var(--ti-border-strong)] bg-[var(--ti-surface-raised)] px-3 py-2 text-[var(--ti-text)]" : "rounded-full px-3 py-2 text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)]"}
         disabled={busy || recordingStatusUnknown || buildStatusUnavailable || isRecording || pendingLineId !== null || buildSnapshot?.active === true || !buildSnapshot?.evaluation_ready}
-        onclick={() => { selectedPane = "review"; }}>3. Review</button>
+        onclick={() => openCreationStage("review")}>3. Review</button>
     </nav>
 
     {#if showRecordPanel && showBuildPanel}
@@ -1225,9 +1266,9 @@
                 </div>
               {/if}
               {#if buildSnapshot.evaluation_ready && !isRecording && pendingLineId === null}
-                <button type="button" class="ti-button mt-4 w-full" disabled={buildStatusUnavailable || recordingStatusUnknown || busy} onclick={() => { selectedPane = "review"; }}>Return to Review</button>
+                <button type="button" class="ti-button mt-4 w-full" disabled={buildStatusUnavailable || recordingStatusUnknown || busy} onclick={() => openCreationStage("review")}>Return to Review</button>
               {:else if buildSnapshot.can_build && !buildSnapshot.active && !isRecording && pendingLineId === null}
-                <button type="button" class="ti-button mt-4 w-full" disabled={voiceChangesLocked || buildStatusUnavailable || recordingStatusUnknown} onclick={() => { selectedPane = "create"; }}>Continue to Create</button>
+                <button type="button" class="ti-button mt-4 w-full" disabled={voiceChangesLocked || buildStatusUnavailable || recordingStatusUnknown} onclick={() => openCreationStage("create")}>Continue to Create</button>
               {/if}
             {:else}
               <p role="status" class="mb-0 mt-3 text-sm text-[var(--ti-text-muted)]">Checking recording progress…</p>
@@ -1302,11 +1343,13 @@
         <p class="mb-0 text-xs leading-5 text-[var(--ti-text-muted)]">
           {activeStage === "review" ? "Review every generated sample before selecting your new voice." : "Your current Meeting voice stays unchanged until you approve a new one."}
         </p>
-        <button type="button" class="ti-button ti-button-secondary" disabled={recordingStatusUnknown || buildStatusUnavailable || buildSnapshot?.active === true || buildSnapshot?.preview_active === true || busy} onclick={() => { selectedPane = "record"; }}>
+        <button type="button" class="ti-button ti-button-secondary" disabled={recordingStatusUnknown || buildStatusUnavailable || buildSnapshot?.active === true || buildSnapshot?.preview_active === true || busy} onclick={() => openCreationStage("record")}>
           Record more
         </button>
       </div>
-      <MyVoiceBuild {onNotice}
+      <MyVoiceBuild bind:this={buildPlaybackOwner} {onNotice}
+        playbackEnabled={creatorOpen && !showRecordPanel && !voiceChangesLocked && !recordingStatusUnknown}
+        onBeforePlayback={() => stopReplay()}
         voiceChangesLocked={voiceChangesLocked || recordingStatusUnknown || isRecording || pendingLineId !== null}
         onMeetingVoiceChanged={async (message) => {
           await refreshVoiceSelection();

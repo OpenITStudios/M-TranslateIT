@@ -21,6 +21,14 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### My Voice audio playback ownership and async handoff — 2026-10-30
+
+**Pinned source parent:** `740f1bc0202601d770c60711e70519b42a569edc` on `Local`. My Voice has one parent Audio element for Built-in, Saved and guided Replay, and an independently mounted `MyVoiceBuild.svelte` Audio element for Quick Preview and eight held-out evaluation samples. The parent previously called only its own `stopReplay()` before microphone capture or pane changes, leaving child playback active. Parent Built-in/Saved asynchronous WAV loads also lacked the existing request-revision check used by guided Replay, so a late response could start playback after mic ownership changed.
+
+**Bounded source repair:** The existing child exports a synchronous `stopPlayback()` (Svelte 5 component export), still owning its Audio element. The page binds that export and calls both player Stops immediately before starting microphone capture, stage transitions, voice switching, archive-backed improvement and unknown recording state; hidden/locked child playback is also invalidated. Both audio owners request focus before loading, and the page's Saved/Built-in WAV fetches and player callbacks now compare `replayRevision` before using bytes or clearing active playback. The existing `playEvaluation` and `playQuickPreview` guards prevent overlapping child requests. The source-only frontend regression owner asserts these invariants. No new persistent audio manager, Tauri command, model, WAV writer, device route or approval path.
+
+**Proof ceiling:** `STATIC_SOURCE` only, including Svelte 5 component export semantics and authored source contracts. No Svelte typecheck/rendering, Rust/Node/Python execution, audio fixture playback, microphone/device, training/GPU or installed Windows acceptance was run. Actual playback isolation and keyboard interaction remain **UNKNOWN / NOT EXECUTED**.
+
 ### My Voice integration admission: bounded status file reads — 2026-10-30
 
 **Pinned source parent:** `c84cefa5628f5a1dd6a35958144855c85b6c771e` on `Local`. The current `evaluation_manifest` loaded `evaluation.json` with `fs::read` *before* enforcing its 128-KiB bound; the main `reviewable_evaluation` read candidate `actor.json` with no size bound. Even an ordinary My Voice status refresh could therefore attempt excessive allocation on corrupted/oversized local files. P3 reference and frozen dataset checks also used size-before-`fs::read` patterns without a bounded actual read.
