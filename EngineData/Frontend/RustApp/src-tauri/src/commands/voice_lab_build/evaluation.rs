@@ -110,6 +110,36 @@ pub struct VoiceLabEvaluationSample {
     pub artifact_flags: Vec<String>,
 }
 
+// Comparison data is strictly advisory. It describes only checkpoints from
+// the SAME completed training run, never a previous approved voice.
+#[derive(Debug, Clone, Serialize)]
+pub struct VoiceLabCandidateComparison {
+    pub candidate_id: String,
+    pub selected_for_review: bool,
+    pub mean_intelligibility_wer: f64,
+    pub maximum_intelligibility_wer: f64,
+    pub mean_speaker_similarity: f64,
+    pub minimum_speaker_similarity: f64,
+    pub artifact_case_count: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct CandidateEvidenceSample {
+    line_id: u32,
+    exact_text: String,
+    sha256: String,
+    intelligibility_text: String,
+    intelligibility_wer: f64,
+    speaker_similarity: f64,
+    artifact_flags: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CandidateEvidenceRow {
+    candidate_id: String,
+    samples: Vec<CandidateEvidenceSample>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct EvaluationManifest {
     schema_version: u32,
@@ -119,6 +149,99 @@ pub(super) struct EvaluationManifest {
     pub(super) selected_candidate_id: String,
     pub(super) review_id: String,
     pub(super) samples: Vec<VoiceLabEvaluationSample>,
+    // Legacy reviews may not have a checkpoint comparison. A malformed
+    // optional comparison must never break the original Review/approval.
+    #[serde(default)]
+    candidate_evidence: Option<serde_json::Value>,
+}
+
+// Only surface comparison rows when all 2–3 candidates describe the SAME
+// eight authored held-out sentences and the selected row matches every
+// current selected WAV hash, recognizer text, score and artifact flag.
+// These are reported measurements, not independent verification of unselected
+// audio files, identity, naturalness or the previously approved Meeting voice.
+pub(super) fn candidate_comparison(manifest: &EvaluationManifest) -> Vec<VoiceLabCandidateComparison> {
+    let Some(raw) = manifest.candidate_evidence.clone() else {
+        return Vec::new();
+    };
+    let Ok(candidates) = serde_json::from_value::<Vec<CandidateEvidenceRow>>(raw) else {
+        return Vec::new();
+    };
+    if !(2..=3).contains(&candidates.len()) || manifest.samples.len() != HELD_OUT_LINES.len() {
+        return Vec::new();
+    }
+    let mut identities = std::collections::BTreeSet::new();
+    let mut selected_count = 0_usize;
+    let mut summaries = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let id = candidate.candidate_id.as_str();
+        if id.is_empty() || id.len() > 64
+            || !id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+            || !identities.insert(candidate.candidate_id.clone())
+            || candidate.samples.len() != HELD_OUT_LINES.len()
+        {
+            return Vec::new();
+        }
+        let selected_for_review = candidate.candidate_id == manifest.selected_candidate_id;
+        if selected_for_review { selected_count += 1; }
+        let mut seen = std::collections::BTreeSet::new();
+        let mut wer_sum = 0.0_f64;
+        let mut worst_wer = 0.0_f64;
+        let mut similarity_sum = 0.0_f64;
+        let mut minimum_similarity = f64::INFINITY;
+        let mut flagged_count = 0_usize;
+        for sample in &candidate.samples {
+            let Some((_, canonical_text)) = HELD_OUT_LINES.iter()
+                .find(|(line_id, _)| *line_id == sample.line_id)
+            else { return Vec::new(); };
+            if !seen.insert(sample.line_id)
+                || sample.exact_text != *canonical_text
+                || !valid_sha256(&sample.sha256)
+                || sample.intelligibility_text.trim().is_empty()
+                || !sample.intelligibility_wer.is_finite()
+                || sample.intelligibility_wer < 0.0
+                || !sample.speaker_similarity.is_finite()
+                || !(-1.000001..=1.000001).contains(&sample.speaker_similarity)
+                || sample.artifact_flags.iter().any(|flag| {
+                    !matches!(flag.as_str(), "clipping" | "unexpected_silence")
+                })
+            {
+                return Vec::new();
+            }
+            if selected_for_review {
+                let Some(approved_review_sample) = manifest.samples.iter()
+                    .find(|current| current.line_id == sample.line_id)
+                else { return Vec::new(); };
+                if approved_review_sample.exact_text != sample.exact_text
+                    || approved_review_sample.sha256 != sample.sha256
+                    || approved_review_sample.intelligibility_text != sample.intelligibility_text
+                    || (approved_review_sample.intelligibility_wer - sample.intelligibility_wer).abs() > 0.000001
+                    || (approved_review_sample.speaker_similarity - sample.speaker_similarity).abs() > 0.000001
+                    || approved_review_sample.artifact_flags != sample.artifact_flags
+                {
+                    return Vec::new();
+                }
+            }
+            wer_sum += sample.intelligibility_wer;
+            worst_wer = worst_wer.max(sample.intelligibility_wer);
+            similarity_sum += sample.speaker_similarity;
+            minimum_similarity = minimum_similarity.min(sample.speaker_similarity);
+            if !sample.artifact_flags.is_empty() { flagged_count += 1; }
+        }
+        if seen.len() != HELD_OUT_LINES.len() { return Vec::new(); }
+        let count = candidate.samples.len() as f64;
+        summaries.push(VoiceLabCandidateComparison {
+            candidate_id: candidate.candidate_id,
+            selected_for_review,
+            mean_intelligibility_wer: wer_sum / count,
+            maximum_intelligibility_wer: worst_wer,
+            mean_speaker_similarity: similarity_sum / count,
+            minimum_speaker_similarity: minimum_similarity,
+            artifact_case_count: flagged_count,
+        });
+    }
+    if selected_count != 1 { return Vec::new(); }
+    summaries
 }
 
 pub(super) fn evaluation_dir(paths: &VoiceLabStoragePaths) -> PathBuf {
@@ -331,6 +454,7 @@ mod tests {
             selection_method: EVALUATION_SELECTION_METHOD.to_string(),
             selected_candidate_id: "s8-g15".to_string(),
             review_id: "a".repeat(64),
+            candidate_evidence: None,
             samples: HELD_OUT_LINES
                 .iter()
                 .map(|(line_id, text)| VoiceLabEvaluationSample {
@@ -469,6 +593,65 @@ mod tests {
             }
         });
         assert!(!candidate_selection_matches_actor_json(&manifest, &stale));
+    }
+
+    fn checkpoint_evidence(
+        manifest: &EvaluationManifest,
+        candidate_id: &str,
+        similarity: f64,
+        wer: f64,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "candidate_id": candidate_id,
+            "samples": manifest.samples.iter().map(|sample| serde_json::json!({
+                "line_id": sample.line_id,
+                "exact_text": &sample.exact_text,
+                "sha256": if candidate_id == manifest.selected_candidate_id {
+                    sample.sha256.as_str()
+                } else { "c" },
+                "intelligibility_text": &sample.intelligibility_text,
+                "intelligibility_wer": wer,
+                "speaker_similarity": similarity,
+                "artifact_flags": [],
+            })).collect::<Vec<_>>(),
+        })
+    }
+
+    #[test]
+    fn candidate_comparison_requires_complete_matched_eight_line_evidence() {
+        let mut report = manifest();
+        assert!(candidate_comparison(&report).is_empty(), "legacy review has no comparison");
+        let selected = checkpoint_evidence(&report, "s8-g15", 0.9, 0.0);
+        let mut alternative = checkpoint_evidence(&report, "s6-g10", 0.8, 0.25);
+        for sample in alternative["samples"].as_array_mut().unwrap() {
+            sample["sha256"] = serde_json::json!("c".repeat(64));
+        }
+        report.candidate_evidence = Some(serde_json::json!([selected, alternative]));
+        let rows = candidate_comparison(&report);
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].selected_for_review);
+        assert!(!rows[1].selected_for_review);
+        assert_eq!(rows[0].mean_intelligibility_wer, 0.0);
+        assert_eq!(rows[1].maximum_intelligibility_wer, 0.25);
+        assert_eq!(rows[1].minimum_speaker_similarity, 0.8);
+
+        let valid = report.candidate_evidence.clone().unwrap();
+        report.candidate_evidence.as_mut().unwrap()[0]["samples"][0]["sha256"] =
+            serde_json::json!("a".repeat(64));
+        assert!(candidate_comparison(&report).is_empty(), "selected WAV SHA drift is not comparable");
+        report.candidate_evidence = Some(valid.clone());
+        report.candidate_evidence.as_mut().unwrap()[1]["samples"][0]["exact_text"] =
+            serde_json::json!("Unrelated sentence");
+        assert!(candidate_comparison(&report).is_empty(), "different held-out text cannot compare");
+        report.candidate_evidence = Some(valid.clone());
+        report.candidate_evidence.as_mut().unwrap()[1]["samples"].as_array_mut().unwrap().pop();
+        assert!(candidate_comparison(&report).is_empty(), "partial candidate is not comparable");
+        report.candidate_evidence = Some(valid.clone());
+        report.candidate_evidence.as_mut().unwrap()[1]["candidate_id"] =
+            serde_json::json!("s8-g15");
+        assert!(candidate_comparison(&report).is_empty(), "duplicate candidate ID");
+        report.candidate_evidence = Some(serde_json::json!([valid[0].clone()]));
+        assert!(candidate_comparison(&report).is_empty(), "one candidate has no comparison");
     }
 
     #[test]

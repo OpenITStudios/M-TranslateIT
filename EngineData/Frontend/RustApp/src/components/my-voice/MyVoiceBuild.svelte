@@ -42,6 +42,7 @@
     evaluation_ready: false,
     evaluation_review_id: null,
     evaluation_samples: [],
+    evaluation_comparison: [],
     approved_voice_ready: false,
     selected_voice_kind: "unknown",
     selected_builtin_voice_id: null,
@@ -96,6 +97,17 @@
       ? Math.min(100, Math.round((build.accepted_duration_ms / build.minimum_duration_ms) * 100))
       : 100,
   );
+
+  // WER is a word-error fraction, not a perceptual quality score. Similarity
+  // is a cosine from the existing engine's speaker verifier, not identity proof.
+  function formatWordErrorRate(value: number): string {
+    return Number.isFinite(value) && value >= 0 ? `${(value * 100).toFixed(1)}%` : "Unavailable";
+  }
+
+  function formatSpeakerSimilarity(value: number): string {
+    return Number.isFinite(value) && value >= -1.000001 && value <= 1.000001
+      ? value.toFixed(3) : "Unavailable";
+  }
 
   function formatDuration(milliseconds: number): string {
     const seconds = Math.max(0, Math.floor(milliseconds / 1000));
@@ -672,9 +684,58 @@
     <div class="mt-5">
       <strong class="text-sm font-semibold">Listen before using My Voice</strong>
       <p class="mb-0 mt-1 text-sm leading-5 text-[var(--ti-text-muted)]">Listen to these new sentences. Use My Voice only if it sounds like you.</p>
+      <details class="mt-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-3" aria-label="Compare evaluated voice candidates">
+        <summary class="cursor-pointer text-sm font-medium">Compare evaluated checkpoints</summary>
+        <p class="mb-0 mt-2 text-xs leading-5 text-[var(--ti-text-muted)]">
+          This compares checkpoints evaluated on the same eight held-out English sentences in this build, not your previously approved Meeting voice.
+          Lower WER means fewer words differed from the local recognizer's transcription; speaker similarity is a relative cosine, not proof of identity or naturalness.
+        </p>
+        {#if build.evaluation_comparison?.length}
+          <div class="mt-3 overflow-x-auto">
+            <table class="w-full min-w-[620px] border-collapse text-left text-xs">
+              <caption class="sr-only">Reported metrics for checkpoints in the current My Voice build</caption>
+              <thead>
+                <tr class="border-b border-[var(--ti-border)] text-[var(--ti-text-muted)]">
+                  <th scope="col" class="py-2 pr-3 font-medium">Checkpoint</th>
+                  <th scope="col" class="py-2 pr-3 font-medium">Mean WER</th>
+                  <th scope="col" class="py-2 pr-3 font-medium">Worst WER</th>
+                  <th scope="col" class="py-2 pr-3 font-medium">Mean similarity</th>
+                  <th scope="col" class="py-2 pr-3 font-medium">Lowest similarity</th>
+                  <th scope="col" class="py-2 font-medium">Flagged lines</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each build.evaluation_comparison as candidate (candidate.candidate_id)}
+                  <tr class="border-b border-[var(--ti-border)] last:border-0">
+                    <th scope="row" class="py-2 pr-3 font-medium">
+                      <span>{candidate.candidate_id}</span>
+                      {#if candidate.selected_for_review}
+                        <span class="ml-2 text-[var(--ti-success)]">Prepared for review</span>
+                      {/if}
+                    </th>
+                    <td class="py-2 pr-3 tabular-nums">{formatWordErrorRate(candidate.mean_intelligibility_wer)}</td>
+                    <td class="py-2 pr-3 tabular-nums">{formatWordErrorRate(candidate.maximum_intelligibility_wer)}</td>
+                    <td class="py-2 pr-3 tabular-nums">{formatSpeakerSimilarity(candidate.mean_speaker_similarity)}</td>
+                    <td class="py-2 pr-3 tabular-nums">{formatSpeakerSimilarity(candidate.minimum_speaker_similarity)}</td>
+                    <td class="py-2 tabular-nums">{candidate.artifact_case_count} of 8</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+          <p class="mb-0 mt-2 text-xs leading-5 text-[var(--ti-text-muted)]">
+            The existing training selector prioritizes artifact-free results, then mean/worst WER, then speaker similarity.
+            Nonselected checkpoint audio is not available for verified playback here. Only the prepared candidate can be approved after listening.
+          </p>
+        {:else}
+          <p class="mb-0 mt-2 text-xs text-[var(--ti-text-muted)]">
+            Matched checkpoint evidence is unavailable for this review. No prior-voice quality comparison is claimed; listen to the eight available previews.
+          </p>
+        {/if}
+      </details>
       <div class="mt-4 space-y-2">
         {#each build.evaluation_samples as sample}
-          <div class="flex items-center gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] px-4 py-3">
+          <div class="flex flex-wrap items-center gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] px-4 py-3">
             <button type="button" class="ti-button ti-button-secondary shrink-0" aria-busy={evaluationLoadingLineId === sample.line_id} disabled={statusCheckUnavailable || playingLineId !== null || evaluationLoadingLineId !== null} onclick={() => void playEvaluation(sample.line_id)}>
               <Play size={14} /><span aria-live="polite">{evaluationLoadingLineId === sample.line_id ? "Loading audio..." : playingLineId === sample.line_id ? "Playing..." : "Preview"}</span>
             </button>
@@ -682,6 +743,19 @@
             {#if reviewedLineIds.includes(sample.line_id)}
               <span class="flex shrink-0 items-center gap-1 text-xs font-semibold text-[var(--ti-success)]"><Check size={13} />Listened</span>
             {/if}
+            <details class="w-full text-xs text-[var(--ti-text-muted)]">
+              <summary class="cursor-pointer">Evaluation details</summary>
+              <p class="mb-0 mt-2">Recognizer transcript: {sample.intelligibility_text}</p>
+              <p class="mb-0 mt-1">
+                Word error rate: {formatWordErrorRate(sample.intelligibility_wer)}
+                · Speaker similarity: {formatSpeakerSimilarity(sample.speaker_similarity)}
+              </p>
+              <p class="mb-0 mt-1">
+                {sample.artifact_flags.length
+                  ? `Signal flags: ${sample.artifact_flags.join(", ")}`
+                  : "No recorded clipping or unexpected-silence flags"}
+              </p>
+            </details>
           </div>
         {/each}
       </div>

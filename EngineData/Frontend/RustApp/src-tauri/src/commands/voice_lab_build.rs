@@ -45,10 +45,10 @@ mod process_owner;
 use process_owner::OwnedBuildJob;
 use receipts::{completion_file, completion_matches, commit_completion, create_identity, identity_file, read_identity, manual_stop_file, request_manual_stop};
 
-pub use evaluation::VoiceLabEvaluationSample;
+pub use evaluation::{VoiceLabCandidateComparison, VoiceLabEvaluationSample};
 use phase::reconcile_phase;
 use evaluation::{
-    evaluation_dir, evaluation_review_complete, held_out_contract, held_out_wavs_intact,
+    candidate_comparison, evaluation_dir, evaluation_review_complete, held_out_contract, held_out_wavs_intact,
     reviewable_evaluation as reviewable_evaluation_for_takes, verified_held_out_wav,
     EvaluationManifest, MAX_EVALUATION_WAV_BYTES,
 };
@@ -339,6 +339,8 @@ pub struct VoiceLabBuildStatus {
     pub evaluation_ready: bool,
     pub evaluation_review_id: Option<String>,
     pub evaluation_samples: Vec<VoiceLabEvaluationSample>,
+    // Advisory comparison of checkpoints from this SAME completed build only.
+    pub evaluation_comparison: Vec<VoiceLabCandidateComparison>,
     pub approved_voice_ready: bool,
     pub selected_voice_kind: String,
     pub selected_builtin_voice_id: Option<String>,
@@ -644,6 +646,7 @@ fn current_status() -> VoiceLabBuildStatus {
         "Accepted recordings have enough usable speech and variety to create My Voice.".to_string()
     };
 
+    let comparison = evaluation.as_ref().map(candidate_comparison).unwrap_or_default();
     VoiceLabBuildStatus {
         active: snapshot.active || process_cleanup_pending,
         preview_active,
@@ -680,6 +683,7 @@ fn current_status() -> VoiceLabBuildStatus {
         evaluation_ready: evaluation.is_some(),
         evaluation_review_id: evaluation.as_ref().map(|value| value.review_id.clone()),
         evaluation_samples: evaluation.map(|value| value.samples).unwrap_or_default(),
+        evaluation_comparison: comparison,
         approved_voice_ready: approved_ready,
         selected_voice_kind: selected_voice.kind,
         selected_builtin_voice_id: selected_voice.builtin_id,

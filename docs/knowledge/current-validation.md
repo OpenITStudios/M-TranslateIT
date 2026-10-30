@@ -21,6 +21,14 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### My Voice matched held-out candidate metrics (2026-10-30)
+
+**Pinned source parent:** `1c58280e61a21f762881486bfee8a9e94666732b`. The pinned GPT-SoVITS worker already evaluates 2–3 checkpoints on the same eight authored held-out English lines and writes `candidate_evidence` with WER, speaker similarity, artifact flags and WAV hashes to the existing `evaluation.json`. Before this change, Rust exposed only the selected checkpoint's samples, and My Voice Review provided listening controls without explaining the numeric checkpoint comparison.
+
+**Source-only change:** The canonical Rust evaluation owner now derives a bounded 2–3-row numeric comparison only if all eight line IDs/texts match the authored held-out set, all candidate IDs are unique, scores/flags/hashes are structurally valid, and the prepared checkpoint's evidence matches each currently reviewable selected WAV hash, transcript and metric. Invalid or legacy optional comparison metadata produces **no comparison**, not a false before/after claim or a new approval blocker. The existing build-status API exposes these rows, and the existing Svelte Review offers one collapsed table plus per-sample WER, recognizer transcript, cosine similarity and signal flags. This is a comparison of checkpoints **within this build**, not a measurement of the previously approved voice; nonselected WAV playback/integrity is not independently proven here. The original eight-sample playback completion, human quality confirmation, review ID and Rust actor-promotion gates remain unchanged. No new training model, evaluation subprocess, file store, external provider or workflow was introduced.
+
+**Proof ceiling:** `STATIC_SOURCE` from the pinned source, owned contracts and authored regression cases only. Rust/TypeScript/Svelte compilation, tests, full audio/model inference, GPU use, actual Windows UI/accessibility/meeting audio remain **UNKNOWN / NOT EXECUTED**. WER is recognizer disagreement, not perceptual naturalness; speaker cosine is relative and not speaker authorization/identity proof.
+
 ### Bounded timestamped My Voice review (2026-10-30)
 
 **Pinned source parent:** `3f67c38893ab0b058d06c4efa5ddb1d5c77f566b`. The existing `guided_take.rs` review exposed nonlocalized advice on clipping, edge pauses and quiet-edge energy; users could Replay but not go to an indicated point.

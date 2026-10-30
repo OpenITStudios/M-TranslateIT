@@ -111,6 +111,32 @@ test("device-aware CUDA resource and process controls fail closed at native boun
   assert.match(ui, /case "build_process_guard_failed":/);
 });
 
+test("My Voice compares matched held-out evidence without changing candidate approval authority", () => {
+  const evaluation = read("src-tauri/src/commands/voice_lab_build/evaluation.rs");
+  const owner = read("src-tauri/src/commands/voice_lab_build.rs");
+  const ui = read("src/components/my-voice/MyVoiceBuild.svelte");
+  const bridge = read("src/app/bridge/myVoiceBuildApi.ts");
+  const worker = read("../../Backend/LocalWorker/WorkerRuntime/voice_lab_gpt_sovits_build.py");
+  assert.match(worker, /"candidate_evidence": \[public_candidate_evidence\(candidate\) for candidate in evidence\]/);
+  assert.match(evaluation, /fn candidate_comparison\(manifest: &EvaluationManifest\)/);
+  assert.match(evaluation, /candidate_evidence: Option<serde_json::Value>/);
+  assert.match(evaluation, /candidate_comparison_requires_complete_matched_eight_line_evidence/);
+  assert.match(evaluation, /approved_review_sample\.sha256 != sample\.sha256/);
+  assert.match(evaluation, /seen\.len\(\) != HELD_OUT_LINES\.len\(\)/);
+  assert.match(owner, /reviewable_evaluation\(&paths\)/);
+  assert.match(owner, /let comparison = evaluation\.as_ref\(\)\.map\(candidate_comparison\)/);
+  assert.match(owner, /evaluation_comparison: comparison/);
+  assert.match(bridge, /evaluation_comparison\?: MyVoiceCandidateComparison\[\]/);
+  assert.match(ui, /Compare evaluated checkpoints/);
+  assert.match(ui, /build\.evaluation_comparison/);
+  assert.match(ui, /not your previously approved Meeting voice/);
+  assert.match(ui, /Recognizer transcript: \{sample\.intelligibility_text\}/);
+  assert.match(ui, /formatWordErrorRate\(sample\.intelligibility_wer\)/);
+  assert.match(ui, /formatSpeakerSimilarity\(sample\.speaker_similarity\)/);
+  assert.match(ui, /myVoiceBuildApi\.approve\(reviewedLineIds, qualityConfirmed, build\.evaluation_review_id\)/);
+  assert.doesNotMatch(ui, /selectCandidate\(|switchCheckpoint\(/);
+});
+
 test("manual Stop reuses the existing process owners and cannot claim success after cancellation", () => {
   const native = read("src-tauri/src/commands/voice_lab_build.rs");
   const receipts = read("src-tauri/src/commands/voice_lab_build/receipts.rs");

@@ -18,6 +18,16 @@ export type MyVoiceEvaluationSample = {
   artifact_flags: string[];
 };
 
+export type MyVoiceCandidateComparison = {
+  candidate_id: string;
+  selected_for_review: boolean;
+  mean_intelligibility_wer: number;
+  maximum_intelligibility_wer: number;
+  mean_speaker_similarity: number;
+  minimum_speaker_similarity: number;
+  artifact_case_count: number;
+};
+
 export type MyVoiceRecordingSuggestion = {
   line_id: number;
   reason: string;
@@ -63,6 +73,8 @@ export type MyVoiceBuildStatus = {
   evaluation_ready: boolean;
   evaluation_review_id: string | null;
   evaluation_samples: MyVoiceEvaluationSample[];
+  // Older review receipts legitimately have no optional comparison.
+  evaluation_comparison?: MyVoiceCandidateComparison[];
   approved_voice_ready: boolean;
   selected_voice_kind: "built_in" | "personal" | "none" | "unknown";
   selected_builtin_voice_id: "MaleVoice" | "FemaleVoice" | null;
