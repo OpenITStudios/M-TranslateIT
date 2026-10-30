@@ -129,6 +129,26 @@ test("recovered review keeps verified WAV ownership through replay, accept and d
   assert.match(page, /case "recovery_changed":/);
 });
 
+test("timestamped review reuses guided-take evidence and the current verified Replay", () => {
+  const audioOwner = source("src-tauri/src/engine/audio/guided_take.rs");
+  assert.match(audioOwner, /struct GuidedReviewInterval/);
+  assert.match(audioOwner, /MAX_REVIEW_WARNING_INTERVALS: usize = 12/);
+  assert.match(audioOwner, /fn clipping_review_intervals\(/);
+  assert.match(audioOwner, /warning_intervals_truncated: timeline\.truncated/);
+  assert.match(audioOwner, /clipping_intervals_are_exact_20ms_replay_hints_not_new_blockers/);
+  assert.match(audioOwner, /edge_warning_intervals_use_measured_boundaries_not_noise_claims/);
+  assert.match(audioOwner, /too_many_warning_intervals_are_capped_and_truncation_is_disclosed/);
+  assert.match(storage, /let mut review = review_guided_samples\(line_id, &canonical\.samples\)/);
+  assert.match(voiceApi, /warning_intervals: GuidedReviewInterval\[\]/);
+  assert.match(voiceApi, /warning_intervals_truncated: boolean/);
+  assert.match(page, /recordingState\.pending_review\.warning_intervals/);
+  assert.match(page, /onclick=\{\(\) => void replayTake\(warning\.start_ms\)\}/);
+  assert.match(page, /const requestRevision = replayRevision/);
+  assert.match(page, /if \(startMs !== null\) track\.currentTime = startMs \/ 1000;/);
+  assert.match(page, /Only the first 12 detected moments are shown/);
+  assert.doesNotMatch(page, /getAudioQuality\(|new Worker\(|startCapture\(/);
+});
+
 test("accepted WAV inspection is read-only and backed by exact immutable archive receipts", () => {
   assert.match(voiceApi, /inspect_voice_lab_accepted_take_recovery/);
   assert.match(voiceApi, /type AcceptedTakeRecoveryInspection/);

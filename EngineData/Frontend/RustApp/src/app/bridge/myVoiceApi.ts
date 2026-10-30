@@ -1,10 +1,18 @@
 import { runCommand } from "../shared/tauriBridge";
 
+export type GuidedReviewInterval = {
+  code: "voice_lab:review:possible_clipping" | "voice_lab:review:long_edge_pause" | "voice_lab:review:possible_room_sound";
+  start_ms: number;
+  end_ms: number;
+};
+
 export type GuidedTakeReview = {
   line_id: number;
   duration_ms: number;
   quality_blocker: string;
   review_advice: string[];
+  warning_intervals: GuidedReviewInterval[];
+  warning_intervals_truncated: boolean;
 };
 
 export type GuidedLineStatus = {

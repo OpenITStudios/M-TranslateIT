@@ -14,6 +14,39 @@ const ACTIVE_SAMPLE_THRESHOLD: f32 = 128.0 / 32_768.0;
 const MIN_ACTIVE_RMS: f32 = 256.0 / 32_768.0;
 const MAX_DC_OFFSET: f32 = 2_048.0 / 32_768.0;
 const MAX_CLIPPING_RATIO: f32 = 0.05;
+const REVIEW_FRAME_SAMPLES: usize = 640; // Canonical 32-kHz, 20-ms frames.
+const REVIEW_FRAME_MS: u64 = 20;
+const MAX_REVIEW_WARNING_INTERVALS: usize = 12;
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct GuidedReviewInterval {
+    pub code: &'static str,
+    pub start_ms: u64,
+    pub end_ms: u64,
+}
+
+#[derive(Debug, Default)]
+struct ReviewTimeline {
+    intervals: Vec<GuidedReviewInterval>,
+    truncated: bool,
+}
+
+impl ReviewTimeline {
+    // Retain only the earliest N chronological intervals, including when an
+    // earlier edge hint is discovered after later clipping spans.
+    fn push(&mut self, code: &'static str, first_frame: usize, last_frame: usize, duration_ms: u64) {
+        let start_ms = (first_frame as u64).saturating_mul(REVIEW_FRAME_MS).min(duration_ms);
+        let end_ms = (last_frame as u64).saturating_mul(REVIEW_FRAME_MS).min(duration_ms);
+        if end_ms <= start_ms { return; }
+        let interval = GuidedReviewInterval { code, start_ms, end_ms };
+        let position = self.intervals.partition_point(|earlier| earlier.start_ms <= start_ms);
+        self.intervals.insert(position, interval);
+        if self.intervals.len() > MAX_REVIEW_WARNING_INTERVALS {
+            self.intervals.pop();
+            self.truncated = true;
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GuidedTakeReview {
@@ -22,6 +55,9 @@ pub struct GuidedTakeReview {
     pub quality_blocker: String,
     // Review-only advice; not a training/acceptance blocker.
     pub review_advice: Vec<String>,
+    // Computed from canonical 32-kHz review PCM, never stored or a gate.
+    pub warning_intervals: Vec<GuidedReviewInterval>,
+    pub warning_intervals_truncated: bool,
 }
 
 pub struct CapturedGuidedTake {
@@ -187,18 +223,27 @@ pub fn take_guided_audio() -> Result<(CapturedGuidedTake, GuidedTakeReview), Str
 pub(crate) fn review_guided_samples(line_id: u32, samples: &[f32]) -> GuidedTakeReview {
     let evidence = AudioEvidenceReport::from_samples(samples);
     let quality_blocker = guided_take_quality_blocker(samples, &evidence);
+    let duration_ms = samples.len() as u64 * 1_000 / u64::from(GUIDED_TAKE_SAMPLE_RATE_HZ);
     let mut review_advice = Vec::new();
-    if quality_blocker.is_empty() {
-        if evidence.clipping_ratio >= 0.01 {
+    let mut timeline = ReviewTimeline::default();
+    // A take blocked for severe clipping is still reviewable, but time hints
+    // never replace the existing quality blocker.
+    if evidence.clipping_ratio >= 0.01 {
+        if quality_blocker.is_empty() {
             review_advice.push("voice_lab:review:possible_clipping".to_string());
         }
-        recording_environment_hints(samples, &mut review_advice);
+        clipping_review_intervals(samples, duration_ms, &mut timeline);
+    }
+    if quality_blocker.is_empty() {
+        recording_environment_hints(samples, &mut review_advice, duration_ms, &mut timeline);
     }
     GuidedTakeReview {
         line_id,
-        duration_ms: samples.len() as u64 * 1_000 / u64::from(GUIDED_TAKE_SAMPLE_RATE_HZ),
+        duration_ms,
         quality_blocker,
         review_advice,
+        warning_intervals: timeline.intervals,
+        warning_intervals_truncated: timeline.truncated,
     }
 }
 
@@ -246,19 +291,47 @@ fn guided_take_quality_blocker(samples: &[f32], evidence: &AudioEvidenceReport) 
 }
 
 
+// Advisory only: near-rail PCM samples do not prove audible distortion.
+// Merge contiguous frames and bound all reported intervals.
+fn clipping_review_intervals(samples: &[f32], duration_ms: u64, timeline: &mut ReviewTimeline) {
+    let mut first: Option<usize> = None;
+    for (index, frame) in samples.chunks(REVIEW_FRAME_SAMPLES).enumerate() {
+        let near_rail = frame.iter()
+            .filter(|sample| safe_sample(**sample).abs() >= 0.98)
+            .take(3)
+            .count() >= 3;
+        if near_rail && first.is_none() {
+            first = Some(index);
+        } else if !near_rail {
+            if let Some(start) = first.take() {
+                timeline.push("voice_lab:review:possible_clipping", start, index, duration_ms);
+            }
+        }
+    }
+    if let Some(start) = first {
+        timeline.push(
+            "voice_lab:review:possible_clipping",
+            start,
+            samples.len().div_ceil(REVIEW_FRAME_SAMPLES),
+            duration_ms,
+        );
+    }
+}
+
 // Inspect the completed take, never the real-time audio callback.
-fn recording_environment_hints(samples: &[f32], advice: &mut Vec<String>) {
-    const FRAME_SAMPLES: usize = 640; // 20 ms at the fixed 32 kHz review rate
+fn recording_environment_hints(
+    samples: &[f32], advice: &mut Vec<String>, duration_ms: u64, timeline: &mut ReviewTimeline,
+) {
     const MIN_QUIET_FRAMES: usize = 8; // 160 ms of observable quiet context
     const LONG_EDGE_PAUSE_FRAMES: usize = 125; // 2.5 seconds
     let frame_levels: Vec<f32> = samples
-        .chunks_exact(FRAME_SAMPLES)
+        .chunks_exact(REVIEW_FRAME_SAMPLES)
         .map(|frame| {
             let energy = frame.iter().map(|sample| {
                 let value = f64::from(safe_sample(*sample));
                 value * value
             }).sum::<f64>();
-            (energy / FRAME_SAMPLES as f64).sqrt() as f32
+            (energy / REVIEW_FRAME_SAMPLES as f64).sqrt() as f32
         })
         .collect();
     if frame_levels.len() < 15 {
@@ -278,6 +351,15 @@ fn recording_environment_hints(samples: &[f32], advice: &mut Vec<String>) {
     let trailing = frame_levels.iter().rev().take_while(|level| **level < quiet_limit).count();
     if leading >= LONG_EDGE_PAUSE_FRAMES || trailing >= LONG_EDGE_PAUSE_FRAMES {
         advice.push("voice_lab:review:long_edge_pause".to_string());
+        if leading >= LONG_EDGE_PAUSE_FRAMES {
+            timeline.push("voice_lab:review:long_edge_pause", 0, leading, duration_ms);
+        }
+        if trailing >= LONG_EDGE_PAUSE_FRAMES {
+            timeline.push(
+                "voice_lab:review:long_edge_pause",
+                frame_levels.len() - trailing, frame_levels.len(), duration_ms,
+            );
+        }
     }
     let mut quiet_frames: Vec<f32> = Vec::new();
     if leading >= MIN_QUIET_FRAMES {
@@ -303,6 +385,17 @@ fn recording_environment_hints(samples: &[f32], advice: &mut Vec<String>) {
         let active_mean = active_total / active_count as f32;
         if active_mean > 0.0 && median_quiet / active_mean >= 0.18 {
             advice.push("voice_lab:review:possible_room_sound".to_string());
+            // A raised quiet-edge level is not measured noise or SNR. Avoid
+            // duplicated warnings for boundaries already described as pauses.
+            if (MIN_QUIET_FRAMES..LONG_EDGE_PAUSE_FRAMES).contains(&leading) {
+                timeline.push("voice_lab:review:possible_room_sound", 0, leading, duration_ms);
+            }
+            if (MIN_QUIET_FRAMES..LONG_EDGE_PAUSE_FRAMES).contains(&trailing) {
+                timeline.push(
+                    "voice_lab:review:possible_room_sound",
+                    frame_levels.len() - trailing, frame_levels.len(), duration_ms,
+                );
+            }
         }
     }
 }
@@ -422,6 +515,8 @@ mod tests {
         let (_, review) = take_guided_audio().expect("clean review");
         assert!(review.quality_blocker.is_empty());
         assert!(review.review_advice.is_empty());
+        assert!(review.warning_intervals.is_empty());
+        assert!(!review.warning_intervals_truncated);
     }
 
     #[test]
@@ -501,6 +596,71 @@ mod tests {
             review.quality_blocker,
             "voice_lab:take_signal_unusable:dc_offset_too_high"
         );
+    }
+
+    #[test]
+    fn clipping_intervals_are_exact_20ms_replay_hints_not_new_blockers() {
+        let mut samples = (0..64_000).map(|i| if i % 2 == 0 { 0.12 } else { -0.12 })
+            .collect::<Vec<_>>();
+        for frame in [15_usize, 65_usize] {
+            for (i, sample) in samples[frame * 640..(frame + 1) * 640].iter_mut().enumerate() {
+                *sample = if i % 2 == 0 { 1.0 } else { -1.0 };
+            }
+        }
+        let original = samples.clone();
+        let review = review_guided_samples(3, &samples);
+        assert!(review.quality_blocker.is_empty());
+        assert_eq!(review.review_advice, vec!["voice_lab:review:possible_clipping"]);
+        assert_eq!(review.warning_intervals, vec![
+            GuidedReviewInterval { code: "voice_lab:review:possible_clipping", start_ms: 300, end_ms: 320 },
+            GuidedReviewInterval { code: "voice_lab:review:possible_clipping", start_ms: 1_300, end_ms: 1_320 },
+        ]);
+        assert!(!review.warning_intervals_truncated);
+        assert_eq!(samples, original, "review cannot alter source PCM");
+    }
+
+    #[test]
+    fn edge_warning_intervals_use_measured_boundaries_not_noise_claims() {
+        let mut samples = Vec::new();
+        for (frames, level) in [(9_600, 0.03_f32), (140_800, 0.15_f32), (9_600, 0.03_f32)] {
+            samples.extend((0..frames).map(|i| if i % 2 == 0 { level } else { -level }));
+        }
+        let review = review_guided_samples(7, &samples);
+        assert!(review.quality_blocker.is_empty());
+        assert_eq!(review.warning_intervals, vec![
+            GuidedReviewInterval { code: "voice_lab:review:possible_room_sound", start_ms: 0, end_ms: 300 },
+            GuidedReviewInterval { code: "voice_lab:review:possible_room_sound", start_ms: 4_700, end_ms: 5_000 },
+        ]);
+
+        let mut paused = vec![0.0_f32; 96_000];
+        paused.extend((0..64_000).map(|i| if i % 2 == 0 { 0.12 } else { -0.12 }));
+        paused.extend(vec![0.0; 96_000]);
+        let review = review_guided_samples(8, &paused);
+        assert!(review.quality_blocker.is_empty());
+        assert_eq!(review.warning_intervals, vec![
+            GuidedReviewInterval { code: "voice_lab:review:long_edge_pause", start_ms: 0, end_ms: 3_000 },
+            GuidedReviewInterval { code: "voice_lab:review:long_edge_pause", start_ms: 5_000, end_ms: 8_000 },
+        ]);
+        assert!(!review.warning_intervals_truncated);
+    }
+
+    #[test]
+    fn too_many_warning_intervals_are_capped_and_truncation_is_disclosed() {
+        let mut samples = (0..128 * 640).map(|i| if i % 2 == 0 { 0.12 } else { -0.12 })
+            .collect::<Vec<_>>();
+        for frame in (0..128_usize).step_by(2) {
+            for (i, sample) in samples[frame * 640..(frame + 1) * 640].iter_mut().enumerate() {
+                *sample = if i % 2 == 0 { 1.0 } else { -1.0 };
+            }
+        }
+        let review = review_guided_samples(3, &samples);
+        assert_eq!(review.quality_blocker, "voice_lab:take_signal_unusable:severe_clipping");
+        assert_eq!(review.warning_intervals.len(), MAX_REVIEW_WARNING_INTERVALS);
+        assert!(review.warning_intervals_truncated);
+        assert_eq!(review.warning_intervals[0].start_ms, 0);
+        assert_eq!(review.warning_intervals[11].start_ms, 440);
+        assert!(review.warning_intervals.windows(2)
+            .all(|pair| pair[0].start_ms <= pair[1].start_ms));
     }
 
     #[test]

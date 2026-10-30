@@ -5,6 +5,7 @@
     myVoiceApi,
     type GuidedRecordingActionResult,
     type GuidedRecordingState,
+    type GuidedReviewInterval,
     type LegacyProtectionStatus,
     type SavedRecordingPage,
     type SavedRecording,
@@ -40,6 +41,9 @@
   let authorized = $state(false);
   let busy = $state(false);
   let replaying = $state(false);
+  let loadingReplay = $state(false);
+  // A pending WAV fetch cannot outlive Stop/Retry/Save/navigation of its owner.
+  let replayRevision = 0;
   let buildRefreshRevision = $state(0);
   let audio: HTMLAudioElement | null = null;
   let audioUrl: string | null = null;
@@ -146,6 +150,24 @@
     return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
   }
 
+  function formatReviewTime(milliseconds: number): string {
+    const hundredths = Math.floor(Math.max(0, milliseconds) / 10);
+    const seconds = Math.floor(hundredths / 100);
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}.${String(hundredths % 100).padStart(2, "0")}`;
+  }
+
+  function reviewWarningLabel(code: GuidedReviewInterval["code"]): string {
+    switch (code) {
+      case "voice_lab:review:possible_clipping":
+        return "Peaks close to clipping";
+      case "voice_lab:review:long_edge_pause":
+        return "Long pause at the edge";
+      case "voice_lab:review:possible_room_sound":
+        return "Check sound at the quiet edge";
+      default:
+        return "Listen to this section";
+    }
+  }
 
 
   async function loadSavedLibrary(more = false): Promise<void> {
@@ -828,45 +850,66 @@
   }
 
   function stopReplay(): void {
-    audio?.pause();
+    replayRevision += 1;
+    if (audio) {
+      audio.onended = null;
+      audio.onerror = null;
+      audio.pause();
+    }
     audio = null;
     replaying = false;
+    loadingReplay = false;
     builtinPreviewing = null;
     savedPlayingId = null;
     if (audioUrl) URL.revokeObjectURL(audioUrl);
     audioUrl = null;
   }
 
-  async function replayTake(): Promise<void> {
-    if (busy || replaying || selectedLineId === null) return;
-    let bytes: ArrayBuffer | null;
-    try {
-      bytes = await myVoiceApi.getTakeAudio(selectedLineId);
-    } catch {
-      if (!disposed) onNotice("This recording couldn't be loaded.");
-      return;
-    }
-    if (disposed) return;
-    if (!bytes) {
-      onNotice("This recording isn't available for replay yet.");
-      return;
-    }
+  async function replayTake(startMs: number | null = null): Promise<void> {
+    if (busy || recordingStatusUnknown || loadingReplay || isRecording
+      || selectedLineId === null || (replaying && startMs === null)) return;
+    const lineId = selectedLineId;
+    const review = recordingState.pending_review;
+    // Only a verified pending review may seek; never apply old timestamps to
+    // the accepted take sharing this guided line's ID.
+    if (startMs !== null && (!review || review.line_id !== lineId
+      || !Number.isInteger(startMs) || startMs < 0 || startMs >= review.duration_ms)) return;
     stopReplay();
-    const blob = new Blob([bytes], { type: "audio/wav" });
-    audioUrl = URL.createObjectURL(blob);
-    audio = new Audio(audioUrl);
-    replaying = true;
-    audio.onended = stopReplay;
-    audio.onerror = () => {
-      stopReplay();
-      onNotice("The recorded take couldn't be played.");
-    };
+    const requestRevision = replayRevision;
+    loadingReplay = true;
     try {
-      await audio.play();
-      onNotice("Playing the recorded take.");
+      const bytes = await myVoiceApi.getTakeAudio(lineId);
+      if (disposed || requestRevision !== replayRevision || selectedLineId !== lineId
+        || recordingState.pending_review?.line_id !== (review?.line_id ?? undefined)) return;
+      if (!bytes) {
+        onNotice("This recording isn't available for replay yet.");
+        return;
+      }
+      audioUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+      const track = new Audio(audioUrl);
+      audio = track;
+      if (startMs !== null) track.currentTime = startMs / 1000;
+      track.onended = () => { if (audio === track) stopReplay(); };
+      track.onerror = () => {
+        if (audio === track) {
+          stopReplay();
+          onNotice("The recorded take couldn't be played.");
+        }
+      };
+      loadingReplay = false;
+      replaying = true;
+      await track.play();
+      if (audio === track && requestRevision === replayRevision) {
+        onNotice(startMs === null ? "Playing the recorded take."
+          : `Playing from ${formatReviewTime(startMs)}.`);
+      }
     } catch {
-      stopReplay();
-      onNotice("The recorded take couldn't be played.");
+      if (!disposed && requestRevision === replayRevision) {
+        stopReplay();
+        onNotice("The recorded take couldn't be played.");
+      }
+    } finally {
+      if (requestRevision === replayRevision) loadingReplay = false;
     }
   }
 
@@ -1069,6 +1112,28 @@
                     <p class="mb-0 mt-2 text-sm leading-5 text-[var(--ti-warning)]">{recordingReviewAdvice(advice)}</p>
                   {/each}
                 {/if}
+                {#if recordingState.pending_review.warning_intervals?.length}
+                  <div class="mt-4 border-t border-[var(--ti-border)] pt-3">
+                    <p class="mb-0 text-sm font-semibold">Listen at these moments</p>
+                    <p class="mb-0 mt-1 text-xs leading-5 text-[var(--ti-text-muted)]">
+                      Signal-based hints only; they do not prove noise or missing words. Replay the full line before saving.
+                    </p>
+                    <div class="mt-2 flex flex-wrap gap-2">
+                      {#each recordingState.pending_review.warning_intervals as warning (warning.code + ":" + warning.start_ms + ":" + warning.end_ms)}
+                        <button type="button" class="ti-button ti-button-secondary text-xs"
+                          disabled={busy || recordingStatusUnknown || loadingReplay}
+                          aria-label={`Replay from ${formatReviewTime(warning.start_ms)}: ${reviewWarningLabel(warning.code)}`}
+                          onclick={() => void replayTake(warning.start_ms)}>
+                          <Play size={13} />
+                          <span>{formatReviewTime(warning.start_ms)}–{formatReviewTime(warning.end_ms)} · {reviewWarningLabel(warning.code)}</span>
+                        </button>
+                      {/each}
+                    </div>
+                    {#if recordingState.pending_review.warning_intervals_truncated}
+                      <p class="mb-0 mt-2 text-xs text-[var(--ti-warning)]">Only the first 12 detected moments are shown. Listen to the entire recording as well.</p>
+                    {/if}
+                  </div>
+                {/if}
               </div>
             {/if}
             <div class="mt-5 flex flex-wrap items-center gap-3">
@@ -1078,8 +1143,8 @@
                 </button>
                 <span role="status" class="flex items-center gap-2 text-sm text-[var(--ti-danger)]"><span class="size-2 animate-pulse rounded-full bg-current"></span>Recording</span>
               {:else if recordingState.pending_review && pendingLineId === currentLine.line_id}
-                <button type="button" class="ti-button ti-button-secondary" bind:this={reviewReplayButton} disabled={busy || recordingStatusUnknown || replaying} onclick={() => void replayTake()}>
-                  <Play size={15} /><span>{replaying ? "Playing..." : "Replay"}</span>
+                <button type="button" class="ti-button ti-button-secondary" bind:this={reviewReplayButton} disabled={busy || recordingStatusUnknown || replaying || loadingReplay} onclick={() => void replayTake()}>
+                  <Play size={15} /><span>{loadingReplay ? "Loading audio..." : replaying ? "Playing..." : "Replay"}</span>
                 </button>
                 <button type="button" class={recordingState.pending_review.quality_blocker ? "ti-button" : "ti-button ti-button-secondary"} disabled={busy || recordingStatusUnknown} onclick={() => void retryTake()}>
                   <RotateCcw size={15} /><span>Record again</span>

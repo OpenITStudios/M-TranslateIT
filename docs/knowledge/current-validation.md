@@ -21,6 +21,14 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### Bounded timestamped My Voice review (2026-10-30)
+
+**Pinned source parent:** `3f67c38893ab0b058d06c4efa5ddb1d5c77f566b`. The existing `guided_take.rs` review exposed nonlocalized advice on clipping, edge pauses and quiet-edge energy; users could Replay but not go to an indicated point.
+
+**Source change:** `review_guided_samples` now reports up to 12 chronologically earliest, bounded `code/start_ms/end_ms` intervals and a truncation flag, using its existing 32-kHz, 20-ms frame analysis and clipping evidence. Clean takes receive no invented warnings, heavily clipped takes retain their existing quality blocker, and the interval list does not mutate WAVs or training datasets. The same review function is used on newly stopped takes and recovered Drafts after verifying the canonical/native WAV pair. The existing `myVoiceApi.ts` type and mounted `MyVoice.svelte` render accessible timecoded Replay buttons; the same `getTakeAudio` endpoint seeks to the requested time and invalidates stale async fetches. Existing Rust and frontend-runtime test owners received focused source regression cases.
+
+**Proof: STATIC_SOURCE only.** Current source was inspected and regression source authored. No Rust/Node/Svelte compile or test run, actual Windows playback/seek, keyboard/DPI verification, voice listening, GPU training or model quality acceptance was performed. Time intervals are *signal review hints*, never proof of background noise, intelligibility, speaker identity or improved cloning. All target-Windows outcomes remain **UNKNOWN / NOT EXECUTED**.
+
 ### Native WRITE arithmetic and STATUS framing/counter integrity — 2026-10-30
 
 **Pinned source parent:** `bc4dc15310438169605b3925dd5c8ee72b31d450` on `Local`. The kernel `TranslateITCaptureWrite` computed `g_written + frames` and incremented cumulative counters without handling `ULONGLONG` overflow. A wrapped logical cursor could invalidate cyclic reader positions, and wrapped telemetry could report misleading low diagnostics. The privileged `TI_CAPTURE_IOCTL_STATUS` handler also ignored nonzero input bytes even though the broker's STATUS operation required zero-length input; the Rust status parser accepted counters showing more buffered or overwritten frames than lifetime accepted frames.
