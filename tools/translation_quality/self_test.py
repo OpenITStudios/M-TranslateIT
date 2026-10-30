@@ -324,25 +324,38 @@ def main() -> int:
           "Two or more reviewers have to agree."),
          ("At least one reviewer must agree; two reviewers are informed.",
           "At most two reviewers must agree.",
-          "At least two reviewers must not agree.")),
+          "At least two reviewers must not agree.",
+          "At least two reviewers need to disagree.",
+          "At least two reviewers do not have to agree.")),
         ("en-id-quant-011",
          ("Paling banyak lima item boleh tetap pending.",
           "Maksimal 5 item masih tertunda.",
-          "Item pending maksimal lima."),
+          "Item pending maksimal 5."),
          ("Paling sedikit lima item boleh pending.",
           "Maksimal enam item pending; lima item diproses.",
-          "Maksimal lima belas item pending.")),
+          "Maksimal lima belas item pending.",
+          "Item pending maksimal lima belas.")),
         ("id-en-modality-workplace-001",
          ("They said it could be finished by Friday, not that it had to be finished by Friday.",
-          "Not that it had to be finished by Friday, but that it could be finished by Friday."),
+          "Not that it had to be finished by Friday, but that it could be finished by Friday.",
+          "They said it could be finished by Friday, not that it must be finished by Friday."),
          ("They said it had to be finished by Friday, not that it could be finished by Friday.",
-          "They said it could be finished Friday, and it had to be finished Friday.")),
+          "They said it could be finished Friday, and it had to be finished Friday.",
+          "They said it could be finished by Friday, not that it must be finished by Friday, but it must be finished by Friday.")),
     )
     for case_id, faithful, changed_meaning in quantifier_controls:
         for translated in faithful:
             assert evaluator.invariant_result(cases_by_id[case_id], translated)["critical_pass"], (case_id, translated)
         for translated in changed_meaning:
             assert not evaluator.invariant_result(cases_by_id[case_id], translated)["critical_pass"], (case_id, translated)
+
+    # The unbounded spelled-out reversed phrase is not safe to auto-accept;
+    # leave it for review rather than matching "lima" inside "lima belas".
+    reverse_spelled = evaluator.invariant_result(
+        cases_by_id["en-id-quant-011"], "Item pending maksimal lima."
+    )
+    assert reverse_spelled["quality_status"] == "REVIEW"
+    assert reverse_spelled["ordered_match"] is False
 
     incoming_correction = next(case for case in corpus["cases"] if case["id"] == "en-id-correction-001")
     for valid in ("Saya bilang lima belas, bukan lima puluh.", "Bukan lima puluh, melainkan lima belas."):
