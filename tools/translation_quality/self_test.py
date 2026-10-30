@@ -177,6 +177,35 @@ def main() -> int:
                       f"The budget is {accepted}.50, not {rejected}."):
             assert not evaluator.invariant_result(money, wrong)["critical_pass"], wrong
 
+    # Decimal value and correction role cannot be inferred from matching
+    # isolated numerals and negation words alone.
+    conversion = cases_by_id["id-en-number-002"]
+    for faithful in (
+        "The conversion target is 12.5%, not 15%.",
+        "The conversion target is 12,5%, not 15%.",
+        "Not 15%, but 12.5% is the conversion target.",
+    ):
+        assert evaluator.invariant_result(conversion, faithful)["critical_pass"], faithful
+    for changed_meaning in (
+        "The conversion target is 12%, not 15%.",
+        "The conversion target is 15%, not 12.5%.",
+        "The conversion target is 12.5%, not 15.5%.",
+    ):
+        assert not evaluator.invariant_result(conversion, changed_meaning)["critical_pass"], changed_meaning
+
+    file_size = cases_by_id["en-id-number-002"]
+    for faithful in (
+        "Ukuran filenya 2,4 GB, bukan 24 GB.",
+        "Ukuran filenya 2.4 GB, bukan 24 GB.",
+        "Bukan 24 GB, melainkan 2,4 GB ukuran filenya.",
+    ):
+        assert evaluator.invariant_result(file_size, faithful)["critical_pass"], faithful
+    for reversed_meaning in (
+        "Ukuran filenya 24 GB, bukan 2,4 GB.",
+        "Bukan 2,4 GB, melainkan 24 GB ukuran filenya.",
+    ):
+        assert not evaluator.invariant_result(file_size, reversed_meaning)["critical_pass"], reversed_meaning
+
     incoming_correction = next(case for case in corpus["cases"] if case["id"] == "en-id-correction-001")
     for valid in ("Saya bilang lima belas, bukan lima puluh.", "Bukan lima puluh, melainkan lima belas."):
         assert evaluator.invariant_result(incoming_correction, valid)["critical_pass"], valid
