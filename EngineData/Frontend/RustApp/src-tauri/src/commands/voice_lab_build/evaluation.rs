@@ -140,6 +140,39 @@ struct CandidateEvidenceRow {
     samples: Vec<CandidateEvidenceSample>,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceLabReferenceCriterion {
+    OnlyEligible,
+    LowerClippingFraction,
+    LowerRelativeEdgeEnergy,
+    LowerSilenceFraction,
+    LowerDcOffset,
+    HigherSpeakerConsistency,
+    CloserToTargetDuration,
+    LineIdTiebreak,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct VoiceLabReferenceSelection {
+    pub line_id: u32,
+    pub duration_ms: u64,
+    pub eligible_take_count: usize,
+    pub criterion: VoiceLabReferenceCriterion,
+    pub quiet_edge_comparable: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReferenceSelectionReceipt {
+    line_id: u32,
+    wav_file: String,
+    wav_sha256: String,
+    duration_ms: u64,
+    eligible_take_count: usize,
+    criterion: VoiceLabReferenceCriterion,
+    quiet_edge_comparable: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct EvaluationManifest {
     schema_version: u32,
@@ -153,6 +186,9 @@ pub(super) struct EvaluationManifest {
     // optional comparison must never break the original Review/approval.
     #[serde(default)]
     candidate_evidence: Option<serde_json::Value>,
+    // Old and malformed optional rationale must not block existing Review.
+    #[serde(default)]
+    reference_selection: Option<serde_json::Value>,
 }
 
 // Only surface comparison rows when all 2–3 candidates describe the SAME
@@ -266,6 +302,80 @@ pub(super) fn candidate_comparison(manifest: &EvaluationManifest) -> Vec<VoiceLa
     }
     if selected_count != 1 { return Vec::new(); }
     summaries
+}
+
+// This is not a second reference scorer. Verify the worker's choice was
+// copied from the SAME frozen, authorized training WAV into the actor package.
+// Invalid or legacy rationale disappears; the original Review remains usable.
+fn bounded_reference_sha_matches(path: &Path, digest: &str) -> bool {
+    let Ok(info) = fs::symlink_metadata(path) else { return false; };
+    if !info.is_file() || info.file_type().is_symlink()
+        || info.len() < 44 || info.len() > MAX_FROZEN_TAKE_WAV_BYTES
+    {
+        return false;
+    }
+    let Ok(bytes) = fs::read(path) else { return false; };
+    bytes.len() as u64 == info.len() && sha256_matches(&bytes, digest)
+}
+
+pub(super) fn reference_selection_evidence(
+    paths: &VoiceLabStoragePaths,
+    manifest: &EvaluationManifest,
+) -> Option<VoiceLabReferenceSelection> {
+    let receipt = serde_json::from_value::<ReferenceSelectionReceipt>(
+        manifest.reference_selection.clone()?
+    ).ok()?;
+    if receipt.line_id == 0
+        || receipt.wav_file != format!("take_{:04}.wav", receipt.line_id)
+        || !valid_sha256(&receipt.wav_sha256)
+        || !(3_000..=10_000).contains(&receipt.duration_ms)
+        || receipt.eligible_take_count == 0 || receipt.eligible_take_count > 128
+    {
+        return None;
+    }
+    let dataset_manifest = paths.build_dataset_dir.join("dataset.json");
+    let info = fs::symlink_metadata(&dataset_manifest).ok()?;
+    if !info.is_file() || info.file_type().is_symlink()
+        || info.len() == 0 || info.len() > MAX_DATASET_MANIFEST_BYTES
+    {
+        return None;
+    }
+    let frozen: GuidedDatasetManifest = serde_json::from_slice(
+        &fs::read(dataset_manifest).ok()?
+    ).ok()?;
+    if frozen.schema_version != VOICE_LAB_SCHEMA_VERSION
+        || !frozen.authorized_voice_confirmed
+        || receipt.eligible_take_count > frozen.takes.len()
+    {
+        return None;
+    }
+    let mut matching = frozen.takes.iter().filter(|take| {
+        take.line_id == receipt.line_id && take.wav_file == receipt.wav_file
+    });
+    let take = matching.next()?;
+    if matching.next().is_some() { return None; }
+    let actor: serde_json::Value = serde_json::from_slice(
+        &fs::read(paths.candidate_actor_dir.join("actor.json")).ok()?
+    ).ok()?;
+    if actor.get("reference_wav_file")?.as_str()? != "reference.wav"
+        || actor.get("reference_text")?.as_str()? != take.exact_text
+        || actor.get("reference_duration_ms")?.as_u64()? != receipt.duration_ms
+        || !bounded_reference_sha_matches(
+            &paths.build_dataset_dir.join(&receipt.wav_file), &receipt.wav_sha256
+        )
+        || !bounded_reference_sha_matches(
+            &paths.candidate_actor_dir.join("reference.wav"), &receipt.wav_sha256
+        )
+    {
+        return None;
+    }
+    Some(VoiceLabReferenceSelection {
+        line_id: receipt.line_id,
+        duration_ms: receipt.duration_ms,
+        eligible_take_count: receipt.eligible_take_count,
+        criterion: receipt.criterion,
+        quiet_edge_comparable: receipt.quiet_edge_comparable,
+    })
 }
 
 pub(super) fn evaluation_dir(paths: &VoiceLabStoragePaths) -> PathBuf {
@@ -484,6 +594,7 @@ mod tests {
             selected_candidate_id: "s8-g15".to_string(),
             review_id: "a".repeat(64),
             candidate_evidence: None,
+            reference_selection: None,
             samples: HELD_OUT_LINES
                 .iter()
                 .map(|(line_id, text)| VoiceLabEvaluationSample {
@@ -701,6 +812,22 @@ mod tests {
         assert!(candidate_comparison(&report).is_empty(), "duplicate candidate ID");
         report.candidate_evidence = Some(serde_json::json!([valid[0].clone()]));
         assert!(candidate_comparison(&report).is_empty(), "one candidate has no comparison");
+    }
+
+    #[test]
+    fn reference_reason_rejects_unknown_scores_and_never_becomes_a_quality_gate() {
+        assert_eq!(
+            serde_json::from_str::<VoiceLabReferenceCriterion>(
+                "\"lower_relative_edge_energy\""
+            ).unwrap(),
+            VoiceLabReferenceCriterion::LowerRelativeEdgeEnergy,
+        );
+        assert!(serde_json::from_str::<VoiceLabReferenceCriterion>(
+            "\"proven_noise_reduction\""
+        ).is_err());
+        let report = manifest();
+        assert!(report.reference_selection.is_none(),
+            "legacy evaluation still has no reason instead of invented proof");
     }
 
     #[test]

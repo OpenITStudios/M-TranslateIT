@@ -151,6 +151,32 @@ test("P2 selected review ID hashes the actual ordered selected WAV receipts", ()
   assert.match(ui, /role="region" aria-label="Checkpoint comparison metrics, scroll horizontally" tabindex="0"/);
 });
 
+test("My Voice reference rationale is emitted by the existing selector and source-bound to the frozen WAV", () => {
+  const worker = read("../../Backend/LocalWorker/WorkerRuntime/voice_lab_gpt_sovits_build.py");
+  const evaluation = read("src-tauri/src/commands/voice_lab_build/evaluation.rs");
+  const rustStatus = read("src-tauri/src/commands/voice_lab_build.rs");
+  const bridge = read("src/app/bridge/myVoiceBuildApi.ts");
+  const ui = read("src/components/my-voice/MyVoiceBuild.svelte");
+  assert.match(worker, /selection_evidence: dict\[str, Any\] \| None = None/);
+  assert.match(worker, /ranked\.sort\(key=lambda item: item\[0\]\)/);
+  assert.match(worker, /"criterion": criterion/);
+  assert.match(worker, /"wav_sha256": sha256_file\(Path\(chosen\["wav_path"\]\)\)/);
+  assert.match(worker, /"reference_selection": reference_selection/);
+  assert.match(evaluation, /reference_selection: Option<serde_json::Value>/);
+  assert.match(evaluation, /fn reference_selection_evidence\(/);
+  assert.match(evaluation, /take\.line_id == receipt\.line_id && take\.wav_file == receipt\.wav_file/);
+  assert.match(evaluation, /paths\.build_dataset_dir\.join\(&receipt\.wav_file\)/);
+  assert.match(evaluation, /paths\.candidate_actor_dir\.join\("reference\.wav"\)/);
+  assert.match(evaluation, /bounded_reference_sha_matches\(/);
+  assert.match(rustStatus, /reference_selection: Option<VoiceLabReferenceSelection>/);
+  assert.match(rustStatus, /reference_selection_evidence\(&paths, review\)/);
+  assert.match(bridge, /reference_selection\?: MyVoiceReferenceSelection \| null/);
+  assert.match(ui, /Why was this voice reference chosen\?/);
+  assert.match(ui, /not proof of low noise, speaker identity, naturalness or superior voice quality/);
+  assert.match(ui, /Listen to all eight generated samples before any approval/);
+  assert.match(ui, /myVoiceBuildApi\.approve\(reviewedLineIds, qualityConfirmed, build\.evaluation_review_id\)/);
+});
+
 test("manual Stop reuses the existing process owners and cannot claim success after cancellation", () => {
   const native = read("src-tauri/src/commands/voice_lab_build.rs");
   const receipts = read("src-tauri/src/commands/voice_lab_build/receipts.rs");

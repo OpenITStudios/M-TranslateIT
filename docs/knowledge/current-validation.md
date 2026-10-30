@@ -21,6 +21,14 @@ one SHA does not prove another SHA. Later documentation-only commits do not upgr
 
 ## Current Source Proof
 
+### My Voice frozen-reference selection rationale — 2026-10-30
+
+**Pinned source parent:** `1b7964fd641f3e5af232b79f028ed106b5447ff0` on `Local`. The existing pinned GPT-SoVITS V2ProPlus `select_reference` ranks only 3–10s eligible accepted recordings using a lexicographic tuple: clipping fraction, comparable relative quiet-edge energy, silence fraction, DC offset, median peer embedding cosine (tie-break), closeness to 5s and stable guided line ID. This was already the source decision; no selected-reference explanation was surfaced to My Voice Review.
+
+**Bounded source change:** The same Python ranking call optionally records its *first distinguishing comparator* against the next-ranked eligible take; it does not introduce scoring, ASR, neural models or a change to the selected reference. The existing `Evaluation/evaluation.json` gains optional selected line/file, WAV SHA-256, duration, eligible count, criterion, and whether all edges were comparable. The Rust evaluation owner exposes only bounded, user-facing provenance if the original frozen dataset manifest has the matching guided line and canonical WAV, both that source and the candidate actor's actual `reference.wav` hash to the recorded selection, and actor reference transcript/duration agree. Missing, old or invalid evidence shows no explanation and does not gate the original eight-listen/manual approval. UI displays this only in a collapsed explanation next to existing Review. Generated/private WAVs, approved actors, package selection and Meeting remain untouched.
+
+**Proof ceiling: STATIC_SOURCE.** Only pinned source, exact owner boundaries and authored existing-suite contracts were reviewed; Python/Rust/Node/Svelte/Windows/GPU/model training, waveform, quality and Meeting playback were **UNKNOWN / NOT EXECUTED**. Lexicographic ranking explains a deterministic selection, not measured SNR, optimal speaker identity or perceptual improvement. This receipt does not independently authenticate maliciously re-authored local metadata.
+
 ### P1/P2 reviewed WAV identity and audio lifecycle repair — 2026-10-30
 
 **Pinned source parent:** `5027e3575b5b9c2542488333f83b085c8556bf09`. The Python worker computes `review_id` as a SHA-256 of compact sorted-key JSON containing engine revision, selection method, candidate ID and eight ordered `[line_id, WAV sha256]` pairs. The Rust reader previously checked the ID's hex shape but did not recompute its binding. Modified selected WAV receipts with a retained ID could therefore reuse earlier eight-listen UI state. P1 Start could also begin microphone capture while saved Replay audio was still playing or loading.

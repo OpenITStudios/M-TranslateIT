@@ -160,6 +160,8 @@ def training_takes(dataset_dir: Path, manifest: dict[str, Any]) -> list[dict[str
 def select_reference(
     takes: list[dict[str, Any]],
     peer_cosines: dict[int, float] | None = None,
+    *,
+    selection_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     eligible = [x for x in takes if REFERENCE_MIN_MS <= int(x["duration_ms"]) <= REFERENCE_MAX_MS]
     if not eligible:
@@ -205,7 +207,41 @@ def select_reference(
                 take,
             )
         )
-    return min(ranked, key=lambda item: item[0])[1]
+    # Ranking remains the exact existing lexicographic tuple; reporting is
+    # opt-in, never part of Quick Preview and never an additional model pass.
+    ranked.sort(key=lambda item: item[0])
+    chosen = ranked[0][1]
+    if selection_evidence is not None:
+        criteria = (
+            "lower_clipping_fraction",
+            "lower_relative_edge_energy",
+            "lower_silence_fraction",
+            "lower_dc_offset",
+            "higher_speaker_consistency",
+            "closer_to_target_duration",
+            "line_id_tiebreak",
+        )
+        if len(ranked) == 1:
+            criterion = "only_eligible"
+        else:
+            first_difference = next(
+                index for index, (left, right) in enumerate(
+                    zip(ranked[0][0], ranked[1][0])
+                ) if left != right
+            )
+            criterion = criteria[first_difference]
+        selection_evidence.update(
+            {
+                "line_id": int(chosen["line_id"]),
+                "wav_file": str(chosen["wav_file"]),
+                "wav_sha256": sha256_file(Path(chosen["wav_path"])),
+                "duration_ms": int(chosen["duration_ms"]),
+                "eligible_take_count": len(ranked),
+                "criterion": criterion,
+                "quiet_edge_comparable": bool(compare_quiet_edges),
+            }
+        )
+    return chosen
 
 
 def stage_gpu_budget() -> int:
@@ -984,7 +1020,10 @@ def build_candidate(
         int(item["line_id"]): float(item["median_peer_cosine"])
         for item in speaker_evidence["per_take"]
     }
-    reference = select_reference(takes, peer_cosines=peer_cosines)
+    reference_selection: dict[str, Any] = {}
+    reference = select_reference(
+        takes, peer_cosines=peer_cosines, selection_evidence=reference_selection
+    )
     require_training_not_cancelled("training_start")
     candidates = train(source_root, assets, exp, candidate_dir, status_writer)
 
@@ -1117,6 +1156,8 @@ def build_candidate(
         "selected_candidate_id": str(selected["candidate_id"]),
         "selected_candidate": public_candidate_evidence(selected),
         "candidate_evidence": [public_candidate_evidence(candidate) for candidate in evidence],
+        # Existing local evaluation.json only. No second metadata store.
+        "reference_selection": reference_selection,
         "samples": selected_samples,
     }
     (evaluation_dir / "evaluation.json").write_text(

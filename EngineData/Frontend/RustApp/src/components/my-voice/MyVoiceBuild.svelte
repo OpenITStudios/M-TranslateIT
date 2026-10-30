@@ -6,6 +6,7 @@
     type MyVoiceBuildActionResult,
     type MyVoiceBuildStatus,
     type MyVoiceComputeStatus,
+    type MyVoiceReferenceSelection,
   } from "../../app/bridge/myVoiceBuildApi";
   import QuickVoicePreview from "./QuickVoicePreview.svelte";
 
@@ -43,6 +44,7 @@
     evaluation_review_id: null,
     evaluation_samples: [],
     evaluation_comparison: [],
+    reference_selection: null,
     approved_voice_ready: false,
     selected_voice_kind: "unknown",
     selected_builtin_voice_id: null,
@@ -100,6 +102,29 @@
 
   // WER is a word-error fraction, not a perceptual quality score. Similarity
   // is a cosine from the existing engine's speaker verifier, not identity proof.
+  function referenceCriterionLabel(criterion: MyVoiceReferenceSelection["criterion"]): string {
+    switch (criterion) {
+      case "only_eligible":
+        return "Only one accepted recording met the 3–10 second reference window.";
+      case "lower_clipping_fraction":
+        return "Lower clipping fraction than the next-ranked eligible recording.";
+      case "lower_relative_edge_energy":
+        return "Lower quiet-edge energy relative to active speech, among otherwise tied recordings.";
+      case "lower_silence_fraction":
+        return "Less low-energy audio after higher-priority checks tied.";
+      case "lower_dc_offset":
+        return "Lower DC offset after higher-priority checks tied.";
+      case "higher_speaker_consistency":
+        return "Higher relative peer-embedding consistency after signal checks tied.";
+      case "closer_to_target_duration":
+        return "Duration closer to the five-second reference target.";
+      case "line_id_tiebreak":
+        return "Stable guided-line ID tie-break after other checks tied.";
+      default:
+        return "The comparison criterion is not available.";
+    }
+  }
+
   function formatWordErrorRate(value: number): string {
     return Number.isFinite(value) && value >= 0 ? `${(value * 100).toFixed(1)}%` : "Unavailable";
   }
@@ -684,6 +709,31 @@
     <div class="mt-5">
       <strong class="text-sm font-semibold">Listen before using My Voice</strong>
       <p class="mb-0 mt-1 text-sm leading-5 text-[var(--ti-text-muted)]">Listen to these new sentences. Use My Voice only if it sounds like you.</p>
+      <details class="mt-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-3" aria-label="Training reference selection explanation">
+        <summary class="cursor-pointer text-sm font-medium">Why was this voice reference chosen?</summary>
+        {#if build.reference_selection}
+          <p class="mb-0 mt-2 text-sm leading-5 text-[var(--ti-text-muted)]">
+            Guided line {build.reference_selection.line_id} · {formatDuration(build.reference_selection.duration_ms)} ·
+            {build.reference_selection.eligible_take_count} eligible recording(s) between 3 and 10 seconds.
+          </p>
+          <p class="mb-0 mt-2 text-sm leading-5">{referenceCriterionLabel(build.reference_selection.criterion)}</p>
+          {#if !build.reference_selection.quiet_edge_comparable}
+            <p class="mb-0 mt-2 text-xs text-[var(--ti-text-muted)]">
+              Not all eligible recordings had comparable quiet-edge context; that comparison was excluded from ranking.
+            </p>
+          {/if}
+          <p class="mb-0 mt-2 text-xs leading-5 text-[var(--ti-text-muted)]">
+            This is the first rule that separated the selected take from the next-ranked take.
+            Selection is not proof of low noise, speaker identity, naturalness or superior voice quality.
+            Listen to all eight generated samples before any approval.
+          </p>
+        {:else}
+          <p class="mb-0 mt-2 text-xs leading-5 text-[var(--ti-text-muted)]">
+            Verified selection details are unavailable for this review. No ranking explanation is inferred;
+            the existing listening and approval requirements remain unchanged.
+          </p>
+        {/if}
+      </details>
       <details class="mt-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-3" aria-label="Compare evaluated voice candidates">
         <summary class="cursor-pointer text-sm font-medium">Compare evaluated checkpoints</summary>
         <p class="mb-0 mt-2 text-xs leading-5 text-[var(--ti-text-muted)]">

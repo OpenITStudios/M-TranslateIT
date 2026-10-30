@@ -74,8 +74,21 @@ class VoiceLabAudioQualityTests(unittest.TestCase):
                 ],
                 "held_out_lines": [{"line_id": 1001, "exact_text": "unseen reference text"}],
             }
-            selected = select_reference(training_takes(root, manifest))
+            ranked_evidence: dict = {}
+            selected = select_reference(
+                training_takes(root, manifest), selection_evidence=ranked_evidence
+            )
             self.assertEqual(selected["line_id"], 2)
+            self.assertEqual(ranked_evidence["line_id"], 2)
+            self.assertEqual(ranked_evidence["eligible_take_count"], 2)
+            self.assertEqual(ranked_evidence["criterion"], "lower_relative_edge_energy")
+            self.assertTrue(ranked_evidence["quiet_edge_comparable"])
+            self.assertEqual(ranked_evidence["wav_file"], "take_0002.wav")
+            import hashlib
+            self.assertEqual(
+                ranked_evidence["wav_sha256"],
+                hashlib.sha256((root / ranked_evidence["wav_file"]).read_bytes()).hexdigest(),
+            )
 
     def test_reference_ranks_relative_edge_energy_not_microphone_gain(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -135,7 +148,30 @@ class VoiceLabAudioQualityTests(unittest.TestCase):
                 ],
                 "held_out_lines": [{"line_id": 1001, "exact_text": "unseen words"}],
             }
-            self.assertEqual(select_reference(training_takes(root, manifest))["line_id"], 1)
+            evidence: dict = {}
+            selected = select_reference(
+                training_takes(root, manifest), selection_evidence=evidence
+            )
+            self.assertEqual(selected["line_id"], 1)
+            self.assertEqual(evidence["criterion"], "lower_clipping_fraction")
+
+    def test_reference_evidence_single_eligible_is_an_advisory_choice(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            wav = root / "take_0001.wav"
+            write_take(wav, edge_level=500)
+            only_take = {
+                "line_id": 1,
+                "exact_text": "This is the only eligible reference.",
+                "wav_file": wav.name,
+                "wav_path": wav,
+                "duration_ms": 5_000,
+            }
+            evidence: dict = {}
+            self.assertEqual(select_reference([only_take], selection_evidence=evidence), only_take)
+            self.assertEqual(evidence["criterion"], "only_eligible")
+            self.assertEqual(evidence["eligible_take_count"], 1)
+            self.assertEqual(evidence["duration_ms"], 5_000)
 
     def test_frozen_dataset_report_does_not_modify_training_wav(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

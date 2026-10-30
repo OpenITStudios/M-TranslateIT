@@ -28,6 +28,16 @@ export type MyVoiceCandidateComparison = {
   artifact_case_count: number;
 };
 
+export type MyVoiceReferenceSelection = {
+  line_id: number;
+  duration_ms: number;
+  eligible_take_count: number;
+  criterion: "only_eligible" | "lower_clipping_fraction" | "lower_relative_edge_energy"
+    | "lower_silence_fraction" | "lower_dc_offset" | "higher_speaker_consistency"
+    | "closer_to_target_duration" | "line_id_tiebreak";
+  quiet_edge_comparable: boolean;
+};
+
 export type MyVoiceRecordingSuggestion = {
   line_id: number;
   reason: string;
@@ -75,6 +85,8 @@ export type MyVoiceBuildStatus = {
   evaluation_samples: MyVoiceEvaluationSample[];
   // Older review receipts legitimately have no optional comparison.
   evaluation_comparison?: MyVoiceCandidateComparison[];
+  // Optional: old evaluation files have no verified source-selection witness.
+  reference_selection?: MyVoiceReferenceSelection | null;
   approved_voice_ready: boolean;
   selected_voice_kind: "built_in" | "personal" | "none" | "unknown";
   selected_builtin_voice_id: "MaleVoice" | "FemaleVoice" | null;
@@ -122,6 +134,7 @@ function unavailableStatus(): MyVoiceBuildStatus {
     evaluation_ready: false,
     evaluation_review_id: null,
     evaluation_samples: [],
+    reference_selection: null,
     approved_voice_ready: false,
     selected_voice_kind: "unknown",
     selected_builtin_voice_id: null,

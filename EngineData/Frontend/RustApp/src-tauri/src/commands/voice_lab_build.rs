@@ -45,10 +45,13 @@ mod process_owner;
 use process_owner::OwnedBuildJob;
 use receipts::{completion_file, completion_matches, commit_completion, create_identity, identity_file, read_identity, manual_stop_file, request_manual_stop};
 
-pub use evaluation::{VoiceLabCandidateComparison, VoiceLabEvaluationSample};
+pub use evaluation::{
+    VoiceLabCandidateComparison, VoiceLabEvaluationSample, VoiceLabReferenceSelection,
+};
 use phase::reconcile_phase;
 use evaluation::{
     candidate_comparison, evaluation_dir, evaluation_review_complete, held_out_contract, held_out_wavs_intact,
+    reference_selection_evidence,
     reviewable_evaluation as reviewable_evaluation_for_takes, verified_held_out_wav,
     EvaluationManifest, MAX_EVALUATION_WAV_BYTES,
 };
@@ -341,6 +344,8 @@ pub struct VoiceLabBuildStatus {
     pub evaluation_samples: Vec<VoiceLabEvaluationSample>,
     // Advisory comparison of checkpoints from this SAME completed build only.
     pub evaluation_comparison: Vec<VoiceLabCandidateComparison>,
+    // Advisory-only; absent when legacy or when source origin is unverified.
+    pub reference_selection: Option<VoiceLabReferenceSelection>,
     pub approved_voice_ready: bool,
     pub selected_voice_kind: String,
     pub selected_builtin_voice_id: Option<String>,
@@ -647,6 +652,8 @@ fn current_status() -> VoiceLabBuildStatus {
     };
 
     let comparison = evaluation.as_ref().map(candidate_comparison).unwrap_or_default();
+    let reference_selection = evaluation.as_ref()
+        .and_then(|review| reference_selection_evidence(&paths, review));
     VoiceLabBuildStatus {
         active: snapshot.active || process_cleanup_pending,
         preview_active,
@@ -684,6 +691,7 @@ fn current_status() -> VoiceLabBuildStatus {
         evaluation_review_id: evaluation.as_ref().map(|value| value.review_id.clone()),
         evaluation_samples: evaluation.map(|value| value.samples).unwrap_or_default(),
         evaluation_comparison: comparison,
+        reference_selection,
         approved_voice_ready: approved_ready,
         selected_voice_kind: selected_voice.kind,
         selected_builtin_voice_id: selected_voice.builtin_id,
