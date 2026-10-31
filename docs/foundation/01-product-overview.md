@@ -10,7 +10,7 @@ lifecycle: ACTIVE
 # TranslateIT — Product Overview
 
 **Status:** Active Policy  
-**Updated:** 2026-10-15
+**Updated:** 2026-11-01
 
 ## Purpose
 
@@ -65,6 +65,19 @@ authorized user voice
 ```
 
 Training is occasional. Daily Meeting use performs inference only.
+
+## Optional Codex gateway research (not a Meeting feature yet)
+
+The owner has approved a future **opt-in Codex translation route** that should receive
+microphone audio directly, return only verified English translation text, and reuse
+existing GPT-SoVITS and virtual-microphone delivery. The existing Local route remains
+the only admitted Meeting translation engine until capability, billing and native
+audio tests succeed. The preliminary Codex App Server connection is available in
+Diagnostics only: account/usage introspection is **not** proof of audio access,
+translation quality, latency, or zero additional charges. No automatic cloud
+fallback, paid API key, new Meeting owner, or silently enabled network mode.
+
+See [Codex Gateway research](../knowledge/proposals/2026-11-01-codex-gateway.md).
 
 ## Product locks
 

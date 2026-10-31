@@ -32,7 +32,11 @@ pub fn prepare_for_app_exit() -> bool {
     finish_app_exit(
         &latest_runtime_session_state(),
         super::super::meeting_session::meeting_stop_cleanup_pending(),
-        super::super::helper_bridge::shutdown_helper_bridge_for_app_exit,
+        || {
+            let codex_released = super::super::codex_gateway::shutdown_for_app_exit();
+            let helper_released = super::super::helper_bridge::shutdown_helper_bridge_for_app_exit();
+            codex_released && helper_released
+        },
         super::super::startup_recovery::mark_clean_shutdown,
     )
 }

@@ -9,6 +9,7 @@
   import { sanitizeDiagnosticText } from "../../app/shared/diagnosticPrivacy";
   import MeetingPerformanceDiagnostics from "./MeetingPerformanceDiagnostics.svelte";
   import RuntimeReliabilityDiagnostics from "./RuntimeReliabilityDiagnostics.svelte";
+  import CodexGatewayDiagnostics from "./CodexGatewayDiagnostics.svelte";
 
   let {
     snapshot,
@@ -115,6 +116,7 @@
   </article>
 
   <RuntimeReliabilityDiagnostics {refreshRevision} />
+  <CodexGatewayDiagnostics />
   <MeetingPerformanceDiagnostics status={snapshot.meetingSession} />
 
   <article class="ti-panel p-5">

@@ -127,6 +127,7 @@ const contractPairs = [
   ["src-tauri/src/commands/helper_bridge_runtime.rs", "HelperBridgeStatus", "src/app/shared/types.ts", "HelperBridgeStatus"],
   ["src-tauri/src/commands/helper_bridge_runtime.rs", "HelperBridgeActionResult", "src/app/shared/types.ts", "HelperBridgeActionResult"],
   ["src-tauri/src/commands/helper_bridge.rs", "HelperBridgeWorkerResponse", "src/app/shared/types.ts", "HelperBridgeWorkerResponse"],
+  ["src-tauri/src/commands/codex_gateway.rs", "CodexGatewayStatus", "src/app/bridge/codexGatewayApi.ts", "CodexGatewayStatus"],
   ["src-tauri/src/commands/virtual_mic_route.rs", "VirtualMicRouteContractStatus", "src/app/bridge/runtimeApi.ts", "VirtualMicRouteContractStatus"],
   ["src-tauri/src/commands/meeting_session.rs", "MeetingSessionPreflightStatus", "src/app/bridge/runtimeApi.ts", "MeetingSessionPreflightStatus"],
   ["src-tauri/src/commands/meeting_session.rs", "MeetingOutboundTiming", "src/app/bridge/runtimeApi.ts", "MeetingOutboundTiming"],
