@@ -49,9 +49,10 @@ profiler, or persistent credential copy.
 Only explicit Diagnostics **Check Codex connection** starts a child. The
 application does not automatically start it at boot or restart it after error.
 It looks for an absolute regular native `codex.exe` through
-`TRANSLATEIT_CODEX_EXECUTABLE` or an absolute PATH directory. It will not
-execute `.cmd`, `.bat` or a shell, and does not take over another Codex
-installation's already-running process. Release packaging/discovery remains
+`TRANSLATEIT_CODEX_EXECUTABLE`, the established `CODEX_CLI_PATH`, or a
+bounded set of direct/native npm package paths under absolute PATH directories.
+It will not execute `.cmd`, `.bat` or a shell, scan recursively, or take over
+another Codex installation's already-running process. Release packaging/discovery remains
 unverified.
 
 The child runs `codex app-server --listen stdio://`. JSONL transport has:

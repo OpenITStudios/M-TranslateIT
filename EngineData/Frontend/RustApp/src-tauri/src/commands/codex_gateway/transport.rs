@@ -28,23 +28,40 @@ fn acceptable_binary(path: &Path) -> bool {
             .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
 }
 
-/// Explicit native executable first; otherwise only a native codex.exe in an
-/// absolute PATH directory. Reject shell scripts, relative paths and symlinks.
+/// Conservative candidates only. Never execute a .cmd shim, Node.js loader or
+/// scan an unbounded filesystem tree. Standard npm global installations expose
+/// codex.cmd on PATH but keep the actual binary inside the installed package.
+fn native_candidates_in_bin(directory: &Path) -> [PathBuf; 3] {
+    let package = directory.join("node_modules").join("@openai").join("codex");
+    [
+        directory.join("codex.exe"),
+        package.join("node_modules").join("@openai").join("codex-win32-x64")
+            .join("vendor").join("x86_64-pc-windows-msvc").join("bin").join("codex.exe"),
+        package.join("vendor").join("x86_64-pc-windows-msvc")
+            .join("codex").join("codex.exe"),
+    ]
+}
+
+/// Explicit native executable first, then a reviewed installed-CLI layout in
+/// absolute PATH directories. Preserve the user's other Codex CLI processes.
 fn codex_binary() -> Result<PathBuf, &'static str> {
-    if let Some(raw) = std::env::var_os("TRANSLATEIT_CODEX_EXECUTABLE") {
-        let path = PathBuf::from(raw);
-        return acceptable_binary(&path)
-            .then_some(path)
-            .ok_or("codex_gateway:executable_untrusted");
+    for key in ["TRANSLATEIT_CODEX_EXECUTABLE", "CODEX_CLI_PATH"] {
+        if let Some(raw) = std::env::var_os(key) {
+            let path = PathBuf::from(raw);
+            return acceptable_binary(&path)
+                .then_some(path)
+                .ok_or("codex_gateway:executable_untrusted");
+        }
     }
     if let Some(path_env) = std::env::var_os("PATH") {
         for directory in std::env::split_paths(&path_env) {
             if !directory.is_absolute() {
                 continue;
             }
-            let candidate = directory.join("codex.exe");
-            if acceptable_binary(&candidate) {
-                return Ok(candidate);
+            for candidate in native_candidates_in_bin(&directory) {
+                if acceptable_binary(&candidate) {
+                    return Ok(candidate);
+                }
             }
         }
     }
@@ -315,5 +332,14 @@ mod tests {
         assert!(!acceptable_binary(Path::new("codex.exe")));
         assert!(!acceptable_binary(Path::new("codex.cmd")));
         assert!(!acceptable_binary(Path::new("codex.sh")));
+    }
+
+    #[test]
+    fn npm_candidate_paths_are_finite_and_native_only() {
+        let candidates = native_candidates_in_bin(Path::new("C:\\npm-root"));
+        assert_eq!(candidates.len(), 3);
+        for candidate in candidates {
+            assert_eq!(candidate.file_name().and_then(OsStr::to_str), Some("codex.exe"));
+        }
     }
 }

@@ -27,6 +27,9 @@ test("Codex App Server has one owned stdio process, bounded reader and no paid k
   assert.match(transport, /command\.env_remove\(key\)/);
   assert.match(transport, /"OPENAI_API_KEY"/);
   assert.doesNotMatch(transport, /Command::new\("cmd"/);
+  assert.match(transport, /native_candidates_in_bin/);
+  assert.match(transport, /"CODEX_CLI_PATH"/);
+  assert.match(transport, /"codex-win32-x64"/);
 });
 
 test("RPC admission is introspection-only, no inference and no automatic paid fallback", () => {
