@@ -488,6 +488,44 @@ The code does not claim Codex audio entitlement, causal source/translated
 text pairing, working WebRTC negotiation, physical receiver delivery,
 or a completed Cloud Voice integration.
 
+## Phase 12: native route/bootstrap parity and Original/incoming regression — SOURCE CANDIDATE
+
+A source-level review of P11 against the actual native dispatchers found two
+reachable bypasses of the intended early Local-engine decision:
+
+1. `commands/runtime.rs::start_meeting_translation` prepared or cleared the
+   selected virtual microphone route before reaching the canonical Meeting
+   lifecycle's Codex rejection. A direct native Start now delegates to the
+   existing Meeting blocker *before* any route-pair preparation when the
+   persisted translation engine is not Local. Duplicate active-session Start
+   retains the existing lifecycle owner.
+2. `commands/application_runtime/intents.rs` could start/check the Local
+   helper through `ensure_runtime_ready`, `check_readiness` or `fix_setup`
+   when the engine was Codex. Those Meeting-only setup intents now reuse
+   `meeting_session::local_translated_meeting_route_admitted`, exported to
+   sibling native owners without consulting the Codex diagnostic flag.
+   Rejection precedes worker status/inference and does not change the
+   persisted engine or fall back to a paid provider.
+
+**Preserved:** Explicit My Voice worker/recovery actions are separate from
+implicit Meeting bootstrap. Native Original Microphone Start and source
+selection keep their own non-AI prerequisites; the Codex gate applies only
+to translated Start. The incoming Meeting Sound processor remains on its
+existing optional, Local-enabled incoming lane; it is not promoted to an
+independent Codex session, and it is not proof that a Codex Meeting can
+start. One Meeting/Stop, worker, virtual output and committed-turn owner
+remain unchanged.
+
+**Proof:** STATIC_SOURCE review on pinned parent
+`7fd21a9c412d2f325720898ea55800644d0dda31`; extended existing
+TypeScript source assertions for direct Start routing, alternate native
+intents, Original Microphone and incoming-caption ownership. The prior
+Rust Meeting-engine predicate regression remains authored, not executed. All Rust/TypeScript,
+build, CI, installed Codex, Windows, physical mic, VB-CABLE, realtime
+Voice and paid-usage checks are **NOT EXECUTED / UNKNOWN**. A check
+before source preparation is not a concurrency, CPU cost or runtime timing
+proof. Codex Voice, WebRTC and TTS integration remain **NOT ADMITTED**.
+
 ## Translation commit and resource ownership
 
 One future internal result contract should carry session ID, generation,
@@ -538,9 +576,9 @@ incremental user-PC or hosted CI requirements.
   while Codex translation Start and source switching are explicitly blocked
   until admission. Streaming audio and release bundling are NOT enabled.
 
-**Next source work:** complete a source-level regression audit of the
-new canonical Meeting engine gate against current settings persistence,
-Original Microphone and incoming captions. Resolve only actual contract
-mismatches, keeping Codex Voice network/audio/TTS disabled. Defer one
-integrated Windows build, account entitlement and physical audio/Meeting
-acceptance until explicitly authorized; do not run incremental tests or CI.
+**Next work:** hold P12 as a source candidate and validate its existing
+Rust/TypeScript contracts in the later single authorized pinned-SHA
+integrated build/Windows acceptance. Account Voice entitlement, actual
+WebRTC media and causal translated-text correlation require independent
+proof before any Codex Meeting route could be admitted. Do not dispatch CI,
+request per-commit PC tests or activate paid/cloud inference.

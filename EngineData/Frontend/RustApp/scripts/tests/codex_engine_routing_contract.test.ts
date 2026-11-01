@@ -10,6 +10,9 @@ const uiSource = (path: string): string => readFileSync(new URL(path, frontend),
 const settings = rustSource("engine/settings.rs");
 const persistence = rustSource("commands/settings.rs");
 const meeting = rustSource("commands/meeting_session.rs");
+const nativeMeetingStart = rustSource("commands/runtime.rs");
+const nativeIntents = rustSource("commands/application_runtime/intents.rs");
+const incoming = rustSource("commands/meeting_session/incoming_pipeline.rs");
 const preflight = rustSource("commands/meeting_session/preflight.rs");
 const consumer = rustSource("commands/meeting_session/consumer_runtime.rs");
 const outbound = rustSource("commands/meeting_session/outbound_pipeline.rs");
@@ -22,6 +25,8 @@ const types = uiSource("app/shared/types.ts");
 const state = uiSource("app/shared/state.ts");
 const selector = uiSource("components/settings/MeetingTranslationEngine.svelte");
 const page = uiSource("pages/Settings.svelte");
+const meetingPage = uiSource("pages/Meeting.svelte");
+const quickAccess = uiSource("pages/QuickAccess.svelte");
 const boot = uiSource("App.svelte");
 const facade = uiSource("app/bridge/runtimeProductFacade.ts");
 const readiness = uiSource("app/bridge/productReadinessState.ts");
@@ -133,4 +138,52 @@ test("Settings makes Codex explicitly opt-in, unavailable and non-networked", ()
   assert.match(selector, /runtimeApi\.loadSettings\(\)/);
   assert.match(selector, /does not send microphone audio/);
   assert.match(selector, /disabled=\{locked \|\| saving\}/);
+});
+
+test("P12 checks the persisted engine before direct native Meeting route preparation", () => {
+  assert.match(meeting, /pub\(super\) fn local_translated_meeting_route_admitted\(\) -> bool/);
+  const translated = nativeMeetingStart.slice(
+    nativeMeetingStart.indexOf("pub fn start_meeting_translation()"),
+    nativeMeetingStart.indexOf("pub fn start_meeting_original()"),
+  );
+  const guard = translated.indexOf("!meeting_session::local_translated_meeting_route_admitted()");
+  const routePrepare = translated.indexOf("clear_prepared_virtual_mic_route_selection();");
+  assert.ok(guard >= 0 && routePrepare > guard, "Codex Start must be rejected before VB-CABLE preparation");
+  assert.match(translated.slice(guard, routePrepare), /return meeting_session::start_meeting_translation\(\)/);
+  const original = nativeMeetingStart.slice(nativeMeetingStart.indexOf("pub fn start_meeting_original()"));
+  assert.doesNotMatch(original, /local_translated_meeting_route_admitted/);
+});
+
+test("P12 guards alternate native setup intents from hidden Local worker bootstrap", () => {
+  assert.match(nativeIntents, /fn require_local_outbound_setup\(\) -> Result<\(\), IntentOutcome>/);
+  assert.match(nativeIntents, /meeting_session::local_translated_meeting_route_admitted\(\)/);
+  assert.match(nativeIntents, /"engine_not_admitted"/);
+  const check = nativeIntents.slice(
+    nativeIntents.indexOf('"check_readiness" => {'),
+    nativeIntents.indexOf('"ensure_runtime_ready" =>'),
+  );
+  assert.ok(check.indexOf("require_local_outbound_setup()") >= 0);
+  assert.ok(check.indexOf("require_local_outbound_setup()") < check.indexOf("runtime::verify_required_outbound_ai_readiness()"));
+  const ensure = nativeIntents.slice(
+    nativeIntents.indexOf("fn ensure_runtime_ready()"),
+    nativeIntents.indexOf("fn retry_blocked_worker()"),
+  );
+  assert.ok(ensure.indexOf("require_local_outbound_setup()") >= 0);
+  assert.ok(ensure.indexOf("require_local_outbound_setup()") < ensure.indexOf("helper_bridge::start_helper_bridge()"));
+  const repair = nativeIntents.slice(nativeIntents.indexOf("fn fix_setup()"));
+  assert.ok(repair.indexOf("require_local_outbound_setup()") >= 0);
+  assert.ok(repair.indexOf("require_local_outbound_setup()") < repair.indexOf("helper_bridge::start_helper_bridge()"));
+  // Explicit worker recovery remains a distinct user action; it is not a
+  // Codex Meeting fallback or an automatic bootstrap.
+  assert.match(nativeIntents, /"retry_blocked_worker" => retry_blocked_worker\(\)/);
+});
+
+test("P12 preserves Original Microphone and the independent incoming caption lane", () => {
+  assert.match(lifecycle, /if !original_requested && !super::local_translated_meeting_route_admitted\(\)/);
+  assert.match(lifecycle, /let original_eligible = preflight.microphone_ready && preflight.meeting_route_ready/);
+  assert.match(meetingPage, /currentSource === "original" && !meeting.hasSession/);
+  assert.match(quickAccess, /choice === "original" \|\| meeting.preflight.start_eligible/);
+  assert.doesNotMatch(incoming, /local_translated_meeting_route_admitted/);
+  assert.match(committed, /if lane == "you" && !super::local_translated_meeting_route_admitted\(\)/);
+  assert.match(incoming, /session_id, event_sequence, None, utterance_id, "incoming"/);
 });

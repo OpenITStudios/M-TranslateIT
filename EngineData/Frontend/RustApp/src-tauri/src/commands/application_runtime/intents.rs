@@ -9,6 +9,22 @@ fn helper_state_allows_start(state: &str) -> bool {
     matches!(state, "not_started" | "stopped")
 }
 
+// Meeting setup/bootstrap is LOCAL-only. Reuse the same persisted-engine
+// decision as native Meeting Start; a stale frontend snapshot cannot
+// accidentally warm Whisper/MiLMMT for a selected, unverified Codex route.
+// Explicit My Voice worker operations retain their independent ownership.
+fn require_local_outbound_setup() -> Result<(), IntentOutcome> {
+    if meeting_session::local_translated_meeting_route_admitted() {
+        Ok(())
+    } else {
+        Err(outcome(
+            false,
+            "engine_not_admitted".to_string(),
+            "Codex Voice is selected but not verified. Local Meeting AI setup was not started. Select Local in Settings for offline translation.".to_string(),
+        ))
+    }
+}
+
 pub fn dispatch(intent: &str) -> IntentOutcome {
     match intent {
         "start_meeting" => {
@@ -33,6 +49,9 @@ pub fn dispatch(intent: &str) -> IntentOutcome {
         }
         "fix_setup" => fix_setup(),
         "check_readiness" => {
+            if let Err(blocked) = require_local_outbound_setup() {
+                return blocked;
+            }
             let readiness = runtime::verify_required_outbound_ai_readiness();
             outcome(readiness.ok, readiness.state, readiness.message)
         }
@@ -47,6 +66,9 @@ pub fn dispatch(intent: &str) -> IntentOutcome {
 }
 
 fn ensure_runtime_ready() -> IntentOutcome {
+    if let Err(blocked) = require_local_outbound_setup() {
+        return blocked;
+    }
     let helper = helper_bridge::get_helper_bridge_status();
     if helper.state == "ready" {
         return outcome(
@@ -97,6 +119,9 @@ fn retry_blocked_worker() -> IntentOutcome {
 }
 
 fn fix_setup() -> IntentOutcome {
+    if let Err(blocked) = require_local_outbound_setup() {
+        return blocked;
+    }
     let helper = helper_bridge::get_helper_bridge_status();
     if helper_state_allows_start(&helper.state) {
         let started = helper_bridge::start_helper_bridge();

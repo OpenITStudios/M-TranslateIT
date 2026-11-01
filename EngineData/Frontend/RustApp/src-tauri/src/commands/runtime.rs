@@ -143,6 +143,12 @@ pub fn start_meeting_translation() -> MeetingSessionActionResult {
     if latest_runtime_session_state().has_active_session {
         return meeting_session::start_meeting_translation();
     }
+    // The canonical Meeting gate must run before native VB-CABLE route
+    // preparation, even for direct Rust callers that bypass the frontend.
+    // An unverified Codex preference must not probe/replace the Local route.
+    if !meeting_session::local_translated_meeting_route_admitted() {
+        return meeting_session::start_meeting_translation();
+    }
 
     clear_prepared_virtual_mic_route_selection();
     if let Err(blocker) = prepare_current_virtual_mic_route_for_meeting() {

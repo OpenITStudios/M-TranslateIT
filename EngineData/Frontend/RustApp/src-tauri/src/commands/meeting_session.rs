@@ -52,7 +52,7 @@ fn local_translated_route_for_engine(engine: &str) -> bool {
     engine == "local"
 }
 
-fn local_translated_meeting_route_admitted() -> bool {
+pub(super) fn local_translated_meeting_route_admitted() -> bool {
     local_translated_route_for_engine(&crate::engine::load_settings().translation_engine)
 }
 
