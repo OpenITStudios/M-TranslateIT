@@ -5,7 +5,7 @@ use std::ffi::OsStr;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -126,11 +126,21 @@ fn cleanup_proven(
     child_reaped && writer_released && reader_released && cleanup_failure.is_none()
 }
 
-/// Deterministic notification admission shared by the request and idle loops.
-/// No Voice or tool notification is ever eligible in the account-only gateway.
+/// An account or provider-policy event invalidates previously observed
+/// ChatGPT/provider/usage claims before the controller dequeues that event.
+/// This includes the current upstream modelProvider authentication recovery
+/// notifications; future config/changed also fails closed.
+fn affects_account_authority(method: &str) -> bool {
+    method.starts_with("account/")
+        || method.starts_with("modelProvider/")
+        || matches!(method, "config/changed" | "configRequirements/changed")
+}
+
+/// Deterministic notification admission shared by request and idle loops.
+/// The actual read thread advances a revision before queueing a notification.
 fn account_notification(method: &str) -> Result<bool, &'static str> {
     realtime::refuse_unadmitted_event(method)?;
-    Ok(method.starts_with("account/"))
+    Ok(affects_account_authority(method))
 }
 
 struct WriteCommand {
@@ -240,6 +250,7 @@ fn read_jsonl(
     mut stdout: impl Read,
     tx: SyncSender<WireEvent>,
     overflow: Arc<AtomicBool>,
+    account_revision: Arc<AtomicU64>,
 ) {
     let mut block = [0u8; 4096];
     let mut line = Vec::with_capacity(4096);
@@ -262,6 +273,21 @@ fn read_jsonl(
                 }
                 let parsed = protocol::parse_frame(&line);
                 line.clear();
+                if let Ok(Inbound::Notification { method, .. }) = &parsed {
+                    if affects_account_authority(method) {
+                        // Atomic revision is updated before the event enters
+                        // the bounded queue. UI snapshots therefore invalidate
+                        // even when the controller has not dequeued the event.
+                        if account_revision.fetch_update(
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                            |revision| revision.checked_add(1),
+                        ).is_err() {
+                            overflow.store(true, Ordering::Release);
+                            return;
+                        }
+                    }
+                }
                 if !emit(&tx, &overflow, parsed) {
                     return;
                 }
@@ -287,11 +313,14 @@ pub(super) struct AppServer {
     next_id: u64,
     child_reaped: bool,
     account_dirty: bool,
+    account_revision: Arc<AtomicU64>,
     cleanup_failure: Option<&'static str>,
 }
 
 impl AppServer {
-    pub(super) fn spawn() -> Result<Self, &'static str> {
+    pub(super) fn spawn(account_revision: Arc<AtomicU64>)
+        -> Result<Self, &'static str>
+    {
         let binary = codex_binary()?;
         let mut command = Command::new(binary);
         command.args(["app-server", "--listen", "stdio://"])
@@ -341,9 +370,10 @@ impl AppServer {
         let (tx, receiver) = mpsc::sync_channel(EVENT_QUEUE_CAPACITY);
         let overflow = Arc::new(AtomicBool::new(false));
         let observed = Arc::clone(&overflow);
+        let reader_revision = Arc::clone(&account_revision);
         let reader = match thread::Builder::new()
             .name("translateit-codex-jsonl-reader".to_string())
-            .spawn(move || read_jsonl(stdout, tx, observed))
+            .spawn(move || read_jsonl(stdout, tx, observed, reader_revision))
         {
             Ok(reader) => reader,
             Err(_) => {
@@ -360,6 +390,7 @@ impl AppServer {
             child, writer_tx: Some(writer_tx), receiver, overflow,
             writer_failed, reader: Some(reader), writer: Some(writer),
             next_id: 0, child_reaped: false, account_dirty: false,
+            account_revision,
             cleanup_failure: None,
         })
     }
@@ -421,6 +452,12 @@ impl AppServer {
                 return Ok(result);
             }
         }
+    }
+
+    /// The read thread advances this revision BEFORE queueing account or
+    /// provider events, including while the controller awaits an RPC.
+    pub(super) fn account_revision(&self) -> u64 {
+        self.account_revision.load(Ordering::Acquire)
     }
 
     /// Account notifications arriving while an RPC response is in flight
@@ -527,11 +564,13 @@ mod tests {
         );
         let (tx, rx) = mpsc::sync_channel(4);
         let overflow = Arc::new(AtomicBool::new(false));
-        read_jsonl(input, tx, Arc::clone(&overflow));
+        let revision = Arc::new(AtomicU64::new(0));
+        read_jsonl(input, tx, Arc::clone(&overflow), Arc::clone(&revision));
         assert!(matches!(rx.recv().unwrap().unwrap(), Inbound::Response { id: 1, .. }));
         assert!(matches!(rx.recv().unwrap().unwrap(),
             Inbound::Notification { method, .. } if method == "account/updated"));
         assert!(!overflow.load(Ordering::Acquire));
+        assert_eq!(revision.load(Ordering::Acquire), 1);
     }
 
     #[test]
@@ -540,7 +579,7 @@ mod tests {
         let overflow = Arc::new(AtomicBool::new(false));
         read_jsonl(std::io::Cursor::new(
             b"{\"method\":\"one\"}\n{\"method\":\"two\"}\n".to_vec()
-        ), tx, Arc::clone(&overflow));
+        ), tx, Arc::clone(&overflow), Arc::new(AtomicU64::new(0)));
         assert!(overflow.load(Ordering::Acquire));
         assert!(matches!(rx.recv().unwrap().unwrap(),
             Inbound::Notification { method, .. } if method == "one"));
@@ -603,6 +642,34 @@ mod tests {
         assert_eq!(account_notification("thread/started"), Ok(false));
         assert_eq!(
             account_notification("thread/realtime/transcript/done"),
+            Err("codex_realtime:unsolicited_without_voice_authority")
+        );
+    }
+
+    #[test]
+    fn reader_revision_invalidates_account_and_provider_before_dispatch() {
+        let (tx, rx) = mpsc::sync_channel(8);
+        let overflow = Arc::new(AtomicBool::new(false));
+        let revision = Arc::new(AtomicU64::new(7));
+        let stream = br#"{"method":"account/updated","params":{}}
+{"method":"modelProvider/authRecoveryStarted","params":{}}
+{"method":"config/changed","params":{}}
+{"method":"thread/started","params":{}}
+"#;
+        read_jsonl(
+            std::io::Cursor::new(stream.to_vec()), tx,
+            Arc::clone(&overflow), Arc::clone(&revision),
+        );
+        assert_eq!(revision.load(Ordering::Acquire), 10);
+        assert!(!overflow.load(Ordering::Acquire));
+        for _ in 0..4 {
+            assert!(matches!(rx.recv().unwrap().unwrap(), Inbound::Notification { .. }));
+        }
+        assert_eq!(account_notification("modelProvider/authRecoveryCompleted"), Ok(true));
+        assert_eq!(account_notification("config/changed"), Ok(true));
+        assert_eq!(account_notification("thread/started"), Ok(false));
+        assert_eq!(
+            account_notification("thread/realtime/started"),
             Err("codex_realtime:unsolicited_without_voice_authority")
         );
     }

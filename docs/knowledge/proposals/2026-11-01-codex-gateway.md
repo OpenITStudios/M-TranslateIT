@@ -396,6 +396,50 @@ Upstream shape was inspected at `openai/codex` commit
 `protocol/v2/account.rs` and
 `app-server/src/request_processors/initialize_processor.rs`.
 
+## Phase 10: account/provider authority revision — SOURCE CANDIDATE
+
+The existing Rust App Server `transport.rs` reader now advances a bounded
+generation-local `AtomicU64` account-authority revision **before** enqueueing
+a parsed `account/*` or `modelProvider/*` notification. The same rule
+covers `config/changed` and `configRequirements/changed` if a future
+server emits them. Revision arithmetic fails closed on overflow by setting
+the existing transport-overflow flag. This does not add polling services,
+new subprocesses, login actions, model calls or a second state owner.
+
+The canonical `codex_gateway.rs` owner keeps the current reader revision
+beside the exact generation and remembers which revision was actually
+verified. A successful diagnostic snapshot requires the same revision
+throughout `account/gatewayOAuth/read`, `account/read` and
+`account/rateLimits/read`, followed by an owner-locked revision
+check **before** a status is published. The existing bounded two-attempt
+account re-probe remains: if the account/provider changes repeatedly,
+diagnostics fail closed rather than reporting earlier results.
+
+A status read that observes a newer revision immediately changes the
+visible state to `account_revalidating`, masks ChatGPT login and included
+usage, clears the CLI-version and diagnostic compatibility claims, and
+retains only the true process ownership and generation. Thus a notification
+already parsed by the reader cannot leave old claims visible while queued.
+The same invalidation runs before Connect/Disconnect; Stop and terminal
+cleanup remove verified-revision authority. A completed owner still
+retains any P8 cleanup-incomplete latch.
+
+The P7 fake server now has source-only scenarios for an account change
+and a model-provider authentication recovery event arriving *before*
+the control thread dequeues them. Rust owner unit cases cover stale
+snapshots, cancellation, generation mismatch and cleanup revocation.
+Existing TypeScript source contracts assert the same wiring.
+All tests are **AUTHORED / NOT EXECUTED**.
+
+**Proof boundary:** the revision records notifications actually received
+by the reader. It cannot prove that an upstream identity/provider change
+which emits no notification has been observed, nor can it certify exact
+instantaneous UI state after a concurrent change that has not reached the
+process. The real Voice route and inference remain blocked independently;
+no stored compatibility claim can currently authorize audio, TTS or a
+paid provider. Installed-account, OS, latency and Voice-billing proof
+remain UNKNOWN until one later integrated Windows acceptance stage.
+
 ## Translation commit and resource ownership
 
 One future internal result contract should carry session ID, generation,
@@ -446,9 +490,10 @@ incremental user-PC or hosted CI requirements.
   while Codex translation Start and source switching are explicitly blocked
   until admission. Streaming audio and release bundling are NOT enabled.
 
-**Next source work:** consolidate the Codex Gateway's offline capability
-evidence into its existing P7 fixture and audit the account-provider change
-boundary, preserving exact single-process ownership and preventing a stale
-compatibility snapshot from enabling Voice. Do not issue model/audio RPCs,
-run local/hosted CI, or treat the version probe as runtime acceptance;
-native Windows and Voice billing/translation evidence remain unverified.
+**Next source work:** review the existing diagnostic and offline Realtime
+interfaces against the canonical Meeting Start/Stop and TTS owners to locate
+remaining source-only integration boundaries, without activating Voice,
+adding another process owner or asserting token quota equals Voice
+entitlement. Preserve the account-revision and cleanup latches. No
+per-change local test, hosted CI or cloud inference; actual installed
+Windows and speech-to-translation evidence remain UNKNOWN.

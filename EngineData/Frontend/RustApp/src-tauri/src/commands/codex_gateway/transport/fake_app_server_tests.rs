@@ -15,7 +15,7 @@ use super::super::{cleanup_disposition, CleanupDisposition, CodexGatewayStatus};
 
 use serde_json::{json, Value};
 use std::io::{self, Cursor, Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -117,6 +117,7 @@ struct FakeControl {
     reader_thread: Option<JoinHandle<()>>,
     request_id: u64,
     account_dirty: bool,
+    account_revision: Arc<AtomicU64>,
 }
 
 impl FakeControl {
@@ -189,6 +190,8 @@ fn fixture() -> (FakeCodexAppServer, FakeControl) {
     let overflow = Arc::new(AtomicBool::new(false));
     let writer_failed = Arc::clone(&failed);
     let reader_overflow = Arc::clone(&overflow);
+    let account_revision = Arc::new(AtomicU64::new(0));
+    let reader_revision = Arc::clone(&account_revision);
 
     let writer_thread = thread::Builder::new()
         .name("translateit-fake-codex-writer".into())
@@ -210,6 +213,7 @@ fn fixture() -> (FakeCodexAppServer, FakeControl) {
                 },
                 event_tx,
                 reader_overflow,
+                reader_revision,
             )
         }).expect("fake reader thread available");
 
@@ -227,6 +231,7 @@ fn fixture() -> (FakeCodexAppServer, FakeControl) {
             reader_thread: Some(reader_thread),
             request_id: 0,
             account_dirty: false,
+            account_revision,
         },
     )
 }
@@ -540,6 +545,41 @@ fn unverified_owner_exit_does_not_rearm_codex_voice_or_child_start() {
     assert!(!status.included_usage_allowed);
     assert!(!status.realtime_audio_verified);
     assert!(!status.meeting_route_enabled);
+}
+
+#[test]
+fn p10_account_revision_advances_before_fake_controller_dequeues_event() {
+    let (server, mut client) = fixture();
+    assert_eq!(client.account_revision.load(Ordering::Acquire), 0);
+    server.send_notification("account/updated");
+    let until = Instant::now() + FIXTURE_DEADLINE;
+    while client.account_revision.load(Ordering::Acquire) == 0
+        && Instant::now() < until
+    {
+        thread::yield_now();
+    }
+    assert_eq!(client.account_revision.load(Ordering::Acquire), 1);
+    assert!(!client.account_dirty, "controller has not consumed the event");
+    assert!(client.poll(&AtomicBool::new(false)).unwrap());
+    assert!(client.account_dirty);
+    assert!(client.shutdown(server));
+}
+
+#[test]
+fn p10_provider_policy_event_forces_new_account_diagnostic_probe() {
+    let (server, mut client) = fixture();
+    server.send_notification("modelProvider/authRecoveryStarted");
+    let until = Instant::now() + FIXTURE_DEADLINE;
+    while client.account_revision.load(Ordering::Acquire) == 0
+        && Instant::now() < until
+    {
+        thread::yield_now();
+    }
+    assert_eq!(client.account_revision.load(Ordering::Acquire), 1);
+    assert!(!client.account_dirty);
+    assert!(client.poll(&AtomicBool::new(false)).unwrap());
+    assert!(client.account_dirty);
+    assert!(client.shutdown(server));
 }
 
 #[test]

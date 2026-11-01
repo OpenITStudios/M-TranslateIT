@@ -302,3 +302,37 @@ test("P9 proves read-only explicit gateway policy before account or token quota 
   assert.match(gateway, /realtime_audio_verified: false/);
   assert.match(gateway, /meeting_route_enabled: false/);
 });
+
+
+test("P10 rejects stale account and provider claims before notifications are dequeued", () => {
+  assert.match(transport, /use std::sync::atomic::\{AtomicBool, AtomicU64, Ordering\}/);
+  assert.match(transport, /fn affects_account_authority\(method: &str\)/);
+  assert.match(transport, /method.starts_with\("modelProvider\/"\)/);
+  assert.match(transport, /method.starts_with\("account\/"\)/);
+  assert.match(transport, /fn read_jsonl\(/);
+  assert.match(transport, /account_revision.fetch_update\(/);
+  assert.match(transport, /fn account_revision\(&self\) -> u64/);
+  assert.match(transport, /fn reader_revision_invalidates_account_and_provider_before_dispatch/);
+
+  assert.match(gateway, /fn invalidate_stale_account\(owner: &mut GatewayOwner\)/);
+  assert.match(gateway, /fn can_publish_account\(/);
+  assert.match(gateway, /fn publish_verified_account\(/);
+  assert.match(gateway, /state\.verified_account_revision = Some\(revision\)/);
+  assert.match(gateway, /state: "account_revalidating"/);
+  assert.match(gateway, /"codex_gateway:account_or_provider_changed"/);
+  assert.match(gateway, /state\.status = status/);
+  assert.match(gateway, /server\.account_revision\(\) != revision/);
+  assert.match(gateway, /publish_verified_account\(generation, revision, status\)/);
+  assert.match(gateway, /invalidate_stale_account\(&mut state\)/);
+  assert.match(gateway, /fn auth_event_revision_immediately_masks_old_account_and_cli_claims/);
+  assert.match(gateway, /fn cancelled_or_stale_revision_cannot_republish_account_authority/);
+
+  assert.match(fakeServer, /fn p10_account_revision_advances_before_fake_controller_dequeues_event/);
+  assert.match(fakeServer, /fn p10_provider_policy_event_forces_new_account_diagnostic_probe/);
+  assert.match(fakeServer, /account_revision: Arc<AtomicU64>/);
+  assert.match(fakeServer, /reader_revision/);
+  assert.match(gateway, /"experimentalApi": false/);
+  assert.match(gateway, /meeting_route_enabled: false/);
+  assert.doesNotMatch(transport, /realtime_rpc::/);
+  assert.doesNotMatch(protocol, /"thread\/realtime\/start" \|/);
+});

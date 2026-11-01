@@ -10,7 +10,7 @@ mod realtime;
 mod realtime_rpc;
 mod transport;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -107,6 +107,8 @@ struct GatewayOwner {
     status: CodexGatewayStatus,
     cancellation: Option<Arc<AtomicBool>>,
     thread: Option<JoinHandle<()>>,
+    account_revision: Option<Arc<AtomicU64>>,
+    verified_account_revision: Option<u64>,
 }
 
 impl Default for GatewayOwner {
@@ -116,6 +118,8 @@ impl Default for GatewayOwner {
             status: CodexGatewayStatus::idle(0),
             cancellation: None,
             thread: None,
+            account_revision: None,
+            verified_account_revision: None,
         }
     }
 }
@@ -126,10 +130,70 @@ fn owner() -> &'static Mutex<GatewayOwner> {
     OWNER.get_or_init(|| Mutex::new(GatewayOwner::default()))
 }
 
+/// Account and provider notifications are observed by the read thread before
+/// entering the control queue. A snapshot may not claim authentication or
+/// version compatibility if a newer event exists but has not been dequeued.
+fn invalidate_stale_account(owner: &mut GatewayOwner) {
+    let stale = match (
+        owner.verified_account_revision,
+        owner.account_revision.as_ref(),
+    ) {
+        (Some(verified), Some(current)) => current.load(Ordering::Acquire) != verified,
+        _ => false,
+    };
+    if stale && matches!(
+        owner.status.state,
+        "authenticated" | "quota_blocked" | "usage_unverified"
+    ) {
+        let process_owned = owner.status.process_owned;
+        owner.status = CodexGatewayStatus {
+            state: "account_revalidating",
+            blocker: "codex_gateway:account_or_provider_changed",
+            process_owned,
+            generation: owner.generation,
+            runtime_claim: "codex_gateway:account_authority_unverified",
+            ..CodexGatewayStatus::idle(owner.generation)
+        };
+        owner.verified_account_revision = None;
+    }
+}
+
+fn can_publish_account(
+    state: &GatewayOwner,
+    generation: u64,
+    revision: u64,
+) -> bool {
+    state.generation == generation
+        && state.status.state != "cleanup_incomplete"
+        && !state.cancellation.as_ref()
+            .is_some_and(|stop| stop.load(Ordering::Acquire))
+        && state.account_revision.as_ref().is_some_and(|current| {
+            current.load(Ordering::Acquire) == revision
+        })
+}
+
+fn publish_verified_account(
+    generation: u64,
+    revision: u64,
+    status: CodexGatewayStatus,
+) -> bool {
+    let Ok(mut state) = owner().lock() else {
+        return false;
+    };
+    if !can_publish_account(&state, generation, revision) {
+        return false;
+    }
+    state.status = status;
+    state.verified_account_revision = Some(revision);
+    true
+}
+
 fn reconcile(owner: &mut GatewayOwner) {
     if owner.thread.as_ref().is_some_and(JoinHandle::is_finished) {
         let finished = owner.thread.take().expect("completed handle present").join();
         owner.cancellation = None;
+        owner.account_revision = None;
+        owner.verified_account_revision = None;
         if finished.is_err() {
             owner.status = CodexGatewayStatus::cleanup_incomplete(
                 owner.generation,
@@ -148,6 +212,7 @@ fn snapshot() -> CodexGatewayStatus {
     match owner().try_lock() {
         Ok(mut state) => {
             reconcile(&mut state);
+            invalidate_stale_account(&mut state);
             state.status.clone()
         }
         Err(_) => CodexGatewayStatus::blocked(0, "codex_gateway:owner_busy_or_unavailable"),
@@ -164,6 +229,9 @@ fn update(generation: u64, status: CodexGatewayStatus, final_state: bool) {
         {
             return; // A late successful handshake cannot undo Stop.
         }
+        if final_state {
+            state.verified_account_revision = None;
+        }
         state.status = status;
     }
 }
@@ -177,6 +245,7 @@ fn refresh_account(
     // A workspace/account change can race a response. At most one re-read
     // is allowed; never claim included usage from an unstable account pair.
     for _ in 0..2 {
+        let revision = server.account_revision();
         server.take_account_dirty();
         // Initialize alone does not acknowledge explicitGatewayOauth.
         // Prove the same owned server supports the read-only gateway status
@@ -192,10 +261,10 @@ fn refresh_account(
             cancellation,
         )?;
         let included = protocol::ordinary_usage(&quota)?;
-        if server.take_account_dirty() {
+        if server.take_account_dirty() || server.account_revision() != revision {
             continue;
         }
-        update(generation, CodexGatewayStatus {
+        let status = CodexGatewayStatus {
             state: match included {
                 Some(true) => "authenticated",
                 Some(false) => "quota_blocked",
@@ -216,14 +285,26 @@ fn refresh_account(
             meeting_route_enabled: false,
             generation,
             runtime_claim: "codex_gateway:account_probe_only",
-        }, false);
-        return Ok(());
+        };
+        // An account event can race the final RPC reply; the authority
+        // revision is checked again under the canonical owner lock. If an
+        // event follows publication, snapshot() invalidates the old proof.
+        if publish_verified_account(generation, revision, status) {
+            return Ok(());
+        }
+        if cancellation.load(Ordering::Acquire) {
+            return Err("codex_gateway:cancelled");
+        }
     }
     Err("codex_gateway:account_changed_during_probe")
 }
 
-fn run_owned(generation: u64, cancellation: Arc<AtomicBool>) {
-    let result = match AppServer::spawn() {
+fn run_owned(
+    generation: u64,
+    cancellation: Arc<AtomicBool>,
+    account_revision: Arc<AtomicU64>,
+) {
+    let result = match AppServer::spawn(account_revision) {
         Ok(mut server) => {
             let operation = (|| -> Result<(), &'static str> {
                 let initialized = server.request(
@@ -333,6 +414,7 @@ fn start() -> CodexGatewayStatus {
         return CodexGatewayStatus::blocked(0, "codex_gateway:owner_busy_or_unavailable");
     };
     reconcile(&mut state);
+    invalidate_stale_account(&mut state);
     if state.status.state == "cleanup_incomplete" || state.thread.is_some() {
         // Terminal uncertainty cannot be cleared by Connect/Disconnect or
         // by a completed owner thread. No second Codex process is spawned.
@@ -343,7 +425,11 @@ fn start() -> CodexGatewayStatus {
     };
     let cancellation = Arc::new(AtomicBool::new(false));
     let worker_stop = Arc::clone(&cancellation);
+    let account_revision = Arc::new(AtomicU64::new(0));
+    let reader_revision = Arc::clone(&account_revision);
     state.generation = generation;
+    state.account_revision = Some(account_revision);
+    state.verified_account_revision = None;
     state.status = CodexGatewayStatus {
         state: "connecting",
         blocker: "",
@@ -353,13 +439,15 @@ fn start() -> CodexGatewayStatus {
     };
     let worker = thread::Builder::new()
         .name("translateit-codex-owner".to_string())
-        .spawn(move || run_owned(generation, worker_stop));
+        .spawn(move || run_owned(generation, worker_stop, reader_revision));
     match worker {
         Ok(worker) => {
             state.thread = Some(worker);
             state.cancellation = Some(cancellation);
         }
         Err(_) => {
+            state.account_revision = None;
+            state.verified_account_revision = None;
             state.status = CodexGatewayStatus::blocked(
                 generation, "codex_gateway:owner_spawn_failed",
             );
@@ -373,11 +461,13 @@ fn request_stop() -> CodexGatewayStatus {
         return CodexGatewayStatus::blocked(0, "codex_gateway:owner_busy_or_unavailable");
     };
     reconcile(&mut state);
+    invalidate_stale_account(&mut state);
     if state.status.state == "cleanup_incomplete" {
         return state.status.clone();
     }
     if let Some(stop) = &state.cancellation {
         stop.store(true, Ordering::Release);
+        state.verified_account_revision = None;
         state.status = CodexGatewayStatus {
             state: "stopping",
             blocker: "",
@@ -572,6 +662,8 @@ mod tests {
             ),
             cancellation: Some(Arc::new(AtomicBool::new(true))),
             thread: Some(worker),
+            account_revision: Some(Arc::new(AtomicU64::new(4))),
+            verified_account_revision: None,
         };
         reconcile(&mut state);
         assert_eq!(state.status.state, "cleanup_incomplete");
@@ -601,6 +693,60 @@ mod tests {
             joined_but_unverified.runtime_claim,
             "codex_gateway:cleanup_not_verified"
         );
+    }
+
+    #[test]
+    fn auth_event_revision_immediately_masks_old_account_and_cli_claims() {
+        let mut state = GatewayOwner::default();
+        state.generation = 18;
+        state.account_revision = Some(Arc::new(AtomicU64::new(3)));
+        state.verified_account_revision = Some(3);
+        state.status = CodexGatewayStatus {
+            state: "authenticated",
+            process_owned: true,
+            chatgpt_authenticated: true,
+            included_usage_allowed: true,
+            app_server_version: Some("1.2.3".into()),
+            diagnostic_protocol_compatible: true,
+            generation: 18,
+            ..CodexGatewayStatus::idle(18)
+        };
+        invalidate_stale_account(&mut state);
+        assert_eq!(state.status.state, "authenticated");
+        state.account_revision.as_ref().unwrap().fetch_add(1, Ordering::AcqRel);
+        invalidate_stale_account(&mut state);
+        assert_eq!(state.status.state, "account_revalidating");
+        assert_eq!(state.status.blocker, "codex_gateway:account_or_provider_changed");
+        assert!(state.status.process_owned);
+        assert!(!state.status.chatgpt_authenticated);
+        assert!(!state.status.included_usage_allowed);
+        assert_eq!(state.status.app_server_version, None);
+        assert!(!state.status.diagnostic_protocol_compatible);
+        assert!(!state.status.realtime_audio_verified);
+        assert!(!state.status.meeting_route_enabled);
+        assert_eq!(state.verified_account_revision, None);
+    }
+
+    #[test]
+    fn cancelled_or_stale_revision_cannot_republish_account_authority() {
+        let mut state = GatewayOwner::default();
+        state.generation = 7;
+        state.account_revision = Some(Arc::new(AtomicU64::new(3)));
+        state.cancellation = Some(Arc::new(AtomicBool::new(false)));
+        assert!(can_publish_account(&state, 7, 3));
+        assert!(!can_publish_account(&state, 8, 3));
+        assert!(!can_publish_account(&state, 7, 2));
+
+        state.account_revision.as_ref().unwrap().fetch_add(1, Ordering::AcqRel);
+        assert!(!can_publish_account(&state, 7, 3));
+        assert!(can_publish_account(&state, 7, 4));
+        state.cancellation.as_ref().unwrap().store(true, Ordering::Release);
+        assert!(!can_publish_account(&state, 7, 4));
+        state.cancellation.as_ref().unwrap().store(false, Ordering::Release);
+        state.status = CodexGatewayStatus::cleanup_incomplete(
+            7, "codex_gateway:owned_cleanup_pending", true,
+        );
+        assert!(!can_publish_account(&state, 7, 4));
     }
 
     #[test]
