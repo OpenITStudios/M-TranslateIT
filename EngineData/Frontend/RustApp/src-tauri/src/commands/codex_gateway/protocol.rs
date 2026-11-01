@@ -9,7 +9,7 @@ pub(super) const MAX_REQUEST_BYTES: usize = 8 * 1024;
 #[derive(Debug)]
 pub(super) enum Inbound {
     Response { id: u64, result: Value },
-    Notification(String),
+    Notification { method: String, params: Value },
 }
 
 pub(super) fn parse_frame(frame: &[u8]) -> Result<Inbound, &'static str> {
@@ -39,7 +39,8 @@ pub(super) fn parse_frame(frame: &[u8]) -> Result<Inbound, &'static str> {
     {
         return Err("codex_gateway:notification_method_invalid");
     }
-    Ok(Inbound::Notification(method.to_string()))
+    let params = object.get("params").cloned().unwrap_or(Value::Null);
+    Ok(Inbound::Notification { method: method.to_string(), params })
 }
 
 pub(super) fn request(id: u64, method: &str, params: Value) -> Result<Vec<u8>, &'static str> {
@@ -101,7 +102,7 @@ mod tests {
         }
         assert!(matches!(
             parse_frame(br#"{"method":"account/updated","params":{}}"#).unwrap(),
-            Inbound::Notification(name) if name == "account/updated"
+            Inbound::Notification { method, .. } if method == "account/updated"
         ));
         assert_eq!(
             parse_frame(br#"{"id":1,"error":{"message":"private email"}}"#).unwrap_err(),
@@ -131,5 +132,18 @@ mod tests {
         assert!(request(1, "turn/start", json!({})).is_err());
         assert!(request(1, "initialize", json!([])).is_err());
         assert!(request(1, "initialize", json!({})).unwrap().ends_with(b"\n"));
+    }
+
+    #[test]
+    fn notification_params_are_preserved_with_session_identity() {
+        let frame = br#"{"method":"thread/realtime/item/completed","params":{"threadId":"t","item":{"id":"i","realtimeSessionId":"s","type":"transcriptSegment","role":"assistant","text":"Hello"}}}"#;
+        match parse_frame(frame).unwrap() {
+            Inbound::Notification { method, params } => {
+                assert_eq!(method, "thread/realtime/item/completed");
+                assert_eq!(params["threadId"], "t");
+                assert_eq!(params["item"]["realtimeSessionId"], "s");
+            }
+            _ => panic!("expected notification"),
+        }
     }
 }

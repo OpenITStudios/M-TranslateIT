@@ -80,10 +80,43 @@ authenticated state must not survive a changed account. App Exit asks this owner
 and refuses the clean marker if a child or reader remains unverified. Status
 does not include account email or private upstream response bodies.
 
-## Phase 2: capability and audio admission — NOT IMPLEMENTED
+## Phase 2: source-derived realtime adapter — STAGED / NOT LIVE
+
+P2 now contains a pure Rust event observer and a bounded PCM framing queue in
+`commands/codex_gateway/realtime.rs`. It consumes the current upstream
+role-bearing `thread/realtime/item/completed` schema, preserving `threadId`,
+`realtimeSessionId`, item ID, role and complete text. It returns
+`UnverifiedAssistantText`, never a committed translation; an assistant
+message is not proof of speech-source correspondence or faithful translation.
+
+Uncorrelated flat `transcript/done` and all draft `delta` events remain
+noncommittable; `user` transcript and `assistant` output are distinct, and
+cloud output audio is explicitly ignored. A duplicate item, foreign thread,
+wrong session, missing role, unknown event, remote error, or stale event after
+Stop revokes the observer. The bounded 256-ID evidence window is intentionally
+not a long-Meeting production dedupe strategy: canonical Meeting sequence
+correlation must replace it before activation.
+
+The offline input framer accepts only contiguous PCM16 mono 24 kHz and at most
+4,800 samples (200 ms) per frame; it queues at most four frames and emits
+the upstream audio-chunk fields with Base64. A clock gap, overflow or revocation
+invalidates the queue; nothing is silently skipped. Source clocks are not
+assumed to be 24 kHz in the native capture pipeline: an authorized resampling
+and sample-clock adapter is still required before live use.
+
+These source components are covered by authored synthetic Rust contract cases.
+`protocol.rs` now preserves notification parameters instead of discarding
+them. During the **existing P1 diagnostic connection**, any unexpected realtime
+notification is rejected; no Voice request is sent, and the account probe
+revalidates a racing account/workspace-change event at most once. There is no
+network/audio inference evidence from these fixtures.
 
 Use the *installed and version-pinned* Codex CLI's actual protocol schema;
 never synthesize unsupported JSON-RPC or treat a source type as entitlement.
+The reference source was compared against `openai/codex` commit
+`67f0994b532b8740f14b5b738af7b7b2a915b1d6` at
+`codex-rs/app-server-protocol/src/protocol/common.rs` and
+`v2/realtime.rs`. The user's installed CLI version remains unverified.
 In current upstream, realtime V2 text-only output is unavailable for ChatGPT
 WebRTC V1/V3, and the direct WebSocket V2 route requires API-key auth. A
 ChatGPT-account WebRTC route may emit translated assistant text *alongside*

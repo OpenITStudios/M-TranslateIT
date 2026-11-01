@@ -4,6 +4,7 @@
 //! verified audio-to-translated-text capability can be admitted.
 
 mod protocol;
+mod realtime;
 mod transport;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -121,37 +122,44 @@ fn refresh_account(
     server: &mut AppServer,
     cancellation: &AtomicBool,
 ) -> Result<(), &'static str> {
-    // Re-run this exact account/usage gate on account-change notifications.
-    // Never preserve a stale ChatGPT/usage claim across a workspace change.
-    let account = server.request("account/read", json!({}), cancellation)?;
-    protocol::chatgpt_account(&account)?;
-    let quota = server.request(
-        "account/rateLimits/read",
-        json!({"supportsLunaReserve": false, "excludeResetCreditDetails": true}),
-        cancellation,
-    )?;
-    let included = protocol::ordinary_usage(&quota)?;
-    update(generation, CodexGatewayStatus {
-        state: match included {
-            Some(true) => "authenticated",
-            Some(false) => "quota_blocked",
-            None => "usage_unverified",
-        },
-        blocker: match included {
-            Some(true) => "",
-            Some(false) => "codex_gateway:included_usage_unavailable",
-            None => "codex_gateway:usage_permission_unknown",
-        },
-        process_owned: true,
-        chatgpt_authenticated: true,
-        included_usage_allowed: included == Some(true),
-        // Login and quota are not proof of ChatGPT Voice entitlement.
-        realtime_audio_verified: false,
-        meeting_route_enabled: false,
-        generation,
-        runtime_claim: "codex_gateway:account_probe_only",
-    }, false);
-    Ok(())
+    // A workspace/account change can race a response. At most one re-read
+    // is allowed; never claim included usage from an unstable account pair.
+    for _ in 0..2 {
+        server.take_account_dirty();
+        let account = server.request("account/read", json!({}), cancellation)?;
+        protocol::chatgpt_account(&account)?;
+        let quota = server.request(
+            "account/rateLimits/read",
+            json!({"supportsLunaReserve": false, "excludeResetCreditDetails": true}),
+            cancellation,
+        )?;
+        let included = protocol::ordinary_usage(&quota)?;
+        if server.take_account_dirty() {
+            continue;
+        }
+        update(generation, CodexGatewayStatus {
+            state: match included {
+                Some(true) => "authenticated",
+                Some(false) => "quota_blocked",
+                None => "usage_unverified",
+            },
+            blocker: match included {
+                Some(true) => "",
+                Some(false) => "codex_gateway:included_usage_unavailable",
+                None => "codex_gateway:usage_permission_unknown",
+            },
+            process_owned: true,
+            chatgpt_authenticated: true,
+            included_usage_allowed: included == Some(true),
+            // Login and quota are not proof of ChatGPT Voice entitlement.
+            realtime_audio_verified: false,
+            meeting_route_enabled: false,
+            generation,
+            runtime_claim: "codex_gateway:account_probe_only",
+        }, false);
+        return Ok(());
+    }
+    Err("codex_gateway:account_changed_during_probe")
 }
 
 fn run_owned(generation: u64, cancellation: Arc<AtomicBool>) {

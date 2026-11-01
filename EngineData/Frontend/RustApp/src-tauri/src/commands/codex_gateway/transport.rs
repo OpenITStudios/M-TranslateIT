@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use super::protocol::{self, Inbound, MAX_FRAME_BYTES};
+use super::realtime;
 
 const EVENT_QUEUE_CAPACITY: usize = 32;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(8);
@@ -133,6 +134,7 @@ pub(super) struct AppServer {
     reader: Option<JoinHandle<()>>,
     next_id: u64,
     child_reaped: bool,
+    account_dirty: bool,
 }
 
 impl AppServer {
@@ -185,7 +187,7 @@ impl AppServer {
         };
         Ok(Self {
             child, stdin, receiver, overflow, reader: Some(reader),
-            next_id: 0, child_reaped: false,
+            next_id: 0, child_reaped: false, account_dirty: false,
         })
     }
 
@@ -227,7 +229,15 @@ impl AppServer {
                 Ok(Ok(Inbound::Response { .. })) => {
                     return Err("codex_gateway:unexpected_response_id");
                 }
-                Ok(Ok(Inbound::Notification(_))) => { /* explicit account/read follows */ }
+                Ok(Ok(Inbound::Notification { method, .. })) => {
+                    // While a request is in flight, an account switch cannot
+                    // be considered the same authenticated owner. A realtime
+                    // event is forbidden before explicit Voice admission.
+                    realtime::refuse_unadmitted_event(&method)?;
+                    if method.starts_with("account/") {
+                        self.account_dirty = true;
+                    }
+                }
                 Ok(Err(reason)) => return Err(reason),
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => {
@@ -235,6 +245,12 @@ impl AppServer {
                 }
             }
         }
+    }
+
+    /// Account notifications arriving while an RPC response is in flight
+    /// invalidate that account/usage snapshot; refresh in a bounded probe.
+    pub(super) fn take_account_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.account_dirty)
     }
 
     pub(super) fn initialized(&mut self, cancelled: &AtomicBool) -> Result<(), &'static str> {
@@ -251,8 +267,11 @@ impl AppServer {
     ) -> Result<bool, &'static str> {
         self.check_live(cancelled)?;
         match self.receiver.recv_timeout(Duration::from_millis(100)) {
-            Ok(Ok(Inbound::Notification(method))) if method.starts_with("account/") => Ok(true),
-            Ok(Ok(Inbound::Notification(_))) => Ok(false),
+            Ok(Ok(Inbound::Notification { method, .. })) if method.starts_with("account/") => Ok(true),
+            Ok(Ok(Inbound::Notification { method, .. })) => {
+                realtime::refuse_unadmitted_event(&method)?;
+                Ok(false)
+            },
             Ok(Ok(Inbound::Response { .. })) => Err("codex_gateway:unsolicited_response"),
             Ok(Err(reason)) => Err(reason),
             Err(RecvTimeoutError::Timeout) => Ok(false),
@@ -310,8 +329,8 @@ mod tests {
         let overflow = Arc::new(AtomicBool::new(false));
         read_jsonl(input, tx, Arc::clone(&overflow));
         assert!(matches!(rx.recv().unwrap().unwrap(), Inbound::Response { id: 1, .. }));
-        assert!(matches!(rx.recv().unwrap().unwrap(), Inbound::Notification(ref name)
-            if name == "account/updated"));
+        assert!(matches!(rx.recv().unwrap().unwrap(),
+            Inbound::Notification { method, .. } if method == "account/updated"));
         assert!(!overflow.load(Ordering::Acquire));
     }
 
@@ -323,8 +342,8 @@ mod tests {
             b"{\"method\":\"one\"}\n{\"method\":\"two\"}\n".to_vec()
         ), tx, Arc::clone(&overflow));
         assert!(overflow.load(Ordering::Acquire));
-        assert!(matches!(rx.recv().unwrap().unwrap(), Inbound::Notification(name)
-            if name == "one"));
+        assert!(matches!(rx.recv().unwrap().unwrap(),
+            Inbound::Notification { method, .. } if method == "one"));
     }
 
     #[test]

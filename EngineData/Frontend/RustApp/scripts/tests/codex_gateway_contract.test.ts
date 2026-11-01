@@ -7,6 +7,7 @@ const read = (file: string) => readFileSync(new URL(file, root), "utf8");
 const gateway = read("commands/codex_gateway.rs");
 const transport = read("commands/codex_gateway/transport.rs");
 const protocol = read("commands/codex_gateway/protocol.rs");
+const realtime = read("commands/codex_gateway/realtime.rs");
 const registry = read("commands/registry.rs");
 const shutdown = read("commands/application_runtime/shutdown.rs");
 const frontend = readFileSync(
@@ -30,6 +31,8 @@ test("Codex App Server has one owned stdio process, bounded reader and no paid k
   assert.match(transport, /native_candidates_in_bin/);
   assert.match(transport, /"CODEX_CLI_PATH"/);
   assert.match(transport, /"codex-win32-x64"/);
+  assert.match(transport, /account_dirty/);
+  assert.match(transport, /take_account_dirty/);
 });
 
 test("RPC admission is introspection-only, no inference and no automatic paid fallback", () => {
@@ -43,6 +46,7 @@ test("RPC admission is introspection-only, no inference and no automatic paid fa
   assert.match(gateway, /meeting_route_enabled: false/);
   assert.doesNotMatch(gateway, /"thread\/realtime\/start"/);
   assert.doesNotMatch(gateway, /"turn\/start"/);
+  assert.match(protocol, /Notification \{ method: String, params: Value \}/);
 });
 
 test("Native commands are actually wired to the diagnostics client", () => {
@@ -56,6 +60,8 @@ test("Native commands are actually wired to the diagnostics client", () => {
   assert.match(shutdown, /codex_gateway::shutdown_for_app_exit/);
   assert.match(gateway, /meeting_stop_cleanup_pending/);
   assert.match(gateway, /refresh_account\(generation, &mut server, &cancellation\)/);
+  assert.match(gateway, /account_changed_during_probe/);
+  assert.match(transport, /refuse_unadmitted_event/);
 });
 
 test("No experimental Codex readiness is substituted for Local Meeting readiness", () => {
@@ -63,6 +69,33 @@ test("No experimental Codex readiness is substituted for Local Meeting readiness
   const probe = read("commands/helper_bridge/functional_probe.rs");
   assert.doesNotMatch(lifecycle, /codex_gateway/);
   assert.doesNotMatch(probe, /codex_gateway/);
+  assert.match(gateway, /realtime_audio_verified: false/);
+  assert.match(gateway, /meeting_route_enabled: false/);
+});
+
+
+test("P2 maps only canonical role-bearing completed items to unverified candidates", () => {
+  assert.match(realtime, /thread\/realtime\/item\/completed/);
+  assert.match(realtime, /realtimeSessionId/);
+  assert.match(realtime, /Some\("assistant"\) => Ok\(Observation::UnverifiedAssistantText/);
+  assert.match(realtime, /Some\("user"\) => Ok\(Observation::SourceTranscript/);
+  assert.match(realtime, /thread\/realtime\/transcript\/done/);
+  assert.match(realtime, /duplicate_item/);
+  assert.match(realtime, /foreign_thread/);
+  assert.match(realtime, /CloudAudioIgnored/);
+  assert.doesNotMatch(realtime, /voice_actor_synthesize|deliver_meeting_output|commit_meeting_turn/);
+});
+
+test("P2 has bounded PCM framing with gap and Stop rejection, but no live Voice RPC", () => {
+  assert.match(realtime, /MAX_AUDIO_FRAMES: usize = 4/);
+  assert.match(realtime, /SAMPLES_PER_FRAME: usize = 4_800/);
+  assert.match(realtime, /audio_backpressure/);
+  assert.match(realtime, /audio_clock_gap/);
+  assert.match(realtime, /audio_clock_overflow/);
+  assert.match(realtime, /fn base64_pcm/);
+  assert.match(gateway, /mod realtime;/);
+  assert.doesNotMatch(protocol, /"thread\/realtime\/appendAudio" \|/);
+  assert.doesNotMatch(gateway, /"thread\/realtime\/start"/);
   assert.match(gateway, /realtime_audio_verified: false/);
   assert.match(gateway, /meeting_route_enabled: false/);
 });
