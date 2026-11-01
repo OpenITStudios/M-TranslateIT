@@ -24,6 +24,22 @@ test("Codex App Server has one owned stdio process, bounded reader and no paid k
   assert.match(transport, /"app-server", "--listen", "stdio:\/\/"/);
   assert.match(transport, /MAX_FRAME_BYTES/);
   assert.match(transport, /sync_channel\(EVENT_QUEUE_CAPACITY\)/);
+  assert.match(transport, /WRITE_QUEUE_CAPACITY: usize = 1/);
+  assert.match(transport, /sync_channel\(WRITE_QUEUE_CAPACITY\)/);
+  assert.match(transport, /fn write_jsonl\(/);
+  assert.match(transport, /fn write_frame\(/);
+  assert.match(transport, /writer\.try_send\(WriteCommand/);
+  assert.match(transport, /receipt\.recv_timeout\(remaining\.min\(WAIT_SLICE\)\)/);
+  assert.match(transport, /codex_gateway:write_timeout/);
+  assert.match(transport, /codex_gateway:writer_queue_full/);
+  assert.match(transport, /self\.writer_tx\.take\(\)/);
+  assert.match(transport, /self\.writer\.is_none\(\) && self\.reader\.is_none\(\)/);
+  assert.match(transport, /fn notification_dispatch_retains_only_account_changes_and_denies_voice/);
+  assert.match(transport, /fn writer_ack_preserves_exact_jsonl_without_using_the_control_thread_for_io/);
+  assert.match(transport, /fn writer_failure_stays_redacted_and_poisoned/);
+  assert.doesNotMatch(transport, /self\.stdin\.write_all\(/);
+  assert.match(transport, /writer_failed\.load\(Ordering::Acquire\)/);
+  assert.match(transport, /cleanup_failure/);
   assert.match(transport, /event_queue_overflow/);
   assert.match(transport, /child\.kill\(\)/);
   assert.match(transport, /reader\.join\(\)/);
@@ -155,5 +171,20 @@ test("P5 stages typed V3 WebRTC start/audio/stop envelopes without live RPC admi
   assert.doesNotMatch(protocol, /"thread\/realtime\/appendAudio" \|/);
   assert.doesNotMatch(transport, /realtime_rpc::/);
   assert.match(gateway, /"experimentalApi": false/);
+  assert.match(gateway, /meeting_route_enabled: false/);
+});
+
+
+test("P6 keeps the account-only RPC allowlist and single read/write ownership", () => {
+  assert.match(protocol, /"initialize" \| "account\/read" \| "account\/rateLimits\/read"/);
+  assert.doesNotMatch(transport, /realtime_rpc::/);
+  assert.match(transport, /fn account_notification\(method: &str\)/);
+  assert.match(transport, /account_notification\(&method\)\?/);
+  assert.match(transport, /codex_gateway:unexpected_response_id/);
+  assert.match(transport, /codex_gateway:unsolicited_response/);
+  assert.match(transport, /fn stop_and_reap/);
+  assert.match(transport, /writer\.join\(\)/);
+  assert.match(transport, /reader\.join\(\)/);
+  assert.match(gateway, /realtime_audio_verified: false/);
   assert.match(gateway, /meeting_route_enabled: false/);
 });

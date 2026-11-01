@@ -246,6 +246,41 @@ activation or Meeting route. A mocked envelope may be inspected in a Rust
 unit test but cannot pass the P1 RPC allowlist. This is executable source
 preparation, not proof of account Voice availability or latency.
 
+## Phase 6: bounded App Server write ownership and control dispatch — SOURCE CANDIDATE
+
+The existing `codex_gateway/transport.rs` now owns **one writer thread**
+in addition to the existing bounded stdout reader. Only the writer can touch
+`ChildStdin`. The controller submits a maximum 8-KiB JSONL body through a
+one-slot `sync_channel` using `try_send`, then waits for the specific
+write receipt in 50-ms cancellation slices. A shared eight-second deadline
+covers both write completion and the exact JSON-RPC reply, avoiding unbounded
+blocking of the controller on `write_all` when the Codex child stops reading.
+The writer itself uses a blocking OS pipe, but it is owned and isolated; this
+is **not** an async OS pipe or a guarantee that a stuck descendant releases
+every inherited handle.
+
+The initial `initialized` notification also uses this same writer. Writer
+failure permanently poisons the live request gate; `Full` and
+`Disconnected` queues are explicit failures, never automatic retries.
+The reader retains its 256-KiB per-frame bound and 32-event channel; the
+request controller continues to admit exactly one in-flight RPC and rejects
+any mismatched response ID. A single account-notification classifier is
+shared by the request and idle loops; changing accounts invalidates the
+previous probe while an unexpected realtime event remains forbidden.
+
+On Stop, the gateway closes the writer queue and terminates/reaps **only its
+owned Codex child**. Cleanup is complete only after *both* the writer and
+reader have finished and been joined. Unknown thread ownership, thread panic
+or a child-handle issue is not a successful cleanup receipt; the existing
+`cleanup_incomplete` state remains authoritative. No new audio process,
+tool/MCP invocation, auto-reconnect, extra model provider or paid API path
+has been introduced.
+
+The new Rust writer/queue/error cases and TypeScript bridge source assertions
+are authored, **NOT EXECUTED**. No compiler, installed Codex CLI, Windows
+stdio stall, target-Microphone, live meeting, or ChatGPT Voice entitlement
+evidence has been collected.
+
 ## Translation commit and resource ownership
 
 One future internal result contract should carry session ID, generation,
@@ -296,10 +331,10 @@ incremental user-PC or hosted CI requirements.
   while Codex translation Start and source switching are explicitly blocked
   until admission. Streaming audio and release bundling are NOT enabled.
 
-**Next source work:** converge the existing App Server control channel on
-a bounded, nonblocking writer and deterministic in-flight request/notification
-dispatch, preserving the read-only P1 request allowlist. Do not add an active
-Voice session, a second Meeting owner or a paid-API fallback. Exact installed
-CLI capability, real WebRTC audio delivery, included Voice entitlement,
-source/translation correspondence and native performance remain UNKNOWN
-until one future authorized integrated acceptance phase.
+**Next source work:** prepare one deterministic fake App Server integration
+fixture around the now-owned writer/reader to exercise cancellation, delayed
+responses, account-change interleaving and incomplete Stop during the later
+integrated local source run. Do not run incremental local tests, enable CI, or
+turn on any paid or unverified Codex Voice route. Actual installed CLI,
+WebRTC connection, included Voice entitlement, translation fidelity and
+target-Windows audio acceptance remain UNKNOWN.

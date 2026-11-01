@@ -4,7 +4,7 @@
 use std::ffi::OsStr;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::Arc;
@@ -17,9 +17,56 @@ use super::protocol::{self, Inbound, MAX_FRAME_BYTES};
 use super::realtime;
 
 const EVENT_QUEUE_CAPACITY: usize = 32;
+const WRITE_QUEUE_CAPACITY: usize = 1;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(8);
 const WAIT_SLICE: Duration = Duration::from_millis(50);
 type WireEvent = Result<Inbound, &'static str>;
+type WriteReceipt = Result<(), &'static str>;
+
+/// Deterministic notification admission shared by the request and idle loops.
+/// No Voice or tool notification is ever eligible in the account-only gateway.
+fn account_notification(method: &str) -> Result<bool, &'static str> {
+    realtime::refuse_unadmitted_event(method)?;
+    Ok(method.starts_with("account/"))
+}
+
+struct WriteCommand {
+    body: Vec<u8>,
+    completed: SyncSender<WriteReceipt>,
+}
+
+/// Sole write owner. Blocking OS-pipe writes are confined to this owned
+/// thread, never the request/Stop controller. Each write has a bounded payload,
+/// one acknowledgement and an explicit shutdown/disconnect path.
+fn write_jsonl(
+    mut stdin: impl Write,
+    receiver: Receiver<WriteCommand>,
+    failed: Arc<AtomicBool>,
+) {
+    while let Ok(command) = receiver.recv() {
+        if command.body.is_empty()
+            || command.body.len() > protocol::MAX_REQUEST_BYTES
+            || command.body.last() != Some(&b'\n')
+        {
+            failed.store(true, Ordering::Release);
+            let _ = command.completed.try_send(Err("codex_gateway:writer_frame_invalid"));
+            break;
+        }
+        // Do not expose command.body or raw IO errors in any logging.
+        let written = stdin.write_all(&command.body)
+            .and_then(|()| stdin.flush())
+            .map_err(|_| "codex_gateway:stdin_write_failed");
+        if written.is_err() {
+            failed.store(true, Ordering::Release);
+        }
+        let stop_after_failure = written.is_err();
+        let _ = command.completed.try_send(written);
+        if stop_after_failure {
+            break;
+        }
+    }
+}
+
 
 fn acceptable_binary(path: &Path) -> bool {
     path.is_absolute()
@@ -128,13 +175,16 @@ fn read_jsonl(
 
 pub(super) struct AppServer {
     child: Child,
-    stdin: ChildStdin,
+    writer_tx: Option<SyncSender<WriteCommand>>,
     receiver: Receiver<WireEvent>,
     overflow: Arc<AtomicBool>,
+    writer_failed: Arc<AtomicBool>,
     reader: Option<JoinHandle<()>>,
+    writer: Option<JoinHandle<()>>,
     next_id: u64,
     child_reaped: bool,
     account_dirty: bool,
+    cleanup_failure: Option<&'static str>,
 }
 
 impl AppServer {
@@ -171,6 +221,20 @@ impl AppServer {
             let _ = child.wait();
             return Err("codex_gateway:stdout_unavailable");
         };
+        let (writer_tx, writer_rx) = mpsc::sync_channel(WRITE_QUEUE_CAPACITY);
+        let writer_failed = Arc::new(AtomicBool::new(false));
+        let write_fault = Arc::clone(&writer_failed);
+        let writer = match thread::Builder::new()
+            .name("translateit-codex-jsonl-writer".to_string())
+            .spawn(move || write_jsonl(stdin, writer_rx, write_fault))
+        {
+            Ok(writer) => writer,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("codex_gateway:writer_spawn_failed");
+            }
+        };
         let (tx, receiver) = mpsc::sync_channel(EVENT_QUEUE_CAPACITY);
         let overflow = Arc::new(AtomicBool::new(false));
         let observed = Arc::clone(&overflow);
@@ -180,14 +244,20 @@ impl AppServer {
         {
             Ok(reader) => reader,
             Err(_) => {
+                // Close the idle writer's one-slot queue, then reap only the
+                // child that this gateway created. No unrelated Codex process.
+                drop(writer_tx);
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = writer.join();
                 return Err("codex_gateway:reader_spawn_failed");
             }
         };
         Ok(Self {
-            child, stdin, receiver, overflow, reader: Some(reader),
+            child, writer_tx: Some(writer_tx), receiver, overflow,
+            writer_failed, reader: Some(reader), writer: Some(writer),
             next_id: 0, child_reaped: false, account_dirty: false,
+            cleanup_failure: None,
         })
     }
 
@@ -198,10 +268,52 @@ impl AppServer {
         if self.overflow.load(Ordering::Acquire) {
             return Err("codex_gateway:event_queue_overflow");
         }
+        if self.writer_failed.load(Ordering::Acquire) {
+            return Err("codex_gateway:writer_failed");
+        }
+        if self.writer.as_ref().is_some_and(JoinHandle::is_finished) {
+            return Err("codex_gateway:writer_exited");
+        }
         if self.child.try_wait().map_err(|_| "codex_gateway:child_probe_failed")?.is_some() {
             return Err("codex_gateway:child_exited");
         }
         Ok(())
+    }
+
+    /// Only one request is in flight. The writing thread has a one-slot queue
+    /// and the controller waits for the exact write receipt with a deadline.
+    /// A stalled child cannot block cancellation on write_all/flush.
+    fn write_frame(
+        &mut self,
+        body: Vec<u8>,
+        cancelled: &AtomicBool,
+        deadline: Instant,
+    ) -> Result<(), &'static str> {
+        self.check_live(cancelled)?;
+        let (completed, receipt) = mpsc::sync_channel(1);
+        let writer = self.writer_tx.as_ref()
+            .ok_or("codex_gateway:writer_unavailable")?;
+        match writer.try_send(WriteCommand { body, completed }) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => return Err("codex_gateway:writer_queue_full"),
+            Err(TrySendError::Disconnected(_)) => {
+                return Err("codex_gateway:writer_disconnected");
+            }
+        }
+        loop {
+            self.check_live(cancelled)?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err("codex_gateway:write_timeout");
+            }
+            match receipt.recv_timeout(remaining.min(WAIT_SLICE)) {
+                Ok(result) => return result,
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err("codex_gateway:write_receipt_lost");
+                }
+            }
+        }
     }
 
     pub(super) fn request(
@@ -215,9 +327,8 @@ impl AppServer {
             .ok_or("codex_gateway:request_id_exhausted")?;
         let current_id = self.next_id;
         let body = protocol::request(current_id, method, params)?;
-        self.stdin.write_all(&body).and_then(|()| self.stdin.flush())
-            .map_err(|_| "codex_gateway:stdin_write_failed")?;
         let deadline = Instant::now() + RESPONSE_TIMEOUT;
+        self.write_frame(body, cancelled, deadline)?;
         loop {
             self.check_live(cancelled)?;
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -233,8 +344,7 @@ impl AppServer {
                     // While a request is in flight, an account switch cannot
                     // be considered the same authenticated owner. A realtime
                     // event is forbidden before explicit Voice admission.
-                    realtime::refuse_unadmitted_event(&method)?;
-                    if method.starts_with("account/") {
+                    if account_notification(&method)? {
                         self.account_dirty = true;
                     }
                 }
@@ -254,10 +364,12 @@ impl AppServer {
     }
 
     pub(super) fn initialized(&mut self, cancelled: &AtomicBool) -> Result<(), &'static str> {
-        self.check_live(cancelled)?;
-        self.stdin.write_all(protocol::initialized_notification())
-            .and_then(|()| self.stdin.flush())
-            .map_err(|_| "codex_gateway:initialized_write_failed")
+        let deadline = Instant::now() + RESPONSE_TIMEOUT;
+        self.write_frame(
+            protocol::initialized_notification().to_vec(),
+            cancelled,
+            deadline,
+        )
     }
 
     /// No automatic model requests. Only account changes invalidate the probe.
@@ -267,10 +379,10 @@ impl AppServer {
     ) -> Result<bool, &'static str> {
         self.check_live(cancelled)?;
         match self.receiver.recv_timeout(Duration::from_millis(100)) {
-            Ok(Ok(Inbound::Notification { method, .. })) if method.starts_with("account/") => Ok(true),
             Ok(Ok(Inbound::Notification { method, .. })) => {
-                realtime::refuse_unadmitted_event(&method)?;
-                Ok(false)
+                let changed = account_notification(&method)?;
+                self.account_dirty |= changed;
+                Ok(changed)
             },
             Ok(Ok(Inbound::Response { .. })) => Err("codex_gateway:unsolicited_response"),
             Ok(Err(reason)) => Err(reason),
@@ -281,34 +393,58 @@ impl AppServer {
         }
     }
 
-    /// A false result retains this exact owner. The caller must not mark the
-    /// gateway clean or release its generation until the stdout reader exited.
+    /// A false result retains this exact owner. Completion requires the
+    /// child to be reaped and BOTH JSONL threads to have finished and joined.
     pub(super) fn stop_and_reap(&mut self) -> Result<bool, &'static str> {
+        if let Some(failure) = self.cleanup_failure {
+            return Err(failure);
+        }
+        // The channel close wakes an idle writer without injecting a stop
+        // frame into a potentially stalled upstream pipe.
+        self.writer_tx.take();
         if !self.child_reaped {
             let still_running = self.child.try_wait()
                 .map_err(|_| "codex_gateway:child_probe_failed")?.is_none();
-            if still_running {
-                self.child.kill().map_err(|_| "codex_gateway:child_stop_failed")?;
+            if still_running && self.child.kill().is_err() {
+                // Process may have exited between try_wait and kill.
+                if self.child.try_wait()
+                    .map_err(|_| "codex_gateway:child_probe_failed")?.is_none()
+                {
+                    return Err("codex_gateway:child_stop_failed");
+                }
             }
             self.child.wait().map_err(|_| "codex_gateway:child_reap_failed")?;
             self.child_reaped = true;
         }
+        if self.writer.as_ref().is_some_and(JoinHandle::is_finished) {
+            let writer = self.writer.take().expect("checked writer present");
+            if writer.join().is_err() {
+                self.cleanup_failure = Some("codex_gateway:writer_join_failed");
+                return Err("codex_gateway:writer_join_failed");
+            }
+        }
         if self.reader.as_ref().is_some_and(JoinHandle::is_finished) {
             let reader = self.reader.take().expect("checked reader present");
-            reader.join().map_err(|_| "codex_gateway:reader_join_failed")?;
-            return Ok(true);
+            if reader.join().is_err() {
+                self.cleanup_failure = Some("codex_gateway:reader_join_failed");
+                return Err("codex_gateway:reader_join_failed");
+            }
         }
-        Ok(false)
+        Ok(self.child_reaped && self.writer.is_none() && self.reader.is_none())
     }
 }
 
 impl Drop for AppServer {
     fn drop(&mut self) {
-        // Panic/error backstop. This can wait for an inherited stdout handle:
-        // do not silently detach an owned JSONL reader or claim clean release.
+        // Panic/error backstop. Normal lifecycle holds the AppServer until
+        // stop_and_reap proves both owned threads finished.
+        self.writer_tx.take();
         if !self.child_reaped {
             let _ = self.child.kill();
             let _ = self.child.wait();
+        }
+        if let Some(writer) = self.writer.take() {
+            let _ = writer.join();
         }
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
@@ -344,6 +480,90 @@ mod tests {
         assert!(overflow.load(Ordering::Acquire));
         assert!(matches!(rx.recv().unwrap().unwrap(),
             Inbound::Notification { method, .. } if method == "one"));
+    }
+
+
+    #[test]
+    fn writer_ack_preserves_exact_jsonl_without_using_the_control_thread_for_io() {
+        use std::sync::Mutex;
+
+        struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
+        impl Write for CaptureWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let (tx, rx) = mpsc::sync_channel(WRITE_QUEUE_CAPACITY);
+        let (ack, done) = mpsc::sync_channel(1);
+        assert!(tx.try_send(WriteCommand {
+            body: b"{\"method\":\"initialized\"}\n".to_vec(),
+            completed: ack,
+        }).is_ok());
+        drop(tx);
+        let failed = Arc::new(AtomicBool::new(false));
+        write_jsonl(CaptureWriter(Arc::clone(&recorded)), rx, Arc::clone(&failed));
+        assert!(done.recv().unwrap().is_ok());
+        assert_eq!(
+            recorded.lock().unwrap().as_slice(),
+            b"{\"method\":\"initialized\"}\n".as_slice()
+        );
+        assert!(!failed.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn writer_queue_is_bounded_without_blocking_the_caller() {
+        let (tx, _rx) = mpsc::sync_channel(WRITE_QUEUE_CAPACITY);
+        let (first, _first_receipt) = mpsc::sync_channel(1);
+        assert!(tx.try_send(WriteCommand {
+            body: b"{\"method\":\"initialized\"}\n".to_vec(),
+            completed: first,
+        }).is_ok());
+        let (second, _second_receipt) = mpsc::sync_channel(1);
+        assert!(matches!(
+            tx.try_send(WriteCommand {
+                body: b"{\"method\":\"initialized\"}\n".to_vec(),
+                completed: second,
+            }),
+            Err(TrySendError::Full(_))
+        ));
+    }
+
+    #[test]
+    fn notification_dispatch_retains_only_account_changes_and_denies_voice() {
+        assert_eq!(account_notification("account/updated"), Ok(true));
+        assert_eq!(account_notification("account/rateLimits/updated"), Ok(true));
+        assert_eq!(account_notification("thread/started"), Ok(false));
+        assert_eq!(
+            account_notification("thread/realtime/transcript/done"),
+            Err("codex_realtime:unsolicited_without_voice_authority")
+        );
+    }
+
+    #[test]
+    fn writer_failure_stays_redacted_and_poisoned() {
+        struct BrokenWriter;
+        impl Write for BrokenWriter {
+            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("private diagnostic payload"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+
+        let (tx, rx) = mpsc::sync_channel(1);
+        let (ack, done) = mpsc::sync_channel(1);
+        assert!(tx.try_send(WriteCommand {
+            body: b"{\"method\":\"initialized\"}\n".to_vec(),
+            completed: ack,
+        }).is_ok());
+        drop(tx);
+        let failed = Arc::new(AtomicBool::new(false));
+        write_jsonl(BrokenWriter, rx, Arc::clone(&failed));
+        assert_eq!(done.recv().unwrap(), Err("codex_gateway:stdin_write_failed"));
+        assert!(failed.load(Ordering::Acquire));
     }
 
     #[test]
