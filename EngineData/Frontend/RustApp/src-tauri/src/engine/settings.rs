@@ -1,10 +1,38 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 const CURRENT_SCHEMA_VERSION: u32 = 14;
 const MAX_SETTING_TEXT_CHARS: usize = 160;
+const MAX_SETTINGS_FILE_BYTES: usize = 64 * 1024;
+
+// One Settings IO authority for save/recovery and translated Meeting admission.
+static SETTINGS_IO_GATE: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn settings_io_gate() -> &'static Mutex<()> {
+    SETTINGS_IO_GATE.get_or_init(|| Mutex::new(()))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeetingEngineAdmission {
+    Local,
+    Codex,
+    Unverified,
+}
+
+fn persisted_engine(settings: &RuntimeSettings) -> MeetingEngineAdmission {
+    match settings.translation_engine.as_str() {
+        "local" => MeetingEngineAdmission::Local,
+        "codex" => MeetingEngineAdmission::Codex,
+        _ => MeetingEngineAdmission::Unverified,
+    }
+}
+
+fn is_verified_missing(path: &Path) -> bool {
+    matches!(fs::symlink_metadata(path), Err(error) if error.kind() == io::ErrorKind::NotFound)
+}
 
 fn default_translation_engine() -> String {
     "local".to_string()
@@ -72,6 +100,10 @@ impl Default for RuntimeSettings {
 
 impl RuntimeSettings {
     pub fn load_or_default(path: &Path) -> Self {
+        // UI remains tolerant, but this fallback never authorizes translated Meeting.
+        let Ok(_guard) = settings_io_gate().lock() else {
+            return Self::default();
+        };
         if let Some(settings) = read_settings_file(path) {
             // If the replacement already committed but the process stopped before
             // cleanup, the valid primary file is authoritative. Remove stale write
@@ -95,12 +127,43 @@ impl RuntimeSettings {
         Self::default()
     }
 
+    /// The authoritative read-only route admission, unlike tolerant UI defaults.
+    /// No new-install Local permission is granted if a saved file, backup, or
+    /// unfinished atomic temporary write exists but cannot be verified.
+    pub fn meeting_engine_admission(path: &Path) -> MeetingEngineAdmission {
+        let Ok(_guard) = settings_io_gate().lock() else {
+            return MeetingEngineAdmission::Unverified;
+        };
+        if let Some(settings) = read_settings_file(path) {
+            return persisted_engine(&settings);
+        }
+        let backup = path.with_extension("json.bak");
+        if let Some(settings) = read_settings_file(&backup) {
+            return persisted_engine(&settings);
+        }
+        let temporary = path.with_extension("json.tmp");
+        if [path, backup.as_path(), temporary.as_path()]
+            .iter()
+            .all(|path| is_verified_missing(path))
+        {
+            MeetingEngineAdmission::Local
+        } else {
+            MeetingEngineAdmission::Unverified
+        }
+    }
+
     pub fn save_pretty(&self, path: &Path) -> io::Result<()> {
+        let _guard = settings_io_gate().lock().map_err(|_| {
+            io::Error::new(io::ErrorKind::Other, "settings_io_lock_unavailable")
+        })?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
         let body = serde_json::to_string_pretty(&self.clone().sanitized())
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if body.len() > MAX_SETTINGS_FILE_BYTES {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "settings_file_too_large"));
+        }
         write_atomic(path, &body)
     }
 
@@ -128,8 +191,32 @@ impl RuntimeSettings {
 }
 
 fn read_settings_file(path: &Path) -> Option<RuntimeSettings> {
-    let raw = fs::read_to_string(path).ok()?;
-    serde_json::from_str::<RuntimeSettings>(&raw)
+    let file = fs::File::open(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    // Cap the opened handle's bytes as well as the parsed settings shape.
+    let mut bytes = Vec::new();
+    file.take(MAX_SETTINGS_FILE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes).ok()?;
+    if bytes.len() > MAX_SETTINGS_FILE_BYTES {
+        return None;
+    }
+    let raw = std::str::from_utf8(&bytes).ok()?;
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let object = value.as_object()?;
+    let version = object.get("schema_version").and_then(serde_json::Value::as_u64);
+    let legacy_without_engine = object.get("schema_version").is_none()
+        || version.is_some_and(|value| value < CURRENT_SCHEMA_VERSION as u64);
+    // Pre-v14 legacy settings may omit the engine. New settings must contain
+    // a canonical, explicit choice; invalid values cannot sanitize into Local.
+    match object.get("translation_engine") {
+        Some(serde_json::Value::String(engine))
+            if matches!(engine.as_str(), "local" | "codex") => {}
+        None if legacy_without_engine => {}
+        _ => return None,
+    }
+    serde_json::from_value::<RuntimeSettings>(value)
         .ok()
         .map(RuntimeSettings::sanitized)
 }
@@ -233,7 +320,7 @@ fn sanitize_optional_runtime_text(value: Option<String>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeSettings, CURRENT_SCHEMA_VERSION};
+    use super::{MeetingEngineAdmission, RuntimeSettings, CURRENT_SCHEMA_VERSION};
     use std::fs;
 
     #[test]
@@ -279,6 +366,50 @@ mod tests {
         let mut unknown = RuntimeSettings::default();
         unknown.translation_engine = "apikey".to_string();
         assert_eq!(unknown.sanitized().translation_engine, "local");
+    }
+
+    #[test]
+    fn meeting_admission_distinguishes_fresh_install_and_damaged_saved_engine() {
+        let path = std::env::temp_dir().join(format!(
+            "translateit_meeting_admission_{}.json", std::process::id()
+        ));
+        let backup = path.with_extension("json.bak");
+        let temporary = path.with_extension("json.tmp");
+        for file in [&path, &backup, &temporary] {
+            let _ = fs::remove_file(file);
+        }
+        assert_eq!(RuntimeSettings::meeting_engine_admission(&path), MeetingEngineAdmission::Local);
+        fs::write(&path, r#"{"schema_version":13,"meeting_setup_state":"completed"}"#).unwrap();
+        assert_eq!(RuntimeSettings::meeting_engine_admission(&path), MeetingEngineAdmission::Local);
+        fs::write(&path, r#"{"schema_version":14,"translation_engine":"codex"}"#).unwrap();
+        assert_eq!(RuntimeSettings::meeting_engine_admission(&path), MeetingEngineAdmission::Codex);
+        fs::write(&path, r#"{"schema_version":14,"translation_engine":"local"}"#).unwrap();
+        assert_eq!(RuntimeSettings::meeting_engine_admission(&path), MeetingEngineAdmission::Local);
+        for invalid in [
+            "{not json",
+            r#"{"schema_version":14}"#,
+            r#"{"schema_version":14,"translation_engine":"apikey"}"#,
+            r#"{"schema_version":14,"translation_engine":null}"#,
+        ] {
+            fs::write(&path, invalid).unwrap();
+            assert_eq!(
+                RuntimeSettings::meeting_engine_admission(&path),
+                MeetingEngineAdmission::Unverified, "{invalid}"
+            );
+        }
+        fs::remove_file(&path).unwrap();
+        fs::write(&temporary, b"pending_uncommitted_write").unwrap();
+        assert_eq!(RuntimeSettings::meeting_engine_admission(&path), MeetingEngineAdmission::Unverified);
+        fs::remove_file(&temporary).unwrap();
+        fs::write(&path, "{corrupt").unwrap();
+        fs::write(&backup, r#"{"schema_version":14,"translation_engine":"codex"}"#).unwrap();
+        assert_eq!(RuntimeSettings::meeting_engine_admission(&path), MeetingEngineAdmission::Codex);
+        fs::write(&backup, r#"{"schema_version":14,"translation_engine":"local"}"#).unwrap();
+        assert_eq!(RuntimeSettings::meeting_engine_admission(&path), MeetingEngineAdmission::Local);
+        fs::remove_file(&backup).unwrap();
+        fs::write(&path, "x".repeat(super::MAX_SETTINGS_FILE_BYTES + 1)).unwrap();
+        assert_eq!(RuntimeSettings::meeting_engine_admission(&path), MeetingEngineAdmission::Unverified);
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

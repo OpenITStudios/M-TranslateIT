@@ -48,24 +48,37 @@ use session_state::{incoming_lane_enabled, OutboundTimingContext};
 // Codex account diagnostics, offline transcript candidates and staged WebRTC
 // envelopes do not grant ASR/MT/TTS or playback authority. Do not read
 // CodexGatewayStatus here or create a second Meeting/session owner.
-fn local_translated_route_for_engine(engine: &str) -> bool {
-    engine == "local"
+fn local_translated_route_for_admission(
+    admission: crate::engine::settings::MeetingEngineAdmission,
+) -> bool {
+    admission == crate::engine::settings::MeetingEngineAdmission::Local
 }
 
 pub(super) fn local_translated_meeting_route_admitted() -> bool {
-    local_translated_route_for_engine(&crate::engine::load_settings().translation_engine)
+    local_translated_route_for_admission(crate::engine::meeting_engine_admission())
+}
+
+pub(super) fn translated_route_settings_unverified() -> bool {
+    crate::engine::meeting_engine_admission()
+        == crate::engine::settings::MeetingEngineAdmission::Unverified
+}
+
+// Settings mutations reuse the canonical Start/Stop guard; no new owner.
+pub(super) fn try_settings_mutation_guard(
+) -> Result<std::sync::MutexGuard<'static, ()>, &'static str> {
+    lifecycle::try_settings_mutation_guard()
 }
 
 #[cfg(test)]
 mod local_translation_route_tests {
-    use super::local_translated_route_for_engine;
+    use super::local_translated_route_for_admission;
+    use crate::engine::settings::MeetingEngineAdmission;
 
     #[test]
     fn only_the_installed_local_translation_route_can_run_existing_ai_pipeline() {
-        assert!(local_translated_route_for_engine("local"));
-        for engine in ["codex", "apikey", "unknown", "", "LOCAL"] {
-            assert!(!local_translated_route_for_engine(engine), "{engine}");
-        }
+        assert!(local_translated_route_for_admission(MeetingEngineAdmission::Local));
+        assert!(!local_translated_route_for_admission(MeetingEngineAdmission::Codex));
+        assert!(!local_translated_route_for_admission(MeetingEngineAdmission::Unverified));
     }
 }
 

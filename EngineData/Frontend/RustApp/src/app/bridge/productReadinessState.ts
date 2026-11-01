@@ -63,6 +63,7 @@ export function mapProductReadiness(input: {
   const worker = parseWorkerCapabilities(input.workerStatus ?? null);
   const meeting = meetingPreflight(input.meetingSession ?? null);
   const codexVoiceBlocked = meeting.blockers.includes("meeting_session:codex_voice_not_admitted");
+  const settingsUnverified = meeting.blockers.includes("meeting_session:settings_unverified");
   const productMeeting = mapProductMeetingState(input.meetingSession ?? null);
   // An explicitly selected raw microphone is not a translation session.
   const originalLive = productMeeting.live && input.meetingSession?.audio_source === "original";
@@ -125,6 +126,8 @@ export function mapProductReadiness(input: {
         : "Translation is live. Stop the Meeting session when you are finished."
       : productMeeting.hasSession || productMeeting.lifecycle === "cleanup_incomplete"
         ? productMeeting.message
+      : settingsUnverified
+        ? "Saved translation settings could not be verified. Reconfirm the engine in Settings before starting."
       : codexVoiceBlocked
         ? "Codex Voice is selected but not yet verified for translation. Select Local in Settings to start offline translation."
       : helperChecking
@@ -142,7 +145,7 @@ export function mapProductReadiness(input: {
       ? originalLive ? "Original Microphone is live." : "Meeting Translation is live."
       : productMeeting.hasSession || productMeeting.lifecycle === "cleanup_incomplete"
         ? productMeeting.message
-      : codexVoiceBlocked
+      : settingsUnverified || codexVoiceBlocked
         ? meeting.summary
       : helperChecking
         ? "Checking local AI worker status; translation readiness is not yet verified."

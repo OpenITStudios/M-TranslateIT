@@ -9,4 +9,4 @@ pub mod settings;
 pub mod state;
 
 pub use capture_lifecycle::{start_capture, stop_capture};
-pub use runtime_settings::load_settings;
+pub use runtime_settings::{load_settings, meeting_engine_admission};

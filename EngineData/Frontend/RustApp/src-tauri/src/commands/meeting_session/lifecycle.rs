@@ -85,6 +85,12 @@ fn meeting_lifecycle_gate() -> &'static Mutex<()> {
     MEETING_LIFECYCLE_GATE.get_or_init(|| Mutex::new(()))
 }
 
+pub(super) fn try_settings_mutation_guard(
+) -> Result<std::sync::MutexGuard<'static, ()>, &'static str> {
+    meeting_lifecycle_gate().try_lock()
+        .map_err(|_| "meeting_transition_in_progress")
+}
+
 // One native authority check reused by the two existing consumer/playback
 // owners. The only authorized no-snapshot cleanup is the canonical Meeting
 // Stop transaction, which holds MEETING_LIFECYCLE_GATE throughout teardown.
@@ -418,9 +424,14 @@ fn start_meeting_impl(original_requested: bool) -> MeetingSessionActionResult {
         // and included-usage entitlement are proven. Refuse BEFORE worker
         // recovery, model preload, microphone ownership or VB-CABLE opening.
         // No automatic fallback to the Local engine.
+        let settings_unverified = super::translated_route_settings_unverified();
         return blocked_result(
-            "codex_voice_not_admitted",
-            "Codex Voice is selected but not yet verified. No audio or AI runtime was started. Choose Local to use the offline engine.".to_string(),
+            if settings_unverified { "settings_unverified" } else { "codex_voice_not_admitted" },
+            if settings_unverified {
+                "Saved translation settings are unreadable or inconsistent. No Local AI was started. Reconfirm your translation engine in Settings.".to_string()
+            } else {
+                "Codex Voice is selected but not yet verified. No audio or AI runtime was started. Choose Local to use the offline engine.".to_string()
+            },
         );
     }
 

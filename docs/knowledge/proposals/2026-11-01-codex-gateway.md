@@ -556,6 +556,49 @@ installed account, real audio, WebRTC and payment terms remain
 **NOT EXECUTED / UNKNOWN**. No Codex Voice, model turn, paid fallback or
 cloud audio was admitted.
 
+## Phase 14: strict persisted-engine admission and Settings mutation fencing — SOURCE CANDIDATE
+
+The old Meeting route gate consumed `RuntimeSettings::load_or_default`,
+which intentionally returns Local defaults on a missing or unreadable file.
+A corrupted saved Codex choice could therefore admit the Local ASR/MT/TTS
+route without valid persisted authorization.
+
+The canonical Rust Settings owner now separates tolerant UI loading from
+read-only `MeetingEngineAdmission = Local | Codex | Unverified`.
+The same primary and committed backup settings are read with an actual
+64-KiB file-handle bound; malformed JSON, invalid explicit engine values
+and schema-v14 files missing their engine are not trusted. Pre-v14 legacy
+settings still accept absent engine as Local. Only a verified absence of
+primary, backup AND temporary write artifacts admits Local as a clean
+first-install default. A valid backup may recover its exact Local/Codex
+choice; any unresolved file/recovery state blocks Local inference.
+
+A process-local Settings IO mutex protects canonical read/recover/save
+against intermediate in-process writes. Native `save_runtime_settings`
+and `select_audio_device` also reuse the *existing* canonical Meeting
+Start/Stop transition lock. Device selection rereads current Settings
+after this lock so a stale device preference cannot overwrite a more
+recent engine selection. No new meeting/audio/credential owner exists.
+
+Meeting preflight, translated Start, native setup intents and product
+readiness now distinguish damaged Settings with `settings_unverified`
+from deliberate Codex selection. The existing Settings engine control
+presents a single explicit **Reconfirm Local engine** action when the
+Meeting preflight reports unverified settings; confirmation uses the
+existing native save and re-read path. The Original Microphone passthrough
+and optional incoming within admitted Local Meeting are unchanged.
+
+**Proof:** STATIC_SOURCE on pinned parent
+`8a41115b17c724c4a5ef8fc019b7ed8c695b7626`. Rust and
+TypeScript regressions are authored for clean install, old schema, Codex,
+corrupt/oversized files, pending temp, valid backup, native mutation
+guard and explicit UI recovery; **NOT EXECUTED**. Source does not prove
+Windows file races, actual UI, compiler, GPU/audio, installed Codex,
+Voice entitlement or meeting-app delivery. Complete external deletion of
+all settings evidence cannot be distinguished from a first install
+without a separately authorized durable provenance record. No paid
+inference, Cloud Voice, WebRTC session or fallback is enabled.
+
 ## Translation commit and resource ownership
 
 One future internal result contract should carry session ID, generation,
@@ -606,10 +649,8 @@ incremental user-PC or hosted CI requirements.
   while Codex translation Start and source switching are explicitly blocked
   until admission. Streaming audio and release bundling are NOT enabled.
 
-**Next source work:** review the canonical persisted-engine admission's
-read-failure/default behavior and concurrent Settings mutation against
-translated Start and queued work. Preserve the explicit Local-on-new-install
-default without silently treating a damaged or stale Codex preference as
-proof of Local admission. Resolve only observed source-owner defects.
-Keep the single later integrated Windows acceptance and all Codex Voice,
-paid inference and paused CI boundaries unchanged.
+**Next source work:** perform a bounded integration-source audit of P14
+file admission, Rust/TS settings contracts, source-mutation locks and
+explicit UI recovery. Fix only source-visible defects before preserving
+one exact-SHA integrated Windows candidate. CI and Codex Voice stay
+disabled; no per-commit local execution is requested.

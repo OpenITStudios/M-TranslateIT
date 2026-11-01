@@ -44,7 +44,12 @@ pub(super) fn build_preflight() -> MeetingSessionPreflightStatus {
     // readiness. Avoid even probing the local helper for this route. No
     // microphone, model load, or network session is started by preflight.
     if !super::local_translated_meeting_route_admitted() {
-        let mut blockers = vec!["meeting_session:codex_voice_not_admitted".to_string()];
+        let settings_unverified = super::translated_route_settings_unverified();
+        let mut blockers = vec![if settings_unverified {
+            "meeting_session:settings_unverified".to_string()
+        } else {
+            "meeting_session:codex_voice_not_admitted".to_string()
+        }];
         if transient_stop_cleanup_pending() {
             blockers.push("meeting_session:cleanup_incomplete".to_string());
         }
@@ -73,8 +78,16 @@ pub(super) fn build_preflight() -> MeetingSessionPreflightStatus {
             provider_ready: false,
             meeting_route_ready: route.route_ready,
             blockers,
-            summary: "Codex Voice is selected but audio-to-translated-text access and included-usage entitlement are not verified. Start Translation is disabled. Select Local to use the existing offline engine.".to_string(),
-            runtime_claim: "codex_voice_unadmitted_source_contract_not_windows_runtime_proof".to_string(),
+            summary: if settings_unverified {
+                "Saved translation engine settings are unreadable or inconsistent. Start Translation is disabled until Settings are explicitly saved again.".to_string()
+            } else {
+                "Codex Voice is selected but audio-to-translated-text access and included-usage entitlement are not verified. Start Translation is disabled. Select Local to use the existing offline engine.".to_string()
+            },
+            runtime_claim: if settings_unverified {
+                "translation_engine_settings_unverified_not_windows_runtime_proof".to_string()
+            } else {
+                "codex_voice_unadmitted_source_contract_not_windows_runtime_proof".to_string()
+            },
         };
     }
 

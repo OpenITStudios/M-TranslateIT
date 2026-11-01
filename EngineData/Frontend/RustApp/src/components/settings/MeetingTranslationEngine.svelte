@@ -5,11 +5,13 @@
   let {
     settings,
     locked = false,
+    needsReconfirmation = false,
     onSettingsChange,
     onNotice,
   }: {
     settings: RuntimeSettings;
     locked?: boolean;
+    needsReconfirmation?: boolean;
     onSettingsChange: (settings: RuntimeSettings) => void | Promise<void>;
     onNotice: (message: string) => void;
   } = $props();
@@ -18,7 +20,9 @@
   let savingMessage = $state("");
 
   async function chooseEngine(engine: "local" | "codex"): Promise<void> {
-    if (saving || locked || settings.translation_engine === engine) return;
+    // A corrupt persisted settings file is presented through tolerant UI
+    // defaults, but only an explicit re-save can restore native admission.
+    if (saving || locked || (settings.translation_engine === engine && !needsReconfirmation)) return;
     saving = true;
     savingMessage = "Saving translation engine...";
     let nativeSaved = false;
@@ -59,7 +63,8 @@
   <div class="min-w-0 flex-1">
     <span class="ti-field-label">Translation engine</span>
     <strong class="mt-1.5 block text-[13px] font-semibold leading-5">
-      {settings.translation_engine === "codex" ? "Codex Voice · not yet available" : "Local · offline"}
+      {needsReconfirmation ? "Engine settings · verification required"
+        : settings.translation_engine === "codex" ? "Codex Voice · not yet available" : "Local · offline"}
     </strong>
     <p class="mb-0 mt-1 text-[11.5px] leading-5 text-[var(--ti-text-soft)]">
       Local uses Whisper, MiLMMT and the selected GPT-SoVITS voice.
@@ -67,6 +72,18 @@
       included-usage terms and translated-text output are verified.
       Selecting Codex does not send microphone audio or enable cloud inference.
     </p>
+    {#if needsReconfirmation}
+      <p class="mb-0 mt-2 text-[12px] leading-5 text-[var(--ti-text-muted)]" role="alert">
+        Saved engine settings could not be verified. Confirm the intended
+        engine below before starting Meeting translation.
+      </p>
+      {#if settings.translation_engine === "local"}
+        <button type="button" class="ti-button ti-button-secondary mt-3"
+          disabled={locked || saving} onclick={() => void chooseEngine("local")}>
+          Reconfirm Local engine
+        </button>
+      {/if}
+    {/if}
     {#if savingMessage}
       <p class="mb-0 mt-2 text-[11.5px] leading-5 text-[var(--ti-text-muted)]" role="status">
         {savingMessage}

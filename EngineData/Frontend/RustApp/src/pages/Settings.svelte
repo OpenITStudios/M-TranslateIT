@@ -258,6 +258,7 @@
 
         <MeetingTranslationEngine
           {settings}
+          needsReconfirmation={snapshot.meetingSession?.preflight?.blockers?.includes("meeting_session:settings_unverified") === true}
           locked={meetingResourcesLocked}
           onSettingsChange={onSettingsChange}
           onNotice={onNotice}

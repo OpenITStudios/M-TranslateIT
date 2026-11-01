@@ -17,10 +17,15 @@ fn require_local_outbound_setup() -> Result<(), IntentOutcome> {
     if meeting_session::local_translated_meeting_route_admitted() {
         Ok(())
     } else {
+        let settings_unverified = meeting_session::translated_route_settings_unverified();
         Err(outcome(
             false,
-            "engine_not_admitted".to_string(),
-            "Codex Voice is selected but not verified. Local Meeting AI setup was not started. Select Local in Settings for offline translation.".to_string(),
+            if settings_unverified { "settings_unverified" } else { "engine_not_admitted" }.to_string(),
+            if settings_unverified {
+                "Saved translation settings are unreadable or inconsistent. No Local AI setup was started. Reconfirm the engine in Settings."
+            } else {
+                "Codex Voice is selected but not verified. Local Meeting AI setup was not started. Select Local in Settings for offline translation."
+            }.to_string(),
         ))
     }
 }

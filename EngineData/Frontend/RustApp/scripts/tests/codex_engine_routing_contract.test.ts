@@ -8,6 +8,8 @@ const rustSource = (path: string): string => readFileSync(new URL(path, rust), "
 const uiSource = (path: string): string => readFileSync(new URL(path, frontend), "utf8");
 
 const settings = rustSource("engine/settings.rs");
+const settingsRuntime = rustSource("engine/runtime_settings.rs");
+const engineModule = rustSource("engine/mod.rs");
 const persistence = rustSource("commands/settings.rs");
 const meeting = rustSource("commands/meeting_session.rs");
 const nativeMeetingStart = rustSource("commands/runtime.rs");
@@ -56,6 +58,7 @@ test("Codex preflight has no fake Local readiness or local helper probe", () => 
   const probe = preflight.indexOf("let helper = get_helper_bridge_status();");
   assert.ok(guard >= 0 && probe > guard, "Codex branch must precede the Local worker probe");
   assert.match(preflight, /meeting_session:codex_voice_not_admitted/);
+  assert.match(preflight, /meeting_session:settings_unverified/);
   assert.match(preflight, /start_eligible: false/);
   assert.match(preflight, /ready_for_start: false/);
   assert.match(preflight, /provider_ready: false/);
@@ -79,10 +82,10 @@ test("all Start and Original-to-TranslateIT paths reject unverified Codex before
 });
 
 test("P11 uses one Meeting-local engine admission gate, never a Codex diagnostic flag", () => {
-  assert.match(meeting, /fn local_translated_route_for_engine\(engine: &str\) -> bool/);
-  assert.match(meeting, /engine == "local"/);
+  assert.match(meeting, /fn local_translated_route_for_admission\(/);
+  assert.match(meeting, /admission == crate::engine::settings::MeetingEngineAdmission::Local/);
   assert.match(meeting, /fn local_translated_meeting_route_admitted\(\) -> bool/);
-  assert.match(meeting, /crate::engine::load_settings\(\)\.translation_engine/);
+  assert.match(meeting, /crate::engine::meeting_engine_admission\(\)/);
   assert.match(meeting, /fn only_the_installed_local_translation_route_can_run_existing_ai_pipeline/);
   for (const owner of [preflight, lifecycle, switching, consumer, outbound, committed, playback]) {
     assert.match(owner, /super::local_translated_meeting_route_admitted\(\)/);
@@ -128,6 +131,7 @@ test("startup does not warm the local AI worker for a selected Codex engine", ()
   assert.match(boot, /initialSnapshot\.settings\.translation_engine === "local"/);
   assert.match(facade, /settings\.translation_engine === "local"/);
   assert.match(readiness, /meeting_session:codex_voice_not_admitted/);
+  assert.match(readiness, /meeting_session:settings_unverified/);
   assert.match(readiness, /Select Local in Settings to start offline translation/);
 });
 
@@ -205,4 +209,48 @@ test("P13 preserves the native Codex blocker through First Setup readiness notic
   assert.match(refresh, /const readinessMessage = step === 4/);
   assert.match(refresh, /readinessMessage && readinessMessage !== "TranslateIT is ready\."/);
   assert.match(refresh, /meetingVoiceReady && snapshot\?\.readiness\.meetingReady/);
+});
+
+test("P14 admits Local only from verified persisted settings or a clean first install", () => {
+  assert.match(settings, /pub enum MeetingEngineAdmission/);
+  assert.match(settings, /pub fn meeting_engine_admission\(path: &Path\)/);
+  assert.match(settings, /MAX_SETTINGS_FILE_BYTES/);
+  assert.match(settings, /file\.take\(MAX_SETTINGS_FILE_BYTES as u64 \+ 1\)/);
+  assert.match(settings, /read_to_end\(&mut bytes\)/);
+  assert.match(settings, /let legacy_without_engine/);
+  assert.match(settings, /None if legacy_without_engine =>/);
+  assert.match(settings, /backup\.as_path\(\), temporary\.as_path\(\)/);
+  assert.match(settings, /\.all\(\|path\| is_verified_missing\(path\)\)/);
+  assert.match(settings, /fn meeting_admission_distinguishes_fresh_install_and_damaged_saved_engine/);
+  assert.match(settingsRuntime, /RuntimeSettings::meeting_engine_admission\(&settings_path\(\)\)/);
+  assert.match(engineModule, /meeting_engine_admission/);
+  assert.doesNotMatch(meeting, /load_settings\(\)\.translation_engine/);
+});
+
+test("P14 serialized settings saves cannot race canonical Meeting Start or silently reset Codex", () => {
+  assert.match(settings, /static SETTINGS_IO_GATE/);
+  assert.match(settings, /pub fn save_pretty\(&self, path: &Path\)[\s\S]*settings_io_gate\(\)\.lock\(\)/);
+  assert.match(lifecycle, /pub\(super\) fn try_settings_mutation_guard\(/);
+  assert.match(meeting, /lifecycle::try_settings_mutation_guard\(\)/);
+  const save = persistence.slice(persistence.indexOf("pub fn save_runtime_settings("));
+  const guardIndex = save.indexOf("super::meeting_session::try_settings_mutation_guard()");
+  const settingsRead = save.indexOf("let current = engine::load_settings();");
+  assert.ok(guardIndex >= 0 && guardIndex < settingsRead);
+  assert.match(save, /let unverified_engine = engine::meeting_engine_admission\(\)/);
+  assert.match(save, /if runtime_session_owns_audio_resources\(\) && unverified_engine/);
+  const device = persistence.slice(persistence.indexOf("pub fn select_audio_device("));
+  assert.match(device, /settings_engine_unverified/);
+  assert.match(device, /let _meeting_transition = match super::meeting_session::try_settings_mutation_guard\(\)/);
+  assert.match(device, /let current = engine::load_settings\(\);\s*if engine::meeting_engine_admission\(\)/);
+  assert.match(device, /if runtime_session_owns_audio_resources\(\)/);
+  assert.match(meeting, /pub\(super\) fn translated_route_settings_unverified\(\)/);
+  assert.match(preflight, /meeting_session:settings_unverified/);
+  assert.match(lifecycle, /"settings_unverified"/);
+  assert.match(nativeIntents, /"settings_unverified"/);
+  assert.match(readiness, /settingsUnverified/);
+  assert.match(selector, /needsReconfirmation = false/);
+  assert.match(selector, /settings\.translation_engine === engine && !needsReconfirmation/);
+  assert.match(selector, /Reconfirm Local engine/);
+  assert.match(selector, /chooseEngine\("local"\)/);
+  assert.match(page, /needsReconfirmation=\{snapshot\.meetingSession\?\.preflight\?\.blockers\?\.includes\("meeting_session:settings_unverified"\) === true\}/);
 });

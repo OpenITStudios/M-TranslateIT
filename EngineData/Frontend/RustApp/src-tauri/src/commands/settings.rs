@@ -120,9 +120,30 @@ pub fn load_runtime_settings() -> RuntimeSettings {
 
 pub fn save_runtime_settings(settings: RuntimeSettings) -> CommandResult {
     let started = trace_command_start("save_runtime_settings", "saving runtime settings");
+    let _meeting_transition = match super::meeting_session::try_settings_mutation_guard() {
+        Ok(guard) => guard,
+        Err(_) => {
+            let result = CommandResult::blocked(
+                LifecycleState::Error,
+                "A Meeting Start/Stop transaction is in progress or unavailable. No Settings change was saved.".to_string(),
+            );
+            trace_command_end("save_runtime_settings", started, "meeting_transition_unavailable");
+            return result;
+        }
+    };
     let current = engine::load_settings();
     let candidate = settings.sanitized();
-    let result = if runtime_session_owns_audio_resources()
+    let unverified_engine = engine::meeting_engine_admission()
+        == crate::engine::settings::MeetingEngineAdmission::Unverified;
+    let result = if runtime_session_owns_audio_resources() && unverified_engine {
+        // When tolerant UI settings default to Local after file corruption,
+        // even a same-value save is a real authority mutation. Never allow it
+        // to repair/enable Local while Original or a stale Meeting owns audio.
+        CommandResult::blocked(
+            LifecycleState::Error,
+            audio_resource_lock_message("reconfirming the translation engine"),
+        )
+    } else if runtime_session_owns_audio_resources()
         && audio_preferences_changed(&current, &candidate)
     {
         CommandResult::blocked(
@@ -170,6 +191,38 @@ pub fn select_audio_device(kind: String, device_id: Option<String>) -> AudioDevi
     // Stop path releases the runtime session. Persisting a different device while a
     // stream still owns the previous endpoint would make Settings disagree with the
     // active runtime. Defer the change instead of attempting a mid-session hot rebind.
+    // Device probes and their subsequent full-settings saves must not race
+    // an engine preference update or the canonical Meeting Start/Stop.
+    let _meeting_transition = match super::meeting_session::try_settings_mutation_guard() {
+        Ok(guard) => guard,
+        Err(_) => {
+            trace_command_end("select_audio_device", started, "meeting_transition_unavailable");
+            return AudioDeviceSelectionResult {
+                ok: false,
+                kind: kind.clone(),
+                device_id: requested,
+                device_name: current_device_label(&current, &kind),
+                message: "A Meeting Start/Stop or Settings change is in progress. No device preference was saved.".to_string(),
+                settings: current,
+            };
+        }
+    };
+    // Always read again after acquiring the mutation guard: a stale audio
+    // snapshot must never silently overwrite a concurrently saved Codex choice.
+    let current = engine::load_settings();
+    if engine::meeting_engine_admission()
+        == crate::engine::settings::MeetingEngineAdmission::Unverified
+    {
+        trace_command_end("select_audio_device", started, "settings_engine_unverified");
+        return AudioDeviceSelectionResult {
+            ok: false,
+            kind: kind.clone(),
+            device_id: requested,
+            device_name: current_device_label(&current, &kind),
+            message: "Saved translation engine settings could not be verified. Reconfirm the engine before changing audio devices.".to_string(),
+            settings: current,
+        };
+    }
     if runtime_session_owns_audio_resources() {
         trace_command_end(
             "select_audio_device",
