@@ -280,8 +280,9 @@ test("P15 prevents First Setup from persisting tolerant Local defaults before en
     firstSetup.indexOf("async function advance("),
   );
   const guard = persist.indexOf("if (snapshot === null || engineSettingsUnverified)");
-  const write = persist.indexOf("await runtimeApi.saveSettings(candidate)");
-  assert.ok(guard >= 0 && write > guard,
+  const expected = persist.indexOf("const expected = cloneSettings(settings)");
+  const write = persist.indexOf("await runtimeApi.saveSettings(candidate, expected)");
+  assert.ok(guard >= 0 && expected > guard && write > expected,
     "ordinary Continue/Defer must not silently overwrite an unverified persisted engine");
 
   assert.match(firstSetup, /snapshot\?\.meetingSession\?\.preflight\?\.blockers\?\.includes\("meeting_session:settings_unverified"\)/);
