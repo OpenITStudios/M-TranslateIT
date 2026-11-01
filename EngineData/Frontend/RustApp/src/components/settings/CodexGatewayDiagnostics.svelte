@@ -24,7 +24,8 @@
   });
 
   const connected = $derived(status?.process_owned === true);
-  const stopping = $derived(status?.state === "stopping" || status?.state === "cleanup_incomplete");
+  const stopping = $derived(status?.state === "stopping");
+  const cleanupIncomplete = $derived(status?.state === "cleanup_incomplete");
 </script>
 
 <article class="ti-panel p-5">
@@ -54,11 +55,21 @@
     {status?.blocker || "No diagnostic blocker reported."}
     Voice entitlement, audio input, translated output, and zero-additional-charge admission are not certified by this check.
   </p>
+  {#if cleanupIncomplete}
+    <p class="mt-3 text-[12px] leading-5 text-[var(--ti-text-muted)]" role="alert">
+      Codex cleanup could not be verified. A new Codex process is blocked for this
+      application session; repeated Disconnect attempts cannot repair an unknown
+      child or reader/writer owner. Review the diagnostic blocker before trying
+      a fresh application session.
+    </p>
+  {/if}
   <div class="ti-action-row mt-4">
     <button type="button" class="ti-button ti-button-secondary" disabled={busy} onclick={() => void perform("status")}>
       {busy ? "Checking..." : "Refresh"}
     </button>
-    {#if connected || stopping}
+    {#if cleanupIncomplete}
+      <!-- There is no safe retry command for a latched native cleanup fault. -->
+    {:else if connected || stopping}
       <button type="button" class="ti-button ti-button-secondary" disabled={busy} onclick={() => void perform("disconnect")}>
         Disconnect owned App Server
       </button>

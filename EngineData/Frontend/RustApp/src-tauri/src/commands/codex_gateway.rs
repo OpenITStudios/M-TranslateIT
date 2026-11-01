@@ -20,6 +20,9 @@ use serde_json::json;
 use crate::engine::runtime_state::latest_runtime_session_state;
 use transport::AppServer;
 
+const CLEANUP_SETTLEMENT_LIMIT: Duration = Duration::from_secs(3);
+const CLEANUP_SETTLEMENT_SLICE: Duration = Duration::from_millis(50);
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CodexGatewayStatus {
     pub state: &'static str,
@@ -55,6 +58,42 @@ impl CodexGatewayStatus {
             ..Self::idle(generation)
         }
     }
+
+    /// A cleanup failure is not an ordinary connection error. It remains
+    /// latched even after the last owner thread terminates: no new Codex
+    /// child may be started in this application lifetime.
+    fn cleanup_incomplete(generation: u64, blocker: &'static str, process_owned: bool) -> Self {
+        Self {
+            state: "cleanup_incomplete",
+            blocker,
+            process_owned,
+            generation,
+            runtime_claim: "codex_gateway:cleanup_not_verified",
+            ..Self::idle(generation)
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CleanupDisposition {
+    Complete,
+    Retry,
+    Incomplete(&'static str),
+}
+
+/// One classification for both the actual child and synthetic P7 tests.
+/// A latched join/child error is fatal immediately; only a healthy but still
+/// settling owned thread may receive a bounded re-check.
+fn cleanup_disposition(
+    outcome: Result<bool, &'static str>,
+    deadline_reached: bool,
+) -> CleanupDisposition {
+    match outcome {
+        Ok(true) => CleanupDisposition::Complete,
+        Ok(false) if !deadline_reached => CleanupDisposition::Retry,
+        Ok(false) => CleanupDisposition::Incomplete("codex_gateway:owned_cleanup_deadline"),
+        Err(reason) => CleanupDisposition::Incomplete(reason),
+    }
 }
 
 struct GatewayOwner {
@@ -86,10 +125,14 @@ fn reconcile(owner: &mut GatewayOwner) {
         let finished = owner.thread.take().expect("completed handle present").join();
         owner.cancellation = None;
         if finished.is_err() {
-            owner.status = CodexGatewayStatus::blocked(
-                owner.generation, "codex_gateway:owner_thread_failed",
+            owner.status = CodexGatewayStatus::cleanup_incomplete(
+                owner.generation,
+                "codex_gateway:owner_thread_failed",
+                false,
             );
         } else {
+            // A joined owner is no longer holding its child handle, but a
+            // prior cleanup failure remains a non-reconnectable uncertainty.
             owner.status.process_owned = false;
         }
     }
@@ -199,20 +242,41 @@ fn run_owned(generation: u64, cancellation: Arc<AtomicBool>) {
                 Ok(())
             })();
 
-            // Do not lose an owned process/stdout reader after a Stop or
-            // failure. This thread remains the owner until cleanup is proven.
+            // Keep the exact AppServer owner in this thread while teardown
+            // is attempted. A permanently latched writer/reader join failure
+            // must never cause an infinite retry loop. A bounded number of
+            // healthy-but-not-yet-joined polls is allowed.
+            let cleanup_deadline = Instant::now() + CLEANUP_SETTLEMENT_LIMIT;
             loop {
-                match server.stop_and_reap() {
-                    Ok(true) => break,
-                    Ok(false) | Err(_) => {
-                        update(generation, CodexGatewayStatus {
-                            state: "cleanup_incomplete",
-                            blocker: "codex_gateway:owned_cleanup_pending",
-                            process_owned: true,
+                let outcome = server.stop_and_reap();
+                let expired = Instant::now() >= cleanup_deadline;
+                match cleanup_disposition(outcome, expired) {
+                    CleanupDisposition::Complete => break,
+                    CleanupDisposition::Retry => {
+                        update(
                             generation,
-                            ..CodexGatewayStatus::idle(generation)
-                        }, true);
-                        thread::sleep(Duration::from_millis(100));
+                            CodexGatewayStatus::cleanup_incomplete(
+                                generation, "codex_gateway:owned_cleanup_pending", true,
+                            ),
+                            true,
+                        );
+                        thread::sleep(CLEANUP_SETTLEMENT_SLICE);
+                    }
+                    CleanupDisposition::Incomplete(reason) => {
+                        // No optimistic Idle/Blocked transition after an
+                        // unverified teardown, including when cancelled.
+                        // The AppServer's Drop still owns its exact child
+                        // handle and any unjoined read/write threads. A
+                        // stalled OS handle may hold this owner thread here;
+                        // Start and App Exit remain blocked in either case.
+                        update(
+                            generation,
+                            CodexGatewayStatus::cleanup_incomplete(
+                                generation, reason, true,
+                            ),
+                            true,
+                        );
+                        return;
                     }
                 }
             }
@@ -252,7 +316,9 @@ fn start() -> CodexGatewayStatus {
         return CodexGatewayStatus::blocked(0, "codex_gateway:owner_busy_or_unavailable");
     };
     reconcile(&mut state);
-    if state.thread.is_some() {
+    if state.status.state == "cleanup_incomplete" || state.thread.is_some() {
+        // Terminal uncertainty cannot be cleared by Connect/Disconnect or
+        // by a completed owner thread. No second Codex process is spawned.
         return state.status.clone();
     }
     let Some(generation) = state.generation.checked_add(1) else {
@@ -290,6 +356,9 @@ fn request_stop() -> CodexGatewayStatus {
         return CodexGatewayStatus::blocked(0, "codex_gateway:owner_busy_or_unavailable");
     };
     reconcile(&mut state);
+    if state.status.state == "cleanup_incomplete" {
+        return state.status.clone();
+    }
     if let Some(stop) = &state.cancellation {
         stop.store(true, Ordering::Release);
         state.status = CodexGatewayStatus {
@@ -453,6 +522,68 @@ mod tests {
         );
         assert_eq!(wire.phase(), Phase::StartPending);
         assert!(!CodexGatewayStatus::idle(9).meeting_route_enabled);
+    }
+
+    #[test]
+    fn cleanup_disposition_is_bounded_and_fatal_errors_are_not_retried() {
+        assert_eq!(cleanup_disposition(Ok(true), false), CleanupDisposition::Complete);
+        assert_eq!(cleanup_disposition(Ok(false), false), CleanupDisposition::Retry);
+        assert_eq!(
+            cleanup_disposition(Ok(false), true),
+            CleanupDisposition::Incomplete("codex_gateway:owned_cleanup_deadline")
+        );
+        assert_eq!(
+            cleanup_disposition(Err("codex_gateway:writer_join_failed"), false),
+            CleanupDisposition::Incomplete("codex_gateway:writer_join_failed")
+        );
+        assert_eq!(
+            cleanup_disposition(Err("codex_gateway:child_reap_failed"), false),
+            CleanupDisposition::Incomplete("codex_gateway:child_reap_failed")
+        );
+    }
+
+    #[test]
+    fn finished_owner_cannot_clear_a_latched_cleanup_failure() {
+        let worker = thread::spawn(|| {});
+        while !worker.is_finished() {
+            thread::yield_now();
+        }
+        let mut state = GatewayOwner {
+            generation: 21,
+            status: CodexGatewayStatus::cleanup_incomplete(
+                21, "codex_gateway:writer_join_failed", true,
+            ),
+            cancellation: Some(Arc::new(AtomicBool::new(true))),
+            thread: Some(worker),
+        };
+        reconcile(&mut state);
+        assert_eq!(state.status.state, "cleanup_incomplete");
+        assert_eq!(state.status.blocker, "codex_gateway:writer_join_failed");
+        assert_eq!(state.status.generation, 21);
+        assert!(!state.status.process_owned);
+        assert!(state.thread.is_none());
+        assert!(state.cancellation.is_none());
+    }
+
+    #[test]
+    fn unresolved_cleanup_remains_distinct_from_a_clean_disconnection() {
+        let awaiting = CodexGatewayStatus::cleanup_incomplete(
+            13, "codex_gateway:owned_cleanup_pending", true
+        );
+        assert_eq!(awaiting.state, "cleanup_incomplete");
+        assert!(awaiting.process_owned);
+        assert!(!awaiting.realtime_audio_verified);
+        assert!(!awaiting.meeting_route_enabled);
+        let joined_but_unverified = CodexGatewayStatus::cleanup_incomplete(
+            13, "codex_gateway:writer_join_failed", false
+        );
+        assert_eq!(joined_but_unverified.state, "cleanup_incomplete");
+        assert!(!joined_but_unverified.process_owned);
+        assert_ne!(joined_but_unverified.state, "disconnected");
+        assert_eq!(
+            joined_but_unverified.runtime_claim,
+            "codex_gateway:cleanup_not_verified"
+        );
     }
 
     #[test]

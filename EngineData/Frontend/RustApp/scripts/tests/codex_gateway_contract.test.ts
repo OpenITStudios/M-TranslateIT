@@ -210,6 +210,33 @@ test("P7 tests use the real owned JSONL reader/writer and response dispatcher", 
   assert.match(fakeServer, /cleanup_proven\(/);
 });
 
+
+test("P8 fatal cleanup faults are terminal and cannot silently reconnect", () => {
+  assert.match(gateway, /const CLEANUP_SETTLEMENT_LIMIT: Duration = Duration::from_secs\(3\)/);
+  assert.match(gateway, /enum CleanupDisposition/);
+  assert.match(gateway, /fn cleanup_disposition/);
+  assert.match(gateway, /Ok\(false\) if !deadline_reached => CleanupDisposition::Retry/);
+  assert.match(gateway, /Err\(reason\) => CleanupDisposition::Incomplete\(reason\)/);
+  assert.match(gateway, /let cleanup_deadline = Instant::now\(\) \+ CLEANUP_SETTLEMENT_LIMIT/);
+  assert.match(gateway, /CleanupDisposition::Incomplete\(reason\) =>/);
+  assert.match(gateway, /CodexGatewayStatus::cleanup_incomplete\(/);
+  assert.match(gateway, /state.status.state == "cleanup_incomplete" \|\| state.thread.is_some\(\)/);
+  assert.match(gateway, /if state.status.state == "cleanup_incomplete" \{/);
+  assert.match(gateway, /"codex_gateway:owner_thread_failed"/);
+  assert.match(gateway, /"codex_gateway:cleanup_not_verified"/);
+  assert.doesNotMatch(gateway, /Ok\(false\) \| Err\(_\) =>/);
+  assert.match(diagnostics, /const cleanupIncomplete = \$derived/);
+  assert.match(diagnostics, /role="alert"/);
+  assert.match(diagnostics, /\{#if cleanupIncomplete\}/);
+  assert.match(fakeServer, /fn latched_join_failure_is_terminal_and_does_not_retry_cleanup_forever/);
+  assert.match(fakeServer, /fn unverified_owner_exit_does_not_rearm_codex_voice_or_child_start/);
+  assert.match(transport, /self.cleanup_failure = Some\("codex_gateway:writer_join_failed"\)/);
+  assert.match(transport, /self.cleanup_failure = Some\("codex_gateway:reader_join_failed"\)/);
+  assert.match(protocol, /"initialize" \| "account\/read" \| "account\/rateLimits\/read"/);
+  assert.match(gateway, /realtime_audio_verified: false/);
+  assert.match(gateway, /meeting_route_enabled: false/);
+});
+
 test("P7 scenarios cover account changes, stalls, cancellation and exact IDs", () => {
   for (const scenario of [
     "scripted_account_notification_before_response_invalidates_same_rpc_probe",

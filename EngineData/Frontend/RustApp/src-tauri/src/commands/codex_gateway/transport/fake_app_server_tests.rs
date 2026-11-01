@@ -10,6 +10,7 @@ use super::{
     WireEvent, EVENT_QUEUE_CAPACITY, WRITE_QUEUE_CAPACITY,
 };
 use super::super::protocol::{self, Inbound};
+use super::super::{cleanup_disposition, CleanupDisposition, CodexGatewayStatus};
 
 use serde_json::{json, Value};
 use std::io::{self, Cursor, Read, Write};
@@ -490,6 +491,42 @@ fn cleanup_uncertainty_never_promotes_a_clean_stop_marker() {
     assert!(!cleanup_proven(true, true, true, Some("codex_gateway:writer_join_failed")));
     assert!(!cleanup_proven(true, true, true, Some("codex_gateway:reader_join_failed")));
     assert!(cleanup_proven(true, true, true, None));
+}
+
+#[test]
+fn latched_join_failure_is_terminal_and_does_not_retry_cleanup_forever() {
+    let failed = cleanup_disposition(
+        Err("codex_gateway:writer_join_failed"), false,
+    );
+    assert_eq!(
+        failed,
+        CleanupDisposition::Incomplete("codex_gateway:writer_join_failed"),
+    );
+    assert_ne!(failed, CleanupDisposition::Retry);
+    let still_settling = cleanup_disposition(Ok(false), false);
+    assert_eq!(still_settling, CleanupDisposition::Retry);
+    let timed_out = cleanup_disposition(Ok(false), true);
+    assert_eq!(
+        timed_out,
+        CleanupDisposition::Incomplete("codex_gateway:owned_cleanup_deadline"),
+    );
+    assert_ne!(timed_out, CleanupDisposition::Complete);
+}
+
+#[test]
+fn unverified_owner_exit_does_not_rearm_codex_voice_or_child_start() {
+    let status = CodexGatewayStatus::cleanup_incomplete(
+        11, "codex_gateway:reader_join_failed", false,
+    );
+    assert_eq!(status.state, "cleanup_incomplete");
+    assert_eq!(status.generation, 11);
+    assert_eq!(status.blocker, "codex_gateway:reader_join_failed");
+    assert_eq!(status.runtime_claim, "codex_gateway:cleanup_not_verified");
+    assert!(!status.process_owned);
+    assert!(!status.chatgpt_authenticated);
+    assert!(!status.included_usage_allowed);
+    assert!(!status.realtime_audio_verified);
+    assert!(!status.meeting_route_enabled);
 }
 
 #[test]

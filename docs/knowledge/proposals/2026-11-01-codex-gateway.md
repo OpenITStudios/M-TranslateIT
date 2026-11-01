@@ -313,6 +313,41 @@ No real Codex account, API usage, cloud audio, TTS, Windows environment or
 device has been accessed. Failure paths retain enumerated, redacted errors
 and cannot promote an unknown shutdown to a verified one.
 
+## Phase 8: bounded Stop settlement and permanent cleanup latch — SOURCE CANDIDATE
+
+The existing `codex_gateway.rs` now classifies the owner's
+`stop_and_reap()` outcome into `Complete`, `Retry`, and
+`Incomplete(reason)`. A healthy `Ok(false)` can be checked again
+within a three-second settlement budget, with 50-ms observation intervals.
+An `Err`—including a latched reader/writer join failure—is **terminal
+immediately**, not retried indefinitely. The budget limits repeated
+observations; it does **not** turn OS `kill`/`wait`, inherited pipe
+handles or Rust `Drop` into time-bounded operations.
+
+A terminal outcome retains a `cleanup_incomplete` status with a
+redacted reason and no voice/account entitlement. The exact `AppServer`
+child and remaining read/write thread handles remain within the owning
+thread until the existing `Drop` backstop attempts to release them.
+If its teardown blocks, the owner thread and incomplete state remain
+visible; if the owner finishes, `reconcile` clears its `process_owned`
+observation **without** clearing `cleanup_incomplete`. A panicked owner
+also becomes an unresolved cleanup fault, not a normal recoverable
+connection error. The status is latched for this application lifetime.
+
+Connect cannot create another Codex child after `cleanup_incomplete`,
+Disconnect is idempotent and cannot override the unresolved state, and
+App Exit cannot produce a clean-release receipt from that state.
+Diagnostics explains the latched failure without offering a misleading
+repeat-Disconnect action. No automatic retry, process-name-wide kill,
+fallback to paid API, or modification of the Local Meeting engine.
+
+Rust unit cases and the existing P7 in-memory fake now include a
+terminal-join-failure scenario and a deadline-exhaustion scenario, while
+the TypeScript source contract checks source wiring. They are
+**AUTHORED / NOT EXECUTED**. Installed Windows process ownership,
+inherited stdout handles, application exit behavior, actual Codex CLI,
+Voice entitlement and Meeting delivery remain unverified.
+
 ## Translation commit and resource ownership
 
 One future internal result contract should carry session ID, generation,
@@ -363,9 +398,10 @@ incremental user-PC or hosted CI requirements.
   while Codex translation Start and source switching are explicitly blocked
   until admission. Streaming audio and release bundling are NOT enabled.
 
-**Next source work:** harden the existing Codex Gateway's fatal
-cleanup/retry boundary when a reader or writer join permanently fails, while
-preserving process ownership and never treating unverified cleanup as a
-successful Stop. Keep this source-only until the later integrated native
-acceptance; do not dispatch paused CI, run cloud inference, enable
-experimental Voice, or ask for per-commit user-PC tests.
+**Next source work:** add a bounded, source-only installed Codex CLI
+version/protocol-compatibility gate to the existing diagnostic App Server
+owner, preventing unsupported protocol changes from being mistaken for a
+usable Voice route. No browser login, audio upload, model inference, paid
+provider, local per-change test or paused CI dispatch. Native Windows
+process/pipe behavior and Voice entitlement remain unverified until the
+later integrated acceptance phase.
