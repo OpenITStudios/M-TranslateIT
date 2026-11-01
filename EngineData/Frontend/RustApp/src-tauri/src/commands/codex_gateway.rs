@@ -3,6 +3,7 @@
 //! The existing Local Meeting/voice worker remains untouched until a separately
 //! verified audio-to-translated-text capability can be admitted.
 
+mod compatibility;
 mod correlation;
 mod protocol;
 mod realtime;
@@ -16,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::json;
+use compatibility::DiagnosticCompatibility;
 
 use crate::engine::runtime_state::latest_runtime_session_state;
 use transport::AppServer;
@@ -30,6 +32,8 @@ pub struct CodexGatewayStatus {
     pub process_owned: bool,
     pub chatgpt_authenticated: bool,
     pub included_usage_allowed: bool,
+    pub app_server_version: Option<String>,
+    pub diagnostic_protocol_compatible: bool,
     pub realtime_audio_verified: bool,
     pub meeting_route_enabled: bool,
     pub generation: u64,
@@ -44,6 +48,8 @@ impl CodexGatewayStatus {
             process_owned: false,
             chatgpt_authenticated: false,
             included_usage_allowed: false,
+            app_server_version: None,
+            diagnostic_protocol_compatible: false,
             realtime_audio_verified: false,
             meeting_route_enabled: false,
             generation,
@@ -166,11 +172,18 @@ fn refresh_account(
     generation: u64,
     server: &mut AppServer,
     cancellation: &AtomicBool,
+    diagnostic: &DiagnosticCompatibility,
 ) -> Result<(), &'static str> {
     // A workspace/account change can race a response. At most one re-read
     // is allowed; never claim included usage from an unstable account pair.
     for _ in 0..2 {
         server.take_account_dirty();
+        // Initialize alone does not acknowledge explicitGatewayOauth.
+        // Prove the same owned server supports the read-only gateway status
+        // method before account/rate-limit introspection, and recheck it after
+        // account/workspace changes. No browser login or model call is sent.
+        let gateway = server.request("account/gatewayOAuth/read", json!({}), cancellation)?;
+        compatibility::verify_gateway_oauth_read(&gateway)?;
         let account = server.request("account/read", json!({}), cancellation)?;
         protocol::chatgpt_account(&account)?;
         let quota = server.request(
@@ -196,7 +209,9 @@ fn refresh_account(
             process_owned: true,
             chatgpt_authenticated: true,
             included_usage_allowed: included == Some(true),
-            // Login and quota are not proof of ChatGPT Voice entitlement.
+            app_server_version: Some(diagnostic.cli_version.clone()),
+            diagnostic_protocol_compatible: true,
+            // Login, protocol shape and ordinary usage are NOT Voice proof.
             realtime_audio_verified: false,
             meeting_route_enabled: false,
             generation,
@@ -226,17 +241,19 @@ fn run_owned(generation: u64, cancellation: Arc<AtomicBool>) {
                     }),
                     &cancellation,
                 )?;
-                if !initialized.is_object() {
-                    return Err("codex_gateway:initialize_invalid");
-                }
+                // The upstream InitializeResponse has no serverVersion field.
+                // Extract bounded released build information from userAgent
+                // and check the documented platform/path response shape.
+                let diagnostic = compatibility::verify_initialize(&initialized)?;
                 server.initialized(&cancellation)?;
 
-                // Account introspection only; no browser login or AI turn.
-                refresh_account(generation, &mut server, &cancellation)?;
+                // Verify explicit gateway login policy before account reads;
+                // never assume an older server honored the initialize flag.
+                refresh_account(generation, &mut server, &cancellation, &diagnostic)?;
 
                 while !cancellation.load(Ordering::Acquire) {
                     if server.poll(&cancellation)? {
-                        refresh_account(generation, &mut server, &cancellation)?;
+                        refresh_account(generation, &mut server, &cancellation, &diagnostic)?;
                     }
                 }
                 Ok(())
@@ -584,6 +601,25 @@ mod tests {
             joined_but_unverified.runtime_claim,
             "codex_gateway:cleanup_not_verified"
         );
+    }
+
+    #[test]
+    fn versioned_diagnostic_status_never_enables_voice_or_meeting() {
+        let diagnostic = CodexGatewayStatus {
+            state: "authenticated",
+            blocker: "",
+            process_owned: true,
+            chatgpt_authenticated: true,
+            included_usage_allowed: true,
+            app_server_version: Some("0.110.0".to_string()),
+            diagnostic_protocol_compatible: true,
+            generation: 14,
+            ..CodexGatewayStatus::idle(14)
+        };
+        assert!(!diagnostic.realtime_audio_verified);
+        assert!(!diagnostic.meeting_route_enabled);
+        assert_eq!(diagnostic.app_server_version.as_deref(), Some("0.110.0"));
+        assert!(!CodexGatewayStatus::idle(14).diagnostic_protocol_compatible);
     }
 
     #[test]

@@ -6,6 +6,8 @@ export type CodexGatewayStatus = {
   process_owned: boolean;
   chatgpt_authenticated: boolean;
   included_usage_allowed: boolean;
+  app_server_version: string | null;
+  diagnostic_protocol_compatible: boolean;
   realtime_audio_verified: boolean;
   meeting_route_enabled: boolean;
   generation: number;
@@ -19,6 +21,8 @@ function unavailable(): CodexGatewayStatus {
     process_owned: false,
     chatgpt_authenticated: false,
     included_usage_allowed: false,
+    app_server_version: null,
+    diagnostic_protocol_compatible: false,
     realtime_audio_verified: false,
     meeting_route_enabled: false,
     generation: 0,

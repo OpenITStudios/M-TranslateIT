@@ -10,6 +10,7 @@ use super::{
     WireEvent, EVENT_QUEUE_CAPACITY, WRITE_QUEUE_CAPACITY,
 };
 use super::super::protocol::{self, Inbound};
+use super::super::compatibility;
 use super::super::{cleanup_disposition, CleanupDisposition, CodexGatewayStatus};
 
 use serde_json::{json, Value};
@@ -78,6 +79,18 @@ impl FakeCodexAppServer {
         let mut frame = serde_json::to_vec(&json!({
             "id": id,
             "result": result,
+        })).unwrap();
+        frame.push(b'\n');
+        self.send_bytes(&frame);
+    }
+
+    fn send_rpc_method_not_found(&self, id: u64) {
+        let mut frame = serde_json::to_vec(&json!({
+            "id": id,
+            "error": {
+                "code": -32601,
+                "message": "account gateway read method unavailable"
+            }
         })).unwrap();
         frame.push(b'\n');
         self.send_bytes(&frame);
@@ -527,6 +540,75 @@ fn unverified_owner_exit_does_not_rearm_codex_voice_or_child_start() {
     assert!(!status.included_usage_allowed);
     assert!(!status.realtime_audio_verified);
     assert!(!status.meeting_route_enabled);
+}
+
+#[test]
+fn p9_scripted_gateway_capability_precedes_account_and_usage_reads() {
+    let (server, mut client) = fixture();
+    let worker = thread::spawn(move || {
+        let deadline = Instant::now() + FIXTURE_DEADLINE;
+        let cancelled = AtomicBool::new(false);
+        let gateway = client.request(
+            "account/gatewayOAuth/read", &cancelled, deadline,
+        ).and_then(|result| {
+            compatibility::verify_gateway_oauth_read(&result)?;
+            Ok(())
+        });
+        let account = gateway.and_then(|_| {
+            client.request("account/read", &cancelled, Instant::now() + FIXTURE_DEADLINE)
+        });
+        let quota = account.and_then(|result| {
+            protocol::chatgpt_account(&result)?;
+            client.request(
+                "account/rateLimits/read",
+                &cancelled,
+                Instant::now() + FIXTURE_DEADLINE,
+            )
+        });
+        (client, quota)
+    });
+
+    let gateway = server.next_request();
+    assert_eq!(gateway["method"], "account/gatewayOAuth/read");
+    assert!(gateway.get("params").is_none());
+    server.send_response(gateway["id"].as_u64().unwrap(), json!({
+        "providerId":"openai", "providerName":"OpenAI",
+        "required":false, "status":null, "error":null
+    }));
+
+    let account = server.next_request();
+    assert_eq!(account["method"], "account/read");
+    server.send_response(account["id"].as_u64().unwrap(), json!({
+        "account":{"type":"chatgpt"}
+    }));
+    let quota = server.next_request();
+    assert_eq!(quota["method"], "account/rateLimits/read");
+    server.send_response(quota["id"].as_u64().unwrap(), json!({
+        "ordinaryUsageAllowed": true
+    }));
+    let (client, result) = worker.join().unwrap();
+    assert_eq!(protocol::ordinary_usage(&result.unwrap()), Ok(Some(true)));
+    assert!(client.shutdown(server));
+}
+
+#[test]
+fn p9_unsupported_gateway_oauth_read_blocks_without_account_request() {
+    let (server, mut client) = fixture();
+    let worker = thread::spawn(move || {
+        let reply = client.request(
+            "account/gatewayOAuth/read",
+            &AtomicBool::new(false),
+            Instant::now() + FIXTURE_DEADLINE,
+        );
+        (client, reply)
+    });
+    let request = server.next_request();
+    assert_eq!(request["method"], "account/gatewayOAuth/read");
+    server.send_rpc_method_not_found(request["id"].as_u64().unwrap());
+    let (client, reply) = worker.join().unwrap();
+    assert_eq!(reply, Err("codex_gateway:rpc_rejected"));
+    assert_eq!(client.request_id, 1, "no account or model request after feature rejection");
+    assert!(client.shutdown(server));
 }
 
 #[test]

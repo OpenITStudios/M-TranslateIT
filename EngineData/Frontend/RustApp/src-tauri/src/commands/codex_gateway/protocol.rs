@@ -56,15 +56,23 @@ pub(super) fn parse_frame(frame: &[u8]) -> Result<Inbound, &'static str> {
 }
 
 pub(super) fn request(id: u64, method: &str, params: Value) -> Result<Vec<u8>, &'static str> {
-    // The caller owns the fixed allowlist. This function refuses arbitrary method names.
-    if !matches!(method, "initialize" | "account/read" | "account/rateLimits/read")
-        || !params.is_object()
+    // Allow exactly four read-only/control methods, never a model turn or
+    // experimental Voice. Upstream GatewayOAuthRead accepts Option<()> and
+    // must be serialized WITHOUT a params object.
+    let payload = if method == "account/gatewayOAuth/read" {
+        if params != json!({}) {
+            return Err("codex_gateway:request_not_allowed");
+        }
+        json!({"id": id, "method": method})
+    } else if matches!(method, "initialize" | "account/read" | "account/rateLimits/read")
+        && params.is_object()
     {
+        json!({"id": id, "method": method, "params": params})
+    } else {
         return Err("codex_gateway:request_not_allowed");
-    }
-    let mut body = serde_json::to_vec(&json!({
-        "id": id, "method": method, "params": params
-    })).map_err(|_| "codex_gateway:request_encode_failed")?;
+    };
+    let mut body = serde_json::to_vec(&payload)
+        .map_err(|_| "codex_gateway:request_encode_failed")?;
     if body.len() > MAX_REQUEST_BYTES {
         return Err("codex_gateway:request_too_large");
     }
@@ -144,6 +152,23 @@ mod tests {
         assert!(request(1, "turn/start", json!({})).is_err());
         assert!(request(1, "initialize", json!([])).is_err());
         assert!(request(1, "initialize", json!({})).unwrap().ends_with(b"\n"));
+    }
+
+    #[test]
+    fn gateway_oauth_read_is_a_params_free_read_only_probe() {
+        let bytes = request(41, "account/gatewayOAuth/read", json!({})).unwrap();
+        let payload: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["id"], 41);
+        assert_eq!(payload["method"], "account/gatewayOAuth/read");
+        assert!(payload.get("params").is_none());
+        assert_eq!(
+            request(42, "account/gatewayOAuth/read", json!({"login":true})),
+            Err("codex_gateway:request_not_allowed"),
+        );
+        assert_eq!(
+            request(43, "account/gatewayOAuth/login", json!({})),
+            Err("codex_gateway:request_not_allowed"),
+        );
     }
 
     #[test]

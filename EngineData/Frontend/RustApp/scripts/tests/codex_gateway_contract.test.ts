@@ -7,6 +7,7 @@ const read = (file: string) => readFileSync(new URL(file, root), "utf8");
 const gateway = read("commands/codex_gateway.rs");
 const transport = read("commands/codex_gateway/transport.rs");
 const fakeServer = read("commands/codex_gateway/transport/fake_app_server_tests.rs");
+const compatibility = read("commands/codex_gateway/compatibility.rs");
 const protocol = read("commands/codex_gateway/protocol.rs");
 const realtime = read("commands/codex_gateway/realtime.rs");
 const realtimeRpc = read("commands/codex_gateway/realtime_rpc.rs");
@@ -258,5 +259,46 @@ test("P7 scenarios cover account changes, stalls, cancellation and exact IDs", (
   assert.doesNotMatch(fakeServer, /Command::new\(|codex app-server|OPENAI_API_KEY/);
   assert.match(protocol, /"initialize" \| "account\/read" \| "account\/rateLimits\/read"/);
   assert.match(gateway, /"experimentalApi": false/);
+  assert.match(gateway, /meeting_route_enabled: false/);
+});
+
+
+test("P9 parses actual InitializeResponse user-agent version and platform without a second process", () => {
+  assert.match(gateway, /mod compatibility;/);
+  assert.match(gateway, /compatibility::verify_initialize\(&initialized\)/);
+  assert.match(compatibility, /fn parse_build_version\(user_agent: &str\)/);
+  assert.match(compatibility, /"userAgent"/);
+  assert.match(compatibility, /"codexHome"/);
+  assert.match(compatibility, /"platformFamily"/);
+  assert.match(compatibility, /"platformOs"/);
+  assert.match(compatibility, /codex_compatibility:cli_version_placeholder/);
+  assert.match(compatibility, /codex_compatibility:server_platform_mismatch/);
+  assert.doesNotMatch(compatibility, /Command::new|OPENAI_API_KEY|thread\/realtime\/start/);
+  assert.match(gateway, /app_server_version: Option<String>/);
+  assert.match(gateway, /diagnostic_protocol_compatible: bool/);
+  assert.match(gateway, /app_server_version: Some\(diagnostic\.cli_version\.clone\(\)\)/);
+  assert.match(gateway, /diagnostic_protocol_compatible: true/);
+  assert.match(frontend, /app_server_version: string \| null/);
+  assert.match(frontend, /diagnostic_protocol_compatible: boolean/);
+  assert.match(diagnostics, /Compatible with diagnostic reads only/);
+  assert.match(diagnostics, /Voice entitlement, realtime protocol support/);
+});
+
+test("P9 proves read-only explicit gateway policy before account or token quota probe", () => {
+  assert.match(protocol, /method == "account\/gatewayOAuth\/read"/);
+  assert.match(protocol, /json!\(\{"id": id, "method": method\}\)/);
+  assert.match(protocol, /account\/gatewayOAuth\/read/);
+  assert.doesNotMatch(protocol, /"account\/gatewayOAuth\/login" \|/);
+  assert.doesNotMatch(protocol, /"account\/gatewayOAuth\/cancel" \|/);
+  assert.match(gateway, /server\.request\("account\/gatewayOAuth\/read", json!\(\{\}\), cancellation\)\?/);
+  assert.match(gateway, /compatibility::verify_gateway_oauth_read\(&gateway\)\?/);
+  assert.match(compatibility, /Some\("openai"\)/);
+  assert.match(compatibility, /Some\(false\)/);
+  assert.match(compatibility, /gateway_provider_not_admitted/);
+  assert.match(fakeServer, /p9_scripted_gateway_capability_precedes_account_and_usage_reads/);
+  assert.match(fakeServer, /p9_unsupported_gateway_oauth_read_blocks_without_account_request/);
+  assert.match(fakeServer, /send_rpc_method_not_found/);
+  assert.match(gateway, /"experimentalApi": false/);
+  assert.match(gateway, /realtime_audio_verified: false/);
   assert.match(gateway, /meeting_route_enabled: false/);
 });

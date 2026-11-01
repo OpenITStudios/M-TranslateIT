@@ -52,8 +52,14 @@
     </div>
   </div>
   <p class="mb-0 mt-3 text-[11.5px] leading-5 text-[var(--ti-text-soft)]">
+    CLI build: {status?.app_server_version ?? "Not verified"}.
+    Account protocol: {status?.diagnostic_protocol_compatible === true
+      ? "Compatible with diagnostic reads only" : "Not verified"}.
+  </p>
+  <p class="mb-0 mt-3 text-[11.5px] leading-5 text-[var(--ti-text-soft)]">
     {status?.blocker || "No diagnostic blocker reported."}
-    Voice entitlement, audio input, translated output, and zero-additional-charge admission are not certified by this check.
+    Voice entitlement, realtime protocol support, audio input, translated output, and
+    zero-additional-charge admission are not certified by this check.
   </p>
   {#if cleanupIncomplete}
     <p class="mt-3 text-[12px] leading-5 text-[var(--ti-text-muted)]" role="alert">

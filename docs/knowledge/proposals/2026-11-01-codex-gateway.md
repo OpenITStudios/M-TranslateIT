@@ -62,8 +62,9 @@ The child runs `codex app-server --listen stdio://`. JSONL transport has:
 - redacted, enumerated failures; no raw stdout/stderr/chat/body/credential logs;
 - one owned reader and child, verified teardown before clean-app-exit marker.
 
-Only `initialize`, `account/read` and `account/rateLimits/read` are
-admitted at this phase, with `initialized` sent after initialize. Account
+The diagnostic allowlist contains only `initialize`, `account/gatewayOAuth/read`,
+`account/read` and `account/rateLimits/read`. The read-only gateway policy probe
+is required before account/usage reads. `initialized` follows initialize. Account
 type must be `chatgpt`; `ordinaryUsageAllowed` true is required to *record*
 included-usage permission. Null/missing means unknown and is not permission.
 `supportsLunaReserve=false`; inherited API keys and alternate API base
@@ -238,9 +239,10 @@ success. The encoder's Debug implementation exposes only RPC ID, method and
 byte length, never raw SDP, audio or transcript contents. Rust unit scenarios
 and an existing TypeScript source-contract test were **authored, not run**.
 
-**Admission boundary unchanged:** the actual P1 `protocol::request`
-method allowlist remains `initialize`, `account/read` and
-`account/rateLimits/read`. `transport.rs` does not invoke the P5 codec;
+**Voice admission boundary unchanged:** the diagnostic `protocol::request`
+allowlist contains `initialize`, `account/gatewayOAuth/read`,
+`account/read` and `account/rateLimits/read`; it contains no model,
+login-action or Voice RPC. `transport.rs` does not invoke the P5 codec;
 there is no TCP/WebRTC peer, audio upload, TTS emission, experimental API
 activation or Meeting route. A mocked envelope may be inspected in a Rust
 unit test but cannot pass the P1 RPC allowlist. This is executable source
@@ -348,6 +350,52 @@ the TypeScript source contract checks source wiring. They are
 inherited stdout handles, application exit behavior, actual Codex CLI,
 Voice entitlement and Meeting delivery remain unverified.
 
+## Phase 9: installed CLI build and read-only protocol gate — SOURCE CANDIDATE
+
+The existing single owned App Server now validates the upstream v1
+`InitializeResponse` shape directly: `userAgent`, `codexHome`,
+`platformFamily` and `platformOs`. The Codex build version is extracted
+from the bounded first user-agent token, which upstream produces as
+`<originator>/<CARGO_PKG_VERSION>`. A second `codex --version` process is
+**not** spawned. Invalid, missing, malformed or `0.0.0` placeholder versions
+fail closed. The Windows response and codexHome are validated, but the raw
+user-agent, path, and private account data are not returned to the UI.
+
+The upstream development workspace reports `0.0.0`, so the source does not
+establish a trustworthy minimum shipped version for Codex Voice. This gate
+therefore validates **version syntax and the documented account-diagnostic
+protocol**, not a guessed released-version range, the experimental audio
+protocol, signed binary identity, or product Voice entitlement.
+
+Initialize with `explicitGatewayOauth: true` does not acknowledge that an
+older server actually honored the no-automatic-browser policy. Before each
+ChatGPT account/ordinary-usage read, the gateway now sends the upstream
+params-free `account/gatewayOAuth/read` RPC. Only its read-only response for
+the built-in `openai` provider with `required: false`, null `status`, and
+null `error` is accepted. Missing support, another provider, required
+external gateway credentials, or malformed responses block diagnostics.
+The status check is repeated during an account-change re-probe. This expands
+the allowlist by **one read-only account method**, not a login or inference
+method. Older server builds may attempt legacy automatic sign-in before the
+probe detects missing support; this source-only gate cannot guarantee
+otherwise without an actual Windows execution trace. It does not prove
+account quota is billed for realtime Voice.
+
+Rust exposes only `app_server_version` and
+`diagnostic_protocol_compatible`; UI explicitly describes compatibility
+as **diagnostic reads only**. Unknowns and errors do not become Voice
+readiness. The P7 in-memory fake has scripted support/unsupported cases for
+`account/gatewayOAuth/read` and exact request ordering, along with new
+Rust and TypeScript regression source contracts. These are AUTHORED /
+**NOT EXECUTED**. Native Windows, actual account entitlement, Cloud Voice
+or real translation behavior remain unverified.
+
+Upstream shape was inspected at `openai/codex` commit
+`67f0994b532b8740f14b5b738af7b7b2a915b1d6`, especially
+`codex-rs/app-server-protocol/src/protocol/v1.rs`,
+`protocol/v2/account.rs` and
+`app-server/src/request_processors/initialize_processor.rs`.
+
 ## Translation commit and resource ownership
 
 One future internal result contract should carry session ID, generation,
@@ -398,10 +446,9 @@ incremental user-PC or hosted CI requirements.
   while Codex translation Start and source switching are explicitly blocked
   until admission. Streaming audio and release bundling are NOT enabled.
 
-**Next source work:** add a bounded, source-only installed Codex CLI
-version/protocol-compatibility gate to the existing diagnostic App Server
-owner, preventing unsupported protocol changes from being mistaken for a
-usable Voice route. No browser login, audio upload, model inference, paid
-provider, local per-change test or paused CI dispatch. Native Windows
-process/pipe behavior and Voice entitlement remain unverified until the
-later integrated acceptance phase.
+**Next source work:** consolidate the Codex Gateway's offline capability
+evidence into its existing P7 fixture and audit the account-provider change
+boundary, preserving exact single-process ownership and preventing a stale
+compatibility snapshot from enabling Voice. Do not issue model/audio RPCs,
+run local/hosted CI, or treat the version probe as runtime acceptance;
+native Windows and Voice billing/translation evidence remain unverified.
