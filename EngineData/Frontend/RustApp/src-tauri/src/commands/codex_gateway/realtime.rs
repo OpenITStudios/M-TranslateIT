@@ -16,7 +16,7 @@ const MAX_AUDIO_FRAMES: usize = 4;
 const SAMPLES_PER_FRAME: usize = 4_800; // 200 ms at 24 kHz
 const AUDIO_RATE: u32 = 24_000;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub(super) enum Observation {
     Ignored,
     SourceTranscript { item_id: String, text: String },
@@ -25,6 +25,22 @@ pub(super) enum Observation {
     UnverifiedAssistantText { item_id: String, text: String },
     CloudAudioIgnored,
     Closed,
+}
+
+// These observations may contain private meeting content. Never expose it via
+// automatically derived Debug when a validator rejects an event.
+impl std::fmt::Debug for Observation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ignored => f.write_str("Ignored"),
+            Self::CloudAudioIgnored => f.write_str("CloudAudioIgnored"),
+            Self::Closed => f.write_str("Closed"),
+            Self::SourceTranscript { .. } => f.write_str("SourceTranscript(<redacted>)"),
+            Self::UnverifiedAssistantText { .. } => {
+                f.write_str("UnverifiedAssistantText(<redacted>)")
+            }
+        }
+    }
 }
 
 fn safe_id(value: &str) -> bool {
@@ -320,6 +336,16 @@ mod tests {
         let mut o = RealtimeObserver::new("thr_a").unwrap();
         o.observe("thread/realtime/started", &started()).unwrap();
         o
+    }
+
+    #[test]
+    fn debug_representation_does_not_dump_private_spoken_text() {
+        let candidate = Observation::UnverifiedAssistantText {
+            item_id: "out_1".into(),
+            text: "sensitive utterance".into(),
+        };
+        let debug = format!("{candidate:?}");
+        assert!(!debug.contains("sensitive utterance"));
     }
 
     #[test]

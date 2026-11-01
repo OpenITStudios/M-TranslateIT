@@ -3,6 +3,7 @@
 //! The existing Local Meeting/voice worker remains untouched until a separately
 //! verified audio-to-translated-text capability can be admitted.
 
+mod correlation;
 mod protocol;
 mod realtime;
 mod transport;
@@ -378,6 +379,57 @@ mod tests {
             assert!(!candidate.realtime_audio_verified);
             assert!(!candidate.meeting_route_enabled);
         }
+    }
+
+    #[test]
+    fn source_derived_realtime_items_produce_no_authorized_tts_result() {
+        use super::correlation::{CorrelationGate, SourceWindow};
+        use super::realtime::RealtimeObserver;
+
+        let mut upstream = RealtimeObserver::new("thread_p3").unwrap();
+        upstream.observe(
+            "thread/realtime/started",
+            &serde_json::json!({
+                "threadId": "thread_p3",
+                "realtimeSessionId": "voice_p3",
+                "version": "v3"
+            }),
+        ).unwrap();
+        let mut evidence = CorrelationGate::default();
+        evidence.begin(SourceWindow {
+            generation: 10,
+            source_epoch: 4,
+            sequence: 9,
+            start_sample: 48_000,
+            end_sample: 72_000,
+        }).unwrap();
+        let source = upstream.observe(
+            "thread/realtime/item/completed",
+            &serde_json::json!({
+                "threadId": "thread_p3",
+                "item": {"id": "in_9", "realtimeSessionId": "voice_p3",
+                         "type": "transcriptSegment",
+                         "role": "user", "text": "Berapa harga sekarang?"}
+            }),
+        ).unwrap();
+        assert!(evidence.observe(source).unwrap().is_none());
+        let assistant = upstream.observe(
+            "thread/realtime/item/completed",
+            &serde_json::json!({
+                "threadId": "thread_p3",
+                "item": {"id": "out_9", "realtimeSessionId": "voice_p3",
+                         "type": "transcriptSegment",
+                         "role": "assistant", "text": "What is the current price?"}
+            }),
+        ).unwrap();
+        let pair = evidence.observe(assistant).unwrap().unwrap();
+        assert_eq!(pair.source.sequence, 9);
+        assert_eq!(pair.source_item_id, "in_9");
+        assert_eq!(pair.assistant_item_id, "out_9");
+        // One-off proximity is not an upstream-corroborated causal link:
+        // no TTS/Meeting commit method accepts this UnverifiedPair.
+        assert!(evidence.is_retired());
+        assert!(!CodexGatewayStatus::idle(10).meeting_route_enabled);
     }
 
     #[test]

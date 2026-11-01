@@ -140,6 +140,35 @@ chunked (initial experiment 200 ms) and must pass format/clock negotiation,
 bounded queue/backpressure, source-range and epoch consistency. A gap marks
 the affected utterance invalid; it never silently drops words.
 
+## Phase 3: strict source/assistant correlation — SOURCE CANDIDATE, NOT ADMITTED
+
+`commands/codex_gateway/correlation.rs` now contains a bounded, one-flight
+correlation evidence gate. Its source lease records the canonical Meeting
+generation, source epoch, utterance sequence and exact 24 kHz PCM window.
+It accepts one role-bearing completed `user` item followed by one role-bearing
+completed `assistant` item, validates distinct provider IDs, requires bounded
+non-empty text and rejects overlapping input, duplicates, missing source,
+invalid sample ranges and results after Stop.
+
+The result type is intentionally named `UnverifiedPair`. Private speech and account payloads are redacted in the gateway's RPC and observation `Debug` formatters. It is **not**
+`TranslationCommit`: Codex's documented item-completed event has no
+authoritative `replyToSourceItemId`, source sample-range identity, or
+Meeting utterance sequence. Two items appearing near each other do not prove
+a causal or semantically correct translation. Consequently the evidence gate
+retires itself after one pair rather than allowing late responses from an
+earlier utterance to be attributed to the next one. The event adapter and
+correlation gate are connected by a synthetic Rust regression scenario,
+without adding any production TTS or Meeting call.
+
+**Not yet satisfied:** a real, included-usage Voice entitlement for this
+account; exact installed CLI protocol; sample-clock synchronization and
+end-of-source acknowledgement; a demonstrated source-to-assistant mapping
+that remains unambiguous with interruptions, overlap and 30-minute sessions;
+real Indonesian/English semantic evaluation. None can be inferred from
+`ordinaryUsageAllowed: true` or from source-only mock tests. P3 is not
+complete as a live capability, and there is no path to enable it by manually
+asserting an unverified success flag.
+
 ## Translation commit and resource ownership
 
 One future internal result contract should carry session ID, generation,
@@ -179,7 +208,8 @@ incremental user-PC or hosted CI requirements.
 ## Source owners and continuation
 
 - Native gateway, account admission and process lifecycle:
-  `src-tauri/src/commands/codex_gateway.rs` and its children.
+  `src-tauri/src/commands/codex_gateway.rs` and its children, with a
+  one-flight unverified output boundary in `codex_gateway/correlation.rs`.
 - User-facing *diagnostic only*: `src/components/settings/CodexGatewayDiagnostics.svelte`
   and `src/app/bridge/codexGatewayApi.ts`.
 - Shared Meeting Start/Stop, voice readiness, output and archive: their
@@ -188,8 +218,9 @@ incremental user-PC or hosted CI requirements.
 - Normal product engine selection, audio streaming and release bundling:
   explicitly **not** enabled by the phase-1 connection probe.
 
-**Next work:** prove and implement the smallest authorized ChatGPT-account
-Voice-to-final-translated-text adapter with a source-derived event contract,
-then admit the Codex route through the existing Meeting preflight/Stop
-lifecycle. If included Voice access is not demonstrably available, keep
-Jalur 2 blocked without weakening Local Meeting.
+**Next work:** verify the installed Codex Voice protocol and included-usage
+entitlement, then obtain an authoritative or experimentally demonstrated
+source-to-assistant mapping that remains correct across long sessions,
+interruptions and overlapping speech. Only after that evidence may the
+existing Meeting Start/Stop and GPT-SoVITS owners admit the Codex route.
+Unverified or separately billed Voice remains BLOCKED.

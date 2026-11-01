@@ -8,6 +8,7 @@ const gateway = read("commands/codex_gateway.rs");
 const transport = read("commands/codex_gateway/transport.rs");
 const protocol = read("commands/codex_gateway/protocol.rs");
 const realtime = read("commands/codex_gateway/realtime.rs");
+const correlation = read("commands/codex_gateway/correlation.rs");
 const registry = read("commands/registry.rs");
 const shutdown = read("commands/application_runtime/shutdown.rs");
 const frontend = readFileSync(
@@ -97,5 +98,21 @@ test("P2 has bounded PCM framing with gap and Stop rejection, but no live Voice 
   assert.doesNotMatch(protocol, /"thread\/realtime\/appendAudio" \|/);
   assert.doesNotMatch(gateway, /"thread\/realtime\/start"/);
   assert.match(gateway, /realtime_audio_verified: false/);
+  assert.match(gateway, /meeting_route_enabled: false/);
+});
+
+
+test("P3 source/assistant correlation is one-flight and always unverified", () => {
+  assert.match(gateway, /mod correlation;/);
+  assert.match(correlation, /struct SourceWindow/);
+  assert.match(correlation, /struct UnverifiedPair/);
+  assert.match(correlation, /struct CorrelationGate/);
+  assert.match(correlation, /codex_correlation:assistant_without_source/);
+  assert.match(correlation, /codex_correlation:source_ambiguous/);
+  assert.match(correlation, /codex_correlation:overlapping_source/);
+  assert.match(correlation, /codex_correlation:retired/);
+  assert.match(correlation, /MAX_UTTERANCE_SAMPLES/);
+  assert.match(gateway, /source_derived_realtime_items_produce_no_authorized_tts_result/);
+  assert.doesNotMatch(correlation, /voice_actor_synthesize|enqueue_meeting_playback|commit_meeting_turn/);
   assert.match(gateway, /meeting_route_enabled: false/);
 });

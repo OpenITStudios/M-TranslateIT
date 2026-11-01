@@ -6,10 +6,22 @@ use serde_json::{json, Value};
 pub(super) const MAX_FRAME_BYTES: usize = 256 * 1024;
 pub(super) const MAX_REQUEST_BYTES: usize = 8 * 1024;
 
-#[derive(Debug)]
 pub(super) enum Inbound {
     Response { id: u64, result: Value },
     Notification { method: String, params: Value },
+}
+
+// RPC payloads may contain accounts, transcripts or audio. Never print their
+// contents through panic messages, generic Debug logs or diagnostic bundles.
+impl std::fmt::Debug for Inbound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Response { id, .. } => f.debug_struct("Response").field("id", id).finish(),
+            Self::Notification { method, .. } => {
+                f.debug_struct("Notification").field("method", method).finish()
+            }
+        }
+    }
 }
 
 pub(super) fn parse_frame(frame: &[u8]) -> Result<Inbound, &'static str> {
@@ -132,6 +144,19 @@ mod tests {
         assert!(request(1, "turn/start", json!({})).is_err());
         assert!(request(1, "initialize", json!([])).is_err());
         assert!(request(1, "initialize", json!({})).unwrap().ends_with(b"\n"));
+    }
+
+    #[test]
+    fn debug_representation_never_contains_private_rpc_values() {
+        let response = parse_frame(
+            br#"{"id":5,"result":{"account":{"email":"private-address@example.com"}}}"#,
+        ).unwrap();
+        assert!(!format!("{response:?}").contains("private-address"));
+
+        let notification = parse_frame(
+            br#"{"method":"thread/realtime/transcript/done","params":{"threadId":"t","text":"confidential speech"}}"#,
+        ).unwrap();
+        assert!(!format!("{notification:?}").contains("confidential speech"));
     }
 
     #[test]
