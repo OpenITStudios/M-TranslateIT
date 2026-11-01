@@ -151,6 +151,19 @@ pub fn save_product_settings(
     })
 }
 
+// Explicit engine selection updates only the native engine preference and
+// compares the caller-observed previous engine before persisting current Settings.
+#[tauri::command]
+pub fn select_translation_engine(
+    app: tauri::AppHandle,
+    engine: String,
+    expected_current_engine: String,
+) -> crate::engine::state::CommandResult {
+    emit_after(&app, "select_translation_engine", || {
+        super::super::settings::select_translation_engine(engine, expected_current_engine)
+    })
+}
+
 // Dedicated explicit recovery command. The normal full Settings mutation
 // cannot repair an Unverified engine by silently saving tolerant UI defaults.
 #[tauri::command]

@@ -27,12 +27,12 @@
     savingMessage = "Saving translation engine...";
     let nativeSaved = false;
     try {
-      const candidate: RuntimeSettings = { ...settings, translation_engine: engine };
-      // The dedicated native recovery action accepts only the selected
-      // engine, never the potentially stale full Settings UI snapshot.
+      // Both engine-changing native actions carry only the selected engine.
+      // For an already verified setting, native compares the previous engine
+      // before writing so stale UI state cannot silently overwrite Codex/Local.
       const saved = needsReconfirmation
         ? await runtimeApi.confirmUnverifiedTranslationEngine(engine)
-        : await runtimeApi.saveSettings(candidate);
+        : await runtimeApi.selectTranslationEngine(engine, settings.translation_engine);
       if (!saved.ok) {
         savingMessage = saved.message || "Engine selection was not saved.";
         onNotice(savingMessage);

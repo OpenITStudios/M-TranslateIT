@@ -43,7 +43,7 @@ const tauriRegistry = readFileSync(new URL("../../src-tauri/src/commands/registr
 test("Tauri mutation commands register at their defining module, not a function-only re-export", () => {
   assert.match(mutationModule, /pub\(crate\) mod mutations;/);
   assert.doesNotMatch(mutationModule, /pub use mutations::/);
-  for (const name of ["select_product_audio_device","save_product_settings","confirm_unverified_translation_engine","start_product_voice_recording","stop_product_voice_recording","start_product_voice_build","cancel_product_voice_build","approve_product_voice_candidate","select_product_builtin_voice"]) {
+  for (const name of ["select_product_audio_device","save_product_settings","select_translation_engine","confirm_unverified_translation_engine","start_product_voice_recording","stop_product_voice_recording","start_product_voice_build","cancel_product_voice_build","approve_product_voice_candidate","select_product_builtin_voice"]) {
     const declaration = name === "select_product_builtin_voice" ? "pub async fn" : "pub fn";
     assert.ok(mutationOwner.includes(`#[tauri::command]\n${declaration} ${name}(`), name);
     assert.ok(tauriRegistry.includes(`crate::commands::application_runtime::mutations::${name},`), name);

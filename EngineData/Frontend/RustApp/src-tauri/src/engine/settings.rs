@@ -134,37 +134,56 @@ impl RuntimeSettings {
         let Ok(_guard) = settings_io_gate().lock() else {
             return MeetingEngineAdmission::Unverified;
         };
-        if let Some(settings) = read_settings_file(path) {
-            return persisted_engine(&settings);
+        meeting_engine_admission_locked(path)
+    }
+
+    /// Explicit recovery holds the *same* Settings IO lock across admission,
+    /// recoverable-field inspection, atomic write and strict post-write read.
+    /// Other in-process Settings readers/writers cannot change the source
+    /// between the native confirmation decision and its persistence.
+    pub fn recover_unverified_engine(
+        path: &Path,
+        chosen: MeetingEngineAdmission,
+    ) -> io::Result<()> {
+        let engine = match chosen {
+            MeetingEngineAdmission::Local => "local",
+            MeetingEngineAdmission::Codex => "codex",
+            MeetingEngineAdmission::Unverified => {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid_engine_choice"));
+            }
+        };
+        let _guard = settings_io_gate().lock().map_err(|_| {
+            io::Error::new(io::ErrorKind::Other, "settings_io_lock_unavailable")
+        })?;
+        if meeting_engine_admission_locked(path) != MeetingEngineAdmission::Unverified {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists, "engine_preference_changed_before_recovery"
+            ));
         }
+
+        // Preserve any well-formed non-engine preferences from the current
+        // bounded JSON, or its bounded backup. A completely invalid document
+        // has no trustworthy preferences, so only then use safe defaults.
         let backup = path.with_extension("json.bak");
-        if let Some(settings) = read_settings_file(&backup) {
-            return persisted_engine(&settings);
+        let mut settings = recoverable_settings_with_engine(path, engine)
+            .or_else(|| recoverable_settings_with_engine(&backup, engine))
+            .unwrap_or_default();
+        settings.translation_engine = engine.to_string();
+        save_settings_locked(&settings, path)?;
+
+        if read_settings_file(path).map(|settings| persisted_engine(&settings)) != Some(chosen) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData, "engine_recovery_post_write_unverified"
+            ));
         }
-        let temporary = path.with_extension("json.tmp");
-        if [path, backup.as_path(), temporary.as_path()]
-            .iter()
-            .all(|path| is_verified_missing(path))
-        {
-            MeetingEngineAdmission::Local
-        } else {
-            MeetingEngineAdmission::Unverified
-        }
+        Ok(())
     }
 
     pub fn save_pretty(&self, path: &Path) -> io::Result<()> {
         let _guard = settings_io_gate().lock().map_err(|_| {
             io::Error::new(io::ErrorKind::Other, "settings_io_lock_unavailable")
         })?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let body = serde_json::to_string_pretty(&self.clone().sanitized())
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        if body.len() > MAX_SETTINGS_FILE_BYTES {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "settings_file_too_large"));
-        }
-        write_atomic(path, &body)
+        save_settings_locked(self, path)
     }
 
     pub fn sanitized(mut self) -> Self {
@@ -190,20 +209,68 @@ impl RuntimeSettings {
     }
 }
 
-fn read_settings_file(path: &Path) -> Option<RuntimeSettings> {
+fn meeting_engine_admission_locked(path: &Path) -> MeetingEngineAdmission {
+    if let Some(settings) = read_settings_file(path) {
+        return persisted_engine(&settings);
+    }
+    let backup = path.with_extension("json.bak");
+    if let Some(settings) = read_settings_file(&backup) {
+        return persisted_engine(&settings);
+    }
+    let temporary = path.with_extension("json.tmp");
+    if [path, backup.as_path(), temporary.as_path()]
+        .iter()
+        .all(|path| is_verified_missing(path))
+    {
+        MeetingEngineAdmission::Local
+    } else {
+        MeetingEngineAdmission::Unverified
+    }
+}
+
+fn save_settings_locked(settings: &RuntimeSettings, path: &Path) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let body = serde_json::to_string_pretty(&settings.clone().sanitized())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if body.len() > MAX_SETTINGS_FILE_BYTES {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "settings_file_too_large"));
+    }
+    write_atomic(path, &body)
+}
+
+fn read_settings_value(path: &Path) -> Option<serde_json::Value> {
     let file = fs::File::open(path).ok()?;
     if !file.metadata().ok()?.is_file() {
         return None;
     }
-    // Cap the opened handle's bytes as well as the parsed settings shape.
+    // Cap the opened handle's bytes for both strict reading and recovery.
     let mut bytes = Vec::new();
     file.take(MAX_SETTINGS_FILE_BYTES as u64 + 1)
         .read_to_end(&mut bytes).ok()?;
     if bytes.len() > MAX_SETTINGS_FILE_BYTES {
         return None;
     }
-    let raw = std::str::from_utf8(&bytes).ok()?;
-    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn recoverable_settings_with_engine(path: &Path, engine: &str) -> Option<RuntimeSettings> {
+    let value = read_settings_value(path)?;
+    let mut object = value.as_object()?.clone();
+    // Only the engine field is supplied by the recovery intent; all other
+    // fields must pass their existing typed deserialization and sanitizers.
+    object.insert(
+        "translation_engine".to_string(),
+        serde_json::Value::String(engine.to_string()),
+    );
+    serde_json::from_value::<RuntimeSettings>(serde_json::Value::Object(object))
+        .ok()
+        .map(RuntimeSettings::sanitized)
+}
+
+fn read_settings_file(path: &Path) -> Option<RuntimeSettings> {
+    let value = read_settings_value(path)?;
     let object = value.as_object()?;
     let version = object.get("schema_version").and_then(serde_json::Value::as_u64);
     let legacy_without_engine = object.get("schema_version").is_none()
@@ -230,13 +297,21 @@ fn restore_settings_backup(path: &Path, backup_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+fn replace_previous_settings_backup(primary: &Path, backup: &Path) -> bool {
+    // Keep a parseable saved backup when the primary is truncated/unreadable.
+    // Ordinary valid primary writes still refresh .bak as the previous
+    // committed state; an invalid primary must not erase the only recoverable
+    // JSON if the next rename/crash occurs before the new primary commits.
+    read_settings_value(primary).is_some() || read_settings_value(backup).is_none()
+}
+
 fn write_atomic(path: &Path, body: &str) -> io::Result<()> {
     let temp_path = path.with_extension("json.tmp");
     fs::write(&temp_path, body)?;
     // Preserve the previous good file before any destructive step so a crash between
     // removing the destination and completing the retry rename cannot lose settings.
     let backup_path = path.with_extension("json.bak");
-    if path.exists() {
+    if path.exists() && replace_previous_settings_backup(path, &backup_path) {
         fs::copy(path, &backup_path)?;
     }
     match fs::rename(&temp_path, path) {
@@ -410,6 +485,114 @@ mod tests {
         fs::write(&path, "x".repeat(super::MAX_SETTINGS_FILE_BYTES + 1)).unwrap();
         assert_eq!(RuntimeSettings::meeting_engine_admission(&path), MeetingEngineAdmission::Unverified);
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn explicit_recovery_keeps_valid_preferences_when_only_engine_is_invalid() {
+        let path = std::env::temp_dir().join(format!(
+            "translateit_engine_recovery_partial_{}.json", std::process::id()
+        ));
+        let backup = path.with_extension("json.bak");
+        let temp = path.with_extension("json.tmp");
+        for file in [&path, &backup, &temp] {
+            let _ = fs::remove_file(file);
+        }
+        fs::write(&path, r#"{
+            "schema_version":14,
+            "translation_engine":"apikey",
+            "meeting_setup_state":"completed",
+            "meeting_setup_checkpoint":4,
+            "meeting_listen_source_language":"id",
+            "meeting_listen_target_language":"en",
+            "audio":{"input_device_id":"USB Microphone","output_device_id":"Meeting Output","noise_suppression":"off"}
+        }"#).unwrap();
+        assert_eq!(
+            RuntimeSettings::meeting_engine_admission(&path),
+            MeetingEngineAdmission::Unverified
+        );
+        RuntimeSettings::recover_unverified_engine(&path, MeetingEngineAdmission::Local)
+            .expect("explicit Local recovery should preserve typed non-engine settings");
+        let restored = RuntimeSettings::load_or_default(&path);
+        assert_eq!(restored.translation_engine, "local");
+        assert_eq!(restored.meeting_setup_state, "completed");
+        assert_eq!(restored.meeting_setup_checkpoint, 4);
+        assert_eq!(restored.meeting_listen_source_language, "id");
+        assert_eq!(restored.meeting_listen_target_language, "en");
+        assert_eq!(restored.audio.input_device_id.as_deref(), Some("USB Microphone"));
+        assert_eq!(restored.audio.output_device_id.as_deref(), Some("Meeting Output"));
+        assert_eq!(restored.audio.noise_suppression, "off");
+        assert_eq!(
+            RuntimeSettings::meeting_engine_admission(&path),
+            MeetingEngineAdmission::Local
+        );
+        let stale = RuntimeSettings::recover_unverified_engine(
+            &path, MeetingEngineAdmission::Codex
+        ).expect_err("later recovery may not replace an already verified choice");
+        assert_eq!(stale.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            RuntimeSettings::meeting_engine_admission(&path),
+            MeetingEngineAdmission::Local
+        );
+        for file in [&path, &backup, &temp] {
+            let _ = fs::remove_file(file);
+        }
+    }
+
+    #[test]
+    fn explicit_recovery_uses_recoverable_backup_then_requires_primary_receipt() {
+        let path = std::env::temp_dir().join(format!(
+            "translateit_engine_recovery_backup_{}.json", std::process::id()
+        ));
+        let backup = path.with_extension("json.bak");
+        let temp = path.with_extension("json.tmp");
+        for file in [&path, &backup, &temp] {
+            let _ = fs::remove_file(file);
+        }
+        fs::write(&path, "invalid json").unwrap();
+        fs::write(&backup, r#"{
+            "schema_version":14,"translation_engine":"invalid",
+            "meeting_setup_state":"deferred",
+            "audio":{"input_device_id":"Recovered Mic","output_device_id":"Recovered Speaker","noise_suppression":"off"}
+        }"#).unwrap();
+        assert_eq!(
+            RuntimeSettings::meeting_engine_admission(&path),
+            MeetingEngineAdmission::Unverified
+        );
+        RuntimeSettings::recover_unverified_engine(&path, MeetingEngineAdmission::Codex)
+            .expect("bounded, typed backup fields should be retained after explicit confirmation");
+        let restored = RuntimeSettings::load_or_default(&path);
+        assert_eq!(restored.translation_engine, "codex");
+        assert_eq!(restored.meeting_setup_state, "deferred");
+        assert_eq!(restored.audio.input_device_id.as_deref(), Some("Recovered Mic"));
+        assert_eq!(restored.audio.output_device_id.as_deref(), Some("Recovered Speaker"));
+        assert_eq!(restored.audio.noise_suppression, "off");
+        assert_eq!(
+            RuntimeSettings::meeting_engine_admission(&path),
+            MeetingEngineAdmission::Codex
+        );
+        for file in [&path, &backup, &temp] {
+            let _ = fs::remove_file(file);
+        }
+    }
+
+    #[test]
+    fn atomic_settings_backup_keeps_parseable_recovery_on_invalid_primary() {
+        let path = std::env::temp_dir().join(format!(
+            "translateit_atomic_backup_policy_{}.json", std::process::id()
+        ));
+        let backup = path.with_extension("json.bak");
+        for file in [&path, &backup] {
+            let _ = fs::remove_file(file);
+        }
+        fs::write(&path, "not json").unwrap();
+        fs::write(&backup, r#"{"schema_version":14,"translation_engine":"invalid",
+            "audio":{"input_device_id":"Recovered Mic","output_device_id":null,"noise_suppression":"auto"}}"#).unwrap();
+        assert!(!super::replace_previous_settings_backup(&path, &backup));
+        fs::write(&path, r#"{"schema_version":14,"translation_engine":"local"}"#).unwrap();
+        assert!(super::replace_previous_settings_backup(&path, &backup));
+        for file in [&path, &backup] {
+            let _ = fs::remove_file(file);
+        }
     }
 
     #[test]

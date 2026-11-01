@@ -161,14 +161,16 @@ pub fn save_runtime_settings(settings: RuntimeSettings) -> CommandResult {
             LifecycleState::Error,
             audio_resource_lock_message("changing audio devices"),
         )
-    } else if runtime_session_owns_audio_resources()
-        && engine_preference_changed(&current, &candidate)
-    {
-        // The selected translation engine is a property of the complete
-        // Meeting generation, not a mutable mid-session preference.
+    } else if engine_preference_changed(&current, &candidate) {
+        // A stale full Settings snapshot must not silently change engines.
+        // Explicit engine changes are a separate CAS-style native mutation.
         CommandResult::blocked(
             LifecycleState::Error,
-            audio_resource_lock_message("changing the translation engine"),
+            if runtime_session_owns_audio_resources() {
+                audio_resource_lock_message("changing the translation engine")
+            } else {
+                "Use the explicit translation engine selection control. Other Settings changes must not change the selected engine.".to_string()
+            },
         )
     } else {
         persist_runtime_settings(candidate)
@@ -227,18 +229,25 @@ fn confirm_unverified_translation_engine_inner(engine: &str) -> CommandResult {
         );
     }
 
-    let mut recovered = engine::load_settings();
-    recovered.translation_engine = engine.to_string();
-    let saved = persist_runtime_settings(recovered);
-    if !saved.ok {
-        return saved;
-    }
-    if engine::meeting_engine_admission() != expected {
-        // A completed write is not itself proof of the canonical admission.
-        return CommandResult::blocked(
-            LifecycleState::Error,
-            "Engine preference was saved, but its current admission could not be verified. Refresh Settings.",
-        );
+    // The canonical Settings owner keeps read/recoverable-field inspection,
+    // write and strict post-write verification under one Settings IO lock.
+    let paths = ProjectPaths::discover();
+    let settings_path =
+        PathBuf::from(paths.user_cache_dir).join("rust_runtime_settings.json");
+    match RuntimeSettings::recover_unverified_engine(&settings_path, expected) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return CommandResult::blocked(
+                LifecycleState::Error,
+                "The saved engine changed before recovery. Refresh Settings before trying again.",
+            );
+        }
+        Err(_) => {
+            return CommandResult::blocked(
+                LifecycleState::Error,
+                "The engine confirmation could not be safely saved and verified. Check Settings.",
+            );
+        }
     }
     CommandResult::ok(
         LifecycleState::Idle,
@@ -246,6 +255,87 @@ fn confirm_unverified_translation_engine_inner(engine: &str) -> CommandResult {
             "Local engine explicitly confirmed. Review microphone and other preferences before starting a Meeting."
         } else {
             "Codex preference confirmed. Review other settings; Codex Voice translation remains unavailable."
+        },
+    )
+}
+
+/// An explicit engine change is a compare-and-set mutation of the *current*
+/// canonical Settings, not a full stale UI candidate. The old selected engine
+/// must still match the one the caller observed before the write.
+pub fn select_translation_engine(
+    engine: String, expected_current_engine: String,
+) -> CommandResult {
+    let started = trace_command_start("select_translation_engine", "changing translation engine");
+    let result = select_translation_engine_inner(&engine, &expected_current_engine);
+    trace_command_end(
+        "select_translation_engine", started,
+        format!("state={} ok={}", result.state, result.ok),
+    );
+    result
+}
+
+fn select_translation_engine_inner(engine: &str, expected_current_engine: &str) -> CommandResult {
+    let (Some(chosen), Some(expected)) = (
+        explicit_engine_choice(engine),
+        explicit_engine_choice(expected_current_engine),
+    ) else {
+        return CommandResult::blocked(
+            LifecycleState::Error,
+            "Choose a supported Local or Codex engine. No Settings were changed.",
+        );
+    };
+    if chosen == expected {
+        return CommandResult::blocked(
+            LifecycleState::Error,
+            "That engine is already selected. Refresh Settings if the displayed choice is uncertain.",
+        );
+    }
+
+    let _meeting_transition = match super::meeting_session::try_settings_mutation_guard() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return CommandResult::blocked(
+                LifecycleState::Error,
+                "A Meeting Start/Stop or another Settings change is in progress. Engine selection was not saved.",
+            );
+        }
+    };
+    if runtime_session_owns_audio_resources() {
+        return CommandResult::blocked(
+            LifecycleState::Error,
+            audio_resource_lock_message("changing the translation engine"),
+        );
+    }
+    if engine::meeting_engine_admission() != expected {
+        return CommandResult::blocked(
+            LifecycleState::Error,
+            "The engine changed since this Settings view was opened, or needs explicit recovery. Refresh Settings.",
+        );
+    }
+    let mut current = engine::load_settings();
+    if current.translation_engine != expected_current_engine {
+        return CommandResult::blocked(
+            LifecycleState::Error,
+            "The stored engine choice changed before the edit. Refresh Settings.",
+        );
+    }
+    current.translation_engine = engine.to_string();
+    let saved = persist_runtime_settings(current);
+    if !saved.ok {
+        return saved;
+    }
+    if engine::meeting_engine_admission() != chosen {
+        return CommandResult::blocked(
+            LifecycleState::Error,
+            "Engine selection was saved, but its current admission could not be verified. Refresh Settings.",
+        );
+    }
+    CommandResult::ok(
+        LifecycleState::Idle,
+        if chosen == MeetingEngineAdmission::Local {
+            "Local translation engine selected."
+        } else {
+            "Codex selected. Meeting translation remains unavailable until Voice access is verified."
         },
     )
 }

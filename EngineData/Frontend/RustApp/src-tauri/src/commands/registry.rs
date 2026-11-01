@@ -6,6 +6,7 @@ pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wr
         crate::commands::application_runtime::dispatch_product_intent,
         crate::commands::application_runtime::mutations::select_product_audio_device,
         crate::commands::application_runtime::mutations::save_product_settings,
+        crate::commands::application_runtime::mutations::select_translation_engine,
         crate::commands::application_runtime::mutations::confirm_unverified_translation_engine,
         crate::commands::application_runtime::mutations::start_product_voice_recording,
         crate::commands::application_runtime::mutations::stop_product_voice_recording,

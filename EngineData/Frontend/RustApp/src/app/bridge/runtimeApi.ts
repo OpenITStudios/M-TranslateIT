@@ -522,6 +522,17 @@ export const runtimeApi = {
     );
   },
 
+  async selectTranslationEngine(
+    engine: "local" | "codex",
+    expectedCurrentEngine: "local" | "codex",
+  ): Promise<CommandResult> {
+    return invokeOr<CommandResult>(
+      "select_translation_engine",
+      { engine, expectedCurrentEngine },
+      commandFallback("Translation engine selection could not be verified because the desktop runtime is unavailable."),
+    );
+  },
+
   async confirmUnverifiedTranslationEngine(engine: "local" | "codex"): Promise<CommandResult> {
     return invokeOr<CommandResult>(
       "confirm_unverified_translation_engine",

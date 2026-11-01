@@ -52,8 +52,13 @@ test("engine selection is one strict, persisted Rust and TypeScript preference",
 
 test("engine cannot change during an owned Meeting or pending Retry Stop", () => {
   assert.match(persistence, /fn engine_preference_changed/);
-  assert.match(persistence, /if runtime_session_owns_audio_resources\(\)\s*&& engine_preference_changed/);
-  assert.match(persistence, /audio_resource_lock_message\("changing the translation engine"\)/);
+  assert.match(persistence, /else if engine_preference_changed\(&current, &candidate\)/);
+  const selection = persistence.slice(
+    persistence.indexOf("pub fn select_translation_engine("),
+    persistence.indexOf("pub fn select_audio_device("),
+  );
+  assert.match(selection, /if runtime_session_owns_audio_resources\(\)/);
+  assert.match(selection, /audio_resource_lock_message\("changing the translation engine"\)/);
 });
 
 test("Codex preflight has no fake Local readiness or local helper probe", () => {
@@ -143,7 +148,7 @@ test("Settings makes Codex explicitly opt-in, unavailable and non-networked", ()
   assert.match(selector, /<option value="local">/);
   assert.match(selector, /<option value="codex">/);
   assert.match(selector, /Translation is not yet verified|Meeting translation remains blocked|not yet available/);
-  assert.match(selector, /runtimeApi\.saveSettings\(candidate\)/);
+  assert.match(selector, /runtimeApi\.selectTranslationEngine\(engine, settings\.translation_engine\)/);
   assert.match(selector, /runtimeApi\.loadSettings\(\)/);
   assert.match(selector, /does not send microphone audio/);
   assert.match(selector, /disabled=\{locked \|\| saving\}/);
@@ -306,7 +311,7 @@ test("P16 generic Settings saves cannot silently recover an Unverified engine", 
 test("P16 explicit engine confirmation is narrow, native and reuses one Settings owner", () => {
   const native = persistence.slice(
     persistence.indexOf("pub fn confirm_unverified_translation_engine("),
-    persistence.indexOf("pub fn select_audio_device("),
+    persistence.indexOf("pub fn select_translation_engine("),
   );
   assert.match(persistence, /fn explicit_engine_choice\(engine: &str\)/);
   assert.match(persistence, /"local" => Some\(MeetingEngineAdmission::Local\)/);
@@ -315,11 +320,12 @@ test("P16 explicit engine confirmation is narrow, native and reuses one Settings
   assert.match(native, /super::meeting_session::try_settings_mutation_guard\(\)/);
   assert.match(native, /if runtime_session_owns_audio_resources\(\)/);
   const verifyBeforeSave = native.indexOf("engine::meeting_engine_admission() != MeetingEngineAdmission::Unverified");
-  const write = native.indexOf("persist_runtime_settings(recovered)");
-  const verifyAfterSave = native.indexOf("engine::meeting_engine_admission() != expected");
-  assert.ok(verifyBeforeSave >= 0 && write > verifyBeforeSave && verifyAfterSave > write);
-  assert.match(native, /let mut recovered = engine::load_settings\(\)/);
-  assert.match(native, /recovered.translation_engine = engine.to_string\(\)/);
+  const write = native.indexOf("RuntimeSettings::recover_unverified_engine(&settings_path, expected)");
+  assert.ok(verifyBeforeSave >= 0 && write > verifyBeforeSave);
+  assert.match(settings, /pub fn recover_unverified_engine\(/);
+  assert.match(settings, /if meeting_engine_admission_locked\(path\) != MeetingEngineAdmission::Unverified/);
+  assert.match(settings, /save_settings_locked\(&settings, path\)\?/);
+  assert.match(settings, /if read_settings_file\(path\)\.map\(\|settings\| persisted_engine\(&settings\)\) != Some\(chosen\)/);
   assert.doesNotMatch(native, /save_runtime_settings\(settings\)/);
   assert.match(mutations, /#\[tauri::command\]\s*pub fn confirm_unverified_translation_engine\(/);
   assert.match(mutations, /settings::confirm_unverified_translation_engine\(engine\)/);
@@ -334,9 +340,59 @@ test("P16 Settings and First Setup share explicit native recovery without broad 
     selector.indexOf("</script>"),
   );
   assert.match(choose, /const saved = needsReconfirmation\s*\? await runtimeApi.confirmUnverifiedTranslationEngine\(engine\)/);
-  assert.match(choose, /: await runtimeApi.saveSettings\(candidate\)/);
+  assert.match(choose, /: await runtimeApi.selectTranslationEngine\(engine, settings\.translation_engine\)/);
   assert.match(choose, /const confirmed = await runtimeApi.loadSettings\(\)/);
   assert.match(firstSetup, /<MeetingTranslationEngine[\s\S]*needsReconfirmation=\{true\}/);
   assert.match(page, /<MeetingTranslationEngine[\s\S]*needsReconfirmation=\{snapshot.meetingSession/);
   assert.doesNotMatch(runtimeBridge.slice(runtimeBridge.indexOf("async confirmUnverifiedTranslationEngine")), /\{ settings, engine \}/);
+});
+
+test("P17 recovery preserves validated non-engine settings under the same IO lock", () => {
+  const recover = settings.slice(
+    settings.indexOf("pub fn recover_unverified_engine("),
+    settings.indexOf("pub fn save_pretty(", settings.indexOf("pub fn recover_unverified_engine(")),
+  );
+  assert.match(recover, /let _guard = settings_io_gate\(\)\.lock\(\)/);
+  const verify = recover.indexOf("meeting_engine_admission_locked(path) != MeetingEngineAdmission::Unverified");
+  const salvage = recover.indexOf("recoverable_settings_with_engine(path, engine)");
+  const saved = recover.indexOf("save_settings_locked(&settings, path)?");
+  const verified = recover.indexOf("read_settings_file(path).map(|settings| persisted_engine(&settings))");
+  assert.ok(verify >= 0 && salvage > verify && saved > salvage && verified > saved);
+  assert.match(settings, /fn read_settings_value\(path: &Path\)/);
+  assert.match(settings, /fn recoverable_settings_with_engine\(path: &Path, engine: &str\)/);
+  assert.match(settings, /serde_json::from_value::<RuntimeSettings>\(serde_json::Value::Object\(object\)\)/);
+  assert.match(settings, /fn explicit_recovery_keeps_valid_preferences_when_only_engine_is_invalid/);
+  assert.match(settings, /fn explicit_recovery_uses_recoverable_backup_then_requires_primary_receipt/);
+  assert.match(settings, /fn replace_previous_settings_backup\(primary: &Path, backup: &Path\)/);
+  assert.match(settings, /if path.exists\(\) && replace_previous_settings_backup\(path, &backup_path\)/);
+  assert.match(settings, /fn atomic_settings_backup_keeps_parseable_recovery_on_invalid_primary/);
+  assert.doesNotMatch(recover, /fs::read_to_string/);
+});
+
+test("P17 engine changes are compare-and-set, not stale full-settings overwrite", () => {
+  const generic = persistence.slice(
+    persistence.indexOf("pub fn save_runtime_settings("),
+    persistence.indexOf("pub fn confirm_unverified_translation_engine("),
+  );
+  assert.match(generic, /else if engine_preference_changed\(&current, &candidate\)/);
+  assert.match(generic, /Use the explicit translation engine selection control/);
+  const native = persistence.slice(
+    persistence.indexOf("pub fn select_translation_engine("),
+    persistence.indexOf("pub fn select_audio_device("),
+  );
+  assert.match(native, /fn select_translation_engine_inner\(engine: &str, expected_current_engine: &str\)/);
+  assert.match(native, /super::meeting_session::try_settings_mutation_guard\(\)/);
+  assert.match(native, /if runtime_session_owns_audio_resources\(\)/);
+  assert.match(native, /if engine::meeting_engine_admission\(\) != expected/);
+  assert.match(native, /if current.translation_engine != expected_current_engine/);
+  assert.match(native, /current.translation_engine = engine.to_string\(\)/);
+  assert.match(native, /persist_runtime_settings\(current\)/);
+  assert.match(native, /engine::meeting_engine_admission\(\) != chosen/);
+  assert.match(mutations, /pub fn select_translation_engine\(/);
+  assert.match(mutations, /settings::select_translation_engine\(engine, expected_current_engine\)/);
+  assert.match(tauriRegistry, /application_runtime::mutations::select_translation_engine/);
+  assert.match(runtimeBridge, /async selectTranslationEngine\(/);
+  assert.match(runtimeBridge, /"select_translation_engine",\s*\{ engine, expectedCurrentEngine \}/);
+  assert.match(selector, /runtimeApi\.selectTranslationEngine\(engine, settings.translation_engine\)/);
+  assert.doesNotMatch(selector, /await runtimeApi.saveSettings\(candidate\)/);
 });

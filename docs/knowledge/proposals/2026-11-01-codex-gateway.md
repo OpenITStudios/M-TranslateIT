@@ -691,6 +691,64 @@ account, Voice/audio entitlement, WebRTC, metering, microphone and
 receiver outcomes remain NOT EXECUTED / UNKNOWN**. No cloud inference,
 paid-key fallback, AI worker or new output ownership was activated.
 
+## Phase 17: atomic recovery fidelity and stale UI engine isolation — SOURCE CANDIDATE
+
+Source audit of P16 identified two first-wrong-owner defects. First, the
+explicit recovery path called tolerant `load_settings`, which discarded
+otherwise well-formed microphone, incoming-sound, setup and suppression
+preferences whenever a saved JSON document had only an invalid
+`translation_engine`. The separate admission read, recovery read,
+write and post-write verification also released the Settings IO lock
+between each operation.
+
+The existing `engine/settings.rs` owner now provides one
+`RuntimeSettings::recover_unverified_engine` operation. It holds the
+existing Settings IO mutex for the full strict-Unverified check, bounded
+recovery read, canonical atomic save and strict primary-file receipt.
+It retains type-valid non-engine preferences by replacing only the engine
+field **in memory** before deserializing through the existing Settings
+schema/sanitizer, and falls back to a recoverable `.bak` object if the
+primary is not parseable. When neither contains a usable Settings object,
+the explicit user choice still permits recovery with documented safe
+defaults; unrecoverable data cannot be claimed restored. On an
+already-verified engine it refuses stale recovery without modifying
+the file. A correct-looking prior backup is not destroyed with a
+truncated/unparseable primary at the beginning of `write_atomic`; this
+preserves a recoverable crash-window source, not a guarantee that
+external process writes or Windows filesystem errors are impossible.
+
+Second, the general `save_runtime_settings` path still accepted a
+stale full Settings DTO carrying an old Local/Codex preference whenever
+the persisted engine was otherwise valid. That could silently reset
+the engine while another preference such as noise suppression was
+being edited. It now rejects **all engine changes** from broad Settings
+saves. An explicit `select_translation_engine(engine,
+expected_current_engine)` native action checks literal supported
+values, no active Meeting/audio owner, the existing canonical
+Start/Stop transition mutex, strict persisted admission matching the
+caller's observed previous engine, then reloads *current* Settings
+and writes only the chosen engine field through the existing writer.
+Stale comparisons or post-write admission mismatches block rather
+than silently changing engines. The existing shared Svelte
+`MeetingTranslationEngine` component calls this action for normal
+engine selection; its P16 narrow recovery route remains reserved for
+Unverified Settings. TypeScript and Tauri use one native mutation owner
+and no new runtime output, TTS, model or network owner.
+
+**Proof ceiling:** STATIC_SOURCE on pinned parent
+`b3d6e97cd91d812e87923bd109b1b864cca60745`.
+Rust unit regressions were authored for valid non-engine preference
+retention, recoverable backup fallback, refusal of later stale recovery
+and the backup replacement decision. TypeScript source regressions
+were updated for the new canonical compare-and-set mutation and
+registry/bridge contracts. All Rust/TypeScript/Svelte builds, tests,
+rendered UI, Windows filesystem concurrency, hardware and Codex
+account/Voice/billing remain **NOT EXECUTED / UNKNOWN**. Full-settings
+saves of other stale *non-engine* fields remain an independent
+general Settings concern; this phase specifically prevents silent
+engine mutation. No experimental Codex Voice, paid fallback or cloud
+inference is admitted.
+
 ## Translation commit and resource ownership
 
 One future internal result contract should carry session ID, generation,
@@ -741,9 +799,10 @@ incremental user-PC or hosted CI requirements.
   while Codex translation Start and source switching are explicitly blocked
   until admission. Streaming audio and release bundling are NOT enabled.
 
-**Next source work:** P17 bounded source audit of the new native
-recovery command's strict settings-file admission, stale UI state and
-fallback-value preservation. Resolve only concrete cross-layer contract
-gaps before freezing the single exact-SHA integrated Windows acceptance
-candidate; run no CI or per-change PC tests, and keep Codex Voice and
-paid inference disabled.
+**Next source work:** P18 source-only acceptance-readiness audit of
+the P17 Rust recovery/atomic-writer changes and TypeScript/Tauri
+command contracts, including remaining stale non-engine Settings
+mutations. Correct only concrete source defects; then retain one
+exact-SHA candidate for the existing coordinated Windows build and
+native acceptance. No CI, incremental PC testing, Codex Voice or paid
+inference is enabled.
