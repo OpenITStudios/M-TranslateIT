@@ -28,7 +28,11 @@
     let nativeSaved = false;
     try {
       const candidate: RuntimeSettings = { ...settings, translation_engine: engine };
-      const saved = await runtimeApi.saveSettings(candidate);
+      // The dedicated native recovery action accepts only the selected
+      // engine, never the potentially stale full Settings UI snapshot.
+      const saved = needsReconfirmation
+        ? await runtimeApi.confirmUnverifiedTranslationEngine(engine)
+        : await runtimeApi.saveSettings(candidate);
       if (!saved.ok) {
         savingMessage = saved.message || "Engine selection was not saved.";
         onNotice(savingMessage);
@@ -75,7 +79,8 @@
     {#if needsReconfirmation}
       <p class="mb-0 mt-2 text-[12px] leading-5 text-[var(--ti-text-muted)]" role="alert">
         Saved engine settings could not be verified. Confirm the intended
-        engine below before starting Meeting translation.
+        engine before starting Meeting translation. Preferences that could
+        not be recovered from a damaged file may reset to defaults.
       </p>
       {#if settings.translation_engine === "local"}
         <button type="button" class="ti-button ti-button-secondary mt-3"

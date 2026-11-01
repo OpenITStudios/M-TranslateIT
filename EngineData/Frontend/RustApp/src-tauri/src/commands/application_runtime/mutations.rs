@@ -150,3 +150,15 @@ pub fn save_product_settings(
         super::super::settings::save_runtime_settings(settings)
     })
 }
+
+// Dedicated explicit recovery command. The normal full Settings mutation
+// cannot repair an Unverified engine by silently saving tolerant UI defaults.
+#[tauri::command]
+pub fn confirm_unverified_translation_engine(
+    app: tauri::AppHandle,
+    engine: String,
+) -> crate::engine::state::CommandResult {
+    emit_after(&app, "confirm_translation_engine", || {
+        super::super::settings::confirm_unverified_translation_engine(engine)
+    })
+}

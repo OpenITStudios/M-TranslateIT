@@ -641,6 +641,56 @@ This P15 change closes the observed First Setup UI bypass, **not** that
 independent native contract issue. Codex Voice, cloud audio and paid API
 fallback remain unadmitted.
 
+## Phase 16: explicit native engine recovery admission — SOURCE CANDIDATE
+
+The P14 native `save_runtime_settings` path still accepted a full
+`RuntimeSettings` candidate when `MeetingEngineAdmission::Unverified`
+and no audio session was active. P15 made First Setup's user-facing flow
+explicit, but a different full-settings caller could still save tolerant
+Local defaults and silently repair an unreadable persisted Codex choice.
+
+The existing Rust `commands/settings.rs` owner now rejects **every**
+ordinary full-settings save while the authoritative persisted engine is
+Unverified, irrespective of whether its proposed `translation_engine`
+matches the displayed fallback. The Settings IO and canonical Meeting
+Start/Stop transition guards remain unchanged.
+
+A single narrowly scoped `confirm_unverified_translation_engine(engine)`
+native action accepts exactly `local` or `codex`, never a full Settings
+candidate or arbitrary model/provider parameter. Under the existing
+Meeting transition lock, it refuses an active audio owner or a newer
+already-verified setting, loads the same canonical Settings state, sets
+only the explicitly chosen engine field in that candidate, uses the
+existing Settings writer and confirms the resulting strict on-disk
+admission matches the choice before returning success. An unknown
+choice, stale confirmation, interrupted writer or uncertain post-save
+read is rejected with an explicit message; no implicit retry occurs.
+Because irrecoverably corrupt settings can only be displayed as
+defaults by the tolerant loader, explicit recovery **may also reset
+unrecoverable old preferences to defaults** when the canonical Settings
+object is saved; native evidence must not claim that those older fields
+were preserved.
+
+The action is registered in the existing Tauri mutation module and
+native registry, exposed via the current TypeScript runtime bridge, and
+called only by the existing `MeetingTranslationEngine` component's
+`needsReconfirmation` branch. The ordinary already-verified engine
+change continues through `save_product_settings`. Both First Setup
+and Settings already reuse this component, so no second page-local
+recovery action, device writer, Meeting source or model process is
+introduced. A Tauri command expresses a distinct *caller's recovery
+intent* but cannot authenticate a physical user click against a
+compromised renderer; it is not OS user-consent proof.
+
+The existing Rust exact-choice regression is authored alongside
+TypeScript source contracts for normal save denial, native command
+registration, current admission checks, Start/Stop resource fence,
+post-write verification and shared frontend caller dispatch. This is
+**STATIC_SOURCE only — tests, compilation, Windows execution, Codex
+account, Voice/audio entitlement, WebRTC, metering, microphone and
+receiver outcomes remain NOT EXECUTED / UNKNOWN**. No cloud inference,
+paid-key fallback, AI worker or new output ownership was activated.
+
 ## Translation commit and resource ownership
 
 One future internal result contract should carry session ID, generation,
@@ -691,10 +741,9 @@ incremental user-PC or hosted CI requirements.
   while Codex translation Start and source switching are explicitly blocked
   until admission. Streaming audio and release bundling are NOT enabled.
 
-**Next source work:** P16 bounded native Settings-recovery intent
-audit: require an explicitly attributable engine confirmation when the
-persisted authority is Unverified; ensure generic full-settings mutation
-cannot silently repair it. Preserve the same canonical Settings writer,
-single Meeting transition lock, Local/Original behavior and current
-React-free Svelte UI. Keep source tests/build and target-Windows acceptance
-for the existing later coordinated session; CI/Voice remain disabled.
+**Next source work:** P17 bounded source audit of the new native
+recovery command's strict settings-file admission, stale UI state and
+fallback-value preservation. Resolve only concrete cross-layer contract
+gaps before freezing the single exact-SHA integrated Windows acceptance
+candidate; run no CI or per-change PC tests, and keep Codex Voice and
+paid inference disabled.

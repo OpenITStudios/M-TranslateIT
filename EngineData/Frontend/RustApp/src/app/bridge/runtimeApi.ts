@@ -522,6 +522,14 @@ export const runtimeApi = {
     );
   },
 
+  async confirmUnverifiedTranslationEngine(engine: "local" | "codex"): Promise<CommandResult> {
+    return invokeOr<CommandResult>(
+      "confirm_unverified_translation_engine",
+      { engine },
+      commandFallback("Engine confirmation could not be verified because the frontend bridge could not call Tauri."),
+    );
+  },
+
   async selectAudioDevice(kind: "microphone" | "meeting-sound", deviceId: string | null): Promise<AudioDeviceSelectionCommandResult | null> {
     return invokeNullable<AudioDeviceSelectionCommandResult>("select_product_audio_device", { kind, deviceId });
   },

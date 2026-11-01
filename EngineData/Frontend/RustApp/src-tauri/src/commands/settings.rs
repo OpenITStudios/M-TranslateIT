@@ -10,7 +10,7 @@ use crate::engine::runtime_state::{
     latest_runtime_session_state, APPLICATION_MEETING_OWNER_ID, MIC_TEST_OWNER_ID,
     VOICE_RECORDING_OWNER_ID,
 };
-use crate::engine::settings::RuntimeSettings;
+use crate::engine::settings::{MeetingEngineAdmission, RuntimeSettings};
 use crate::engine::state::{CommandResult, LifecycleState};
 
 #[derive(Debug, Clone, Serialize)]
@@ -89,6 +89,17 @@ fn engine_preference_changed(current: &RuntimeSettings, candidate: &RuntimeSetti
     current.translation_engine != candidate.translation_engine
 }
 
+// Only a literal user-selected engine is acceptable for explicit repair.
+// Normal full-settings saves must never turn an uncertain disk state into
+// an implicitly authorized Local translator.
+fn explicit_engine_choice(engine: &str) -> Option<MeetingEngineAdmission> {
+    match engine {
+        "local" => Some(MeetingEngineAdmission::Local),
+        "codex" => Some(MeetingEngineAdmission::Codex),
+        _ => None,
+    }
+}
+
 fn audio_preferences_changed(current: &RuntimeSettings, candidate: &RuntimeSettings) -> bool {
     current.audio.input_device_id != candidate.audio.input_device_id
         || current.audio.output_device_id != candidate.audio.output_device_id
@@ -134,14 +145,14 @@ pub fn save_runtime_settings(settings: RuntimeSettings) -> CommandResult {
     let current = engine::load_settings();
     let candidate = settings.sanitized();
     let unverified_engine = engine::meeting_engine_admission()
-        == crate::engine::settings::MeetingEngineAdmission::Unverified;
-    let result = if runtime_session_owns_audio_resources() && unverified_engine {
-        // When tolerant UI settings default to Local after file corruption,
-        // even a same-value save is a real authority mutation. Never allow it
-        // to repair/enable Local while Original or a stale Meeting owns audio.
+        == MeetingEngineAdmission::Unverified;
+    let result = if unverified_engine {
+        // A damaged primary/backup is NOT a clean first install. Even if the
+        // caller presents an apparently unchanged Local choice, only the
+        // narrow explicit engine confirmation command may repair that state.
         CommandResult::blocked(
             LifecycleState::Error,
-            audio_resource_lock_message("reconfirming the translation engine"),
+            "Saved translation engine settings could not be verified. Confirm Local or Codex explicitly before saving other Settings.".to_string(),
         )
     } else if runtime_session_owns_audio_resources()
         && audio_preferences_changed(&current, &candidate)
@@ -168,6 +179,75 @@ pub fn save_runtime_settings(settings: RuntimeSettings) -> CommandResult {
         format!("state={}", result.state),
     );
     result
+}
+
+// Exact-purpose recovery: the caller provides only the chosen engine, not
+// an arbitrary full Settings object that may contain stale device/voice state.
+// This is an explicit native intent, not proof of operating-system user identity.
+pub fn confirm_unverified_translation_engine(engine: String) -> CommandResult {
+    let started = trace_command_start(
+        "confirm_unverified_translation_engine", "confirming saved translation engine",
+    );
+    let result = confirm_unverified_translation_engine_inner(&engine);
+    trace_command_end(
+        "confirm_unverified_translation_engine", started,
+        format!("state={} ok={}", result.state, result.ok),
+    );
+    result
+}
+
+fn confirm_unverified_translation_engine_inner(engine: &str) -> CommandResult {
+    let Some(expected) = explicit_engine_choice(engine) else {
+        return CommandResult::blocked(
+            LifecycleState::Error,
+            "Choose exactly Local or Codex. No engine settings were changed.",
+        );
+    };
+    let _meeting_transition = match super::meeting_session::try_settings_mutation_guard() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return CommandResult::blocked(
+                LifecycleState::Error,
+                "A Meeting Start/Stop or Settings change is in progress. Engine confirmation was not saved.",
+            );
+        }
+    };
+    if runtime_session_owns_audio_resources() {
+        return CommandResult::blocked(
+            LifecycleState::Error,
+            audio_resource_lock_message("confirming the translation engine"),
+        );
+    }
+    if engine::meeting_engine_admission() != MeetingEngineAdmission::Unverified {
+        // A stale UI confirmation must not overwrite a newly verified engine.
+        // Ordinary, already-verified engine changes use save_product_settings.
+        return CommandResult::blocked(
+            LifecycleState::Error,
+            "The engine settings have changed since recovery was requested. Refresh Settings before choosing again.",
+        );
+    }
+
+    let mut recovered = engine::load_settings();
+    recovered.translation_engine = engine.to_string();
+    let saved = persist_runtime_settings(recovered);
+    if !saved.ok {
+        return saved;
+    }
+    if engine::meeting_engine_admission() != expected {
+        // A completed write is not itself proof of the canonical admission.
+        return CommandResult::blocked(
+            LifecycleState::Error,
+            "Engine preference was saved, but its current admission could not be verified. Refresh Settings.",
+        );
+    }
+    CommandResult::ok(
+        LifecycleState::Idle,
+        if expected == MeetingEngineAdmission::Local {
+            "Local engine explicitly confirmed. Review microphone and other preferences before starting a Meeting."
+        } else {
+            "Codex preference confirmed. Review other settings; Codex Voice translation remains unavailable."
+        },
+    )
 }
 
 pub fn select_audio_device(kind: String, device_id: Option<String>) -> AudioDeviceSelectionResult {
@@ -323,8 +403,18 @@ pub fn select_audio_device(kind: String, device_id: Option<String>) -> AudioDevi
 
 #[cfg(test)]
 mod tests {
-    use super::{audio_preferences_changed, engine_preference_changed};
+    use super::{audio_preferences_changed, engine_preference_changed, explicit_engine_choice};
+    use crate::engine::settings::MeetingEngineAdmission;
     use crate::engine::settings::RuntimeSettings;
+
+    #[test]
+    fn explicit_engine_recovery_accepts_only_literal_local_or_codex() {
+        assert_eq!(explicit_engine_choice("local"), Some(MeetingEngineAdmission::Local));
+        assert_eq!(explicit_engine_choice("codex"), Some(MeetingEngineAdmission::Codex));
+        for invalid in ["", "LOCAL", " CoDeX ", "apikey", "unknown", "local\\n"] {
+            assert_eq!(explicit_engine_choice(invalid), None, "{invalid}");
+        }
+    }
 
     #[test]
     fn engine_preference_change_is_separate_from_audio_device_drift() {
