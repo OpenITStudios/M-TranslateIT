@@ -195,6 +195,57 @@ Neither initial Codex selection nor the Codex Diagnostics account probe
 starts Voice or sends audio to cloud inference. This is strictly source work;
 UI, Rust compilation and actual Meeting acceptance are NOT EXECUTED.
 
+## Phase 5: Realtime WebRTC RPC lifecycle and bounded audio ACKs — STAGED ONLY
+
+The source-only `codex_gateway/realtime_rpc.rs` now builds precisely scoped
+`thread/realtime/start`, `thread/realtime/appendAudio`, and
+`thread/realtime/stop` JSON-RPC envelopes from the upstream V3
+`ThreadRealtimeStartParams`/`ThreadRealtimeAppendAudioParams`/
+`ThreadRealtimeStopParams` shapes. It selects `version = v3`,
+`outputModality = audio`, an externally generated WebRTC offer SDP, and
+disables unrelated startup context. This is **not text-only realtime**: under
+the reviewed Codex version, V3 WebRTC still uses audio output and any
+role-bearing text remains unverified until a live run establishes its meaning.
+The RPC encoder does not create a Codex thread, initiate WebRTC peer
+negotiation, or authenticate Voice. A real media/data-channel owner is not
+yet implemented.
+
+A single `RealtimeRpc` state machine requires Start RPC ACK, matching
+`thread/realtime/started` event (v3 + session ID), matching SDP answer,
+then a separate verified media/entitlement signal before audio admission.
+That final signal requires a sealed `VerifiedMediaAuthority` type, for which
+there is deliberately **no production constructor**: account/read token
+quota is not proof of included Voice usage, billing or SDP connectivity.
+
+Outgoing frames are bounded: 32 KiB for Start, 24 KiB for 200-ms PCM16 audio
+RPC and 1 KiB for Stop; SDP is bounded at 16 KiB. Audio carries exact
+Meeting generation and source epoch, continuous sample clock, one-channel
+24-kHz format and valid Base64 padding. No more than four audio requests may
+remain unacknowledged. Out-of-order acknowledgements are tracked with a
+bounded FIFO; contiguous confirmed samples advance only after the
+corresponding request ACK. An unacknowledged frame older than five seconds
+invalidates the audio lease when the future event loop drives the deadline
+check. Duplicate Start/Stop acknowledgements, unexpected audio JSON keys
+and malformed Base64 padding are rejected or dropped by exact-field
+reconstruction. An invalid frame, unexpected RPC ID, stale
+generation, discontinuity, cancellation, overflow or protocol error blocks
+new audio. No late frame is replayed to catch up.
+
+Stop revokes audio admission immediately but retains the StopPending state
+until both the matching Stop RPC ACK and the upstream session-closed event
+arrive. A late audio sender cannot turn a pending Stop into a false cleanup
+success. The encoder's Debug implementation exposes only RPC ID, method and
+byte length, never raw SDP, audio or transcript contents. Rust unit scenarios
+and an existing TypeScript source-contract test were **authored, not run**.
+
+**Admission boundary unchanged:** the actual P1 `protocol::request`
+method allowlist remains `initialize`, `account/read` and
+`account/rateLimits/read`. `transport.rs` does not invoke the P5 codec;
+there is no TCP/WebRTC peer, audio upload, TTS emission, experimental API
+activation or Meeting route. A mocked envelope may be inspected in a Rust
+unit test but cannot pass the P1 RPC allowlist. This is executable source
+preparation, not proof of account Voice availability or latency.
+
 ## Translation commit and resource ownership
 
 One future internal result contract should carry session ID, generation,
@@ -245,8 +296,10 @@ incremental user-PC or hosted CI requirements.
   while Codex translation Start and source switching are explicitly blocked
   until admission. Streaming audio and release bundling are NOT enabled.
 
-**Next source work:** prepare a typed, cancelled and version-gated Codex
-App Server realtime session control interface without issuing paid RPCs,
-capturing audio, or advertising Voice entitlement. Actual account Voice
-availability, charging and source/output correlation require separately
-authorized real runtime proof before Meeting may admit Codex.
+**Next source work:** converge the existing App Server control channel on
+a bounded, nonblocking writer and deterministic in-flight request/notification
+dispatch, preserving the read-only P1 request allowlist. Do not add an active
+Voice session, a second Meeting owner or a paid-API fallback. Exact installed
+CLI capability, real WebRTC audio delivery, included Voice entitlement,
+source/translation correspondence and native performance remain UNKNOWN
+until one future authorized integrated acceptance phase.

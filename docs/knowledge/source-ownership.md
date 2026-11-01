@@ -121,7 +121,7 @@ Domain algorithms remain in their domain modules; ApplicationRuntime coordinates
 | Canonical worker entry | `EngineData/Backend/LocalWorker/WorkerRuntime/realtime_local_worker.py` |
 | Worker orchestration/I/O | `realtime_local_worker_base.py`, `worker_io_runtime.py`, `worker_runtime_common.py` |
 | Helper process/transport/readiness | Rust `commands/helper_bridge*` |
-| Experimental Codex App Server account/usage probe and process lifecycle (not Meeting-capable) | Rust `commands/codex_gateway.rs`, `commands/codex_gateway/protocol.rs`, `transport.rs`; `realtime.rs` owns offline typed voice observations and PCM frame admission; `correlation.rs` owns one-flight unverified source/assistant evidence |
+| Experimental Codex App Server account/usage probe and process lifecycle (not Meeting-capable) | Rust `commands/codex_gateway.rs`, `commands/codex_gateway/protocol.rs`, `transport.rs`; `realtime.rs` owns offline typed voice observations and PCM frame admission; `correlation.rs` owns one-flight unverified source/assistant evidence; `realtime_rpc.rs` owns offline typed V3 WebRTC RPC envelopes, in-flight ACK accounting and Stop handshake |
 | Canonical MiLMMT translation | `milmmt_translation_provider.py` |
 | Model inventory/staging | `model_manifest.json` + `prepare_model_assets*.py` |
 | My Voice recording/review | Rust `commands/voice_lab_recording.rs` |

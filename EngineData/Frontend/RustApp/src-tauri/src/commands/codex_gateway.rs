@@ -6,6 +6,7 @@
 mod correlation;
 mod protocol;
 mod realtime;
+mod realtime_rpc;
 mod transport;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -430,6 +431,28 @@ mod tests {
         // no TTS/Meeting commit method accepts this UnverifiedPair.
         assert!(evidence.is_retired());
         assert!(!CodexGatewayStatus::idle(10).meeting_route_enabled);
+    }
+
+    #[test]
+    fn offline_realtime_rpc_is_not_admitted_by_account_probe_transport() {
+        use super::realtime_rpc::{RealtimeRpc, Phase};
+        use std::sync::atomic::AtomicBool;
+
+        let mut wire = RealtimeRpc::new("thread_test", "voice_test", 9, 2).unwrap();
+        let frame = wire.start(
+            10,
+            "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n",
+            &AtomicBool::new(false),
+        ).unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&frame.bytes).unwrap();
+        // P1 has no path to send this experimental request. No Voice RPC,
+        // cloud inference, billing or Meeting source can be activated.
+        assert_eq!(
+            protocol::request(frame.id, frame.method, payload["params"].clone()),
+            Err("codex_gateway:request_not_allowed")
+        );
+        assert_eq!(wire.phase(), Phase::StartPending);
+        assert!(!CodexGatewayStatus::idle(9).meeting_route_enabled);
     }
 
     #[test]
