@@ -142,7 +142,10 @@ pub fn load_runtime_settings() -> RuntimeSettings {
     settings
 }
 
-pub fn save_runtime_settings(settings: RuntimeSettings) -> CommandResult {
+pub fn save_runtime_settings(
+    settings: RuntimeSettings,
+    expected_settings: RuntimeSettings,
+) -> CommandResult {
     let started = trace_command_start("save_runtime_settings", "saving runtime settings");
     let _meeting_transition = match super::meeting_session::try_settings_mutation_guard() {
         Ok(guard) => guard,
@@ -157,6 +160,7 @@ pub fn save_runtime_settings(settings: RuntimeSettings) -> CommandResult {
     };
     let current = engine::load_settings();
     let candidate = settings.sanitized();
+    let expected = expected_settings.sanitized();
     let unverified_engine = engine::meeting_engine_admission()
         == MeetingEngineAdmission::Unverified;
     let resources_owned = runtime_session_owns_audio_resources();
@@ -167,6 +171,14 @@ pub fn save_runtime_settings(settings: RuntimeSettings) -> CommandResult {
         CommandResult::blocked(
             LifecycleState::Error,
             "Saved translation engine settings could not be verified. Confirm Local or Codex explicitly before saving other Settings.".to_string(),
+        )
+    } else if current != expected {
+        // A full Settings candidate must be based on the exact latest saved
+        // snapshot. Otherwise even an unrelated edit could overwrite a
+        // concurrently committed non-engine preference (setup/suppression).
+        CommandResult::blocked(
+            LifecycleState::Error,
+            "Settings changed since this view was loaded. Refresh Settings before saving.",
         )
     } else if audio_preferences_changed(&current, &candidate) {
         // Device changes always require the existing probe-and-save owner.
@@ -540,6 +552,24 @@ mod tests {
         candidate.translation_engine = "codex".to_string();
         assert!(engine_preference_changed(&current, &candidate));
         assert!(!audio_preferences_changed(&current, &candidate));
+    }
+
+    #[test]
+    fn stale_full_settings_snapshots_are_detected_across_non_engine_fields() {
+        let current = RuntimeSettings::default();
+        let mut expected = current.clone();
+        assert_eq!(current, expected);
+        expected.audio.noise_suppression = "off".to_string();
+        assert_ne!(current, expected);
+
+        let mut expected = current.clone();
+        expected.meeting_setup_state = "completed".to_string();
+        expected.meeting_setup_checkpoint = 5;
+        assert_ne!(current, expected);
+
+        let mut expected = current.clone();
+        expected.audio.input_device_id = Some("Earlier Microphone".to_string());
+        assert_ne!(current, expected);
     }
 
     #[test]

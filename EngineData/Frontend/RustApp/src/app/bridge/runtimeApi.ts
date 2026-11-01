@@ -514,10 +514,10 @@ export const runtimeApi = {
     return loadRuntimeSettings();
   },
 
-  async saveSettings(settings: RuntimeSettings): Promise<CommandResult> {
+  async saveSettings(settings: RuntimeSettings, expectedSettings: RuntimeSettings): Promise<CommandResult> {
     return invokeOr<CommandResult>(
       "save_product_settings",
-      { settings },
+      { settings, expectedSettings },
       commandFallback("Settings could not be saved because the frontend bridge could not call Tauri."),
     );
   },

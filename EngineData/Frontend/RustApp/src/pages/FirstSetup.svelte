@@ -166,14 +166,18 @@
       message = "Saved engine settings must be verified before setup can be saved. Confirm the translation engine first.";
       return false;
     }
-    const candidate = cloneSettings(settings);
+    const expected = cloneSettings(settings);
+    const candidate = cloneSettings(expected);
     candidate.meeting_setup_state = state;
     const currentCheckpoint = setupCheckpoint(candidate.meeting_setup_checkpoint);
     const effectiveStep = Math.max(currentCheckpoint, nextCheckpoint) as SetupStep;
     candidate.meeting_setup_checkpoint = persistedSetupCheckpoint(effectiveStep);
     try {
-      const result = await runtimeApi.saveSettings(candidate);
-      if (!result.ok) throw new Error("setup save failed");
+      const result = await runtimeApi.saveSettings(candidate, expected);
+      if (!result.ok) {
+        message = result.message || "Setup settings changed. Refresh setup before saving.";
+        return false;
+      }
       const savedSettings = await runtimeApi.loadSettings();
       settings = cloneSettings(savedSettings ?? candidate);
       return true;

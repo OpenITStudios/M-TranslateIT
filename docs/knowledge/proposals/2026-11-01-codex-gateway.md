@@ -807,6 +807,50 @@ and external filesystem interference remain target-host evidence
 requirements, not a source PASS. Codex Voice, paid inference and
 automatic fallback remain **NOT ADMITTED**.
 
+## Phase 19: stale full-Settings snapshot admission — SOURCE CANDIDATE
+
+The P18 broad Settings command already refused implicit engine changes,
+unprobed device rebinds and Meeting-sensitive edits while audio was
+owned. Its remaining idle boundary accepted a full `RuntimeSettings`
+candidate without verifying the UI's base settings version. When
+First Setup, Meeting's `Finish Setup` action or noise suppression
+saved an old snapshot after another native Settings mutation,
+the full DTO could silently overwrite a newer non-engine preference.
+
+The same native `save_runtime_settings` owner now requires an
+`expected_settings` snapshot and compares its sanitized canonical
+fields with the currently loaded Settings **under the already existing
+Meeting lifecycle mutation guard**. A mismatch refuses the entire
+write before the current unverified-engine, device/engine and
+live-resource restrictions are relaxed; the earlier restrictions
+remain in place. Existing `AudioSettings` and `RuntimeSettings`
+derive structural equality, not a new persisted version field,
+revision cache or settings database. A new install with matching
+defaults remains Local by existing policy.
+
+The existing `save_product_settings` Tauri mutation and
+`runtimeApi.saveSettings(settings, expectedSettings)` forward the
+expected base snapshot. Exactly three source callers in the current
+frontend tree—First Setup checkpoint persistence, Meeting's
+`Finish Setup`, and noise suppression—supply their prior Settings
+snapshot; explicit Local/Codex engine changes continue to use
+the P16/P17 narrow native commands. The existing runtime-settings
+contract test receives source assertions for the compare-before-write,
+Tauri/TypeScript argument parity and all three callers. No new
+settings owner, model invocation, audio thread, scheduled task or
+retry mechanism was introduced.
+
+**Proof:** STATIC_SOURCE review of 71 frontend TypeScript/Svelte
+files and the three actual saveSettings callers at pinned parent
+`89aa24bfa70a8ca4497deadec184088478093d03`.
+One regression is authored but **NOT EXECUTED**; Rust compile,
+TypeScript typecheck, Svelte check, live Windows filesystem races,
+audio/meeting receiver and Codex diagnostic compatibility remain
+UNKNOWN. External writers that bypass the in-process lock and changes
+arriving after a successful persistence receipt are not guaranteed
+by this source-only optimistic-concurrency contract.
+Codex Voice/cloud inference and paid fallback are still not admitted.
+
 ## Translation commit and resource ownership
 
 One future internal result contract should carry session ID, generation,
@@ -858,11 +902,11 @@ incremental user-PC or hosted CI requirements.
   until admission. Streaming audio and release bundling are NOT enabled.
 
 **Next acceptance gate (deferred, not an execution request):**
-preserve this P18 source candidate on one immutable Local SHA and use
-the existing Target Windows Performance Acceptance sequence for locked
-source-contract tests, Rust/frontend compilation, then coordinated
-developer-mode Local translation, Original Microphone, optional incoming
-and Codex diagnostics-only checks. Native Windows, audio and install
-evidence remain UNKNOWN until that separately authorized integrated
-phase runs. Do not dispatch paused CI, request per-change PC tests,
-activate Codex Voice or use paid inference.
+preserve this P19 source candidate at the exact Local SHA after commit
+and use the existing Target Windows Performance Acceptance sequence
+for locked source-contract tests, Rust/frontend compilation, then
+one coordinated developer-mode Local/Original/optional-incoming and
+Codex diagnostics-only acceptance. Native Windows/audio/install proof
+remains UNKNOWN until that separately authorized integrated phase runs.
+Do not dispatch paused CI, request incremental PC tests, activate
+Codex Voice or use paid inference.

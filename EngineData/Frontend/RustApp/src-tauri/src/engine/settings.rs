@@ -54,7 +54,7 @@ fn default_meeting_setup_checkpoint() -> u8 {
     1
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AudioSettings {
     pub input_device_id: Option<String>,
@@ -72,7 +72,7 @@ impl Default for AudioSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct RuntimeSettings {
     pub schema_version: u32,

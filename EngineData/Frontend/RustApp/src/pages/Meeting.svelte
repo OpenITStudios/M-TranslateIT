@@ -60,12 +60,12 @@
     if (resumeBusy || actionBusy || meeting.hasSession || meeting.canStop) return;
     resumeBusy = true;
     try {
-      const settings = {
+      const expected = {
         ...snapshot.settings,
-        meeting_setup_state: "new",
         audio: { ...snapshot.settings.audio },
       };
-      const save = await runtimeApi.saveSettings(settings);
+      const settings = { ...expected, meeting_setup_state: "new" };
+      const save = await runtimeApi.saveSettings(settings, expected);
       if (!save.ok) throw new Error("Setup could not be resumed");
       await onRefresh("Continue the initial Meeting setup.");
     } catch {

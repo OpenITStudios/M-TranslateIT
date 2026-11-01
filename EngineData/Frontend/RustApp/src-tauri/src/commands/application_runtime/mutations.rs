@@ -145,9 +145,10 @@ pub async fn select_product_voice_version(
 pub fn save_product_settings(
     app: tauri::AppHandle,
     settings: crate::engine::settings::RuntimeSettings,
+    expected_settings: crate::engine::settings::RuntimeSettings,
 ) -> crate::engine::state::CommandResult {
     emit_after(&app, "save_settings", || {
-        super::super::settings::save_runtime_settings(settings)
+        super::super::settings::save_runtime_settings(settings, expected_settings)
     })
 }
 

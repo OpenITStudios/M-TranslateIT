@@ -1,5 +1,6 @@
 <script lang="ts">
   import { runtimeApi } from "../../app/bridge/runtimeApi";
+  import { cloneSettings } from "../../app/shared/state";
   import type { RuntimeSettings } from "../../app/shared/types";
 
   let {
@@ -20,11 +21,12 @@
     if (saving || locked || settings.audio.noise_suppression === mode) return;
     saving = true;
     try {
+      const expected = cloneSettings(settings);
       const candidate: RuntimeSettings = {
-        ...settings,
-        audio: { ...settings.audio, noise_suppression: mode },
+        ...expected,
+        audio: { ...expected.audio, noise_suppression: mode },
       };
-      const result = await runtimeApi.saveSettings(candidate);
+      const result = await runtimeApi.saveSettings(candidate, expected);
       if (!result.ok) {
         onNotice(result.message || "Noise suppression setting couldn't be saved.");
         return;

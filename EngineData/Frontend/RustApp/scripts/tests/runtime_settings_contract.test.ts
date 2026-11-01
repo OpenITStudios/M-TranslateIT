@@ -98,3 +98,32 @@ test("settings sanitizers keep product enum-like values bounded", () => {
   assert.match(rust, /"deferred" => "deferred"/);
   assert.match(rust, /"completed" => "completed"/);
 });
+
+test("P19 Settings optimistic concurrency blocks stale non-engine DTOs before the native writer", () => {
+  const native = readFileSync(new URL("../../src-tauri/src/commands/settings.rs", import.meta.url), "utf8");
+  const mutations = readFileSync(new URL("../../src-tauri/src/commands/application_runtime/mutations.rs", import.meta.url), "utf8");
+  const bridge = readFileSync(new URL("../../src/app/bridge/runtimeApi.ts", import.meta.url), "utf8");
+  const first = readFileSync(new URL("../../src/pages/FirstSetup.svelte", import.meta.url), "utf8");
+  const noise = readFileSync(new URL("../../src/components/settings/MeetingNoiseSuppression.svelte", import.meta.url), "utf8");
+  const meeting = readFileSync(new URL("../../src/pages/Meeting.svelte", import.meta.url), "utf8");
+
+  assert.match(rust, /pub struct RuntimeSettings \{/);
+  assert.match(rust, /#\[derive\(Debug, Clone, Serialize, Deserialize, PartialEq, Eq\)\]/);
+  assert.match(native, /pub fn save_runtime_settings\(\s*settings: RuntimeSettings,\s*expected_settings: RuntimeSettings,/);
+  const fn = native.slice(native.indexOf("pub fn save_runtime_settings("), native.indexOf("pub fn confirm_unverified_translation_engine("));
+  const nativeRead = fn.indexOf("let current = engine::load_settings()");
+  const staleGuard = fn.indexOf("else if current != expected");
+  const actualSave = fn.indexOf("persist_runtime_settings(candidate)");
+  assert.ok(nativeRead >= 0 && staleGuard > nativeRead && actualSave > staleGuard);
+  assert.match(native, /fn stale_full_settings_snapshots_are_detected_across_non_engine_fields/);
+  assert.match(mutations, /expected_settings: crate::engine::settings::RuntimeSettings/);
+  assert.match(mutations, /settings::save_runtime_settings\(settings, expected_settings\)/);
+  assert.match(bridge, /async saveSettings\(settings: RuntimeSettings, expectedSettings: RuntimeSettings\)/);
+  assert.match(bridge, /"save_product_settings",\s*\{ settings, expectedSettings \}/);
+  assert.match(first, /const expected = cloneSettings\(settings\)/);
+  assert.match(first, /await runtimeApi.saveSettings\(candidate, expected\)/);
+  assert.match(noise, /const expected = cloneSettings\(settings\)/);
+  assert.match(noise, /await runtimeApi.saveSettings\(candidate, expected\)/);
+  assert.match(meeting, /const expected = \{[\s\S]*?\.\.\.snapshot\.settings/);
+  assert.match(meeting, /await runtimeApi.saveSettings\(settings, expected\)/);
+});
