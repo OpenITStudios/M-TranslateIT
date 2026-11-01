@@ -33,7 +33,6 @@ fn helper_start_recoverable(state: &str, last_error: Option<&str>) -> bool {
 
 pub(super) fn build_preflight() -> MeetingSessionPreflightStatus {
     let input = get_input_status();
-    let helper = get_helper_bridge_status();
     let route = get_virtual_mic_route_selection();
 
     let source_is_virtual_meeting_mic = microphone_conflicts_with_virtual_recording(
@@ -41,6 +40,45 @@ pub(super) fn build_preflight() -> MeetingSessionPreflightStatus {
         route.selected_input_device.as_deref(),
     );
     let microphone_ready = input.prepared && !source_is_virtual_meeting_mic;
+    // A selected, unverified Codex Voice route MUST NOT inherit Local worker
+    // readiness. Avoid even probing the local helper for this route. No
+    // microphone, model load, or network session is started by preflight.
+    if crate::engine::load_settings().translation_engine == "codex" {
+        let mut blockers = vec!["meeting_session:codex_voice_not_admitted".to_string()];
+        if transient_stop_cleanup_pending() {
+            blockers.push("meeting_session:cleanup_incomplete".to_string());
+        }
+        if source_is_virtual_meeting_mic {
+            blockers.push("meeting_session:physical_input_is_virtual_meeting_microphone".to_string());
+        } else if !microphone_ready {
+            blockers.push("meeting_session:microphone_not_ready".to_string());
+        }
+        if !route.route_ready {
+            blockers.push(if route.blocker.is_empty() {
+                "meeting_session:meeting_microphone_route_not_ready".to_string()
+            } else {
+                route.blocker.clone()
+            });
+        }
+        blockers.sort();
+        blockers.dedup();
+        return MeetingSessionPreflightStatus {
+            ready_for_start: false,
+            start_eligible: false,
+            functional_outbound_ready: false,
+            functional_outbound_verified_unix_ms: None,
+            microphone_ready,
+            models_ready: false,
+            helper_ready: false,
+            provider_ready: false,
+            meeting_route_ready: route.route_ready,
+            blockers,
+            summary: "Codex Voice is selected but audio-to-translated-text access and included-usage entitlement are not verified. Start Translation is disabled. Select Local to use the existing offline engine.".to_string(),
+            runtime_claim: "codex_voice_unadmitted_source_contract_not_windows_runtime_proof".to_string(),
+        };
+    }
+
+    let helper = get_helper_bridge_status();
     let helper_ready = helper.state == "ready";
     let provider_ready = helper.provider_ready;
     let functional_outbound_ready = helper.functional_outbound_ready;

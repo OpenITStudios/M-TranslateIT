@@ -3,8 +3,12 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-const CURRENT_SCHEMA_VERSION: u32 = 13;
+const CURRENT_SCHEMA_VERSION: u32 = 14;
 const MAX_SETTING_TEXT_CHARS: usize = 160;
+
+fn default_translation_engine() -> String {
+    "local".to_string()
+}
 
 fn default_meeting_listen_source_language() -> String {
     "en".to_string()
@@ -44,6 +48,7 @@ impl Default for AudioSettings {
 #[serde(default)]
 pub struct RuntimeSettings {
     pub schema_version: u32,
+    pub translation_engine: String,
     pub meeting_listen_source_language: String,
     pub meeting_listen_target_language: String,
     pub meeting_setup_state: String,
@@ -55,6 +60,7 @@ impl Default for RuntimeSettings {
     fn default() -> Self {
         Self {
             schema_version: CURRENT_SCHEMA_VERSION,
+            translation_engine: default_translation_engine(),
             meeting_listen_source_language: default_meeting_listen_source_language(),
             meeting_listen_target_language: default_meeting_listen_target_language(),
             meeting_setup_state: default_meeting_setup_state(),
@@ -100,6 +106,7 @@ impl RuntimeSettings {
 
     pub fn sanitized(mut self) -> Self {
         self.schema_version = CURRENT_SCHEMA_VERSION;
+        self.translation_engine = sanitize_translation_engine(&self.translation_engine);
         self.meeting_listen_source_language =
             sanitize_language(&self.meeting_listen_source_language, "en");
         self.meeting_listen_target_language =
@@ -193,6 +200,13 @@ fn sanitize_language(value: &str, fallback: &str) -> String {
     }
 }
 
+fn sanitize_translation_engine(value: &str) -> String {
+    match clean_setting_text(value).to_lowercase().as_str() {
+        "codex" => "codex".to_string(),
+        _ => "local".to_string(),
+    }
+}
+
 fn sanitize_noise_suppression(value: &str) -> String {
     match clean_setting_text(value).to_lowercase().as_str() {
         "off" => "off".to_string(),
@@ -228,6 +242,7 @@ mod tests {
         let _ = fs::remove_file(&path);
         let settings = RuntimeSettings::load_or_default(&path);
         assert_eq!(settings.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(settings.translation_engine, "local");
         assert_eq!(settings.meeting_listen_source_language, "en");
         assert_eq!(settings.meeting_listen_target_language, "id");
         assert_eq!(settings.meeting_setup_state, "new");
@@ -248,6 +263,22 @@ mod tests {
         let sanitized = invalid.sanitized();
         assert_eq!(sanitized.meeting_listen_source_language, "en");
         assert_eq!(sanitized.meeting_listen_target_language, "id");
+    }
+
+    #[test]
+    fn engine_choice_is_explicit_and_old_settings_default_local() {
+        let legacy: RuntimeSettings = serde_json::from_str(
+            r#"{"schema_version":13,"meeting_setup_state":"completed"}"#
+        ).unwrap();
+        assert_eq!(legacy.sanitized().translation_engine, "local");
+
+        let mut requested = RuntimeSettings::default();
+        requested.translation_engine = " CoDeX ".to_string();
+        assert_eq!(requested.sanitized().translation_engine, "codex");
+
+        let mut unknown = RuntimeSettings::default();
+        unknown.translation_engine = "apikey".to_string();
+        assert_eq!(unknown.sanitized().translation_engine, "local");
     }
 
     #[test]

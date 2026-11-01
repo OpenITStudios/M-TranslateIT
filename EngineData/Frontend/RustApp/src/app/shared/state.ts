@@ -5,7 +5,8 @@ const UNSAFE_DISPLAY_CHARS = /[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g;
 
 export function defaultSettings(): RuntimeSettings {
   return {
-    schema_version: 13,
+    schema_version: 14,
+    translation_engine: "local",
     meeting_listen_source_language: "en",
     meeting_listen_target_language: "id",
     meeting_setup_state: "new",
@@ -27,6 +28,7 @@ export function compact(value: unknown, fallback = "Unknown", maxChars = 180): s
 export function cloneSettings(value: RuntimeSettings): RuntimeSettings {
   return {
     schema_version: value.schema_version,
+    translation_engine: value.translation_engine,
     meeting_listen_source_language: value.meeting_listen_source_language,
     meeting_listen_target_language: value.meeting_listen_target_language,
     meeting_setup_state: value.meeting_setup_state,

@@ -74,7 +74,12 @@ existing GPT-SoVITS and virtual-microphone delivery. The existing Local route re
 the only admitted Meeting translation engine until capability, billing and native
 audio tests succeed. The preliminary Codex App Server connection is available in
 Diagnostics only: account/usage introspection is **not** proof of audio access,
-translation quality, latency, or zero additional charges. No automatic cloud
+translation quality, latency, or zero additional charges. Settings may now
+persist a Local/Codex choice, but Codex Meeting Start and Original-to-TranslateIT
+switching remain blocked at their native entrypoints until Voice is admitted.
+Local remains the default, and saving Codex does not start a Codex session,
+upload audio, or silently run local ASR/translation. Original Microphone
+passthrough remains eligible when the native audio route itself is ready. No automatic cloud
 fallback, paid API key, new Meeting owner, or silently enabled network mode.
 
 See [Codex Gateway research](../knowledge/proposals/2026-11-01-codex-gateway.md).
@@ -84,7 +89,7 @@ See [Codex Gateway research](../knowledge/proposals/2026-11-01-codex-gateway.md)
 ```text
 Platform        → Windows
 Languages       → Indonesian + English only
-Translation     → one canonical pipeline
+Translation     → one active engine per Meeting; Local admitted, Codex reserved/blocked
 Meeting capture → Session Listening
 Meeting voice   → Built-in Male/Female or approved My Voice
 Incoming        → optional EN speech → ID text
@@ -115,7 +120,9 @@ Removed/deferred from current product:
 
 ## Translation context
 
-Normal translation uses one canonical ID ↔ EN pipeline.
+The admitted Local route uses one canonical ID ↔ EN pipeline. An opted-in
+Codex Voice route is not yet admitted; the same one-owner Meeting/voice-output
+contract will apply if it becomes available.
 
 ```text
 Meeting outbound

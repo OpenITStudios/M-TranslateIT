@@ -409,6 +409,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
         // A blocked or failed worker requires the existing explicit recovery.
         if (
           initialSnapshot?.helper.state === "not_started"
+          && initialSnapshot.settings.translation_engine === "local"
           && applicationController.read().snapshot?.helper?.state === "not_started"
         ) {
           setNotice("Preparing the local AI worker. Meeting and Settings remain accessible while it starts.");

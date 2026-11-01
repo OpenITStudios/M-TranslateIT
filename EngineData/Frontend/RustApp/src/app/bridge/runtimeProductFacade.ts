@@ -125,6 +125,7 @@ async function mapApplicationSnapshotToProduct(
 
   if (
     allowRuntimeBootstrap
+    && settings.translation_engine === "local"
     && settings.meeting_setup_state !== "new"
     && application.summaries.worker.state === "not_started"
   ) {

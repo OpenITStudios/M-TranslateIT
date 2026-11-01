@@ -85,6 +85,10 @@ fn audio_resource_lock_message(action: &str) -> String {
     format!("Stop {activity} before {action}. The current audio preferences were kept.")
 }
 
+fn engine_preference_changed(current: &RuntimeSettings, candidate: &RuntimeSettings) -> bool {
+    current.translation_engine != candidate.translation_engine
+}
+
 fn audio_preferences_changed(current: &RuntimeSettings, candidate: &RuntimeSettings) -> bool {
     current.audio.input_device_id != candidate.audio.input_device_id
         || current.audio.output_device_id != candidate.audio.output_device_id
@@ -124,6 +128,15 @@ pub fn save_runtime_settings(settings: RuntimeSettings) -> CommandResult {
         CommandResult::blocked(
             LifecycleState::Error,
             audio_resource_lock_message("changing audio devices"),
+        )
+    } else if runtime_session_owns_audio_resources()
+        && engine_preference_changed(&current, &candidate)
+    {
+        // The selected translation engine is a property of the complete
+        // Meeting generation, not a mutable mid-session preference.
+        CommandResult::blocked(
+            LifecycleState::Error,
+            audio_resource_lock_message("changing the translation engine"),
         )
     } else {
         persist_runtime_settings(candidate)
@@ -257,8 +270,17 @@ pub fn select_audio_device(kind: String, device_id: Option<String>) -> AudioDevi
 
 #[cfg(test)]
 mod tests {
-    use super::audio_preferences_changed;
+    use super::{audio_preferences_changed, engine_preference_changed};
     use crate::engine::settings::RuntimeSettings;
+
+    #[test]
+    fn engine_preference_change_is_separate_from_audio_device_drift() {
+        let current = RuntimeSettings::default();
+        let mut candidate = current.clone();
+        candidate.translation_engine = "codex".to_string();
+        assert!(engine_preference_changed(&current, &candidate));
+        assert!(!audio_preferences_changed(&current, &candidate));
+    }
 
     #[test]
     fn audio_preference_change_detects_only_audio_drift() {

@@ -11,6 +11,7 @@
   import { deviceId } from "../app/shared/state";
   import type { AudioDeviceListReport, RuntimeSettings } from "../app/shared/types";
   import MeetingNoiseSuppression from "../components/settings/MeetingNoiseSuppression.svelte";
+  import MeetingTranslationEngine from "../components/settings/MeetingTranslationEngine.svelte";
   import FloatingCaptionPreferences from "../components/settings/FloatingCaptionPreferences.svelte";
   import TranslationFeedbackReview from "../components/settings/TranslationFeedbackReview.svelte";
   import SettingsDiagnostics from "../components/settings/SettingsDiagnostics.svelte";
@@ -254,6 +255,13 @@
             Multiple Windows audio endpoints have identical names. Those selections are disabled to prevent accidental routing to the wrong device.
           </p>
         {/if}
+
+        <MeetingTranslationEngine
+          {settings}
+          locked={meetingResourcesLocked}
+          onSettingsChange={onSettingsChange}
+          onNotice={onNotice}
+        />
 
         <MeetingNoiseSuppression
           {settings}

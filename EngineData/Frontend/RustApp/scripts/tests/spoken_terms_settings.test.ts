@@ -19,7 +19,8 @@ test("settings defaults and cloning discard retired AI preferences", () => {
     assert.equal(Object.hasOwn(settings, retired), false);
     assert.equal(Object.hasOwn(cloned, retired), false);
   }
-  assert.equal(settings.schema_version, 13);
+  assert.equal(settings.schema_version, 14);
+  assert.equal(settings.translation_engine, "local");
   assert.deepEqual(cloned, settings);
   cloned.audio.noise_suppression = "off";
   assert.equal(settings.audio.noise_suppression, "auto");

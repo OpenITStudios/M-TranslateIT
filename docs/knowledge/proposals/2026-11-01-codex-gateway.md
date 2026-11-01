@@ -169,6 +169,32 @@ real Indonesian/English semantic evaluation. None can be inferred from
 complete as a live capability, and there is no path to enable it by manually
 asserting an unverified success flag.
 
+## Phase 4: persisted route selection and native fail-closed Start — SOURCE CANDIDATE
+
+The Rust settings schema now stores `translation_engine = local | codex`,
+with `local` as the default for existing configuration and unknown values.
+The TypeScript DTO, clone/default projection, and Settings selector share the
+same value and schema. A change while a Meeting/Mic Test/voice-recording owner
+or unresolved Meeting cleanup holds resources is rejected by the native
+settings owner. The selection is a preference, **not** proof of readiness or
+a provider entitlement.
+
+The existing `meeting_session/preflight.rs` reports a dedicated
+`codex_voice_not_admitted` blocker for Codex without probing Local helper
+readiness. `meeting_session/lifecycle.rs` refuses the selected Codex route
+before Local worker recovery or microphone/device preparation.
+`meeting_session/audio_source.rs` independently refuses switching
+Original Microphone to translated output in Codex mode, preventing a bypass.
+The raw Original Microphone path still uses its unchanged resource checks.
+
+The frontend's automatic worker startup paths skip cold Local AI startup
+when Codex is selected; explicit My Voice activities retain access to the
+existing helper. Selection does not forcibly unload an already-running local
+worker, and makes no claim that GPU memory was released.
+Neither initial Codex selection nor the Codex Diagnostics account probe
+starts Voice or sends audio to cloud inference. This is strictly source work;
+UI, Rust compilation and actual Meeting acceptance are NOT EXECUTED.
+
 ## Translation commit and resource ownership
 
 One future internal result contract should carry session ID, generation,
@@ -215,12 +241,12 @@ incremental user-PC or hosted CI requirements.
 - Shared Meeting Start/Stop, voice readiness, output and archive: their
   **existing** owners in `docs/knowledge/source-ownership.md`.
 - Source contract: `scripts/tests/codex_gateway_contract.test.ts`.
-- Normal product engine selection, audio streaming and release bundling:
-  explicitly **not** enabled by the phase-1 connection probe.
+- Product engine selection persists through the existing Settings owner,
+  while Codex translation Start and source switching are explicitly blocked
+  until admission. Streaming audio and release bundling are NOT enabled.
 
-**Next work:** verify the installed Codex Voice protocol and included-usage
-entitlement, then obtain an authoritative or experimentally demonstrated
-source-to-assistant mapping that remains correct across long sessions,
-interruptions and overlapping speech. Only after that evidence may the
-existing Meeting Start/Stop and GPT-SoVITS owners admit the Codex route.
-Unverified or separately billed Voice remains BLOCKED.
+**Next source work:** prepare a typed, cancelled and version-gated Codex
+App Server realtime session control interface without issuing paid RPCs,
+capturing audio, or advertising Voice entitlement. Actual account Voice
+availability, charging and source/output correlation require separately
+authorized real runtime proof before Meeting may admit Codex.

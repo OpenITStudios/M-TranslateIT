@@ -52,6 +52,8 @@ test("core RuntimeSettings defaults remain aligned", () => {
     assert.match(state, new RegExp(`${field}: "${value}"`));
   }
   assert.match(state, /meeting_setup_checkpoint:\s*1/);
+  assert.match(state, /translation_engine:\s*"local"/);
+  assert.match(rust, /sanitize_translation_engine\(&self\.translation_engine\)/);
   assert.match(state, /noise_suppression:\s*"auto"/);
   assert.match(state, /input_device_id:\s*null/);
   assert.match(state, /output_device_id:\s*null/);

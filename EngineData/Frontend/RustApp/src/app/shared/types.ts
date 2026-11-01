@@ -17,6 +17,7 @@ export type RuntimeCommandError = {
 
 export type RuntimeSettings = {
   schema_version: number;
+  translation_engine: "local" | "codex";
   meeting_listen_source_language: string;
   meeting_listen_target_language: string;
   meeting_setup_state: "new" | "deferred" | "completed" | string;

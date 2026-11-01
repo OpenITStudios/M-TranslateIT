@@ -413,6 +413,17 @@ fn start_meeting_impl(original_requested: bool) -> MeetingSessionActionResult {
         );
     }
 
+    if !original_requested && crate::engine::load_settings().translation_engine == "codex" {
+        // Codex Voice is not admitted until authenticated audio-to-translation
+        // and included-usage entitlement are proven. Refuse BEFORE worker
+        // recovery, model preload, microphone ownership or VB-CABLE opening.
+        // No automatic fallback to the Local engine.
+        return blocked_result(
+            "codex_voice_not_admitted",
+            "Codex Voice is selected but not yet verified. No audio or AI runtime was started. Choose Local to use the offline engine.".to_string(),
+        );
+    }
+
     if !original_requested {
     if let Err(message) = recover_helper_after_meeting_stop_if_needed() {
         return blocked_result(
