@@ -17,9 +17,15 @@ export async function runProductSetupAction(action: ProductSetupAction): Promise
   }
   if (action === "check-readiness") {
     const result = await applicationRuntimeApi.dispatchIntent("check_readiness").catch(() => null);
+    // Surface the canonical native admission reason (including an unverified
+    // Codex choice) instead of replacing every failure with a generic notice.
+    // Unknown/failed bridge calls still use the conservative fallback.
     return result?.ok
       ? "TranslateIT is ready."
-      : "TranslateIT still needs attention. Try Check Again, then open Help if the problem continues.";
+      : compact(
+          result?.message,
+          "TranslateIT still needs attention. Try Check Again, then open Help if the problem continues.",
+        );
   }
 
   const result = await runtimeApi.verifyModels().catch(() => null);

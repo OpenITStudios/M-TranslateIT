@@ -30,6 +30,8 @@ const quickAccess = uiSource("pages/QuickAccess.svelte");
 const boot = uiSource("App.svelte");
 const facade = uiSource("app/bridge/runtimeProductFacade.ts");
 const readiness = uiSource("app/bridge/productReadinessState.ts");
+const setupFacade = uiSource("app/bridge/productSetupFacade.ts");
+const firstSetup = uiSource("pages/FirstSetup.svelte");
 
 test("engine selection is one strict, persisted Rust and TypeScript preference", () => {
   assert.match(settings, /CURRENT_SCHEMA_VERSION: u32 = 14/);
@@ -186,4 +188,21 @@ test("P12 preserves Original Microphone and the independent incoming caption lan
   assert.doesNotMatch(incoming, /local_translated_meeting_route_admitted/);
   assert.match(committed, /if lane == "you" && !super::local_translated_meeting_route_admitted\(\)/);
   assert.match(incoming, /session_id, event_sequence, None, utterance_id, "incoming"/);
+});
+
+test("P13 preserves the native Codex blocker through First Setup readiness notices", () => {
+  const source = setupFacade.slice(
+    setupFacade.indexOf('if (action === "check-readiness")'),
+    setupFacade.indexOf('const result = await runtimeApi.verifyModels()'),
+  );
+  assert.match(source, /dispatchIntent\("check_readiness"\)/);
+  assert.match(source, /result\?\.ok/);
+  assert.match(source, /compact\(\s*result\?\.message,/);
+  const refresh = firstSetup.slice(
+    firstSetup.indexOf("async function refreshReadiness()"),
+    firstSetup.indexOf("async function selectBuiltin("),
+  );
+  assert.match(refresh, /const readinessMessage = step === 4/);
+  assert.match(refresh, /readinessMessage && readinessMessage !== "TranslateIT is ready\."/);
+  assert.match(refresh, /meetingVoiceReady && snapshot\?\.readiness\.meetingReady/);
 });

@@ -142,6 +142,40 @@ This disposition does not authorize release or accept new material errors. Keep
 MiLMMT, prompt, decoding and current-source isolation unchanged: no context saver,
 history/style/glossary injection or corrective translation layer.
 
+### Codex Gateway P12/P13 — conditional route and diagnostics acceptance within this session
+
+**Current source status: STATIC_SOURCE / NOT EXECUTED.** This subsection adds
+no standalone test run, CI workflow, account-login automation or new acceptance
+scenario ID. During the same exact-SHA integrated Windows phase, after the
+existing source/compile gate has passed, use the established B5, C0/C1/C1A–C1C,
+C3/C4/C5, D2/D3 and D13/D16 scenarios to inspect the *existing* two engine
+preferences and two microphone sources. A Codex Voice translation demonstration
+is **not** expected or permitted: its media/usage/causal-translation admission
+remains absent. Do not require a Codex CLI/account for the normal Local baseline.
+
+| Existing scenario / state | Expected observation and fail condition |
+| --- | --- |
+| D2/D3 · stopped, `translation_engine=codex` | Settings retains the selected preference after a restart. Preflight blocks translated Start with `codex_voice_not_admitted`; direct native/Quick Access Start rejects before preparing the selected virtual route or loading local ASR/MT/TTS. `ensure_runtime_ready`, `check_readiness` and `fix_setup` reject with `engine_not_admitted` before starting Local AI; First Setup shows the specific reason rather than a generic setup warning. Neither a stopped helper nor a pre-existing My Voice-owned helper is proof of Codex translation readiness. |
+| C1A/C1C · Codex selected, Original Microphone | Original Start, native mute and Stop continue to use the existing physical capture → VB-CABLE route when devices are prepared. It must not require Codex login, local ASR/MT/TTS or My Voice selection; a real separate meeting receiver must confirm raw passthrough before a native PASS. A route or archive failure must not claim Live. |
+| C1B/D16 · Original Live with Codex preference | Switching Original → TranslateIT is rejected; the same Original stream and source epoch remain authoritative. Changing `translation_engine` during Live/Retry Stop is blocked, not silently applied. After a verified Stop, selecting Local permits the normal translated Start path only after its own readiness checks. Do not treat rejected switching as a successful source change. |
+| C0/C1/C3/C4/C5 · Local selected | The standard Whisper → MiLMMT → GPT-SoVITS → VB-CABLE path runs with one capture/playback/Stop owner. Optional incoming Meeting Sound is exercised only as part of this admitted Local session, remains source-first, and cannot block otherwise healthy outbound. No Codex App Server is spawned by ordinary Start, Stop, or incoming activation. |
+| D3/D4 · explicit `Check Codex connection` | This *optional* diagnostic may launch exactly one owned native `codex.exe app-server --listen stdio://` after an explicit click, only if compatible local CLI/account access exists. Observe read-only initialize/account/provider/usage probes and redacted status; `chatgpt_authenticated` or `included_usage_allowed` **must not** change `realtime_audio_verified=false` or `meeting_route_enabled=false`. No remote model turn, Voice RPC, meeting audio, API-key fallback, private transcript or cloud-generated TTS is allowed. Without an installed CLI/account, record this row UNKNOWN/NOT EXECUTED without affecting the Local baseline. |
+| C4/D3 · diagnostic Disconnect, account change and uncertain cleanup | An observed account/provider revision invalidates earlier diagnostic authority; Stop cancels the owned gateway, and a child/reader/writer whose teardown cannot be verified remains `cleanup_incomplete` with no new process/Voice admission or clean-exit claim. Treat the three-second settlement budget as a polling limit, **not** proof of bounded OS pipe teardown. Use existing in-memory fake-server cases for fault injection, never a destructive real-PC process or microphone fault. |
+
+**One admission/evidence owner:** Use the existing runbook's exact-SHA
+source/compile sequence (including
+`scripts/tests/codex_engine_routing_contract.test.ts`,
+`scripts/tests/codex_gateway_contract.test.ts` and the Rust gateway/fake
+App Server unit cases) before developer-mode observations. Record a non-private
+PASS/FAIL/UNKNOWN per applicable existing scenario with the actual source SHA
+and first wrong owner. Source assertions, scripted RPC envelopes and account
+login are not proof of real WebRTC, zero-additional-charge Voice usage, correct
+source/assistant pairing, meeting-receiver audio or physical timing. STOP the
+affected lane immediately on unexpected Local worker bootstrap, unauthorized
+Codex Realtime/audio/model request, silent engine fallback, leaked private
+content or false cleanup. Do not turn on paused CI or request incremental
+PC testing. Signed installation remains separately gated by E2–E6.
+
 ### Meeting long-speech segment candidate — conditional admission in this same phase
 
 The 4B–4D `source_observations.rs` candidate is **`#[cfg(test)]` only**. It is not called by production Meeting, does not translate partial audio, and cannot resolve the active >60-second uninterrupted-speech overflow. Its two input signals are (1) the existing opt-in worker `asr_alignment` estimated-word envelope and (2) quiet measured from the matching finalized 16-kHz PCM buffer. Neither signal proves semantic independence, and matching text alone does **not** authenticate the worker response to the specific request.

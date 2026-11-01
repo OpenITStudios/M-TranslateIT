@@ -526,6 +526,36 @@ Voice and paid-usage checks are **NOT EXECUTED / UNKNOWN**. A check
 before source preparation is not a concurrency, CPU cost or runtime timing
 proof. Codex Voice, WebRTC and TTS integration remain **NOT ADMITTED**.
 
+## Phase 13: truthful setup diagnostics and integrated acceptance scope — SOURCE CANDIDATE
+
+Review of P12 against the current First Setup UI found a presentation
+mismatch: `productSetupFacade.runProductSetupAction("check-readiness")`
+discarded the native `engine_not_admitted` explanation, and
+`FirstSetup.refreshReadiness` discarded its return value altogether. The
+existing facade now returns the bounded native failure message (or its
+previous generic fallback when the bridge is unavailable). First Setup
+reuses that message only when translation readiness remains unverified,
+without inventing ready state or making new model/audio requests. No
+Codex-specific UI status store or alternate admission owner was added.
+
+The canonical [Target Windows Performance Acceptance](../operations/target-windows-performance.md)
+now carries a conditional P12/P13 route matrix covering persisted
+Local/Codex choice, translated Start rejection before native route
+preparation, Original passthrough and source switching, optional incoming
+only in Local Meeting, diagnostics-only Codex App Server, stale account
+authority and cleanup failures. It reuses the existing source/compile
+gate and B/C/D scenario IDs in **one** later exact-SHA integrated
+Windows acceptance phase, not a second test harness. An absent Codex CLI,
+account or compatible entitlement must not block the Local baseline.
+
+**Proof:** STATIC_SOURCE on pinned parent
+`4ba6e6156b7417ee4e74e863eaa8979baf396cea`; reviewed existing
+frontend readiness, native intent and Meeting boundaries and authored a
+TypeScript source regression. Rust, TypeScript, Svelte, CI, Windows,
+installed account, real audio, WebRTC and payment terms remain
+**NOT EXECUTED / UNKNOWN**. No Codex Voice, model turn, paid fallback or
+cloud audio was admitted.
+
 ## Translation commit and resource ownership
 
 One future internal result contract should carry session ID, generation,
@@ -576,9 +606,10 @@ incremental user-PC or hosted CI requirements.
   while Codex translation Start and source switching are explicitly blocked
   until admission. Streaming audio and release bundling are NOT enabled.
 
-**Next work:** hold P12 as a source candidate and validate its existing
-Rust/TypeScript contracts in the later single authorized pinned-SHA
-integrated build/Windows acceptance. Account Voice entitlement, actual
-WebRTC media and causal translated-text correlation require independent
-proof before any Codex Meeting route could be admitted. Do not dispatch CI,
-request per-commit PC tests or activate paid/cloud inference.
+**Next source work:** review the canonical persisted-engine admission's
+read-failure/default behavior and concurrent Settings mutation against
+translated Start and queued work. Preserve the explicit Local-on-new-install
+default without silently treating a damaged or stale Codex preference as
+proof of Local admission. Resolve only observed source-owner defects.
+Keep the single later integrated Windows acceptance and all Codex Voice,
+paid inference and paused CI boundaries unchanged.

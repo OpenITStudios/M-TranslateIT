@@ -214,11 +214,15 @@
     busy = true;
     message = "Refreshing status...";
     try {
-      if (step === 4) await runtimeProductFacade.runProductSetupAction("check-readiness");
+      const readinessMessage = step === 4
+        ? await runtimeProductFacade.runProductSetupAction("check-readiness")
+        : null;
       await refreshSnapshot();
       message = meetingVoiceReady && snapshot?.readiness.meetingReady
         ? "Everything needed for Meeting translation is ready."
-        : "A few setup items still need attention.";
+        : readinessMessage && readinessMessage !== "TranslateIT is ready."
+          ? readinessMessage
+          : "A few setup items still need attention.";
     } catch {
       message = "Couldn't refresh setup status. Try again.";
     } finally {
