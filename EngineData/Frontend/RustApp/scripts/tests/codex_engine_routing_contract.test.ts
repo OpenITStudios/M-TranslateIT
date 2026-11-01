@@ -254,3 +254,34 @@ test("P14 serialized settings saves cannot race canonical Meeting Start or silen
   assert.match(selector, /chooseEngine\("local"\)/);
   assert.match(page, /needsReconfirmation=\{snapshot\.meetingSession\?\.preflight\?\.blockers\?\.includes\("meeting_session:settings_unverified"\) === true\}/);
 });
+
+test("P15 prevents First Setup from persisting tolerant Local defaults before engine recovery", () => {
+  assert.match(boot, /\{:else if setupRequired\}[\s\S]*<FirstSetup/);
+  const init = firstSetup.slice(
+    firstSetup.indexOf("async function initialize()"),
+    firstSetup.indexOf("async function confirmEngineSelection("),
+  );
+  const snapshotRead = init.indexOf("await refreshSnapshot()");
+  const laterStep = init.indexOf("if (step > 1)");
+  assert.ok(snapshotRead >= 0 && laterStep > snapshotRead,
+    "first setup must read native engine truth on Step 1 before enabling navigation");
+  assert.match(init, /if \(checkingSetup\) return/);
+
+  const persist = firstSetup.slice(
+    firstSetup.indexOf("async function persistSetupFact("),
+    firstSetup.indexOf("async function advance("),
+  );
+  const guard = persist.indexOf("if (snapshot === null || engineSettingsUnverified)");
+  const write = persist.indexOf("await runtimeApi.saveSettings(candidate)");
+  assert.ok(guard >= 0 && write > guard,
+    "ordinary Continue/Defer must not silently overwrite an unverified persisted engine");
+
+  assert.match(firstSetup, /snapshot\?\.meetingSession\?\.preflight\?\.blockers\?\.includes\("meeting_session:settings_unverified"\)/);
+  assert.match(firstSetup, /\{:else if engineSettingsUnverified\}[\s\S]*<MeetingTranslationEngine/);
+  assert.match(firstSetup, /needsReconfirmation=\{true\}/);
+  assert.match(firstSetup, /onSettingsChange=\{confirmEngineSelection\}/);
+  assert.match(firstSetup, /async function confirmEngineSelection\([\s\S]*await refreshSnapshot\(\)/);
+  assert.match(firstSetup, /Check setup status/);
+  assert.match(firstSetup, /disabled=\{busy \|\| checkingSetup\}/);
+  assert.match(firstSetup, /<SetupNavigation/);
+});

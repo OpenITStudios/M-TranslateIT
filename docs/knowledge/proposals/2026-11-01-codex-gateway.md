@@ -599,6 +599,48 @@ all settings evidence cannot be distinguished from a first install
 without a separately authorized durable provenance record. No paid
 inference, Cloud Voice, WebRTC session or fallback is enabled.
 
+## Phase 15: First Setup recovery and source-contract reconciliation — SOURCE CANDIDATE
+
+A P14 integration review found a real recovery mismatch: when the tolerant
+Settings loader cannot read a saved engine it returns fresh-install UI
+defaults, including `meeting_setup_state = new`. The root desktop shell
+therefore presents **First Setup**, not the Settings page containing
+`Reconfirm Local engine`. Previously First Setup skipped native snapshot
+inspection on its first step and could persist those tolerant defaults
+through Continue/Defer, without the explicit engine confirmation required
+by P14. The Settings-only recovery claim did not cover that route.
+
+The existing First Setup now obtains an authoritative product/native Meeting
+snapshot even on Step 1 before enabling its normal setup navigation. A missing
+snapshot keeps setup saves disabled and offers a bounded explicit status retry;
+a `meeting_session:settings_unverified` preflight result displays the
+already-existing `MeetingTranslationEngine` confirmation control instead of
+normal setup actions. Both the UI branch and `persistSetupFact` guard prevent
+ordinary setup progress from silently overwriting corrupt saved settings.
+After the user explicitly confirms Local or Codex through the existing
+Settings persistence bridge, the page refreshes its canonical native
+snapshot before returning to setup. No new Settings store, native command,
+model request, media producer or background retry was introduced. A failed
+initial read remains unknown, never an assumed clean install.
+
+The existing `codex_engine_routing_contract.test.ts` gains a targeted
+First Setup recovery regression, checking initialization order, the
+persistent-save guard, native blocker visibility, shared engine component
+and bounded retry control. The existing Target Windows acceptance plan
+reuses the same D1/D2/D3 checks for the previously unreachable First Setup
+recovery route; no parallel test harness or scenario ID is introduced.
+
+**Proof boundary:** inspected source at pinned parent
+`7d499bfafcd11c5caa976687fd5f4e6dbd6b7484`; authored source
+regression only, **NOT EXECUTED**. There is no Rust/Svelte build,
+rendered UI, installed Windows, device, account or billing proof. The
+existing general-purpose native `save_product_settings` command still
+receives a full Settings candidate without a distinct explicit-recovery
+intent, so out-of-band/native callers can remain an authorization gap.
+This P15 change closes the observed First Setup UI bypass, **not** that
+independent native contract issue. Codex Voice, cloud audio and paid API
+fallback remain unadmitted.
+
 ## Translation commit and resource ownership
 
 One future internal result contract should carry session ID, generation,
@@ -649,8 +691,10 @@ incremental user-PC or hosted CI requirements.
   while Codex translation Start and source switching are explicitly blocked
   until admission. Streaming audio and release bundling are NOT enabled.
 
-**Next source work:** perform a bounded integration-source audit of P14
-file admission, Rust/TS settings contracts, source-mutation locks and
-explicit UI recovery. Fix only source-visible defects before preserving
-one exact-SHA integrated Windows candidate. CI and Codex Voice stay
-disabled; no per-commit local execution is requested.
+**Next source work:** P16 bounded native Settings-recovery intent
+audit: require an explicitly attributable engine confirmation when the
+persisted authority is Unverified; ensure generic full-settings mutation
+cannot silently repair it. Preserve the same canonical Settings writer,
+single Meeting transition lock, Local/Original behavior and current
+React-free Svelte UI. Keep source tests/build and target-Windows acceptance
+for the existing later coordinated session; CI/Voice remain disabled.

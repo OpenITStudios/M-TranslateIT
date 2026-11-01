@@ -16,6 +16,7 @@
   import { cloneSettings, compact, deviceId } from "../app/shared/state";
   import type { AudioDeviceListReport, RuntimeSettings } from "../app/shared/types";
   import SetupNavigation from "../components/setup/SetupNavigation.svelte";
+  import MeetingTranslationEngine from "../components/settings/MeetingTranslationEngine.svelte";
   import SetupVoiceChoice from "../components/setup/SetupVoiceChoice.svelte";
   import StatusRow from "../components/ui/StatusRow.svelte";
 
@@ -38,11 +39,15 @@
   let devices = $state<AudioDeviceListReport | null>(null);
   let step = $state<SetupStep>((() => setupCheckpoint(settings.meeting_setup_checkpoint))());
   let busy = $state(false);
+  let checkingSetup = $state(false);
   let message = $state("");
   let selectedMicrophone = $state((() => String(settings.audio.input_device_id ?? ""))());
   let builtinPendingId = $state<BuiltinVoiceId | null>(null);
 
   const meetingVoiceReady = $derived(snapshot?.readiness.approvedVoiceReady ?? null);
+  const engineSettingsUnverified = $derived(
+    snapshot?.meetingSession?.preflight?.blockers?.includes("meeting_session:settings_unverified") === true,
+  );
   const routeCheck = $derived(classifyVirtualMicRoute(routeStatus));
   // An unsaved device choice is not the verified microphone in the runtime snapshot.
   const microphoneSelectionPending = $derived(
@@ -111,17 +116,34 @@
   }
 
   async function initialize(): Promise<void> {
-    if (step > 1) {
+    if (checkingSetup) return;
+    checkingSetup = true;
+    try {
+      // Even Step 1 must discover a corrupt saved engine before Continue/Defer.
       await refreshSnapshot();
-      step = safeSetupResumeStep(step, {
-        microphoneReady: snapshot?.readiness.microphoneReady === true,
-        meetingRouteReady: snapshot?.readiness.meetingRouteReady === true,
-      });
-      if (step === 2) await refreshDevices();
+      if (step > 1) {
+        step = safeSetupResumeStep(step, {
+          microphoneReady: snapshot?.readiness.microphoneReady === true,
+          meetingRouteReady: snapshot?.readiness.meetingRouteReady === true,
+        });
+        if (step === 2) await refreshDevices();
+      }
+    } finally {
+      checkingSetup = false;
     }
   }
 
+  async function confirmEngineSelection(confirmed: RuntimeSettings): Promise<void> {
+    settings = cloneSettings(confirmed);
+    // Only the native Meeting preflight can clear settings_unverified.
+    await refreshSnapshot();
+  }
+
   async function persistSetupFact(state: SetupState, nextCheckpoint: SetupStep): Promise<boolean> {
+    if (snapshot === null || engineSettingsUnverified) {
+      message = "Saved engine settings must be verified before setup can be saved. Confirm the translation engine first.";
+      return false;
+    }
     const candidate = cloneSettings(settings);
     candidate.meeting_setup_state = state;
     const currentCheckpoint = setupCheckpoint(candidate.meeting_setup_checkpoint);
@@ -307,7 +329,36 @@
     </header>
 
     <section class="mx-auto grid max-w-[720px] gap-6 px-8 py-9">
-      {#if step === 1}
+      {#if snapshot === null}
+        <p class="m-0 text-sm leading-6 text-[var(--ti-text-muted)]" role="status">
+          Checking saved engine settings before setup can continue.
+        </p>
+        {#if message}
+          <p class="m-0 text-sm leading-6 text-[var(--ti-text-muted)]" role="alert">{message}</p>
+        {/if}
+        <button type="button" class="ti-button ti-button-secondary"
+          disabled={busy || checkingSetup} onclick={() => void initialize()}>Check setup status</button>
+      {:else if engineSettingsUnverified}
+        <div>
+          <span class="ti-kicker">Settings recovery</span>
+          <h1 class="ti-page-title">Confirm the Meeting translation engine</h1>
+          <p class="ti-page-copy">
+            The saved engine settings could not be verified. Setup will not overwrite
+            them with a default choice. Confirm an engine explicitly before continuing.
+          </p>
+        </div>
+        <MeetingTranslationEngine
+          {settings}
+          needsReconfirmation={true}
+          locked={busy}
+          onSettingsChange={confirmEngineSelection}
+          onNotice={(notice) => { message = notice; }}
+        />
+        {#if message}
+          <p class="m-0 text-sm leading-6 text-[var(--ti-text-muted)]" role="status">{message}</p>
+        {/if}
+      {:else}
+        {#if step === 1}
         <div>
           <span class="ti-kicker">Meeting setup</span>
           <h1 class="ti-page-title text-[2.2rem]">Set up Meeting translation</h1>
@@ -407,6 +458,7 @@
         onRefresh={refreshReadiness}
         onComplete={completeSetup}
       />
+      {/if}
     </section>
   </section>
 </main>
