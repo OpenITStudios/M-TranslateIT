@@ -577,6 +577,12 @@ pub(super) fn commit_meeting_turn(
     delivery_state: Option<&str>,
     outbound_timing: Option<MeetingOutboundTiming>,
 ) -> bool {
+    // A native Live generation is not permission to feed an unadmitted
+    // translation engine into the canonical outbound transcript store.
+    // Incoming Meeting Sound remains independent and unchanged.
+    if lane == "you" && !super::local_translated_meeting_route_admitted() {
+        return false;
+    }
     let Ok(mut guard) = committed_turn_store().lock() else {
         return false;
     };
@@ -623,6 +629,9 @@ pub(super) fn finish_meeting_turn_translation(
     lane: &str,
     translated: Option<&str>,
 ) -> bool {
+    if lane == "you" && !super::local_translated_meeting_route_admitted() {
+        return false;
+    }
     let Ok(mut guard) = committed_turn_store().lock() else {
         return false;
     };
@@ -657,6 +666,12 @@ pub(super) fn begin_committed_playback(
     sequence: u64,
     utterance_id: u64,
 ) -> bool {
+    // The single committed-turn owner reserves output for LOCAL translation
+    // only. An unverified Codex candidate cannot borrow an existing source
+    // identity or enqueue GPT-SoVITS playback.
+    if !super::local_translated_meeting_route_admitted() {
+        return false;
+    }
     let Ok(mut guard) = committed_turn_store().lock() else {
         return false;
     };
@@ -686,6 +701,11 @@ pub(super) fn update_committed_turn_delivery_state(
     utterance_id: u64,
     delivery_state: &str,
 ) -> bool {
+    // Stop's interrupted mutation is permitted after authority revocation.
+    // All other translated-output states require the admitted Local route.
+    if delivery_state != "interrupted" && !super::local_translated_meeting_route_admitted() {
+        return false;
+    }
     let Ok(mut guard) = committed_turn_store().lock() else {
         return false;
     };

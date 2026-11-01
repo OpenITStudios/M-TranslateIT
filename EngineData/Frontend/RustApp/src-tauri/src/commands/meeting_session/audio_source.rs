@@ -170,7 +170,7 @@ pub(super) fn set_source(requested: &str) -> MeetingAudioSourceActionResult {
         return response(true, Some(generation), "Microphone source is already selected.");
     }
     if requested == "translateit" {
-        if crate::engine::load_settings().translation_engine == "codex" {
+        if !super::local_translated_meeting_route_admitted() {
             // Original Microphone remains authoritative: a selected Codex
             // route must not secretly warm the Local ASR/MiLMMT path.
             return response(false, Some(generation),

@@ -43,7 +43,7 @@ pub(super) fn build_preflight() -> MeetingSessionPreflightStatus {
     // A selected, unverified Codex Voice route MUST NOT inherit Local worker
     // readiness. Avoid even probing the local helper for this route. No
     // microphone, model load, or network session is started by preflight.
-    if crate::engine::load_settings().translation_engine == "codex" {
+    if !super::local_translated_meeting_route_admitted() {
         let mut blockers = vec!["meeting_session:codex_voice_not_admitted".to_string()];
         if transient_stop_cleanup_pending() {
             blockers.push("meeting_session:cleanup_incomplete".to_string());

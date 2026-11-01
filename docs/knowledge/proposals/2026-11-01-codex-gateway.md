@@ -440,6 +440,54 @@ no stored compatibility claim can currently authorize audio, TTS or a
 paid provider. Installed-account, OS, latency and Voice-billing proof
 remain UNKNOWN until one later integrated Windows acceptance stage.
 
+## Phase 11: canonical Meeting/voice integration boundaries — SOURCE CANDIDATE
+
+The current source audit found that Codex Voice was correctly blocked at
+Meeting preflight, Start Translation and Original-to-TranslateIT source
+switching, but the same decision appeared in three independent conditions.
+More importantly, the Local outbound consumer, finalized-audio processor,
+committed-turn store and native playback runtime did not independently
+recheck the chosen translation engine. A queued or direct late Local job
+could therefore attempt ASR, MT, TTS or playback if a preference changed
+outside the normal session-locked settings path.
+
+The existing `commands/meeting_session.rs` now owns a single
+`local_translated_meeting_route_admitted` decision derived from canonical
+Rust settings. Only the literal installed `local` engine admits the existing
+ASR → MiLMMT → GPT-SoVITS → VB-CABLE pipeline. The same check is used by
+preflight, Start, source switching and outbound-consumer initialization.
+Original Microphone retains its separate raw-passthrough Start, and
+incoming Meeting Sound is not recast as a Codex output lane.
+
+The outbound consumer rechecks the gate before producing its temporary
+ASR WAV. If the engine is no longer admitted, it reports
+`attention_needed` and terminates its processing loop without releasing
+or replacing the canonical Meeting/Stop owner. The outbound WAV processor
+checks before Local ASR, MT and TTS calls and reports a bounded
+`engine_not_admitted` failure without emitting voice. The existing
+committed-turn store checks only the `you`/outbound lane at source and
+translation commit, plus its playback reservation; incoming captions
+continue to use their existing independent store path. The
+`interrupted` mutation remains possible after Stop.
+
+The one existing playback runtime checks the Local route when starting,
+enqueueing and consuming a prepared WAV, including directly before native
+audio delivery. Its existing generation, source epoch, monotonic
+sequence and committed-source reservation remain authoritative; the
+Codex gateway does not create its own turn store, worker, TTS or output
+queue. The entire Codex Realtime/Codex assistant-candidate branch stays
+disconnected from these production calls. The selected Codex setting
+remains visible, but it cannot silently run the Local worker as a fallback.
+
+Rust and TypeScript regression contracts now assert that these boundaries
+use one Meeting-owned gate and that direct outbound/turn/playback paths
+fail closed. These are authored source checks only: **NOT EXECUTED**.
+The extra settings reads are only at existing utterance/worker or playback
+boundaries; their target-Windows cost and correctness are not measured.
+The code does not claim Codex audio entitlement, causal source/translated
+text pairing, working WebRTC negotiation, physical receiver delivery,
+or a completed Cloud Voice integration.
+
 ## Translation commit and resource ownership
 
 One future internal result contract should carry session ID, generation,
@@ -490,10 +538,9 @@ incremental user-PC or hosted CI requirements.
   while Codex translation Start and source switching are explicitly blocked
   until admission. Streaming audio and release bundling are NOT enabled.
 
-**Next source work:** review the existing diagnostic and offline Realtime
-interfaces against the canonical Meeting Start/Stop and TTS owners to locate
-remaining source-only integration boundaries, without activating Voice,
-adding another process owner or asserting token quota equals Voice
-entitlement. Preserve the account-revision and cleanup latches. No
-per-change local test, hosted CI or cloud inference; actual installed
-Windows and speech-to-translation evidence remain UNKNOWN.
+**Next source work:** complete a source-level regression audit of the
+new canonical Meeting engine gate against current settings persistence,
+Original Microphone and incoming captions. Resolve only actual contract
+mismatches, keeping Codex Voice network/audio/TTS disabled. Defer one
+integrated Windows build, account entitlement and physical audio/Meeting
+acceptance until explicitly authorized; do not run incremental tests or CI.

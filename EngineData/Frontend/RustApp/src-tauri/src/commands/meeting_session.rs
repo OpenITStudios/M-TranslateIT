@@ -44,6 +44,31 @@ use outbound_pipeline::process_outbound_wav;
 use preflight::current_status;
 use session_state::{incoming_lane_enabled, OutboundTimingContext};
 
+// One source of truth for admitting the existing LOCAL outbound Meeting route.
+// Codex account diagnostics, offline transcript candidates and staged WebRTC
+// envelopes do not grant ASR/MT/TTS or playback authority. Do not read
+// CodexGatewayStatus here or create a second Meeting/session owner.
+fn local_translated_route_for_engine(engine: &str) -> bool {
+    engine == "local"
+}
+
+fn local_translated_meeting_route_admitted() -> bool {
+    local_translated_route_for_engine(&crate::engine::load_settings().translation_engine)
+}
+
+#[cfg(test)]
+mod local_translation_route_tests {
+    use super::local_translated_route_for_engine;
+
+    #[test]
+    fn only_the_installed_local_translation_route_can_run_existing_ai_pipeline() {
+        assert!(local_translated_route_for_engine("local"));
+        for engine in ["codex", "apikey", "unknown", "", "LOCAL"] {
+            assert!(!local_translated_route_for_engine(engine), "{engine}");
+        }
+    }
+}
+
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MeetingSessionPreflightStatus {

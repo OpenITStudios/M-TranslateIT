@@ -413,7 +413,7 @@ fn start_meeting_impl(original_requested: bool) -> MeetingSessionActionResult {
         );
     }
 
-    if !original_requested && crate::engine::load_settings().translation_engine == "codex" {
+    if !original_requested && !super::local_translated_meeting_route_admitted() {
         // Codex Voice is not admitted until authenticated audio-to-translation
         // and included-usage entitlement are proven. Refuse BEFORE worker
         // recovery, model preload, microphone ownership or VB-CABLE opening.

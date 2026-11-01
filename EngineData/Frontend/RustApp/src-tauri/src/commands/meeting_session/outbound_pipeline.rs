@@ -181,6 +181,36 @@ fn stale_outbound_result(
     }
 }
 
+/// A late finalized segment must not borrow the Local ASR/MT/TTS worker when
+/// the selected engine is unadmitted. The canonical Meeting generation and
+/// source/turn stores remain the only owners of playback and transcripts.
+fn unadmitted_outbound_result(
+    generation: u64,
+    session_id: &str,
+    event_sequence: u64,
+    utterance_id: u64,
+) -> MeetingOutboundProcessResult {
+    let _ = update_committed_turn_delivery_state(
+        session_id, generation, utterance_id, "interrupted",
+    );
+    update_outbound_status(
+        generation, session_id, "attention_needed", event_sequence,
+        false, false, "meeting_outbound:codex_voice_not_admitted",
+        "Codex Voice has no admitted Meeting translation path. Local AI and voice output were not authorized.",
+    );
+    MeetingOutboundProcessResult {
+        ok: false,
+        delivered: false,
+        state: "engine_not_admitted".to_string(),
+        blocker: "meeting_outbound:codex_voice_not_admitted".to_string(),
+        note: "No local AI worker or Meeting playback was authorized for this utterance."
+            .to_string(),
+        generation,
+        utterance_sequence: event_sequence,
+        runtime_claim: "meeting_outbound_engine_not_admitted_before_local_ai".to_string(),
+    }
+}
+
 pub(super) fn process_outbound_wav(
     generation: u64,
     session_id: &str,
@@ -190,6 +220,14 @@ pub(super) fn process_outbound_wav(
     audio_path: String,
     mut timing: OutboundTimingContext,
 ) -> MeetingOutboundProcessResult {
+    // Defense in depth: a direct/late consumer request cannot invoke local
+    // Whisper, MiLMMT or GPT-SoVITS for an unverified Codex preference,
+    // even if an old Meeting generation was previously Live.
+    if !super::local_translated_meeting_route_admitted() {
+        return unadmitted_outbound_result(
+            generation, session_id, event_sequence, utterance_id,
+        );
+    }
     let Some(source_epoch) = original_voice_pcm::translated_epoch(generation) else {
         return stale_outbound_result(generation, session_id, event_sequence, utterance_id);
     };
@@ -313,6 +351,11 @@ pub(super) fn process_outbound_wav(
         "",
         "Final Indonesian transcript is being translated to English.",
     );
+    if !super::local_translated_meeting_route_admitted() {
+        return unadmitted_outbound_result(
+            generation, session_id, event_sequence, utterance_id,
+        );
+    }
     let translation_started_at = Instant::now();
     let translation = send_helper_worker_task(
         "translate",
@@ -431,6 +474,11 @@ pub(super) fn process_outbound_wav(
             runtime_claim: "meeting_outbound_voice_actor_authority_missing".to_string(),
         };
     };
+    if !super::local_translated_meeting_route_admitted() {
+        return unadmitted_outbound_result(
+            generation, session_id, event_sequence, utterance_id,
+        );
+    }
     let requested_tts_path = tts_output_path(session_id, generation, event_sequence);
     let tts_started_at = Instant::now();
     let tts = send_helper_worker_task(

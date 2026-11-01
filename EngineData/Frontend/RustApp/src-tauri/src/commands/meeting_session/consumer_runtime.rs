@@ -85,6 +85,9 @@ fn incoming_consumer_store() -> &'static Mutex<Option<MeetingIncomingConsumerRun
 }
 
 pub(super) fn ensure_meeting_outbound_consumer(generation: u64, session_id: &str) -> Result<(), String> {
+    if !super::local_translated_meeting_route_admitted() {
+        return Err("meeting_outbound:codex_voice_not_admitted".to_string());
+    }
     if !runtime_generation_is_authoritative(generation) {
         return Err("meeting_outbound:generation_not_authoritative".to_string());
     }
@@ -101,6 +104,11 @@ pub(super) fn ensure_meeting_outbound_consumer(generation: u64, session_id: &str
 }
 
 pub(super) fn start_meeting_outbound_consumer(generation: u64, session_id: &str) -> Result<(), String> {
+    // Do not allocate a Local ASR/MT/TTS consumer for the Codex preference.
+    // The original microphone uses its independent native passthrough path.
+    if !super::local_translated_meeting_route_admitted() {
+        return Err("meeting_outbound:codex_voice_not_admitted".to_string());
+    }
     let store = outbound_consumer_store();
     let mut guard = store
         .lock()
@@ -128,6 +136,22 @@ pub(super) fn start_meeting_outbound_consumer(generation: u64, session_id: &str)
                     || original_voice_pcm::is_original_active(generation)
                 {
                     continue;
+                }
+                if !super::local_translated_meeting_route_admitted() {
+                    // A changed/unadmitted route cannot silently discard
+                    // queued source audio or continue Local inference. The
+                    // canonical Meeting owner still handles explicit Stop.
+                    update_outbound_status(
+                        generation,
+                        &thread_session_id,
+                        "attention_needed",
+                        utterance.sequence,
+                        false,
+                        false,
+                        "meeting_outbound:codex_voice_not_admitted",
+                        "Translation engine is not admitted. Local processing stopped; stop the Meeting before changing engine.",
+                    );
+                    break;
                 }
 
                 let audio_prepare_started_at = Instant::now();

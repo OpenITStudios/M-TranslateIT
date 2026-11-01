@@ -97,6 +97,7 @@ Domain algorithms remain in their domain modules; ApplicationRuntime coordinates
 |---|---|
 | Meeting public status facade | `commands/meeting_session.rs` |
 | Start/Stop lifecycle transactions | `commands/meeting_session/lifecycle.rs` + `engine/runtime_state.rs` |
+| Local/Codex translated route admission (not Voice entitlement) | `commands/meeting_session.rs` owns the canonical Local route decision; preflight, outbound consumer, committed turns and playback enforce it. `commands/codex_gateway.rs` owns account diagnostics only |
 | Meeting preflight/status | `meeting_session/preflight.rs` + `session_state.rs` |
 | Outbound/incoming pipelines | `meeting_session/outbound_pipeline.rs`, `incoming_pipeline.rs`, `incoming_deferred.rs` |
 | Meeting consumer ownership | `meeting_session/consumer_runtime.rs` |

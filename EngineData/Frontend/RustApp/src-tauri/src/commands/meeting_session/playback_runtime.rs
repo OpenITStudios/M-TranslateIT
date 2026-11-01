@@ -115,6 +115,7 @@ fn process_playback_job(job: PreparedPlaybackJob, last_sequence: &mut u64) {
     }
     if !generation_is_live(job.generation)
         || !original_voice_pcm::translated_epoch_matches(job.generation, job.source_epoch)
+        || !super::local_translated_meeting_route_admitted()
     {
         cleanup_job(&job);
         mark_interrupted(&job);
@@ -165,6 +166,7 @@ fn process_playback_job(job: PreparedPlaybackJob, last_sequence: &mut u64) {
 
     if !generation_is_live(job.generation)
         || !original_voice_pcm::translated_epoch_matches(job.generation, job.source_epoch)
+        || !super::local_translated_meeting_route_admitted()
     {
         cleanup_job(&job);
         mark_interrupted(&job);
@@ -220,7 +222,9 @@ fn process_playback_job(job: PreparedPlaybackJob, last_sequence: &mut u64) {
         true,
     );
 
-    if !original_voice_pcm::translated_epoch_matches(job.generation, job.source_epoch) {
+    if !original_voice_pcm::translated_epoch_matches(job.generation, job.source_epoch)
+        || !super::local_translated_meeting_route_admitted()
+    {
         cleanup_job(&job);
         mark_interrupted(&job);
         set_outbound_playback_activity(job.generation, &job.session_id, job.event_sequence, false);
@@ -280,6 +284,7 @@ fn process_playback_job(job: PreparedPlaybackJob, last_sequence: &mut u64) {
 
     if !generation_is_live(job.generation)
         || !original_voice_pcm::translated_epoch_matches(job.generation, job.source_epoch)
+        || !super::local_translated_meeting_route_admitted()
     {
         mark_interrupted(&job);        return;
     }
@@ -318,6 +323,9 @@ fn process_playback_job(job: PreparedPlaybackJob, last_sequence: &mut u64) {
 }
 
 pub(super) fn ensure_meeting_playback_runtime(generation: u64, session_id: &str) -> Result<(), String> {
+    if !super::local_translated_meeting_route_admitted() {
+        return Err("meeting_playback:codex_voice_not_admitted".to_string());
+    }
     if !runtime_generation_is_authoritative(generation) {
         return Err("meeting_playback:generation_not_authoritative".to_string());
     }
@@ -337,6 +345,9 @@ pub(super) fn start_meeting_playback_runtime(
     generation: u64,
     session_id: &str,
 ) -> Result<(), String> {
+    if !super::local_translated_meeting_route_admitted() {
+        return Err("meeting_playback:codex_voice_not_admitted".to_string());
+    }
     let store = playback_runtime_store();
     let mut guard = store
         .lock()
@@ -413,6 +424,11 @@ fn enqueue_with_deadline<T>(
 }
 
 pub(super) fn enqueue_meeting_playback(job: PreparedPlaybackJob) -> Result<(), String> {
+    // Only the canonical source/turn owner may admit a Local prepared WAV.
+    // Unverified Codex assistant text never enters this queue.
+    if !super::local_translated_meeting_route_admitted() {
+        return Err("meeting_playback:codex_voice_not_admitted".to_string());
+    }
     let generation = job.generation;
     let sender = playback_runtime_store()
         .lock()
