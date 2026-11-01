@@ -396,3 +396,62 @@ test("P17 engine changes are compare-and-set, not stale full-settings overwrite"
   assert.match(selector, /runtimeApi\.selectTranslationEngine\(engine, settings.translation_engine\)/);
   assert.doesNotMatch(selector, /await runtimeApi.saveSettings\(candidate\)/);
 });
+
+test("P18 recovery returns to the saved setup state after native verification", () => {
+  const confirm = firstSetup.slice(
+    firstSetup.indexOf("async function confirmEngineSelection("),
+    firstSetup.indexOf("async function persistSetupFact("),
+  );
+  const read = confirm.indexOf("await refreshSnapshot()");
+  const verified = confirm.indexOf('snapshot.meetingSession.preflight.blockers.includes("meeting_session:settings_unverified")');
+  const restored = confirm.indexOf("const restored = cloneSettings(snapshot.settings)");
+  const leave = confirm.indexOf('if (restored.meeting_setup_state !== "new")');
+  const exit = confirm.indexOf("await onComplete(restored)");
+  const resume = confirm.indexOf("step = setupCheckpoint(restored.meeting_setup_checkpoint)");
+  assert.ok(read >= 0 && verified > read && restored > verified && leave > restored);
+  assert.ok(exit > leave && resume > exit,
+    "completed or deferred setup must resume the existing app without another wizard save");
+  assert.match(confirm, /safeSetupResumeStep\(step,/);
+  assert.match(confirm, /if \(step === 2\) await refreshDevices\(\)/);
+  assert.doesNotMatch(confirm, /runtimeApi.saveSettings\(/);
+  assert.match(boot, /async function finishFirstSetup\(/);
+});
+
+test("P18 broad Settings saves cannot silently rebind devices or mutate Live Meeting state", () => {
+  const generic = persistence.slice(
+    persistence.indexOf("pub fn save_runtime_settings("),
+    persistence.indexOf("pub fn confirm_unverified_translation_engine("),
+  );
+  const admission = generic.indexOf("let result = if unverified_engine");
+  const deviceGuard = generic.indexOf("else if audio_preferences_changed(&current, &candidate)");
+  const engineGuard = generic.indexOf("else if engine_preference_changed(&current, &candidate)");
+  const meetingGuard = generic.indexOf("else if resources_owned && meeting_sensitive_settings_changed(&current, &candidate)");
+  const write = generic.indexOf("persist_runtime_settings(candidate)");
+  assert.ok(admission >= 0 && deviceGuard > admission && engineGuard > deviceGuard);
+  assert.ok(meetingGuard > engineGuard && write > meetingGuard);
+  assert.match(generic, /Use the dedicated microphone or Meeting Sound device selection/);
+  assert.match(generic, /audio_resource_lock_message\("changing Meeting preferences"\)/);
+  assert.match(persistence, /fn meeting_sensitive_settings_changed\(/);
+  for (const field of [
+    "meeting_listen_source_language",
+    "meeting_listen_target_language",
+    "meeting_setup_state",
+    "meeting_setup_checkpoint",
+    "audio.noise_suppression",
+  ]) {
+    assert.ok(persistence.includes("current." + field + " != candidate." + field), field);
+  }
+  assert.match(persistence, /fn meeting_sensitive_preferences_are_separate_from_device_and_engine_mutations/);
+});
+
+test("P18 atomic backup policy refuses a parseable but invalid-engine primary", () => {
+  const policy = settings.slice(
+    settings.indexOf("fn replace_previous_settings_backup("),
+    settings.indexOf("fn write_atomic("),
+  );
+  assert.match(policy, /read_settings_file\(primary\)\.is_some\(\)/);
+  assert.match(policy, /read_settings_value\(backup\)\.is_none\(\)/);
+  assert.match(settings, /if path.exists\(\) && replace_previous_settings_backup\(path, &backup_path\)/);
+  assert.match(settings, /fn atomic_settings_backup_keeps_parseable_recovery_on_invalid_primary/);
+  assert.match(settings, /"translation_engine":"apikey"/);
+});

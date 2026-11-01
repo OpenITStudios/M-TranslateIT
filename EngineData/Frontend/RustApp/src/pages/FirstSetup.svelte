@@ -135,8 +135,30 @@
 
   async function confirmEngineSelection(confirmed: RuntimeSettings): Promise<void> {
     settings = cloneSettings(confirmed);
-    // Only the native Meeting preflight can clear settings_unverified.
+    // Recovery can restore the previous setup checkpoint/state as well as its
+    // engine. Refresh native truth before leaving the recovery-only UI.
     await refreshSnapshot();
+    if (!snapshot?.meetingSession?.preflight
+        || snapshot.meetingSession.preflight.blockers.includes("meeting_session:settings_unverified")) {
+      message = "Engine confirmation was saved, but setup status could not be verified. Check setup status.";
+      return;
+    }
+    const restored = cloneSettings(snapshot.settings);
+    settings = restored;
+    if (restored.meeting_setup_state !== "new") {
+      // A previously completed/deferred setup must not be overwritten by a
+      // second wizard simply because the engine field was once unreadable.
+      await onComplete(restored);
+      return;
+    }
+    step = setupCheckpoint(restored.meeting_setup_checkpoint);
+    if (step > 1) {
+      step = safeSetupResumeStep(step, {
+        microphoneReady: snapshot.readiness.microphoneReady === true,
+        meetingRouteReady: snapshot.readiness.meetingRouteReady === true,
+      });
+      if (step === 2) await refreshDevices();
+    }
   }
 
   async function persistSetupFact(state: SetupState, nextCheckpoint: SetupStep): Promise<boolean> {

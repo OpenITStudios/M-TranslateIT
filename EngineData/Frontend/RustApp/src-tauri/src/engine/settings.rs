@@ -298,11 +298,11 @@ fn restore_settings_backup(path: &Path, backup_path: &Path) -> io::Result<()> {
 }
 
 fn replace_previous_settings_backup(primary: &Path, backup: &Path) -> bool {
-    // Keep a parseable saved backup when the primary is truncated/unreadable.
-    // Ordinary valid primary writes still refresh .bak as the previous
-    // committed state; an invalid primary must not erase the only recoverable
-    // JSON if the next rename/crash occurs before the new primary commits.
-    read_settings_value(primary).is_some() || read_settings_value(backup).is_none()
+    // A parseable primary with an INVALID engine is not a committed Settings
+    // authority: keep an older parseable backup rather than replacing its
+    // recoverable preferences with a broken engine before Windows rename.
+    // A strict-valid primary may replace the backup as usual.
+    read_settings_file(primary).is_some() || read_settings_value(backup).is_none()
 }
 
 fn write_atomic(path: &Path, body: &str) -> io::Result<()> {
@@ -587,6 +587,10 @@ mod tests {
         fs::write(&path, "not json").unwrap();
         fs::write(&backup, r#"{"schema_version":14,"translation_engine":"invalid",
             "audio":{"input_device_id":"Recovered Mic","output_device_id":null,"noise_suppression":"auto"}}"#).unwrap();
+        assert!(!super::replace_previous_settings_backup(&path, &backup));
+        // P17's earlier parseable-JSON check wrongly allowed a corrupt v14
+        // engine to evict an older recoverable backup before rename.
+        fs::write(&path, r#"{"schema_version":14,"translation_engine":"apikey"}"#).unwrap();
         assert!(!super::replace_previous_settings_backup(&path, &backup));
         fs::write(&path, r#"{"schema_version":14,"translation_engine":"local"}"#).unwrap();
         assert!(super::replace_previous_settings_backup(&path, &backup));

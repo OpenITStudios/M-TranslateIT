@@ -105,6 +105,19 @@ fn audio_preferences_changed(current: &RuntimeSettings, candidate: &RuntimeSetti
         || current.audio.output_device_id != candidate.audio.output_device_id
 }
 
+// Existing Meeting and microphone owners must not see their setup, language
+// or capture suppression change while they hold the native runtime. Even if
+// a direct Tauri caller bypasses the disabled Svelte controls.
+fn meeting_sensitive_settings_changed(
+    current: &RuntimeSettings, candidate: &RuntimeSettings,
+) -> bool {
+    current.meeting_listen_source_language != candidate.meeting_listen_source_language
+        || current.meeting_listen_target_language != candidate.meeting_listen_target_language
+        || current.meeting_setup_state != candidate.meeting_setup_state
+        || current.meeting_setup_checkpoint != candidate.meeting_setup_checkpoint
+        || current.audio.noise_suppression != candidate.audio.noise_suppression
+}
+
 fn current_device_label(settings: &RuntimeSettings, kind: &str) -> String {
     let selected = if kind == "microphone" {
         settings.audio.input_device_id.as_deref()
@@ -146,6 +159,7 @@ pub fn save_runtime_settings(settings: RuntimeSettings) -> CommandResult {
     let candidate = settings.sanitized();
     let unverified_engine = engine::meeting_engine_admission()
         == MeetingEngineAdmission::Unverified;
+    let resources_owned = runtime_session_owns_audio_resources();
     let result = if unverified_engine {
         // A damaged primary/backup is NOT a clean first install. Even if the
         // caller presents an apparently unchanged Local choice, only the
@@ -154,23 +168,33 @@ pub fn save_runtime_settings(settings: RuntimeSettings) -> CommandResult {
             LifecycleState::Error,
             "Saved translation engine settings could not be verified. Confirm Local or Codex explicitly before saving other Settings.".to_string(),
         )
-    } else if runtime_session_owns_audio_resources()
-        && audio_preferences_changed(&current, &candidate)
-    {
+    } else if audio_preferences_changed(&current, &candidate) {
+        // Device changes always require the existing probe-and-save owner.
+        // A stale full DTO must never revert a newly selected microphone,
+        // including while Meeting is stopped.
         CommandResult::blocked(
             LifecycleState::Error,
-            audio_resource_lock_message("changing audio devices"),
+            if resources_owned {
+                audio_resource_lock_message("changing audio devices")
+            } else {
+                "Use the dedicated microphone or Meeting Sound device selection. A full Settings save cannot change the audio device.".to_string()
+            },
         )
     } else if engine_preference_changed(&current, &candidate) {
         // A stale full Settings snapshot must not silently change engines.
         // Explicit engine changes are a separate CAS-style native mutation.
         CommandResult::blocked(
             LifecycleState::Error,
-            if runtime_session_owns_audio_resources() {
+            if resources_owned {
                 audio_resource_lock_message("changing the translation engine")
             } else {
                 "Use the explicit translation engine selection control. Other Settings changes must not change the selected engine.".to_string()
             },
+        )
+    } else if resources_owned && meeting_sensitive_settings_changed(&current, &candidate) {
+        CommandResult::blocked(
+            LifecycleState::Error,
+            audio_resource_lock_message("changing Meeting preferences"),
         )
     } else {
         persist_runtime_settings(candidate)
@@ -493,7 +517,10 @@ pub fn select_audio_device(kind: String, device_id: Option<String>) -> AudioDevi
 
 #[cfg(test)]
 mod tests {
-    use super::{audio_preferences_changed, engine_preference_changed, explicit_engine_choice};
+    use super::{
+        audio_preferences_changed, engine_preference_changed, explicit_engine_choice,
+        meeting_sensitive_settings_changed,
+    };
     use crate::engine::settings::MeetingEngineAdmission;
     use crate::engine::settings::RuntimeSettings;
 
@@ -513,6 +540,36 @@ mod tests {
         candidate.translation_engine = "codex".to_string();
         assert!(engine_preference_changed(&current, &candidate));
         assert!(!audio_preferences_changed(&current, &candidate));
+    }
+
+    #[test]
+    fn meeting_sensitive_preferences_are_separate_from_device_and_engine_mutations() {
+        let current = RuntimeSettings::default();
+        let mut changed = current.clone();
+        changed.audio.noise_suppression = "off".to_string();
+        assert!(meeting_sensitive_settings_changed(&current, &changed));
+        assert!(!audio_preferences_changed(&current, &changed));
+        assert!(!engine_preference_changed(&current, &changed));
+
+        let mut changed = current.clone();
+        changed.meeting_listen_source_language = "id".to_string();
+        changed.meeting_listen_target_language = "en".to_string();
+        assert!(meeting_sensitive_settings_changed(&current, &changed));
+
+        let mut changed = current.clone();
+        changed.meeting_setup_state = "completed".to_string();
+        changed.meeting_setup_checkpoint = 5;
+        assert!(meeting_sensitive_settings_changed(&current, &changed));
+
+        let mut device_only = current.clone();
+        device_only.audio.input_device_id = Some("Another Mic".to_string());
+        assert!(audio_preferences_changed(&current, &device_only));
+        assert!(!meeting_sensitive_settings_changed(&current, &device_only));
+
+        let mut engine_only = current.clone();
+        engine_only.translation_engine = "codex".to_string();
+        assert!(engine_preference_changed(&current, &engine_only));
+        assert!(!meeting_sensitive_settings_changed(&current, &engine_only));
     }
 
     #[test]

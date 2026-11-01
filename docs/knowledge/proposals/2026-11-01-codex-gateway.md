@@ -749,6 +749,64 @@ general Settings concern; this phase specifically prevents silent
 engine mutation. No experimental Codex Voice, paid fallback or cloud
 inference is admitted.
 
+## Phase 18: integrated source-readiness audit and Settings admission repair — SOURCE CANDIDATE
+
+The P17 narrow engine recovery correctly retained typed, recoverable
+non-engine preferences, but First Setup's `confirmEngineSelection`
+only refreshed its own snapshot. When the native recovery restored
+`meeting_setup_state = completed` or `deferred`, the outer desktop
+application continued presenting a second wizard; following its
+normal Continue/Defer would risk writing `new` back over a previously
+finished setup. The same First Setup owner now verifies the refreshed
+native preflight, hands the restored settings back through the existing
+`onComplete`/application-controller owner for completed or deferred
+sessions, and restores the persisted checkpoint through the existing
+safe-resume rules when setup was genuinely still new. No synthetic
+setup success or second persistence call is introduced.
+
+The native general-purpose `save_runtime_settings` path had another
+source-proven boundary gap: when stopped, a full stale DTO could write
+`audio.input_device_id` or `output_device_id` without the existing
+probe-and-select owner; when Meeting or Mic Test was active, it could
+also write new language directions, setup state/checkpoint or noise
+suppression as long as device and engine stayed unchanged. That
+created a potential mismatch between a live audio generation and
+saved preferences. The existing Settings command now rejects
+**all full-DTO physical audio endpoint changes** in favor of
+`select_product_audio_device`, even when idle. It also rejects
+changes to Meeting-sensitive language, setup and capture suppression
+fields while the existing runtime/audio owner or Retry Stop retains
+resources. Explicit engine compare-and-set and unverified-engine
+confirmation stay as P17/P16, using the same Meeting transition and
+Settings IO locks. Unrelated normal idle setup and suppression saves
+remain admitted; no extra background worker or state database was
+created.
+
+A narrower backup preflight defect remained from P17:
+`replace_previous_settings_backup` treated any parseable primary JSON
+as suitable to overwrite a parseable backup. A primary containing
+invalid `translation_engine` could therefore displace a recoverable
+backup before an interrupted rename. The existing policy now requires
+a **strictly valid primary Settings record** before replacing a
+parseable prior backup. An absent/unparseable backup still permits the
+usual previous-file copy. The existing Rust backup-policy unit case
+now includes a parseable but invalid-engine primary.
+
+**Source proof:** inspected pinned parent
+`cf533d72482623b76c44fba948ad4134967304cb`; authored Rust unit
+regression for Meeting-sensitive fields and expanded the original
+backup-policy case; added focused TypeScript source assertions for
+First Setup resumption, native endpoint/Live Settings admission and
+strict backup protection. All tests, compilers, Svelte rendering,
+actual Windows device/race conditions, Codex account/Voice billing,
+and receiver end-to-end behavior are **NOT EXECUTED / UNKNOWN**.
+An idle stale full DTO can still modify unrelated non-engine
+preferences; it cannot silently rebind a microphone or change the
+selected engine through the general save. Real in-process timing
+and external filesystem interference remain target-host evidence
+requirements, not a source PASS. Codex Voice, paid inference and
+automatic fallback remain **NOT ADMITTED**.
+
 ## Translation commit and resource ownership
 
 One future internal result contract should carry session ID, generation,
@@ -799,10 +857,12 @@ incremental user-PC or hosted CI requirements.
   while Codex translation Start and source switching are explicitly blocked
   until admission. Streaming audio and release bundling are NOT enabled.
 
-**Next source work:** P18 source-only acceptance-readiness audit of
-the P17 Rust recovery/atomic-writer changes and TypeScript/Tauri
-command contracts, including remaining stale non-engine Settings
-mutations. Correct only concrete source defects; then retain one
-exact-SHA candidate for the existing coordinated Windows build and
-native acceptance. No CI, incremental PC testing, Codex Voice or paid
-inference is enabled.
+**Next acceptance gate (deferred, not an execution request):**
+preserve this P18 source candidate on one immutable Local SHA and use
+the existing Target Windows Performance Acceptance sequence for locked
+source-contract tests, Rust/frontend compilation, then coordinated
+developer-mode Local translation, Original Microphone, optional incoming
+and Codex diagnostics-only checks. Native Windows, audio and install
+evidence remain UNKNOWN until that separately authorized integrated
+phase runs. Do not dispatch paused CI, request per-change PC tests,
+activate Codex Voice or use paid inference.
