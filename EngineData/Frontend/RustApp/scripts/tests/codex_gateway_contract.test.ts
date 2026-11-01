@@ -6,6 +6,7 @@ const root = new URL("../../src-tauri/src/", import.meta.url);
 const read = (file: string) => readFileSync(new URL(file, root), "utf8");
 const gateway = read("commands/codex_gateway.rs");
 const transport = read("commands/codex_gateway/transport.rs");
+const fakeServer = read("commands/codex_gateway/transport/fake_app_server_tests.rs");
 const protocol = read("commands/codex_gateway/protocol.rs");
 const realtime = read("commands/codex_gateway/realtime.rs");
 const realtimeRpc = read("commands/codex_gateway/realtime_rpc.rs");
@@ -186,5 +187,49 @@ test("P6 keeps the account-only RPC allowlist and single read/write ownership", 
   assert.match(transport, /writer\.join\(\)/);
   assert.match(transport, /reader\.join\(\)/);
   assert.match(gateway, /realtime_audio_verified: false/);
+  assert.match(gateway, /meeting_route_enabled: false/);
+});
+
+
+test("P7 tests use the real owned JSONL reader/writer and response dispatcher", () => {
+  assert.match(transport, /mod fake_app_server_tests;/);
+  assert.match(transport, /fn submit_with_receipt/);
+  assert.match(transport, /fn recv_expected_response/);
+  assert.match(transport, /fn recv_idle_notification/);
+  assert.match(transport, /fn cleanup_proven/);
+  assert.match(transport, /submit_with_receipt\(&writer, body, deadline/);
+  assert.match(transport, /recv_expected_response\(/);
+  assert.match(fakeServer, /struct FakeCodexAppServer/);
+  assert.match(fakeServer, /impl Write for ScriptedStdin/);
+  assert.match(fakeServer, /impl Read for ScriptedStdout/);
+  assert.match(fakeServer, /write_jsonl\(/);
+  assert.match(fakeServer, /read_jsonl\(/);
+  assert.match(fakeServer, /submit_with_receipt\(/);
+  assert.match(fakeServer, /recv_expected_response\(/);
+  assert.match(fakeServer, /recv_idle_notification\(/);
+  assert.match(fakeServer, /cleanup_proven\(/);
+});
+
+test("P7 scenarios cover account changes, stalls, cancellation and exact IDs", () => {
+  for (const scenario of [
+    "scripted_account_notification_before_response_invalidates_same_rpc_probe",
+    "scripted_jsonl_fragments_keep_exact_request_identity",
+    "scripted_wrong_reply_id_is_not_reused_by_another_request",
+    "scripted_cancellation_rejects_a_late_success_and_does_not_replay",
+    "scripted_reply_after_deadline_cannot_complete_the_next_rpc",
+    "scripted_idle_account_change_and_unsolicited_reply_are_distinct",
+    "unsolicited_realtime_notification_is_rejected_by_the_real_idle_dispatch",
+    "simulated_stalled_writer_times_out_and_stop_remains_unverified_until_join",
+    "cancellation_ends_a_blocked_writer_wait_before_pipe_release",
+    "cleanup_uncertainty_never_promotes_a_clean_stop_marker",
+    "fake_transport_never_admits_voice_or_paid_inference",
+  ]) {
+    assert.ok(fakeServer.includes("fn " + scenario + "()"), scenario + " regression missing");
+  }
+  assert.match(fakeServer, /thread\/realtime\/start/);
+  assert.match(fakeServer, /codex_gateway:request_not_allowed/);
+  assert.doesNotMatch(fakeServer, /Command::new\(|codex app-server|OPENAI_API_KEY/);
+  assert.match(protocol, /"initialize" \| "account\/read" \| "account\/rateLimits\/read"/);
+  assert.match(gateway, /"experimentalApi": false/);
   assert.match(gateway, /meeting_route_enabled: false/);
 });

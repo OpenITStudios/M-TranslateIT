@@ -23,6 +23,109 @@ const WAIT_SLICE: Duration = Duration::from_millis(50);
 type WireEvent = Result<Inbound, &'static str>;
 type WriteReceipt = Result<(), &'static str>;
 
+/// The same cancellable write completion contract is used by the owned
+/// AppServer and the test-only in-memory fake. No second request policy.
+fn submit_with_receipt(
+    writer: &SyncSender<WriteCommand>,
+    body: Vec<u8>,
+    deadline: Instant,
+    mut check_live: impl FnMut() -> Result<(), &'static str>,
+) -> Result<(), &'static str> {
+    check_live()?;
+    let (completed, receipt) = mpsc::sync_channel(1);
+    match writer.try_send(WriteCommand { body, completed }) {
+        Ok(()) => {}
+        Err(TrySendError::Full(_)) => return Err("codex_gateway:writer_queue_full"),
+        Err(TrySendError::Disconnected(_)) => {
+            return Err("codex_gateway:writer_disconnected");
+        }
+    }
+    loop {
+        check_live()?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("codex_gateway:write_timeout");
+        }
+        match receipt.recv_timeout(remaining.min(WAIT_SLICE)) {
+            Ok(result) => return result,
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err("codex_gateway:write_receipt_lost");
+            }
+        }
+    }
+}
+
+/// Exact ID and account-notification dispatch for both the native owner and
+/// the scripted fake. No response payload is printed to logs or Debug.
+fn recv_expected_response(
+    receiver: &Receiver<WireEvent>,
+    expected_id: u64,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+    account_dirty: &mut bool,
+) -> Result<Option<Value>, &'static str> {
+    if cancelled.load(Ordering::Acquire) {
+        return Err("codex_gateway:cancelled");
+    }
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err("codex_gateway:rpc_timeout");
+    }
+    match receiver.recv_timeout(remaining.min(WAIT_SLICE)) {
+        Ok(Ok(Inbound::Response { id, result })) if id == expected_id => {
+            if cancelled.load(Ordering::Acquire) {
+                Err("codex_gateway:cancelled")
+            } else {
+                Ok(Some(result))
+            }
+        }
+        Ok(Ok(Inbound::Response { .. })) => {
+            Err("codex_gateway:unexpected_response_id")
+        }
+        Ok(Ok(Inbound::Notification { method, .. })) => {
+            if account_notification(&method)? {
+                *account_dirty = true;
+            }
+            Ok(None)
+        }
+        Ok(Err(reason)) => Err(reason),
+        Err(RecvTimeoutError::Timeout) => Ok(None),
+        Err(RecvTimeoutError::Disconnected) => {
+            Err("codex_gateway:reader_disconnected")
+        }
+    }
+}
+
+fn recv_idle_notification(
+    receiver: &Receiver<WireEvent>,
+    cancelled: &AtomicBool,
+) -> Result<bool, &'static str> {
+    if cancelled.load(Ordering::Acquire) {
+        return Err("codex_gateway:cancelled");
+    }
+    match receiver.recv_timeout(Duration::from_millis(100)) {
+        Ok(Ok(Inbound::Notification { method, .. })) => {
+            account_notification(&method)
+        }
+        Ok(Ok(Inbound::Response { .. })) => Err("codex_gateway:unsolicited_response"),
+        Ok(Err(reason)) => Err(reason),
+        Err(RecvTimeoutError::Timeout) => Ok(false),
+        Err(RecvTimeoutError::Disconnected) => {
+            Err("codex_gateway:reader_disconnected")
+        }
+    }
+}
+
+fn cleanup_proven(
+    child_reaped: bool,
+    writer_released: bool,
+    reader_released: bool,
+    cleanup_failure: Option<&'static str>,
+) -> bool {
+    child_reaped && writer_released && reader_released && cleanup_failure.is_none()
+}
+
 /// Deterministic notification admission shared by the request and idle loops.
 /// No Voice or tool notification is ever eligible in the account-only gateway.
 fn account_notification(method: &str) -> Result<bool, &'static str> {
@@ -280,40 +383,17 @@ impl AppServer {
         Ok(())
     }
 
-    /// Only one request is in flight. The writing thread has a one-slot queue
-    /// and the controller waits for the exact write receipt with a deadline.
-    /// A stalled child cannot block cancellation on write_all/flush.
+    /// One owned writer and one in-flight control request. The source-only
+    /// fake exercises the same cancellation and deadline helper.
     fn write_frame(
         &mut self,
         body: Vec<u8>,
         cancelled: &AtomicBool,
         deadline: Instant,
     ) -> Result<(), &'static str> {
-        self.check_live(cancelled)?;
-        let (completed, receipt) = mpsc::sync_channel(1);
         let writer = self.writer_tx.as_ref()
-            .ok_or("codex_gateway:writer_unavailable")?;
-        match writer.try_send(WriteCommand { body, completed }) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) => return Err("codex_gateway:writer_queue_full"),
-            Err(TrySendError::Disconnected(_)) => {
-                return Err("codex_gateway:writer_disconnected");
-            }
-        }
-        loop {
-            self.check_live(cancelled)?;
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err("codex_gateway:write_timeout");
-            }
-            match receipt.recv_timeout(remaining.min(WAIT_SLICE)) {
-                Ok(result) => return result,
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err("codex_gateway:write_receipt_lost");
-                }
-            }
-        }
+            .ok_or("codex_gateway:writer_unavailable")?.clone();
+        submit_with_receipt(&writer, body, deadline, || self.check_live(cancelled))
     }
 
     pub(super) fn request(
@@ -331,28 +411,14 @@ impl AppServer {
         self.write_frame(body, cancelled, deadline)?;
         loop {
             self.check_live(cancelled)?;
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err("codex_gateway:rpc_timeout");
-            }
-            match self.receiver.recv_timeout(remaining.min(WAIT_SLICE)) {
-                Ok(Ok(Inbound::Response { id, result })) if id == current_id => return Ok(result),
-                Ok(Ok(Inbound::Response { .. })) => {
-                    return Err("codex_gateway:unexpected_response_id");
-                }
-                Ok(Ok(Inbound::Notification { method, .. })) => {
-                    // While a request is in flight, an account switch cannot
-                    // be considered the same authenticated owner. A realtime
-                    // event is forbidden before explicit Voice admission.
-                    if account_notification(&method)? {
-                        self.account_dirty = true;
-                    }
-                }
-                Ok(Err(reason)) => return Err(reason),
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err("codex_gateway:reader_disconnected");
-                }
+            if let Some(result) = recv_expected_response(
+                &self.receiver,
+                current_id,
+                deadline,
+                cancelled,
+                &mut self.account_dirty,
+            )? {
+                return Ok(result);
             }
         }
     }
@@ -378,19 +444,9 @@ impl AppServer {
         cancelled: &AtomicBool,
     ) -> Result<bool, &'static str> {
         self.check_live(cancelled)?;
-        match self.receiver.recv_timeout(Duration::from_millis(100)) {
-            Ok(Ok(Inbound::Notification { method, .. })) => {
-                let changed = account_notification(&method)?;
-                self.account_dirty |= changed;
-                Ok(changed)
-            },
-            Ok(Ok(Inbound::Response { .. })) => Err("codex_gateway:unsolicited_response"),
-            Ok(Err(reason)) => Err(reason),
-            Err(RecvTimeoutError::Timeout) => Ok(false),
-            Err(RecvTimeoutError::Disconnected) => {
-                Err("codex_gateway:reader_disconnected")
-            }
-        }
+        let changed = recv_idle_notification(&self.receiver, cancelled)?;
+        self.account_dirty |= changed;
+        Ok(changed)
     }
 
     /// A false result retains this exact owner. Completion requires the
@@ -430,7 +486,12 @@ impl AppServer {
                 return Err("codex_gateway:reader_join_failed");
             }
         }
-        Ok(self.child_reaped && self.writer.is_none() && self.reader.is_none())
+        Ok(cleanup_proven(
+            self.child_reaped,
+            self.writer.is_none(),
+            self.reader.is_none(),
+            self.cleanup_failure,
+        ))
     }
 }
 
@@ -451,6 +512,9 @@ impl Drop for AppServer {
         }
     }
 }
+
+#[cfg(test)]
+mod fake_app_server_tests;
 
 #[cfg(test)]
 mod tests {

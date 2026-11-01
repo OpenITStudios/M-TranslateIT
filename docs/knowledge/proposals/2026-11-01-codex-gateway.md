@@ -281,6 +281,38 @@ are authored, **NOT EXECUTED**. No compiler, installed Codex CLI, Windows
 stdio stall, target-Microphone, live meeting, or ChatGPT Voice entitlement
 evidence has been collected.
 
+## Phase 7: deterministic in-memory fake App Server — TEST SOURCE ONLY
+
+A test-only module at `commands/codex_gateway/transport/fake_app_server_tests.rs`
+now drives the SAME `write_jsonl` and `read_jsonl` production helpers with
+small in-memory byte channels. The request/writer code shares its
+`submit_with_receipt` wait contract; the response/notification code shares
+`recv_expected_response` and `recv_idle_notification`. This is not a
+second App Server executable, network client, fake account entitlement or
+alternative production control owner. Only `#[cfg(test)]` references the
+fixture; no diagnostic/Meeting command launches it.
+
+The scripted test cases cover:
+- JSONL fragmentation across reads and exact RPC ID matching;
+- account-change notification before a successful response;
+- unsolicited account notification versus mismatched response ID;
+- cancellation while waiting for a late response and cancellation while a
+  simulated stdin writer is blocked;
+- a response arriving after the deadline, which must never satisfy a newer
+  request;
+- bounded writer timeout, no retries, and an explicit channel-release path;
+- cleanup that stays unverified until all owned readers/writers are joined;
+- denial of unadmitted Realtime notifications and the existing paid/Voice
+  RPC boundary.
+
+The simulated writer blocking is released by an explicit channel signal; it
+does NOT establish that Windows pipes, external descendants, or operating
+system process teardown will behave identically. Test bodies and the
+TypeScript source contract have been authored but **NOT EXECUTED**.
+No real Codex account, API usage, cloud audio, TTS, Windows environment or
+device has been accessed. Failure paths retain enumerated, redacted errors
+and cannot promote an unknown shutdown to a verified one.
+
 ## Translation commit and resource ownership
 
 One future internal result contract should carry session ID, generation,
@@ -331,10 +363,9 @@ incremental user-PC or hosted CI requirements.
   while Codex translation Start and source switching are explicitly blocked
   until admission. Streaming audio and release bundling are NOT enabled.
 
-**Next source work:** prepare one deterministic fake App Server integration
-fixture around the now-owned writer/reader to exercise cancellation, delayed
-responses, account-change interleaving and incomplete Stop during the later
-integrated local source run. Do not run incremental local tests, enable CI, or
-turn on any paid or unverified Codex Voice route. Actual installed CLI,
-WebRTC connection, included Voice entitlement, translation fidelity and
-target-Windows audio acceptance remain UNKNOWN.
+**Next source work:** harden the existing Codex Gateway's fatal
+cleanup/retry boundary when a reader or writer join permanently fails, while
+preserving process ownership and never treating unverified cleanup as a
+successful Stop. Keep this source-only until the later integrated native
+acceptance; do not dispatch paused CI, run cloud inference, enable
+experimental Voice, or ask for per-commit user-PC tests.
