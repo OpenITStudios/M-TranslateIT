@@ -851,6 +851,37 @@ arriving after a successful persistence receipt are not guaranteed
 by this source-only optimistic-concurrency contract.
 Codex Voice/cloud inference and paid fallback are still not admitted.
 
+## Codex text-only source candidate — 2026-11-06 (OFFLINE / NOT ADMITTED)
+
+At upstream openai/codex `0327a3ec34fd8fe9454eb57151a3798f127a53bf`,
+App Server v2 exposes ephemeral `thread/start` and `turn/start` text requests
+and optional JSON output schemas. The existing gateway now owns one
+`text.rs` **source-only** adapter: one independent bounded finalized
+utterance, strict ID↔EN direction, structured single-field output, exact
+thread/turn/generation/epoch/sequence binding, one-shot final acceptance
+and rejection of ambiguous, incomplete, oversized or tool-bearing results.
+It performs no model requests, is not registered in the account-only JSONL
+allowlist and cannot produce a Meeting translation commit or TTS output.
+
+**Safety gate:** Codex is a coding agent, not a proven tool-free translator.
+`sandbox=read-only` and `approvalPolicy=never` do not prohibit all
+tool invocations or prevent their side effects. Post-hoc rejection of
+`commandExecution`/MCP/file/web items is only forensic evidence; no
+live tool-free entitlement, text translation correctness, included usage,
+cloud privacy boundary, GPU savings or latency has been verified.
+Do not connect these source-only shapes to App Server, Meeting, or the
+existing Python worker until a supported pre-execution no-tool gate and
+usage/cost are established. Preserve the Local pipeline and current
+selection blocks; no silent fallback.
+
+**Efficiency and quality acceptance:** one completed utterance, one model
+turn with no prior-turn context or correction-chain, no interim TTS, the
+existing 28-case fast and full translation-quality corpora, and later
+paired stage/first-playback P50/P95 plus device VRAM observations. No
+runtime improvement is claimed. Rust unit/TS source contracts are
+AUTHORED, NOT EXECUTED; CI, cloud inference and Windows tests remain
+disabled/deferred pending explicit owner authorization.
+
 ## Translation commit and resource ownership
 
 One future internal result contract should carry session ID, generation,

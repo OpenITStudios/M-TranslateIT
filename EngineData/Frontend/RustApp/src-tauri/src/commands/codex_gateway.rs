@@ -5,6 +5,7 @@
 
 mod compatibility;
 mod correlation;
+mod text;
 mod protocol;
 mod realtime;
 mod realtime_rpc;

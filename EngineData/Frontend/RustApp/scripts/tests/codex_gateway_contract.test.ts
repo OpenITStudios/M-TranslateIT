@@ -11,6 +11,7 @@ const compatibility = read("commands/codex_gateway/compatibility.rs");
 const protocol = read("commands/codex_gateway/protocol.rs");
 const realtime = read("commands/codex_gateway/realtime.rs");
 const realtimeRpc = read("commands/codex_gateway/realtime_rpc.rs");
+const offlineText = read("commands/codex_gateway/text.rs");
 const correlation = read("commands/codex_gateway/correlation.rs");
 const registry = read("commands/registry.rs");
 const shutdown = read("commands/application_runtime/shutdown.rs");
@@ -337,4 +338,26 @@ test("P10 rejects stale account and provider claims before notifications are deq
   assert.match(gateway, /meeting_route_enabled: false/);
   assert.doesNotMatch(transport, /realtime_rpc::/);
   assert.doesNotMatch(protocol, /"thread\/realtime\/start" \|/);
+});
+
+test("Codex text candidate cannot send inference, execute tools or commit to Meeting", () => {
+  assert.match(gateway, /mod text;/);
+  assert.match(offlineText, /fn offline_thread_start\(/);
+  assert.match(offlineText, /fn offline_turn_start\(/);
+  assert.match(offlineText, /"ephemeral": true/);
+  assert.match(offlineText, /"sandbox": "read-only"/);
+  assert.match(offlineText, /"approvalPolicy": "never"/);
+  assert.match(offlineText, /"outputSchema"/);
+  assert.match(offlineText, /"additionalProperties": false/);
+  assert.match(offlineText, /MAX_SOURCE_BYTES: usize = 4 \* 1024/);
+  assert.match(offlineText, /codex_text:foreign_thread/);
+  assert.match(offlineText, /codex_text:items_not_fully_loaded/);
+  assert.match(offlineText, /codex_text:tool_or_unknown_item/);
+  assert.match(offlineText, /codex_text:ambiguous_final/);
+  assert.match(offlineText, /fn rejects_wrong_direction_empty_oversized_or_unsafe_source/);
+  assert.match(offlineText, /fn exact_one_shot_final_or_explicit_failure_never_admits_tools/);
+  assert.doesNotMatch(offlineText, /Command::new|send_helper_worker_task|voice_actor_synthesize|commit_meeting_turn|deliver_meeting_output/);
+  assert.doesNotMatch(transport, /text::|thread\/start|turn\/start/);
+  assert.doesNotMatch(protocol, /"turn\/start" \|/);
+  assert.match(gateway, /meeting_route_enabled: false/);
 });
