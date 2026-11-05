@@ -420,6 +420,58 @@ def evaluate(
     }
 
 
+def triage_case(corpus: dict, bundle: dict, case_id: str) -> dict:
+    """Inspect one existing case; never treat a declared result as model proof."""
+    case = next((item for item in corpus["cases"] if item["id"] == case_id), None)
+    if case is None:
+        raise ValueError(f"unknown translation quality case id: {case_id}")
+    report = evaluate(
+        corpus, bundle["results"],
+        result_corpus_fingerprint=bundle.get("corpus_fingerprint", ""),
+        source_identity=bundle.get("source_identity", ""),
+    )
+    row = next(item for item in report["cases"] if item["case_id"] == case_id)
+    request = next(item["request"] for item in emit_requests(corpus)["requests"]
+                   if item["case_id"] == case_id)
+    present = case_id in bundle["results"]
+    evidence_complete = bool(
+        report["complete_result_set"]
+        and bundle.get("corpus_fingerprint")
+        and bundle.get("source_identity")
+    )
+    return {
+        "schema": "translateit.translation_quality.case_triage.v1",
+        "case_id": case_id,
+        "suite": "fast" if corpus.get("selection") else "full",
+        "full_regression_evaluated": not bool(corpus.get("selection")),
+        "corpus_fingerprint": report["corpus_fingerprint"],
+        "result_corpus_fingerprint": bundle.get("corpus_fingerprint") or None,
+        "declared_source_identity": bundle.get("source_identity") or None,
+        "result_file_sha256": bundle.get("result_file_sha256"),
+        "complete_result_set": report["complete_result_set"],
+        "case_present": present,
+        "declared_provenance_complete": evidence_complete,
+        "triage_status": row["quality_status"] if present and evidence_complete else "UNVERIFIED",
+        "direction": case["direction"],
+        "risk_tags": list(case.get("risk_tags", [])),
+        "source": case["source"],
+        "references": list(case["references"]),
+        "request": request,
+        "translated_text": bundle["results"].get(case_id) if present else None,
+        "declared_checks": {
+            key: row[key] for key in (
+                "quality_status", "critical_pass", "critical_issue_types",
+                "missing_literals", "missing_concepts", "forbidden_hits", "ordered_match",
+            )
+        },
+        "note": (
+            "Read-only declared-check triage, not independent model execution or "
+            "human semantic review. FAIL/REVIEW need adjudication; PASS covers "
+            "only declared invariants. Never use this report for promotion."
+        ),
+    }
+
+
 def compare_reports(
     corpus: dict,
     baseline_results: dict[str, str],
@@ -666,7 +718,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "command",
-        choices=("validate-corpus", "stats", "emit-requests", "evaluate", "compare", "regrade-retained"),
+        choices=("validate-corpus", "stats", "emit-requests", "evaluate", "compare", "regrade-retained", "triage-case"),
     )
     parser.add_argument("--corpus", type=Path, required=True)
     parser.add_argument("--original-corpus", type=Path)
@@ -675,6 +727,7 @@ def main() -> int:
     parser.add_argument("--results", type=Path)
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--candidate", type=Path)
+    parser.add_argument("--case-id")
     args = parser.parse_args()
     corpus = select_suite(load_corpus(args.corpus), args.suite)
     if args.command == "validate-corpus":
@@ -687,6 +740,17 @@ def main() -> int:
     if args.command == "emit-requests":
         print(json.dumps(emit_requests(corpus), ensure_ascii=False, indent=2))
         return 0
+    if args.command == "triage-case":
+        if args.results is None or args.case_id is None:
+            parser.error("--results and --case-id are required for triage-case")
+        try:
+            bundle = load_result_bundle(args.results)
+            report = triage_case(corpus, bundle, args.case_id)
+        except (OSError, ValueError) as error:
+            print(json.dumps({"ok": False, "blocker": str(error)}, ensure_ascii=False, indent=2))
+            return 1
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0 if report["declared_provenance_complete"] else 1
     if args.command == "regrade-retained":
         if args.original_corpus is None or args.results is None:
             parser.error("--original-corpus and --results required for retained regrading")

@@ -142,6 +142,29 @@ execution evidence. In-process grading time does not prove model or native
 latency. The existing audio core profile remains the executable audio-stage
 integration gate; a direct translation selection cannot replace it.
 
+### Investigate one translation case
+
+Use the canonical evaluator to inspect the exact source, references, request,
+captured output and declared failures for one existing case:
+
+```powershell
+python -X utf8 tools/translation_quality/evaluate_translation_quality.py triage-case --corpus tools/translation_quality/corpus/translation_quality_v1.json --results <full-worker-report.json> --case-id en-id-budget-purpose-001
+```
+
+For `--suite fast`, supply a corresponding actual fast-suite result bundle.
+The read-only command performs no inference and never modifies the corpus.
+Missing case output, incomplete selected results, a missing source identity or
+an absent/mismatched corpus fingerprint yields `UNVERIFIED` for triage.
+The underlying declared checks remain visible for diagnosis; they are not a
+human semantic judgement. A zero exit code reports only declared provenance
+completeness, **not** translation correctness or verified model execution.
+The result file digest identifies exact inspected bytes, not real-model proof.
+Do not publish case-level reports containing private conversation text.
+
+Treat unexpected additions as hypotheses for bilingual review, not automatic
+permission to rewrite model output. Candidate promotion still requires the
+existing full comparison and held-out bilingual evaluation.
+
 ### Execute the selected translation stage
 
 The existing persistent-worker runner accepts the same selection. From a clean,

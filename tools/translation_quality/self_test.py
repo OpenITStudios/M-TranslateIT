@@ -125,6 +125,46 @@ def main() -> int:
     assert report["verdict"] == "PASS"
     assert report["quality_counts"]["REVIEW"] == report["quality_counts"]["FAIL"] == 0
     assert report["corpus_fingerprint"] == fingerprint
+    # Case triage reuses the canonical evaluator rather than a new judge.
+    ident = "en-id-budget-purpose-001"
+    proof = {"results": perfect, "corpus_fingerprint": fingerprint,
+             "source_identity": "synthetic-reference-only", "result_file_sha256": "f" * 64}
+    triage = evaluator.triage_case(corpus, proof, ident)
+    assert triage["triage_status"] == "PASS"
+    assert triage["declared_provenance_complete"]
+    assert triage["request"]["text"] == cases_by_id[ident]["source"]
+    assert "context_pairs" not in triage["request"]
+    assert triage["result_file_sha256"] == "f" * 64
+    invented = "Anggaran pembangunannya adalah lima belas juta rupiah."
+    flagged = evaluator.triage_case(
+        corpus, {**proof, "results": {**perfect, ident: invented}}, ident
+    )
+    assert flagged["triage_status"] == "FAIL"
+    assert "pembangun" in flagged["declared_checks"]["forbidden_hits"]
+    assert flagged["translated_text"] == invented
+    missing = evaluator.triage_case(
+        corpus, {**proof, "results": {k: v for k, v in perfect.items() if k != ident}}, ident
+    )
+    assert missing["triage_status"] == "UNVERIFIED"
+    assert missing["translated_text"] is None
+    stale = evaluator.triage_case(
+        corpus, {**proof, "corpus_fingerprint": "0" * 64}, ident
+    )
+    assert stale["triage_status"] == "UNVERIFIED"
+    unbound = evaluator.triage_case(corpus, {**proof, "source_identity": ""}, ident)
+    assert unbound["triage_status"] == "UNVERIFIED"
+    fast_triage = evaluator.triage_case(
+        fast, {"results": fast_perfect, "corpus_fingerprint": fast_fingerprint,
+               "source_identity": "synthetic-fast-only"}, ident
+    )
+    assert fast_triage["suite"] == "fast"
+    assert not fast_triage["full_regression_evaluated"]
+    try:
+        evaluator.triage_case(corpus, proof, "no-such-case")
+    except ValueError as error:
+        assert "unknown translation quality case id" in str(error)
+    else:
+        raise AssertionError("case triage accepted unknown case")
     assert report["provenance_matches_corpus"] is True
     assert report["group_critical_pass_rates"]["id-en"] == 1.0
     assert report["group_critical_pass_rates"]["contextual_meeting"] == 1.0
