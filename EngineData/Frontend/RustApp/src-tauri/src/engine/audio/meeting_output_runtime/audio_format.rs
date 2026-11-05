@@ -263,25 +263,42 @@ pub(super) fn prepare_output_samples(
         return Err("meeting_output:prepared_audio_too_large".to_string());
     }
     let target_frames = target_frames as usize;
-    let mut mono = Vec::new();
-    mono.try_reserve_exact(source_frames)
-        .map_err(|_| "meeting_output:prepared_audio_allocation_failed".to_string())?;
-    for frame in source.samples.chunks_exact(source_channels) {
-        let sum = frame.iter().copied().sum::<f32>();
-        mono.push(sum / source_channels as f32);
-    }
-
     let mut output = Vec::new();
     output
         .try_reserve_exact(output_samples as usize)
         .map_err(|_| "meeting_output:prepared_audio_allocation_failed".to_string())?;
+
+    // Preserve the existing f32 downmix and linear interpolation, but avoid
+    // allocating a full mono copy of every source frame. Adjacent output
+    // frames usually reuse the same two source averages, especially when
+    // upsampling, so retain only that pair in a tiny rolling cache.
+    let frame_mono = |frame: usize| {
+        let start = frame * source_channels;
+        let sum = source.samples[start..start + source_channels]
+            .iter().copied().sum::<f32>();
+        sum / source_channels as f32
+    };
+    let mut cached_lower = None;
+    let mut lower_mono = 0.0_f32;
+    let mut upper_mono = 0.0_f32;
     for target_index in 0..target_frames {
         let source_position =
             target_index as f64 * source.sample_rate_hz as f64 / target_rate_hz as f64;
         let lower = source_position.floor() as usize;
-        let upper = (lower + 1).min(mono.len() - 1);
+        let upper = (lower + 1).min(source_frames - 1);
+        if cached_lower != Some(lower) {
+            // When progressing by one source frame, the old upper value is
+            // exactly the next lower value. A downsample jump recalculates it.
+            lower_mono = if cached_lower.is_some_and(|previous| previous + 1 == lower) {
+                upper_mono
+            } else {
+                frame_mono(lower)
+            };
+            upper_mono = if upper == lower { lower_mono } else { frame_mono(upper) };
+            cached_lower = Some(lower);
+        }
         let fraction = (source_position - lower as f64) as f32;
-        let value = mono[lower] + (mono[upper] - mono[lower]) * fraction;
+        let value = lower_mono + (upper_mono - lower_mono) * fraction;
         for _ in 0..target_channels {
             output.push(value.clamp(-1.0, 1.0));
         }
@@ -328,5 +345,89 @@ mod read_consistency_tests {
             "partial read must fail despite equal metadata");
         drop(file);
         fs::remove_file(path).expect("cleanup temporary fixture");
+    }
+}
+
+#[cfg(test)]
+mod resampling_buffer_tests {
+    use super::{prepare_output_samples, DecodedWav};
+
+    // Reference implementation is deliberately test-only: it is the old
+    // full-mono-buffer algorithm. Production keeps only two source averages.
+    fn previous_resampling_output(
+        source: &DecodedWav, target_rate_hz: u32, target_channels: u16,
+    ) -> Vec<f32> {
+        let source_channels = usize::from(source.channels);
+        let mono: Vec<f32> = source.samples.chunks_exact(source_channels)
+            .map(|frame| frame.iter().copied().sum::<f32>() / source_channels as f32)
+            .collect();
+        let target_frames = (mono.len() as u128 * u128::from(target_rate_hz))
+            .div_ceil(u128::from(source.sample_rate_hz)) as usize;
+        let mut output = Vec::new();
+        for target_index in 0..target_frames {
+            let position =
+                target_index as f64 * source.sample_rate_hz as f64 / target_rate_hz as f64;
+            let lower = position.floor() as usize;
+            let upper = (lower + 1).min(mono.len() - 1);
+            let fraction = (position - lower as f64) as f32;
+            let value = mono[lower] + (mono[upper] - mono[lower]) * fraction;
+            for _ in 0..target_channels {
+                output.push(value.clamp(-1.0, 1.0));
+            }
+        }
+        output
+    }
+
+    #[test]
+    fn rolling_source_frame_averages_preserve_mono_and_multichannel_samples() {
+        let cases = [
+            (16_000_u32, 48_000_u32, 2_u16, 2_u16,
+             vec![0.8, -0.4, 0.0, 0.6, -0.8, 0.2, 0.1, -0.1]),
+            (48_000, 8_000, 2, 1,
+             vec![0.1, 0.4, 0.3, -0.1, -0.3, 0.5, 0.6, 0.4,
+                  -0.1, -0.5, 0.9, 0.1, -0.9, -0.3, 0.7, 0.5]),
+            (22_050, 44_100, 1, 2, vec![-1.0, -0.5, 0.5, 1.0]),
+            (44_100, 16_000, 4, 1,
+             vec![0.1, 0.2, 0.3, 0.4, -0.5, 0.0, 0.5, 1.0,
+                  -0.2, -0.1, 0.6, 0.7, 0.4, -0.4, -0.4, 0.4]),
+            (16_000, 48_000, 1, 1, vec![0.5]),
+        ];
+        for (source_rate, target_rate, source_channels, target_channels, samples) in cases {
+            let source = DecodedWav {
+                sample_rate_hz: source_rate,
+                channels: source_channels,
+                samples,
+            };
+            let expected = previous_resampling_output(&source, target_rate, target_channels);
+            let actual = prepare_output_samples(&source, target_rate, target_channels)
+                .expect("bounded resampling fixture");
+            assert_eq!(actual, expected, "rate {source_rate}->{target_rate}, channels {source_channels}->{target_channels}");
+        }
+    }
+
+    #[test]
+    fn resampling_rejects_overexpanded_output_before_allocating() {
+        let source = DecodedWav {
+            sample_rate_hz: 8_000,
+            channels: 1,
+            samples: vec![0.0; 200_000],
+        };
+        assert_eq!(
+            prepare_output_samples(&source, 192_000, 8).unwrap_err(),
+            "meeting_output:prepared_audio_too_large",
+        );
+    }
+
+    #[test]
+    fn resampling_empty_or_invalid_direction_stays_empty() {
+        let source = DecodedWav {
+            sample_rate_hz: 16_000,
+            channels: 1,
+            samples: Vec::new(),
+        };
+        assert!(prepare_output_samples(&source, 48_000, 2).unwrap().is_empty());
+        let one_frame = DecodedWav { samples: vec![0.5], ..source };
+        assert!(prepare_output_samples(&one_frame, 0, 2).unwrap().is_empty());
+        assert!(prepare_output_samples(&one_frame, 48_000, 0).unwrap().is_empty());
     }
 }
