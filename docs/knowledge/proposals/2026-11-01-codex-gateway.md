@@ -221,9 +221,9 @@ transcripts may be considered for later admission. This does not prove
 audio input entitlement under the ChatGPT subscription, source/response
 causality, provider translation fidelity, low latency or zero additional
 charges. No production Voice route is enabled.
-The RPC encoder does not create a Codex thread, initiate WebRTC peer
-negotiation, or authenticate Voice. A real media/data-channel owner is not
-yet implemented.
+The RPC encoder does not create a Codex thread, connect to a WebRTC peer,
+or authenticate Voice. A separate WebView2 WebRTC signalling candidate
+exists below, but no production Meeting/Codex owner invokes it.
 
 The offline RealtimeObserver also distinguishes a typed
 `realtimeSessionClosed` item with `outcome=ended` (clean) from
@@ -275,13 +275,52 @@ pre-execution tool restriction and final-text source binding are still
 missing, and the provider must not receive private speech until those
 permissions exist.
 
-The upstream browser/TUI still owns WebRTC offer/answer and ICE media
-negotiation externally. TranslateIT has no WebRTC peer yet: there is
-no media connection, no audio upload and no output playback. Before
-promotion, the single owned session must correlate actual realtime
-items with source windows and prove safe Stop, receiving network
-interruptions, and input speech privacy. Typed SDP envelopes or write
-receipts are not connectivity or transcription proof.
+## P24: WebView2 WebRTC SDP/ICE peer — SOURCE CANDIDATE ONLY
+
+The existing Tauri WebView renderer now has a dedicated, uninvoked
+`src/app/bridge/codexRealtimePeer.ts` signalling helper. It creates
+one browser-native `RTCPeerConnection`, negotiates an audio SDP m-line
+and the reliable ordered `oai-events` data channel, waits for ICE
+gathering before returning a **bounded, ASCII SDP offer**, accepts only
+a matching-generation/source-epoch remote SDP answer, and requires
+both the ICE/peer connection and event channel to be open before
+reporting `signalling-ready`. It has deterministic Stop/revoke,
+connection-failure, unexpected-channel and cancellation behavior.
+Both SDP text and native peer state are deliberately excluded from
+diagnostics, and remote cloud audio tracks are stopped on arrival.
+
+**No duplicate microphone:** this helper never invokes `getUserMedia`,
+creates an AudioContext or installs a local outgoing track. Its
+`recvonly` audio m-line is for negotiating the peer; the existing Rust
+24-kHz `appendAudio` queue is the intended audio source. In upstream
+Codex, the native voice host instead attaches an outgoing audio track,
+so compatibility of a recvonly SDP plus sideband appendAudio is
+**UNVERIFIED**. Real provider acceptance, ICE reachability, audio media,
+and Windows WebView2 capability all remain UNKNOWN. No default STUN/TURN
+server or third-party media relay is introduced.
+
+No frontend or Rust production caller constructs this peer yet.
+`codex_gateway.rs` still initializes `experimentalApi=false` and
+the sealed `VerifiedMediaAuthority` has no production constructor;
+no SDP is sent and no audio/translation is generated. The data channel
+is **not** a second event processor: its messages are ignored while the
+existing Rust App Server owns role-bearing translation observations.
+A peer-connected state is not account Voice entitlement, safe
+tool-free execution, source-response correlation, or Meeting readiness.
+A later authorized owner must join SDP across Tauri/Rust using the same
+Meeting generation, source epoch, cancellation and Stop transaction.
+Do not promote the candidate to Live or GPT-SoVITS on SDP alone.
+
+Upstream source pinned for this peer contract:
+`openai/codex@af92ae158d2c9cb79cf745d609694c5a76d527b0`,
+`codex-rs/app-server-protocol/src/protocol/v2/realtime.rs` (WebRTC
+SDP) and `codex-rs/voice-host/src/transport.rs` (ordered
+`oai-events` channel).
+
+Before promotion, the single owned session must correlate actual
+realtime items with authoritative source windows and prove safe Stop,
+transport failures, media consent, and input speech privacy. Typed SDP
+or writer receipts do not prove a working translation.
 
 The source-only integration now composes the **existing** queue and wire
 encoder: `AudioFrameQueue.pending_state` distinguishes empty from revoked;
@@ -341,8 +380,8 @@ and an existing TypeScript source-contract test were **authored, not run**.
 allowlist contains `initialize`, `account/gatewayOAuth/read`,
 `account/read` and `account/rateLimits/read`; it contains no model,
 login-action or Voice RPC. `transport.rs` does not invoke the P5 codec;
-there is no TCP/WebRTC peer, audio upload, TTS emission, experimental API
-activation or Meeting route. A mocked envelope may be inspected in a Rust
+there is no production WebRTC peer, audio upload, TTS emission,
+experimental API activation or Meeting route. A mocked envelope may be inspected in a Rust
 unit test but cannot pass the P1 RPC allowlist. This is executable source
 preparation, not proof of account Voice availability or latency.
 
