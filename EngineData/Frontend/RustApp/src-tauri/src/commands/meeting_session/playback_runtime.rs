@@ -240,14 +240,13 @@ fn process_playback_job(mut job: PreparedPlaybackJob, last_sequence: &mut u64) {
         drop(suppression_guard);
         return;
     }
-    // The WAV was first checked when TTS completed. Re-check the original
-    // session-owned path immediately before native decoding: queued work must
-    // not follow a substituted symlink or use an expired/missing file.
-    // This cannot prevent an external writer from mutating file bytes after
-    // this check; the canonical decoder remains the audio-format authority.
-    let owned_file = if prepared_tts_output_still_owned(
-        &job.requested_tts_path, &job.actual_tts_path,
-    ) {
+    // The TTS-admitted File already pins the audio identity. One metadata
+    // comparison at dequeue replaces repeated path canonicalization and
+    // rejects a missing/substituted session WAV. The canonical decoder still
+    // checks bytes and any detectable mutation during its one bounded read.
+    let owned_file = if job.opened_tts_file.as_ref().is_some_and(|file| {
+        prepared_tts_output_still_owned(&job.requested_tts_path, file)
+    }) {
         job.opened_tts_file.take()
     } else {
         None

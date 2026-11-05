@@ -157,12 +157,38 @@ fn open_verified_tts_output_in_dir(
     Some((path, opened))
 }
 
-// Reuse the original path gate as a last-moment P11 check, while the P13
-// decoder reads the already-opened file rather than resolving its pathname.
-pub(super) fn prepared_tts_output_still_owned(requested_path: &str, actual_path: &str) -> bool {
-    verified_tts_output_in_dir(
-        &meeting_tts_directory(), requested_path, actual_path,
-    ).is_some()
+// P15: the queue already owns the accepted TTS file handle. Recheck the
+// original requested directory entry against that same handle, rather than
+// repeating P10's canonicalize/report-path checks at every dequeue. Unix
+// identity uses dev/inode; Windows retains the P14 protected read handle and
+// best-effort metadata identity. No re-open and no WAV-byte read here.
+fn prepared_tts_output_still_owned_in_dir(
+    tts_dir: &Path,
+    requested_path: &str,
+    opened_file: &fs::File,
+) -> bool {
+    let Some(expected) = expected_tts_path_in_dir(tts_dir, requested_path) else {
+        return false;
+    };
+    let Ok(entry) = fs::symlink_metadata(&expected) else {
+        return false;
+    };
+    if !entry.file_type().is_file() || entry.len() <= MIN_MEETING_TTS_WAV_BYTES {
+        return false;
+    }
+    let Ok(opened_metadata) = opened_file.metadata() else {
+        return false;
+    };
+    checked_tts_metadata_matches_open(&entry, &opened_metadata)
+}
+
+pub(super) fn prepared_tts_output_still_owned(
+    requested_path: &str,
+    opened_file: &fs::File,
+) -> bool {
+    prepared_tts_output_still_owned_in_dir(
+        &meeting_tts_directory(), requested_path, opened_file,
+    )
 }
 
 pub(super) fn remove_temporary_tts_paths(requested_path: &str, _reported_path: &str) {
@@ -777,8 +803,8 @@ mod tests {
     use super::{
         cleanup_meeting_tts_for_scope_in_dir, cleanup_meeting_tts_for_session_in_dir,
         checked_tts_metadata_matches_open, expected_tts_path_in_dir,
-        open_verified_tts_output_in_dir, remove_temporary_tts_paths_in_dir,
-        tts_output_path, verified_tts_output_in_dir,
+        open_verified_tts_output_in_dir, prepared_tts_output_still_owned_in_dir,
+        remove_temporary_tts_paths_in_dir, tts_output_path, verified_tts_output_in_dir,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1057,6 +1083,53 @@ mod tests {
         drop(held);
         assert!(fs::OpenOptions::new().write(true).open(&path).is_ok(),
             "write access returns after the last queued handle closes");
+        fs::remove_dir_all(root).expect("remove fixture");
+    }
+
+
+    #[test]
+    fn queued_tts_recheck_uses_the_admitted_open_handle() {
+        let root = temp_wav("queued-handle-recheck").with_extension("");
+        fs::create_dir_all(&root).expect("create TTS fixture");
+        let request = tts_output_path("session-a", 7, 11);
+        let path = root.join("session-a_g7_s11.wav");
+        fs::write(&path, one_frame_pcm16_wav()).expect("create admitted WAV");
+        let (_, held) = open_verified_tts_output_in_dir(
+            &root, &request, path.to_string_lossy().as_ref(),
+        ).expect("pin admitted file");
+        assert!(prepared_tts_output_still_owned_in_dir(&root, &request, &held));
+        assert!(!prepared_tts_output_still_owned_in_dir(
+            &root, &tts_output_path("session-b", 7, 11), &held,
+        ), "foreign session has no access to this prepared output");
+        drop(held);
+        fs::remove_dir_all(root).expect("remove fixture");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn queued_same_size_path_replacement_cannot_pass_handle_recheck() {
+        let root = temp_wav("queued-identity-replacement").with_extension("");
+        fs::create_dir_all(&root).expect("create fixture");
+        let request = tts_output_path("session-a", 7, 11);
+        let path = root.join("session-a_g7_s11.wav");
+        let retained = root.join("old.wav");
+        let original = one_frame_pcm16_wav();
+        let mut replacement = original.clone();
+        replacement[44] = 0x7f;
+        fs::write(&path, &original).expect("create original");
+        let (_, held) = open_verified_tts_output_in_dir(
+            &root, &request, path.to_string_lossy().as_ref(),
+        ).expect("pin original inode");
+        assert!(prepared_tts_output_still_owned_in_dir(&root, &request, &held));
+        fs::rename(&path, &retained).expect("move original pathname");
+        fs::write(&path, &replacement).expect("write same-size replacement");
+        assert_eq!(original.len(), replacement.len());
+        assert!(!prepared_tts_output_still_owned_in_dir(&root, &request, &held),
+            "path lookup cannot replace the queued handle identity");
+        fs::remove_file(&path).expect("remove replacement");
+        assert!(!prepared_tts_output_still_owned_in_dir(&root, &request, &held),
+            "missing original path cannot be delivered");
+        drop(held);
         fs::remove_dir_all(root).expect("remove fixture");
     }
 
