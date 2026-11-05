@@ -82,6 +82,15 @@ fn verified_tts_output_in_dir(
     Some(resolved_expected)
 }
 
+// A queued file can disappear or become a symlink before the playback thread
+// reaches it. Reuse the same owned-path gate at the last source-level
+// boundary; do not create a second WAV decoder or trust the queued pathname.
+pub(super) fn prepared_tts_output_still_owned(requested_path: &str, actual_path: &str) -> bool {
+    verified_tts_output_in_dir(
+        &meeting_tts_directory(), requested_path, actual_path,
+    ).is_some()
+}
+
 pub(super) fn remove_temporary_tts_paths(requested_path: &str, _reported_path: &str) {
     // Deleting an arbitrary path supplied by a worker response is not safe.
     // Resolve the single requested file from the app-owned cache root instead.
@@ -160,7 +169,10 @@ fn cleanup_meeting_tts_for_scope_in_dir(
         let file_type = entry
             .file_type()
             .map_err(|_| "meeting_tts_cleanup:file_type_failed".to_string())?;
-        if !file_type.is_file() {
+        // Stop may encounter a symlink created after TTS admission. Removing
+        // a matching link removes only that directory entry, not its target.
+        // Do not follow directory links or delete arbitrary foreign files.
+        if !file_type.is_file() && !file_type.is_symlink() {
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -818,10 +830,22 @@ mod tests {
         let expected = root.join("session-a_g7_s11.wav");
         let foreign = root.join("session-b_g7_s11.wav");
         fs::write(&foreign, one_frame_pcm16_wav()).expect("write foreign session audio");
-        symlink(&foreign, &expected).expect("create internal symlink");
-        assert!(verified_tts_output_in_dir(
+        fs::write(&expected, one_frame_pcm16_wav()).expect("write initially owned audio");
+        let approved = verified_tts_output_in_dir(
             &root, &requested, expected.to_string_lossy().as_ref(),
-        ).is_none(), "same-directory symlink must not borrow foreign audio");
+        ).expect("initial regular WAV is owned");
+        // Simulate replacement during the playback queue delay.
+        fs::remove_file(&expected).expect("remove original queued WAV");
+        symlink(&foreign, &expected).expect("replace with foreign-session symlink");
+        assert!(verified_tts_output_in_dir(
+            &root, &requested, approved.to_string_lossy().as_ref(),
+        ).is_none(), "late symlink replacement must fail revalidation");
+        assert_eq!(
+            cleanup_meeting_tts_for_session_in_dir(&root, "session-a", 7),
+            Ok(1), "Stop removes the matching link, not its target",
+        );
+        assert!(!expected.exists());
+        assert!(foreign.exists(), "other session's file must survive cleanup");
 
         fs::remove_dir_all(root).expect("remove isolated root");
     }
@@ -837,15 +861,26 @@ mod tests {
         let expected = root.join("session-a_g7_s11.wav");
         let foreign = root.join("session-b_g7_s11.wav");
         fs::write(&foreign, one_frame_pcm16_wav()).expect("write foreign session audio");
+        fs::write(&expected, one_frame_pcm16_wav()).expect("write initially owned audio");
+        let approved = verified_tts_output_in_dir(
+            &root, &requested, expected.to_string_lossy().as_ref(),
+        ).expect("initial regular WAV is owned");
+        fs::remove_file(&expected).expect("remove queued output before replacement");
         match symlink_file(&foreign, &expected) {
             Ok(()) => {
                 assert!(verified_tts_output_in_dir(
-                    &root, &requested, expected.to_string_lossy().as_ref(),
-                ).is_none(), "same-directory symlink must not borrow foreign audio");
+                    &root, &requested, approved.to_string_lossy().as_ref(),
+                ).is_none(), "late symlink replacement must fail revalidation");
+                assert_eq!(
+                    cleanup_meeting_tts_for_session_in_dir(&root, "session-a", 7),
+                    Ok(1), "Stop removes the matching symlink",
+                );
+                assert!(!expected.exists());
+                assert!(foreign.exists(), "other session output must survive cleanup");
             }
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                // Creating symlinks can require Windows Developer Mode or
-                // a privilege. This fixture is unavailable, NOT proven.
+                // Windows link creation can require Developer Mode or privilege.
+                // This OS-specific regression remains UNVERIFIED if unavailable.
             }
             Err(error) => panic!("could not create symlink fixture: {error}"),
         }

@@ -13,7 +13,9 @@ use super::committed_turns::{
     begin_committed_playback, update_committed_turn_delivery_state,
     update_committed_turn_outbound_timing,
 };
-use super::outbound_pipeline::remove_temporary_tts_paths;
+use super::outbound_pipeline::{
+    prepared_tts_output_still_owned, remove_temporary_tts_paths,
+};
 use super::session_state::{
     elapsed_millis, record_first_playback_timing, set_outbound_playback_activity,
     set_outbound_timing, update_incoming_status, update_outbound_status, OutboundTimingContext,
@@ -229,6 +231,37 @@ fn process_playback_job(job: PreparedPlaybackJob, last_sequence: &mut u64) {
         mark_interrupted(&job);
         set_outbound_playback_activity(job.generation, &job.session_id, job.event_sequence, false);
         drop(suppression_guard);
+        return;
+    }
+    // The WAV was first checked when TTS completed. Re-check the original
+    // session-owned path immediately before native decoding: queued work must
+    // not follow a substituted symlink or use an expired/missing file.
+    // This cannot prevent an external writer from mutating file bytes after
+    // this check; the canonical decoder remains the audio-format authority.
+    if !prepared_tts_output_still_owned(
+        &job.requested_tts_path, &job.actual_tts_path,
+    ) {
+        cleanup_job(&job);
+        let _ = update_committed_turn_delivery_state(
+            &job.session_id,
+            job.generation,
+            job.utterance_id,
+            "output_failed",
+        );
+        set_outbound_playback_activity(
+            job.generation, &job.session_id, job.event_sequence, false,
+        );
+        drop(suppression_guard);
+        update_outbound_status(
+            job.generation,
+            &job.session_id,
+            "attention_needed",
+            job.event_sequence,
+            false,
+            false,
+            "meeting_playback:tts_identity_changed_before_delivery",
+            "Prepared voice WAV lost its session-owned file identity while queued. No playback was attempted.",
+        );
         return;
     }
     let delivery_started_at = Instant::now();
