@@ -751,7 +751,7 @@ fn deliver_meeting_output_wav_inner(
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_wav_bytes, delivery_deadline_ms, prepare_output_samples, projected_unix_ms,
+        decode_wav_bytes, decode_wav_file, delivery_deadline_ms, prepare_output_samples, projected_unix_ms,
         stream_start_to_first_audio_ms, wait_for_output_completion, wait_for_output_tail,
         install_cancel_control, clear_cancel_control, cancel_meeting_output_for_generation,
         cancel_control, release_output_stream, signal_output_callback_failure,
@@ -1024,6 +1024,87 @@ mod tests {
             wav.extend_from_slice(&sample.to_le_bytes());
         }
         wav
+    }
+
+
+    #[test]
+    fn canonical_decoder_owns_exact_riff_boundary() {
+        let audio = pcm16_wav(16_000, 1, &[0, 7_000]);
+        assert_eq!(decode_wav_bytes(&audio).unwrap().samples.len(), 2);
+
+        let mut excluded = audio.clone();
+        excluded[4..8].copy_from_slice(&36u32.to_le_bytes());
+        assert_eq!(
+            decode_wav_bytes(&excluded).err().as_deref(),
+            Some("meeting_output:wav_riff_size_mismatch"),
+        );
+        let mut appended = audio.clone();
+        appended.extend_from_slice(b"foreign-payload");
+        assert_eq!(
+            decode_wav_bytes(&appended).err().as_deref(),
+            Some("meeting_output:wav_riff_size_mismatch"),
+        );
+        let mut truncated = audio.clone();
+        truncated.truncate(truncated.len() - 1);
+        assert_eq!(
+            decode_wav_bytes(&truncated).err().as_deref(),
+            Some("meeting_output:wav_truncated"),
+        );
+        let mut invalid_size = audio;
+        invalid_size[4..8].copy_from_slice(&0u32.to_le_bytes());
+        assert_eq!(
+            decode_wav_bytes(&invalid_size).err().as_deref(),
+            Some("meeting_output:wav_riff_size_invalid"),
+        );
+    }
+
+    #[test]
+    fn file_decoder_reads_a_bounded_valid_wav_without_second_path_open() {
+        use std::fs;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)
+            .expect("clock after epoch").as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "translateit-one-handle-{}-{nonce}.wav", std::process::id(),
+        ));
+        let wav = pcm16_wav(16_000, 1, &[0, 10_000, -10_000]);
+        fs::write(&path, &wav).expect("write bounded WAV fixture");
+        let decoded = decode_wav_file(&path).expect("decode via single opened handle");
+        assert_eq!(decoded.samples.len(), 3);
+        let mut appended = wav;
+        appended.extend_from_slice(&[1, 2, 3, 4]);
+        fs::write(&path, appended).expect("overwrite with extra bytes");
+        assert_eq!(
+            decode_wav_file(&path).err().as_deref(),
+            Some("meeting_output:wav_riff_size_mismatch"),
+        );
+        fs::remove_file(path).expect("clean file fixture");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opened_decoder_handle_does_not_switch_after_path_replacement() {
+        use std::fs;
+        use super::super::audio_format::read_bounded_open_wav;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)
+            .expect("clock after epoch").as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "translateit-handle-replace-{}-{nonce}.wav", std::process::id(),
+        ));
+        let old_path = path.with_extension("retained");
+        let initial = pcm16_wav(16_000, 1, &[1, 2, 3]);
+        let replacement = pcm16_wav(16_000, 1, &[4, 5, 6]);
+        fs::write(&path, &initial).expect("create original WAV");
+        let opened = fs::File::open(&path).expect("pin original file handle");
+        fs::rename(&path, &old_path).expect("rename original while handle lives");
+        fs::write(&path, replacement).expect("replace pathname with another WAV");
+        assert_eq!(
+            read_bounded_open_wav(opened).expect("read pinned handle"),
+            initial, "opened decoder handle must not follow a later pathname swap",
+        );
+        fs::remove_file(path).expect("remove replacement fixture");
+        fs::remove_file(old_path).expect("remove retained original fixture");
     }
 
     #[test]

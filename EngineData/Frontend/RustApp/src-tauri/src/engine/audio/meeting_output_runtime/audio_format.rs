@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 use super::{
@@ -42,10 +43,13 @@ pub(super) fn decode_wav_bytes(bytes: &[u8]) -> Result<DecodedWav, String> {
         .checked_add(8)
         .ok_or_else(|| "meeting_output:wav_chunk_overflow".to_string())?;
     if riff_end < 12 {
-        return Err("meeting_output:wav_invalid_riff".to_string());
+        return Err("meeting_output:wav_riff_size_invalid".to_string());
     }
     if riff_end > bytes.len() {
         return Err("meeting_output:wav_truncated".to_string());
+    }
+    if riff_end < bytes.len() {
+        return Err("meeting_output:wav_riff_size_mismatch".to_string());
     }
 
     let mut offset = 12usize;
@@ -181,15 +185,38 @@ pub(super) fn decode_wav_bytes(bytes: &[u8]) -> Result<DecodedWav, String> {
     })
 }
 
-pub(super) fn decode_wav_file(path: &Path) -> Result<DecodedWav, String> {
-    let metadata = fs::metadata(path).map_err(|_| "meeting_output:wav_missing".to_string())?;
-    if !metadata.is_file() {
+// The caller opens the path once. All size checks and bytes come from that
+// same file handle; a subsequent rename/replacement of the path cannot switch
+// the file being decoded. This does not make in-place same-length writes
+// atomic or authenticate the file before its handle was opened.
+pub(super) fn read_bounded_open_wav(mut file: fs::File) -> Result<Vec<u8>, String> {
+    let initial = file.metadata().map_err(|_| "meeting_output:wav_read_failed".to_string())?;
+    if !initial.is_file() {
         return Err("meeting_output:wav_missing".to_string());
     }
-    if metadata.len() > MAX_MEETING_OUTPUT_WAV_BYTES {
+    if initial.len() > MAX_MEETING_OUTPUT_WAV_BYTES {
         return Err("meeting_output:wav_too_large".to_string());
     }
-    let bytes = fs::read(path).map_err(|_| "meeting_output:wav_read_failed".to_string())?;
+    let mut bytes = Vec::new();
+    {
+        let mut bounded = (&mut file).take(MAX_MEETING_OUTPUT_WAV_BYTES + 1);
+        bounded.read_to_end(&mut bytes)
+            .map_err(|_| "meeting_output:wav_read_failed".to_string())?;
+    }
+    if bytes.len() as u64 > MAX_MEETING_OUTPUT_WAV_BYTES {
+        return Err("meeting_output:wav_too_large".to_string());
+    }
+    let final_len = file.metadata()
+        .map_err(|_| "meeting_output:wav_read_failed".to_string())?.len();
+    if initial.len() != final_len || bytes.len() as u64 != final_len {
+        return Err("meeting_output:wav_changed_during_read".to_string());
+    }
+    Ok(bytes)
+}
+
+pub(super) fn decode_wav_file(path: &Path) -> Result<DecodedWav, String> {
+    let file = fs::File::open(path).map_err(|_| "meeting_output:wav_missing".to_string())?;
+    let bytes = read_bounded_open_wav(file)?;
     decode_wav_bytes(&bytes)
 }
 
