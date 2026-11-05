@@ -84,7 +84,7 @@ fn process_incoming_wav_with_direction(
         return IncomingAudioProcessResult::Complete;
     }
 
-    let transcript = match classify_incoming_asr_response(&asr) {
+    let transcript = match classify_incoming_asr_response(&asr, &source_language) {
         IncomingAsrDisposition::Deferred => {
             let enqueued_unix_ms =
                 deferred_enqueue_unix_ms(deferred_enqueued_unix_ms, unix_ms() as u64);

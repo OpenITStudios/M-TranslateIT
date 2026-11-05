@@ -4,7 +4,7 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::engine::audio::live_segment_writer::remove_finalized_meeting_utterance_wav;
 
-use super::{worker_blocker, worker_text};
+use super::{validated_meeting_asr_transcript, worker_blocker, worker_text};
 use super::committed_turns::finish_meeting_turn_translation;
 use super::super::helper_bridge::HelperBridgeWorkerResponse;
 
@@ -60,21 +60,24 @@ pub(super) fn incoming_deferred_for_required_outbound(
 
 pub(super) fn classify_incoming_asr_response(
     asr: &HelperBridgeWorkerResponse,
+    expected_language: &str,
 ) -> IncomingAsrDisposition {
     if incoming_deferred_for_required_outbound(asr) {
         return IncomingAsrDisposition::Deferred;
     }
-
-    let transcript = worker_text(asr, "transcript_text");
-    if !asr.ok || transcript.is_none() {
-        let blocker = worker_blocker(asr, "asr:empty_transcript");
-        if blocker.contains("empty_transcript") {
-            IncomingAsrDisposition::EmptyTranscript
-        } else {
-            IncomingAsrDisposition::Failed(blocker)
-        }
+    if let Some(transcript) = validated_meeting_asr_transcript(asr, expected_language) {
+        return IncomingAsrDisposition::Transcript(transcript);
+    }
+    // A malformed successful ASR response is not silence. Only an explicit
+    // failed empty-transcript receipt may resume listening without warning.
+    if asr.ok {
+        return IncomingAsrDisposition::Failed("asr:invalid_response".to_string());
+    }
+    let blocker = worker_blocker(asr, "asr:invalid_response");
+    if blocker == "asr:empty_transcript" {
+        IncomingAsrDisposition::EmptyTranscript
     } else {
-        IncomingAsrDisposition::Transcript(transcript.unwrap_or_default())
+        IncomingAsrDisposition::Failed(blocker)
     }
 }
 
@@ -405,8 +408,56 @@ mod tests {
         };
 
         assert_eq!(
-            classify_incoming_asr_response(&response),
+            classify_incoming_asr_response(&response, "en"),
             IncomingAsrDisposition::Deferred
+        );
+    }
+
+
+    #[test]
+    fn incoming_asr_fails_closed_for_invalid_success_or_language_mismatch() {
+        let valid = serde_json::json!({
+            "ok": true, "stage": "transcribe", "language": "en",
+            "blocker": "", "transcript_text": "  The meeting is open. ",
+        });
+        let mut response = HelperBridgeWorkerResponse {
+            ok: true,
+            state: "completed".into(),
+            task: "transcribe".into(),
+            request_id: "test-incoming-asr".into(),
+            scheduler_priority: "meeting_incoming".into(),
+            message: String::new(),
+            generation_token: 1,
+            runtime_claim: "test_fixture".into(),
+            worker_response_json: valid.to_string(),
+        };
+        assert_eq!(
+            classify_incoming_asr_response(&response, "en"),
+            IncomingAsrDisposition::Transcript("The meeting is open.".into()),
+        );
+        assert_eq!(
+            classify_incoming_asr_response(&response, "id"),
+            IncomingAsrDisposition::Failed("asr:invalid_response".into()),
+        );
+        let mut misleading = valid;
+        misleading["stage"] = serde_json::json!("translate");
+        response.worker_response_json = misleading.to_string();
+        assert_eq!(
+            classify_incoming_asr_response(&response, "en"),
+            IncomingAsrDisposition::Failed("asr:invalid_response".into()),
+        );
+        response.ok = false;
+        response.worker_response_json = serde_json::json!({
+            "ok": false, "stage": "transcribe", "blocker": "asr:empty_transcript",
+        }).to_string();
+        assert_eq!(
+            classify_incoming_asr_response(&response, "en"),
+            IncomingAsrDisposition::EmptyTranscript,
+        );
+        response.ok = true;
+        assert_eq!(
+            classify_incoming_asr_response(&response, "en"),
+            IncomingAsrDisposition::Failed("asr:invalid_response".into()),
         );
     }
 

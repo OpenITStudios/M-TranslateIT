@@ -14,7 +14,8 @@ use super::committed_turns::{
 };
 use super::super::helper_bridge::{required_outbound_voice_actor_token, send_helper_worker_task};
 use super::{
-    generation_is_live, validated_meeting_translation, worker_blocker, worker_number, worker_text,
+    generation_is_live, validated_meeting_asr_transcript, validated_meeting_translation,
+    validated_meeting_voice_output_path, worker_blocker, worker_number,
     MeetingOutboundProcessResult,
 };
 use super::playback_runtime::{enqueue_meeting_playback, PreparedPlaybackJob};
@@ -269,10 +270,14 @@ pub(super) fn process_outbound_wav(
     if !generation_is_live(generation) || !original_voice_pcm::translated_epoch_matches(generation, source_epoch) {
         return stale_outbound_result(generation, session_id, event_sequence, utterance_id);
     }
-    let transcript = worker_text(&asr, "transcript_text");
-    if !asr.ok || transcript.is_none() {
-        let blocker = worker_blocker(&asr, "asr:empty_transcript");
-        let empty = blocker.contains("empty_transcript");
+    let transcript = validated_meeting_asr_transcript(&asr, "id");
+    if transcript.is_none() {
+        let blocker = if asr.ok {
+            "asr:invalid_response".to_string()
+        } else {
+            worker_blocker(&asr, "asr:invalid_response")
+        };
+        let empty = !asr.ok && blocker == "asr:empty_transcript";
         update_outbound_status(
             generation,
             session_id,
@@ -506,13 +511,17 @@ pub(super) fn process_outbound_wav(
         utterance_id,
         &timing.metrics,
     );
-    let tts_path = worker_text(&tts, "output_path").unwrap_or_default();
+    let tts_path = validated_meeting_voice_output_path(&tts, &actor_token).unwrap_or_default();
     if !generation_is_live(generation) || !original_voice_pcm::translated_epoch_matches(generation, source_epoch) {
         remove_temporary_tts_paths(&requested_tts_path, &tts_path);
         return stale_outbound_result(generation, session_id, event_sequence, utterance_id);
     }
-    if !tts.ok || tts_path.is_empty() {
-        let blocker = worker_blocker(&tts, "voice_actor:missing_output");
+    if tts_path.is_empty() {
+        let blocker = if tts.ok {
+            "voice_actor:invalid_synthesis_response".to_string()
+        } else {
+            worker_blocker(&tts, "voice_actor:missing_output")
+        };
         remove_temporary_tts_paths(&requested_tts_path, &tts_path);
         let _ = update_committed_turn_delivery_state(
             session_id,
