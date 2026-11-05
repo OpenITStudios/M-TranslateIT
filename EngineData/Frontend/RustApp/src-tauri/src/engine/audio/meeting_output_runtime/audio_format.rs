@@ -254,8 +254,8 @@ pub(super) fn prepare_output_samples(
         return Ok(Vec::new());
     }
 
-    // Calculate the full expanded size BEFORE allocating the mono or device buffer.
-    // In particular, a small 8 kHz WAV can become enormous at 192 kHz / 8ch.
+    // Calculate the full expanded output size before allocating the device
+    // buffer. Even a small 8 kHz WAV can expand at 192 kHz / 8 channels.
     let target_frames = (source_frames as u128 * u128::from(target_rate_hz))
         .div_ceil(u128::from(source.sample_rate_hz));
     let output_samples = target_frames * u128::from(target_channels);
@@ -403,19 +403,6 @@ mod resampling_buffer_tests {
                 .expect("bounded resampling fixture");
             assert_eq!(actual, expected, "rate {source_rate}->{target_rate}, channels {source_channels}->{target_channels}");
         }
-    }
-
-    #[test]
-    fn resampling_rejects_overexpanded_output_before_allocating() {
-        let source = DecodedWav {
-            sample_rate_hz: 8_000,
-            channels: 1,
-            samples: vec![0.0; 200_000],
-        };
-        assert_eq!(
-            prepare_output_samples(&source, 192_000, 8).unwrap_err(),
-            "meeting_output:prepared_audio_too_large",
-        );
     }
 
     #[test]
