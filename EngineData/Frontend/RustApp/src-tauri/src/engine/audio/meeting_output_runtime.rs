@@ -1085,7 +1085,7 @@ mod tests {
     #[test]
     fn opened_decoder_handle_does_not_switch_after_path_replacement() {
         use std::fs;
-        use super::super::audio_format::read_bounded_open_wav;
+        use super::audio_format::read_bounded_open_wav;
         use std::time::{SystemTime, UNIX_EPOCH};
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH)
             .expect("clock after epoch").as_nanos();

@@ -1,3 +1,5 @@
+use super::duration_ms;
+
 // Keep the public Meeting output API stable. RIFF/PCM validation is owned
 // by the canonical decoder inside the runtime, so each delivery opens its
 // WAV once rather than preflighting a path and reopening it for decoding.
