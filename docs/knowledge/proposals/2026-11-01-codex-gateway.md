@@ -231,6 +231,15 @@ The offline RealtimeObserver also distinguishes a typed
 A failed Voice session cannot be reported as a clean completion.
 The synthetic Rust fixtures cover these cases without executing Codex.
 
+A bounded streaming mono-f32 microphone adapter now exists in the
+same `realtime.rs` owner: `Pcm24kResampler` converts supported
+8–96-kHz capture sample rates to the P5 24-kHz PCM16 sample clock,
+preserves one source sample across chunk boundaries, and rejects input
+gaps, nonfinite input, overlong frames and downstream queue overflow.
+It is a non-callback integration seam, not a running microphone pipeline,
+measured audio-quality proof or finished WebRTC owner. Do not invoke
+allocation-heavy conversion from a CPAL real-time callback.
+
 The source-only integration now composes the **existing** queue and wire
 encoder: `AudioFrameQueue.pending_state` distinguishes empty from revoked;
 `RealtimeRpc.send_queued_audio` checks generation/source epoch, cancellation,

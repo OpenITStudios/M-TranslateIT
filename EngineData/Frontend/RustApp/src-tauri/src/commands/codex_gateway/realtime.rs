@@ -311,6 +311,116 @@ impl AudioFrameQueue {
     }
 }
 
+/// Stateful input-rate -> 24-kHz PCM16 converter for the future Codex
+/// realtime input. Called by an owned non-callback consumer, never CPAL.
+/// One prior sample preserves interpolation across microphone buffer seams.
+pub(super) struct Pcm24kResampler {
+    input_rate: u32,
+    next_input: u64,
+    next_output: u64,
+    previous: Option<f32>,
+    revoked: bool,
+}
+
+impl Pcm24kResampler {
+    pub(super) fn new(input_rate: u32) -> Result<Self, &'static str> {
+        if !(8_000..=96_000).contains(&input_rate) {
+            return Err("codex_realtime:input_rate_unsupported");
+        }
+        Ok(Self { input_rate, next_input: 0, next_output: 0, previous: None, revoked: false })
+    }
+
+    pub(super) fn revoke(&mut self) {
+        self.revoked = true;
+        self.previous = None;
+    }
+
+    /// Convert one bounded mono-f32 microphone chunk and enqueue PCM16.
+    /// A clock gap, invalid frame or rejected queue invalidates both owners.
+    pub(super) fn push_mono_f32(
+        &mut self,
+        start_input: u64,
+        samples: &[f32],
+        queue: &mut AudioFrameQueue,
+    ) -> Result<(), &'static str> {
+        match self.convert(start_input, samples) {
+            Ok((start_output, pcm)) => {
+                if !pcm.is_empty() {
+                    if let Err(blocker) = queue.push(start_output, &pcm) {
+                        self.revoke();
+                        queue.revoke();
+                        return Err(blocker);
+                    }
+                }
+                Ok(())
+            }
+            Err(blocker) => {
+                self.revoke();
+                queue.revoke();
+                Err(blocker)
+            }
+        }
+    }
+
+    fn convert(
+        &mut self,
+        start_input: u64,
+        samples: &[f32],
+    ) -> Result<(u64, Vec<i16>), &'static str> {
+        if self.revoked {
+            return Err("codex_realtime:resampler_revoked");
+        }
+        if start_input != self.next_input {
+            return Err("codex_realtime:input_clock_gap");
+        }
+        // 200-ms maximum source chunk. This ensures at most one queued
+        // 4,800-sample output frame without silently dropping overflow.
+        if samples.is_empty()
+            || samples.len() > (self.input_rate / 5) as usize
+            || samples.iter().any(|x| !x.is_finite())
+        {
+            return Err("codex_realtime:source_frame_invalid");
+        }
+        let end_input = start_input.checked_add(samples.len() as u64)
+            .ok_or("codex_realtime:input_clock_overflow")?;
+        let first_output = self.next_output;
+        let capacity = ((samples.len() as u64 * AUDIO_RATE as u64) / self.input_rate as u64)
+            .min(SAMPLES_PER_FRAME as u64) as usize + 1;
+        let mut pcm = Vec::with_capacity(capacity);
+        loop {
+            let pos = self.next_output.checked_mul(self.input_rate as u64)
+                .ok_or("codex_realtime:output_clock_overflow")?;
+            let left = pos / AUDIO_RATE as u64;
+            let rem = pos % AUDIO_RATE as u64;
+            let right = left + u64::from(rem != 0);
+            if right >= end_input { break; }
+            if pcm.len() >= SAMPLES_PER_FRAME {
+                return Err("codex_realtime:source_frame_overflow");
+            }
+            let at = |idx: u64| -> Result<f32, &'static str> {
+                if idx >= start_input {
+                    samples.get((idx - start_input) as usize).copied()
+                        .ok_or("codex_realtime:source_history_missing")
+                } else if idx.checked_add(1) == Some(start_input) {
+                    self.previous.ok_or("codex_realtime:source_history_missing")
+                } else {
+                    Err("codex_realtime:source_history_missing")
+                }
+            };
+            let lo = at(left)?;
+            let hi = at(right)?;
+            let fraction = rem as f32 / AUDIO_RATE as f32;
+            let mixed = (lo + (hi - lo) * fraction).clamp(-1.0, 1.0);
+            pcm.push((mixed * f32::from(i16::MAX)).round() as i16);
+            self.next_output = self.next_output.checked_add(1)
+                .ok_or("codex_realtime:output_clock_overflow")?;
+        }
+        self.next_input = end_input;
+        self.previous = samples.last().copied();
+        Ok((first_output, pcm))
+    }
+}
+
 // Deterministic Base64 for small, bounded PCM chunks. Avoid adding a second
 // dependency or a dynamic codec to the Windows realtime boundary.
 fn base64_pcm(bytes: &[u8]) -> String {
@@ -480,6 +590,49 @@ mod tests {
         assert_eq!(q.push(105, &[0]), Err("codex_realtime:audio_clock_gap"));
         assert_eq!(q.pending_state(), Err("codex_realtime:audio_queue_revoked"));
         assert!(q.pop().is_none());
+    }
+
+    #[test]
+    fn streaming_pcm24k_conversion_is_partition_independent() {
+        let data = [0.0, 1.0, 0.0, -1.0];
+        let mut split = Pcm24kResampler::new(16_000).unwrap();
+        let (s0, first) = split.convert(0, &data[..2]).unwrap();
+        let (s1, second) = split.convert(2, &data[2..]).unwrap();
+        let mut single = Pcm24kResampler::new(16_000).unwrap();
+        let (_, entire) = single.convert(0, &data).unwrap();
+        let combined: Vec<i16> = first.iter().chain(second.iter()).copied().collect();
+        assert_eq!(combined, entire);
+        assert_eq!(combined.len(), 5);
+        assert_eq!((s0, s1), (0, 2));
+        assert_eq!(combined[0], 0);
+        assert!(combined[1] > 0 && combined[4] < 0);
+    }
+
+    #[test]
+    fn native_48k_mic_clock_and_invalid_input_fail_closed() {
+        let mut converter = Pcm24kResampler::new(48_000).unwrap();
+        let mut queue = AudioFrameQueue::default();
+        converter.push_mono_f32(0, &[0.0, 0.25, 0.5, 0.75], &mut queue).unwrap();
+        let (start, encoded) = queue.pop().unwrap();
+        assert_eq!(start, 0);
+        assert_eq!(encoded["sampleRate"], 24_000);
+        assert_eq!(encoded["samplesPerChannel"], 2);
+        assert_eq!(
+            converter.push_mono_f32(9, &[0.0], &mut queue),
+            Err("codex_realtime:input_clock_gap")
+        );
+        assert_eq!(queue.pending_state(), Err("codex_realtime:audio_queue_revoked"));
+
+        let mut invalid = Pcm24kResampler::new(16_000).unwrap();
+        let mut bad_queue = AudioFrameQueue::default();
+        assert_eq!(
+            invalid.push_mono_f32(0, &[f32::NAN], &mut bad_queue),
+            Err("codex_realtime:source_frame_invalid")
+        );
+        assert_eq!(bad_queue.pending_state(), Err("codex_realtime:audio_queue_revoked"));
+        assert_eq!(invalid.push_mono_f32(0, &[0.0], &mut bad_queue),
+            Err("codex_realtime:resampler_revoked"));
+        assert!(Pcm24kResampler::new(0).is_err());
     }
 
     #[test]

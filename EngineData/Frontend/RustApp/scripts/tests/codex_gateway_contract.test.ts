@@ -173,6 +173,11 @@ test("P5 stages typed V3 WebRTC start/audio/stop envelopes without live RPC admi
   assert.match(realtimeRpc, /_admission: &VerifiedMediaAuthority/);
   assert.match(realtimeRpc, /fn acked_through_sample/);
   assert.match(realtime, /fn pending_state\(/);
+  assert.match(realtime, /struct Pcm24kResampler/);
+  assert.match(realtime, /fn push_mono_f32\(/);
+  assert.match(realtime, /codex_realtime:input_clock_gap/);
+  assert.match(realtime, /fn streaming_pcm24k_conversion_is_partition_independent/);
+  assert.match(realtime, /fn native_48k_mic_clock_and_invalid_input_fail_closed/);
   assert.match(realtimeRpc, /fn send_queued_audio\(/);
   assert.match(realtimeRpc, /fn prepare_stop_with_queue\(/);
   assert.match(realtimeRpc, /fn queued_audio_never_pops_without_authority_and_stop_retires_queue/);
