@@ -51,6 +51,13 @@ Production rules:
 - continuation-only causal decoding;
 - source is never silently truncated;
 - known incomplete/non-EOS generation fails closed;
+- malformed success envelopes and non-string translated outputs fail closed instead
+  of coercing lists, null values or other objects into text;
+- a completed response that begins by repeating the exact canonical MiLMMT
+  prompt for the current source is rejected before Meeting TTS or caption use.
+  This narrowly detects complete prompt-envelope echoes; it does not claim to
+  detect arbitrary language mismatch, semantic hallucinations, or source-only
+  phrases such as `English:` used legitimately;
 - RuntimeAssets readiness requires `.translateit_model_revision` to match the pinned revision;
 - no M2M100/Marian/second-translator fallback/router.
 

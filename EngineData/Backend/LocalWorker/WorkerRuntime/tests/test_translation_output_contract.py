@@ -96,6 +96,95 @@ def test_direct_translation_accepts_output_at_character_limit(monkeypatch) -> No
     assert result["finished_with_eos"] is True
 
 
+def test_direct_translation_rejects_non_string_and_malformed_success(monkeypatch) -> None:
+    worker = load_worker_module()
+    request = {"text": "Selamat pagi", "source_language": "id", "target_language": "en"}
+    for malformed in (None, 12, ["Good morning"], {"text": "Good morning"}, b"Good morning"):
+        broken = success_result("Good morning")
+        broken["translated_text"] = malformed
+        set_original_translate(worker, monkeypatch, lambda _payload, value=broken: value)
+        result = worker.handle_translate(request)
+        assert result["ok"] is False
+        assert result["blocker"] == "translation:invalid_output_type"
+        assert result["translated_text"] == ""
+        assert result["complete"] is False
+    for malformed_ok in ("true", 1, None):
+        broken = success_result("Good morning")
+        broken["ok"] = malformed_ok
+        set_original_translate(worker, monkeypatch, lambda _payload, value=broken: value)
+        result = worker.handle_translate(request)
+        assert result["ok"] is False
+        assert result["blocker"] == "translation:invalid_response_contract"
+        assert result["translated_text"] == ""
+    broken_stage = success_result("Good morning")
+    broken_stage["stage"] = "transcribe"
+    set_original_translate(worker, monkeypatch, lambda _payload: broken_stage)
+    assert worker.handle_translate(request)["blocker"] == "translation:invalid_response_contract"
+
+
+def test_full_canonical_prompt_echo_is_never_delivered_as_translation(monkeypatch) -> None:
+    worker = load_worker_module()
+    for source_language, target_language, source in (
+        ("id", "en", "Rapat dimulai sekarang."),
+        ("en", "id", "The meeting starts now."),
+    ):
+        request = {
+            "text": source,
+            "source_language": source_language,
+            "target_language": target_language,
+        }
+        exact_prompt = worker.milmmt_translation_provider.build_prompt(
+            source_language, target_language, source
+        )
+        echoed = " ".join(exact_prompt.split()) + " guessed translation"
+        set_original_translate(
+            worker, monkeypatch, lambda _payload, output=echoed: success_result(output)
+        )
+        result = worker.handle_translate(request)
+        assert result["ok"] is False
+        assert result["blocker"] == "translation:prompt_echo"
+        assert result["translated_text"] == ""
+        assert result["complete"] is False
+    # Ordinary labels, legitimate code-switching and technical identities are
+    # not full prompt echoes and must not be rejected by this narrow check.
+    ordinary = success_result('The literal labels "English:" and "Indonesian:" are visible.')
+    set_original_translate(worker, monkeypatch, lambda _payload: ordinary)
+    valid = worker.handle_translate(
+        {"text": 'Tampilkan label "English:" dan "Indonesian:".',
+         "source_language": "id", "target_language": "en"}
+    )
+    assert valid["ok"] is True
+    assert valid["translated_text"] == ordinary["translated_text"]
+
+
+def test_standalone_discards_partial_chunks_when_later_chunk_echoes_prompt(monkeypatch) -> None:
+    worker = load_worker_module()
+    install_fake_standalone_runtime(worker, monkeypatch, input_token_limit=2)
+    calls = 0
+
+    def fake_translate(payload):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return success_result("First translated sentence.")
+        prompt = worker.milmmt_translation_provider.build_prompt(
+            "id", "en", payload["text"]
+        )
+        return success_result(" ".join(prompt.split()) + " leaked prompt")
+
+    set_original_translate(worker, monkeypatch, fake_translate)
+    result = worker.runtime.HANDLERS["translate"](
+        {"text": "First sentence. Second sentence.", "source_language": "id",
+         "target_language": "en", "request_kind": "standalone_text"}
+    )
+    assert calls == 2
+    assert result["ok"] is False
+    assert result["blocker"] == "translation:prompt_echo"
+    assert result["translated_text"] == ""
+    assert result["chunk_index"] == 2
+    assert result["chunk_count"] == 2
+
+
 def test_standalone_packs_adjacent_short_sentences_in_one_canonical_request(
     monkeypatch,
 ) -> None:

@@ -38,6 +38,7 @@ _TRANSLATION_NON_INVALIDATING_BLOCKERS = {
     "translation:output_incomplete",
     "translation:output_too_large",
     "translation:empty_output",
+    "translation:prompt_echo",
     "translation:standalone_chunk_plan_empty",
     "translation:chunk_count_limit_exceeded",
     "worker:request_deadline_expired",
@@ -115,13 +116,56 @@ def _translation_failure_contract(result, fallback: str):
     return failed
 
 
-def _translation_contract_result(result):
-    if not isinstance(result, dict):
-        return result
-    if not result.get("ok"):
+def _full_translation_prompt_echo(payload, translated: str) -> bool:
+    """Reject an exact generated prompt envelope, not ordinary language labels."""
+    if not isinstance(payload, dict):
+        return False
+    raw_source = payload.get("text")
+    if not isinstance(raw_source, str) or not raw_source.strip():
+        return False
+    source_language = runtime.normalize_language(payload.get("source_language", "id"), "id")
+    target_language = runtime.normalize_language(payload.get("target_language", "en"), "en")
+    if (source_language, target_language) not in {("id", "en"), ("en", "id")}:
+        return False
+    source_text = runtime.compact_runtime_text(raw_source, runtime.MAX_TRANSLATION_TEXT_CHARS)
+    prompt = milmmt_translation_provider.build_prompt(
+        source_language, target_language, source_text
+    )
+    return " ".join(translated.split()).startswith(" ".join(prompt.split()))
+
+
+def _translation_contract_result(result, payload=None):
+    if not isinstance(result, dict) or type(result.get("ok")) is not bool:
+        return _translation_failure_contract(
+            {
+                "ok": False,
+                "stage": "translate",
+                "blocker": "translation:invalid_response_contract",
+                "translated_text": "",
+                "complete": False,
+            },
+            "translation:provider_failed",
+        )
+    if result["ok"] is False:
         return _translation_failure_contract(result, "translation:provider_failed")
 
-    translated = str(result.get("translated_text", ""))
+    if result.get("stage") != "translate":
+        failed = dict(result)
+        failed.update({
+            "ok": False, "blocker": "translation:invalid_response_contract",
+            "translated_text": "", "complete": False,
+        })
+        return _translation_failure_contract(failed, "translation:provider_failed")
+
+    if not isinstance(result.get("translated_text"), str):
+        failed = dict(result)
+        failed.update({
+            "ok": False, "blocker": "translation:invalid_output_type",
+            "translated_text": "", "complete": False,
+        })
+        return _translation_failure_contract(failed, "translation:provider_failed")
+
+    translated = result["translated_text"]
     if not translated.strip():
         failed = dict(result)
         failed.update(
@@ -160,6 +204,16 @@ def _translation_contract_result(result):
         )
         return _translation_failure_contract(failed, "translation:provider_failed")
 
+    if _full_translation_prompt_echo(payload, translated):
+        failed = dict(result)
+        failed.update({
+            "ok": False,
+            "blocker": "translation:prompt_echo",
+            "translated_text": "",
+            "complete": False,
+        })
+        return _translation_failure_contract(failed, "translation:provider_failed")
+
     return result
 
 
@@ -167,7 +221,7 @@ def _translation_contract_result(result):
 # provider builds its prompt from the current source utterance alone.
 def _contract_guarded_runtime_translate(payload):
     original = getattr(runtime, _TRANSLATION_CONTRACT_ORIGINAL)
-    return _translation_contract_result(original(payload))
+    return _translation_contract_result(original(payload), payload)
 
 
 if not getattr(runtime, _TRANSLATION_CONTRACT_SENTINEL, False):
@@ -189,7 +243,7 @@ if not getattr(runtime, _PRELOAD_POLICY_SENTINEL, False):
 
 
 def _contract_guarded_translate_request(payload):
-    return _translation_contract_result(runtime.handle_translate_request(payload))
+    return _translation_contract_result(runtime.handle_translate_request(payload), payload)
 
 
 runtime.HANDLERS["translation_preload"] = runtime.handle_translation_preload
