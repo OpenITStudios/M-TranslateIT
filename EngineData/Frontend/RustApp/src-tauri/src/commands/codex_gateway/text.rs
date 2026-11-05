@@ -165,8 +165,12 @@ impl FinalTurnEvidence {
         {
             return Err("codex_text:turn_incomplete");
         }
-        if turn.get("itemsView").and_then(Value::as_str) != Some("full") {
-            return Err("codex_text:items_not_fully_loaded");
+        match turn.get("itemsView").and_then(Value::as_str) {
+            Some("full") => {}
+            // Pinned upstream turn/completed includes only the last assistant
+            // message: never mistake its summary for source/tool evidence.
+            Some("summary") => return Err("codex_text:completion_summary_unverified"),
+            _ => return Err("codex_text:items_not_fully_loaded"),
         }
         let items = turn.get("items").and_then(Value::as_array)
             .ok_or("codex_text:items_missing")?;
@@ -369,6 +373,25 @@ mod tests {
     }
 
     #[test]
+    fn upstream_terminal_summary_cannot_prove_source_or_absence_of_tools() {
+        // Codex app-server's turn/completed emits Summary with only the
+        // last agentMessage. This cannot prove what the user said or whether
+        // earlier tool items executed. Never emit a translated result.
+        let mut summary = completed(r#"{"translation":"Hello"}"#);
+        summary["turn"]["itemsView"] = json!("summary");
+        summary["turn"]["items"] = json!([{
+            "type": "agentMessage",
+            "id": "reply",
+            "phase": "final_answer",
+            "text": r#"{"translation":"Hello"}"#
+        }]);
+        assert_eq!(
+            gate().take_completed("turn/completed", &summary).unwrap_err(),
+            "codex_text:completion_summary_unverified"
+        );
+    }
+
+    #[test]
     fn rejected_turn_cannot_become_a_result_on_later_events() {
         let mut gate = gate();
         let mut bad = completed(r#"{"translation":"Hi"}"#);
@@ -383,7 +406,8 @@ mod tests {
 
         let mut gate = gate();
         let mut partial = completed(r#"{"translation":"Hi"}"#);
-        partial["turn"]["itemsView"] = json!("summary");
+        partial["turn"]["itemsView"] = json!("notLoaded");
+        partial["turn"]["items"] = json!([]);
         assert_eq!(gate.take_completed("turn/completed", &partial).unwrap_err(), "codex_text:items_not_fully_loaded");
     }
 }

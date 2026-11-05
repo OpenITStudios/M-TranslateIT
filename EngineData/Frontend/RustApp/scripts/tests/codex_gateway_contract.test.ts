@@ -362,6 +362,8 @@ test("Codex text candidate cannot send inference, execute tools or commit to Mee
   assert.match(offlineText, /codex_text:assistant_before_source/);
   assert.match(offlineText, /fn wrong_utterance_or_direction_and_duplicate_source_are_rejected/);
   assert.match(offlineText, /codex_text:items_not_fully_loaded/);
+  assert.match(offlineText, /codex_text:completion_summary_unverified/);
+  assert.match(offlineText, /fn upstream_terminal_summary_cannot_prove_source_or_absence_of_tools/);
   assert.match(offlineText, /codex_text:tool_or_unknown_item/);
   assert.match(offlineText, /codex_text:ambiguous_final/);
   assert.match(offlineText, /fn rejects_wrong_direction_empty_oversized_or_unsafe_source/);

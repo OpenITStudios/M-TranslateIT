@@ -864,8 +864,21 @@ The gate additionally binds the exact serialized one-utterance request to
 the completed turn's single text user-message item: changed direction or
 source, missing/duplicate source and answer-before-source are rejected.
 Matching this source is structural evidence, not proof of semantic fidelity.
-A real App Server may not include full turn items in `turn/completed`;
-the candidate remains offline until event/item availability is validated.
+The pinned Codex App Server implementation (openai/codex
+`0327a3ec34fd8fe9454eb57151a3798f127a53bf`,
+`codex-rs/app-server/src/bespoke_event_handling.rs`) actually sends
+`turn/completed` with `itemsView=summary` and only its last assistant
+message, or `notLoaded` with no items. Its v2 `turn_start.rs` test
+asserts `Summary`. Neither includes the source turn or a complete
+tool/action audit. Our offline adapter now rejects `summary` explicitly
+as `codex_text:completion_summary_unverified` and keeps `full` as a
+synthetic inspection-only boundary; it does **not** turn normal
+`turn/completed` into a usable translation provider.
+Building a live evidence collector would require complete item provenance
+and a pre-execution no-tools guarantee, neither admitted yet. No
+`thread/read` or `thread/items/list` backfill is added: it would
+create another data, privacy and latency boundary without solving tool
+safety.
 It performs no model requests, is not registered in the account-only JSONL
 allowlist and cannot produce a Meeting translation commit or TTS output.
 The offline request builder now checks its **fully serialized nested JSON**
