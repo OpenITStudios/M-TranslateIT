@@ -76,5 +76,34 @@ class GitHubSourceOnlyGovernanceTests(unittest.TestCase):
         self.assertTrue(any("## Candidate admission" in error for error in errors))
 
 
+    def test_agent_rules_cannot_depend_on_another_product_repository(self):
+        original = verify_repository.text
+
+        def linked(rel: str) -> str:
+            content = original(rel)
+            if rel == "AGENTS.md":
+                return content + "\nhttps://github.com/OpenITStudios/M-LazyDesigner/blob/main/AGENTS.md\n"
+            return content
+
+        errors: list[str] = []
+        with patch.object(verify_repository, "text", side_effect=linked):
+            verify_repository.check_chatgpt_execution_policy(errors)
+        self.assertTrue(any("must not depend on M-LazyDesigner" in issue for issue in errors))
+
+    def test_agent_rules_missing_method_is_rejected(self):
+        original = verify_repository.text
+
+        def missing(rel: str) -> str:
+            content = original(rel)
+            if rel == "AGENTS.md":
+                return content.replace("github.com/cursor/plugins/tree/", "github.com/cursor/plugins/ref/", 1)
+            return content
+
+        errors: list[str] = []
+        with patch.object(verify_repository, "text", side_effect=missing):
+            verify_repository.check_chatgpt_execution_policy(errors)
+        self.assertTrue(any("Agent Rules missing reviewed source: cursor/plugins" in issue for issue in errors))
+
+
 if __name__ == "__main__":
     unittest.main()

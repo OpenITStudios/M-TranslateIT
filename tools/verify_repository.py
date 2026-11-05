@@ -632,6 +632,27 @@ def check_chatgpt_execution_policy(errors: list[str]) -> None:
             if marker not in contents:
                 fail(errors, f"{rel} lost remote/candidate contract: {marker}")
 
+    # Agent Rules is governed by this repository's root, not by another
+    # OpenIT product. This checks source markers only, not live agent behavior.
+    agent_rules = text("AGENTS.md")
+    if "## Agent Rules — independent seven-method contract" not in agent_rules:
+        fail(errors, "Agent Rules independent root contract missing")
+    if "The user selects the branch manually" not in agent_rules:
+        fail(errors, "Agent Rules must preserve manual branch selection")
+    for method_repo in (
+        "multica-ai/andrej-karpathy-skills",
+        "dietrichgebert/ponytail",
+        "cursor/plugins",
+        "google-research/harness2",
+        "deepseek-ai/deepseek-harness",
+        "morluto/rea",
+        "nextlevelbuilder/ui-ux-pro-max-skill",
+    ):
+        if f"github.com/{method_repo}/tree/" not in agent_rules:
+            fail(errors, f"Agent Rules missing reviewed source: {method_repo}")
+    if "github.com/OpenITStudios/M-LazyDesigner/blob/" in agent_rules:
+        fail(errors, "Agent Rules root must not depend on M-LazyDesigner")
+
     for rel in (
         "AGENTS.md", "GITHUB_RULES.md", "README.md", "CONTRIBUTING.md",
         "planning/development.md", "docs/knowledge/flow.md",
