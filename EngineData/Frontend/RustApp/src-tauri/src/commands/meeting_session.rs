@@ -269,26 +269,32 @@ fn worker_text(response: &HelperBridgeWorkerResponse, key: &str) -> Option<Strin
         .map(str::to_string)
 }
 
-// Meeting uses finalized, direction-bound translations only. The Python
-// worker guarantees completion; reject an inconsistent bridge response here
-// before committing a caption or sending any text to the selected voice.
+// Meeting uses finalized, direction-bound translations only. Recheck the
+// Python worker's successful completion and exact direction at this final Rust
+// promotion boundary before committing captions or sending text to TTS. A
+// response that also claims a generation ceiling or a failure blocker is not
+// admitted as successful output.
 fn validated_meeting_translation(
     response: &HelperBridgeWorkerResponse,
     source_language: &str,
     target_language: &str,
 ) -> Option<String> {
-    if !response.ok {
+    if !response.ok || response.task != "translate" {
         return None;
     }
     let value = worker_json(response);
+    let expected_pair = format!("{source_language}->{target_language}");
     if value.get("ok").and_then(Value::as_bool) != Some(true)
         || value.get("stage").and_then(Value::as_str) != Some("translate")
         || value.get("translation_contract").and_then(Value::as_str)
             != Some("canonical_bidirectional_id_en")
         || value.get("complete").and_then(Value::as_bool) != Some(true)
         || value.get("finished_with_eos").and_then(Value::as_bool) != Some(true)
+        || value.get("hit_token_ceiling").and_then(Value::as_bool) != Some(false)
+        || value.get("blocker").and_then(Value::as_str) != Some("")
         || value.get("source_language").and_then(Value::as_str) != Some(source_language)
         || value.get("target_language").and_then(Value::as_str) != Some(target_language)
+        || value.get("direction_pair").and_then(Value::as_str) != Some(expected_pair.as_str())
     {
         return None;
     }
@@ -737,8 +743,11 @@ mod translation_delivery_contract_tests {
             "translation_contract": "canonical_bidirectional_id_en",
             "complete": true,
             "finished_with_eos": true,
+            "hit_token_ceiling": false,
+            "blocker": "",
             "source_language": "id",
             "target_language": "en",
+            "direction_pair": "id->en",
             "translated_text": "  The meeting starts now.  ",
         });
         assert_eq!(
@@ -751,9 +760,15 @@ mod translation_delivery_contract_tests {
             ("translation_contract", json!("unknown")),
             ("complete", json!(false)),
             ("finished_with_eos", json!(false)),
+            ("hit_token_ceiling", json!(true)),
+            ("hit_token_ceiling", json!(null)),
+            ("blocker", json!("translation:output_incomplete")),
             ("source_language", json!("en")),
             ("target_language", json!("id")),
+            ("direction_pair", json!("en->id")),
+            ("direction_pair", json!(null)),
             ("translated_text", json!("  ")),
+            ("translated_text", json!(123)),
         ] {
             let mut broken = valid.clone();
             broken[key] = replacement;
@@ -762,6 +777,25 @@ mod translation_delivery_contract_tests {
                 "invalid translation field must block delivery: {key}"
             );
         }
+        // Both directions are supported, but each requires a consistent
+        // source/target pair and a complete, non-capped worker result.
+        let mut incoming = valid.clone();
+        incoming["source_language"] = json!("en");
+        incoming["target_language"] = json!("id");
+        incoming["direction_pair"] = json!("en->id");
+        incoming["translated_text"] = json!("Rapat dimulai sekarang.");
+        assert_eq!(
+            validated_meeting_translation(&response(incoming.clone()), "en", "id"),
+            Some("Rapat dimulai sekarang.".into())
+        );
+        incoming["direction_pair"] = json!("id->en");
+        assert!(validated_meeting_translation(&response(incoming), "en", "id").is_none());
+
+        // The envelope's task identity is distinct from the JSON stage.
+        let mut wrong_task = response(valid.clone());
+        wrong_task.task = "voice_actor_synthesize".to_string();
+        assert!(validated_meeting_translation(&wrong_task, "id", "en").is_none());
+
         let mut failed_transport = response(valid);
         failed_transport.ok = false;
         assert!(validated_meeting_translation(&failed_transport, "id", "en").is_none());
