@@ -181,7 +181,8 @@ def main() -> int:
         "result_file_sha256": "b" * 64,
     }
     probe = evaluator.compare_case(corpus, baseline_bundle, candidate_bundle, focus)
-    assert probe["review_status"] == "BILINGUAL_REVIEW_REQUIRED"
+    assert probe["review_status"] == "RESULTS_ONLY_NO_WORKER_RECEIPT"
+    assert not probe["worker_receipts_declared"]
     assert probe["target_declared_recovery"]
     assert probe["declared_provenance_complete"]
     assert probe["distinct_declared_source_identities"]
@@ -191,6 +192,20 @@ def main() -> int:
     assert focus in probe["comparison"]["critical_recoveries"]
     assert not probe["comparison"]["critical_regressions"]
     assert probe["comparison"]["promotion_safe_on_declared_critical_invariants"]
+    # Explicitly simulated worker metadata tests the declared admission seam.
+    # This is not a real worker execution or authenticated result.
+    labeled_base = {**baseline_bundle, "worker_run_declared_suite": "full"}
+    labeled_cand = {**candidate_bundle, "worker_run_declared_suite": "full"}
+    reviewable = evaluator.compare_case(corpus, labeled_base, labeled_cand, focus)
+    assert reviewable["review_status"] == "BILINGUAL_REVIEW_REQUIRED"
+    assert reviewable["worker_receipts_declared"]
+    wrong_profile = evaluator.compare_case(
+        corpus,
+        {**labeled_base, "worker_run_declared_suite": "fast"},
+        {**labeled_cand, "worker_run_declared_suite": "fast"},
+        focus,
+    )
+    assert wrong_profile["review_status"] == "RESULTS_ONLY_NO_WORKER_RECEIPT"
     assert probe["request"]["text"] == cases_by_id[focus]["source"]
     assert "context_pairs" not in probe["request"]
     # A declared fast-suite recovery never becomes a release-quality decision.
@@ -650,6 +665,66 @@ def main() -> int:
         loaded = evaluator.load_result_bundle(result_file)
         assert loaded["result_file_sha256"] == hashlib.sha256(result_bytes).hexdigest()
         assert evaluator.regrade_retained(original_corpus, corpus, loaded)["changed_cases"]
+        assert loaded["worker_run_declared_suite"] is None
+
+        # Synthetic receipt samples validate structural shape, not actual inference.
+        fake_model = "milmmt-46-1b-v1.0"
+        fake_revision = "b" * 40
+        synthetic_worker_report = {
+            "schema": "translateit.translation_quality.worker_run.v1",
+            "execution_profile": {"name": "translation-full"},
+            "proof": "INTEGRATION_FIXTURE_TRANSLATION_STAGE_NOT_SPEECH_OR_NATIVE_ACCEPTANCE",
+            "execution_complete": True,
+            "execution_error": None,
+            "worker_terminated": True,
+            "worker_pid": 1234,
+            "model_manifest_sha256": "c" * 64,
+            "source_identity": "a" * 40 + ":" + fake_model + "@" + fake_revision,
+            "corpus_fingerprint": fingerprint,
+            "results": [{
+                "case_id": focus,
+                "translated_text": perfect[focus],
+                "response": {
+                    "ok": True,
+                    "stage": "translate",
+                    "complete": True,
+                    "finished_with_eos": True,
+                    "hit_token_ceiling": False,
+                    "translation_contract": "canonical_bidirectional_id_en",
+                    "model_id": fake_model,
+                    "model_revision": fake_revision,
+                    "translated_text": perfect[focus],
+                },
+            }],
+        }
+        result_file.write_text(json.dumps(synthetic_worker_report), encoding="utf-8")
+        synthetic_loaded = evaluator.load_result_bundle(result_file)
+        assert synthetic_loaded["worker_run_declared_suite"] == "full"
+        assert synthetic_loaded["source_identity"] == synthetic_worker_report["source_identity"]
+        for field, bad in (
+            ("worker_terminated", False),
+            ("worker_pid", True),
+            ("model_manifest_sha256", "not-a-hash"),
+            ("proof", "UNVERIFIED"),
+            ("execution_error", "broken"),
+            ("execution_profile", {"name": "translation-other"}),
+        ):
+            result_file.write_text(
+                json.dumps({**synthetic_worker_report, field: bad}), encoding="utf-8"
+            )
+            assert evaluator.load_result_bundle(result_file)["worker_run_declared_suite"] is None, field
+        for bad_response in (
+            {**synthetic_worker_report["results"][0]["response"], "finished_with_eos": False},
+            {**synthetic_worker_report["results"][0]["response"], "model_revision": "0" * 40},
+            {**synthetic_worker_report["results"][0]["response"], "translated_text": "different"},
+        ):
+            changed_row = {**synthetic_worker_report["results"][0], "response": bad_response}
+            result_file.write_text(
+                json.dumps({**synthetic_worker_report, "results": [changed_row]}),
+                encoding="utf-8",
+            )
+            assert evaluator.load_result_bundle(result_file)["worker_run_declared_suite"] is None
+
 
         # Fail closed on malformed, oversized or shape-confused retained bundles.
         bad_result_contents = (

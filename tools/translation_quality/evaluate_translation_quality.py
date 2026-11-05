@@ -287,6 +287,52 @@ def corpus_stats(corpus: dict) -> dict:
     }
 
 
+
+def declared_worker_receipt_suite(raw: dict | list) -> str | None:
+    """Identify a structurally consistent worker-run claim, not authenticate inference."""
+    if not isinstance(raw, dict) or raw.get("schema") != "translateit.translation_quality.worker_run.v1":
+        return None
+    profile = raw.get("execution_profile")
+    name = profile.get("name") if isinstance(profile, dict) else None
+    if name not in ("translation-fast", "translation-full"):
+        return None
+    identity = raw.get("source_identity")
+    match = re.fullmatch(r"([0-9a-f]{40}):([A-Za-z0-9._-]+)@([0-9a-f]{40})", identity) if isinstance(identity, str) else None
+    digest = raw.get("model_manifest_sha256")
+    pid = raw.get("worker_pid")
+    rows = raw.get("results")
+    if (
+        match is None
+        or not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        or type(pid) is not int or pid <= 0
+        or raw.get("execution_complete") is not True
+        or raw.get("worker_terminated") is not True
+        or raw.get("execution_error") is not None
+        or raw.get("proof") != "INTEGRATION_FIXTURE_TRANSLATION_STAGE_NOT_SPEECH_OR_NATIVE_ACCEPTANCE"
+        or not isinstance(rows, list) or not rows
+    ):
+        return None
+    model_id, revision = match.group(2), match.group(3)
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        response = row.get("response")
+        if not isinstance(response, dict) or any((
+            response.get("ok") is not True,
+            response.get("stage") != "translate",
+            response.get("complete") is not True,
+            response.get("finished_with_eos") is not True,
+            response.get("hit_token_ceiling") is not False,
+            response.get("translation_contract") != "canonical_bidirectional_id_en",
+            response.get("model_id") != model_id,
+            response.get("model_revision") != revision,
+            response.get("translated_text") != row.get("translated_text"),
+        )):
+            return None
+    return name.removeprefix("translation-")
+
+
 def load_result_bundle(path: Path) -> dict:
     # A captured report is untrusted input, even when it came from local tooling.
     if path.is_symlink() or not path.is_file():
@@ -336,6 +382,7 @@ def load_result_bundle(path: Path) -> dict:
         "result_file_sha256": hashlib.sha256(raw_bytes).hexdigest(),
         "corpus_fingerprint": (raw.get("corpus_fingerprint", "").strip() if isinstance(raw, dict) else ""),
         "source_identity": (raw.get("source_identity", "").strip() if isinstance(raw, dict) else ""),
+        "worker_run_declared_suite": declared_worker_receipt_suite(raw),
     }
 
 def load_results(path: Path) -> dict[str, str]:
@@ -448,6 +495,7 @@ def triage_case(corpus: dict, bundle: dict, case_id: str) -> dict:
         "result_corpus_fingerprint": bundle.get("corpus_fingerprint") or None,
         "declared_source_identity": bundle.get("source_identity") or None,
         "result_file_sha256": bundle.get("result_file_sha256"),
+        "worker_run_declared_suite": bundle.get("worker_run_declared_suite"),
         "complete_result_set": report["complete_result_set"],
         "case_present": present,
         "declared_provenance_complete": evidence_complete,
@@ -640,6 +688,12 @@ def compare_case(corpus: dict, baseline_bundle: dict, candidate_bundle: dict, ca
         and comparison["promotion_provenance_complete"]
     )
     target_recovered = case_id in comparison["critical_recoveries"]
+    # Only an exact canonical worker-report profile may reach the human-review
+    # handoff. Legacy/handcrafted results remain gradeable but not admissible.
+    worker_receipts_declared = (
+        baseline_bundle.get("worker_run_declared_suite") == before["suite"]
+        and candidate_bundle.get("worker_run_declared_suite") == before["suite"]
+    )
     if not evidence_complete or not distinct_identities:
         review_status = "UNVERIFIED"
     elif comparison["critical_regressions"]:
@@ -650,6 +704,8 @@ def compare_case(corpus: dict, baseline_bundle: dict, candidate_bundle: dict, ca
         review_status = "FAST_DIAGNOSTIC_ONLY"
     elif not comparison["promotion_safe_on_declared_critical_invariants"]:
         review_status = "UNRESOLVED_DECLARED_FAILURES"
+    elif not worker_receipts_declared:
+        review_status = "RESULTS_ONLY_NO_WORKER_RECEIPT"
     else:
         review_status = "BILINGUAL_REVIEW_REQUIRED"
     return {
@@ -660,6 +716,7 @@ def compare_case(corpus: dict, baseline_bundle: dict, candidate_bundle: dict, ca
         "full_regression_evaluated": comparison["full_regression_evaluated"],
         "declared_provenance_complete": evidence_complete,
         "distinct_declared_source_identities": distinct_identities,
+        "worker_receipts_declared": worker_receipts_declared,
         "review_status": review_status,
         "target_declared_recovery": target_recovered,
         "source": before["source"],
@@ -669,6 +726,7 @@ def compare_case(corpus: dict, baseline_bundle: dict, candidate_bundle: dict, ca
         "baseline": {
             "declared_source_identity": before["declared_source_identity"],
             "result_file_sha256": before["result_file_sha256"],
+            "worker_run_declared_suite": before["worker_run_declared_suite"],
             "translated_text": before["translated_text"],
             "triage_status": before["triage_status"],
             "declared_checks": before["declared_checks"],
@@ -676,6 +734,7 @@ def compare_case(corpus: dict, baseline_bundle: dict, candidate_bundle: dict, ca
         "candidate": {
             "declared_source_identity": after["declared_source_identity"],
             "result_file_sha256": after["result_file_sha256"],
+            "worker_run_declared_suite": after["worker_run_declared_suite"],
             "translated_text": after["translated_text"],
             "triage_status": after["triage_status"],
             "declared_checks": after["declared_checks"],
@@ -693,7 +752,9 @@ def compare_case(corpus: dict, baseline_bundle: dict, candidate_bundle: dict, ca
         "note": (
             "A focused contrast reuses existing declared checks and exact selected "
             "result sets. It neither executes a model nor proves semantic quality. "
-            "BILINGUAL_REVIEW_REQUIRED is not an acceptance or promotion decision. "
+            "Worker reports are checked for declared structure only, not "
+            "authenticated execution. BILINGUAL_REVIEW_REQUIRED is not an "
+            "acceptance or promotion decision. "
             "Only independent bilingual and integrated runtime evidence can "
             "establish the remaining quality and product gates."
         ),

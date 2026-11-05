@@ -206,6 +206,8 @@ The declared `review_status` is fail-closed:
 - `FAST_DIAGNOSTIC_ONLY`: target recovered within the fast suite;
 - `UNRESOLVED_DECLARED_FAILURES`: full-suite target recovery still leaves
   unresolved other declared failures;
+- `RESULTS_ONLY_NO_WORKER_RECEIPT`: complete declared-result comparison
+  lacks a matching pair of structurally consistent worker-run reports;
 - `BILINGUAL_REVIEW_REQUIRED`: complete full-suite comparison found a
   declared recovery, no introduced declared regressions, and a PASS
   candidate on the existing checks. **This is not semantic acceptance.**
@@ -220,6 +222,35 @@ Windows acceptance phase, and explicit promotion approval.
    the bounded reviewed change in a separate authorized decision. Do not
    silently rewrite a model output or inject prior utterances, a glossary,
    prompts or previous translations into canonical Meeting inference.
+
+### Recorded worker-receipt admission (P3)
+
+A contrast built from legacy JSON lists or manually assembled source/translation
+pairs can still be scored for diagnostic purposes, but it cannot claim to be
+ready for bilingual review. `compare-case` requires both selected results to
+carry a **structurally consistent** `translateit.translation_quality.worker_run.v1`
+report from the existing offline persistent-worker reporting format:
+
+- declared `translation-fast` / `translation-full` profile matching the
+  corpus selection;
+- `execution_complete=true`, `worker_terminated=true`, positive worker
+  PID, empty execution error, and the canonical translation-stage proof label;
+- a 40-character source revision, declared model/revision identity and
+  64-character manifest checksum;
+- each recorded canonical response must declare successful translation,
+  complete EOS, matching model/revision, and matching captured output.
+
+These are **untrusted assertions inside a JSON report**, not an attestation:
+anyone could construct a matching JSON object. The result loader identifies a
+`worker_run_declared_suite`, not verified model execution. Independent
+model/runtime evidence and human evaluation remain necessary. The loader keeps
+legacy result compatibility for ordinary scoring and retained regrading.
+
+When an otherwise fully passing contrast has no pair of matching declared
+worker receipts, the new status is `RESULTS_ONLY_NO_WORKER_RECEIPT` and the CLI
+exits nonzero. This gate changes only the focused contrast workflow; it does
+not silently change the older `evaluate`/`compare` result formats or quality
+scoring. Never infer that a source-only self-test exercised MiLMMT.
 
 ### Execute the selected translation stage
 
