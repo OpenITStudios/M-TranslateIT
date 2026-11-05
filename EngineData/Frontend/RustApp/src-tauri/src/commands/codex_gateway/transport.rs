@@ -23,17 +23,37 @@ const WAIT_SLICE: Duration = Duration::from_millis(50);
 type WireEvent = Result<Inbound, &'static str>;
 type WriteReceipt = Result<(), &'static str>;
 
+/// One writer, two strictly bounded classes. Diagnostic requests retain the
+/// original 8-KiB method allowlist; only a sealed typed realtime frame can
+/// select the separate larger JSONL budget.
+#[derive(Clone, Copy)]
+enum WriteScope {
+    Diagnostic,
+    Realtime(usize),
+}
+impl WriteScope {
+    fn limit(self) -> usize {
+        match self {
+            Self::Diagnostic => protocol::MAX_REQUEST_BYTES + 1,
+            Self::Realtime(n) if matches!(n, 1024 | 24_576 | 32_768) => n,
+            _ => 0,
+        }
+    }
+}
+
+
 /// The same cancellable write completion contract is used by the owned
 /// AppServer and the test-only in-memory fake. No second request policy.
-fn submit_with_receipt(
+fn submit_with_receipt_scoped(
     writer: &SyncSender<WriteCommand>,
     body: Vec<u8>,
+    scope: WriteScope,
     deadline: Instant,
     mut check_live: impl FnMut() -> Result<(), &'static str>,
 ) -> Result<(), &'static str> {
     check_live()?;
     let (completed, receipt) = mpsc::sync_channel(1);
-    match writer.try_send(WriteCommand { body, completed }) {
+    match writer.try_send(WriteCommand { body, scope, completed }) {
         Ok(()) => {}
         Err(TrySendError::Full(_)) => return Err("codex_gateway:writer_queue_full"),
         Err(TrySendError::Disconnected(_)) => {
@@ -54,6 +74,17 @@ fn submit_with_receipt(
             }
         }
     }
+}
+
+fn submit_with_receipt(
+    writer: &SyncSender<WriteCommand>,
+    body: Vec<u8>,
+    deadline: Instant,
+    check_live: impl FnMut() -> Result<(), &'static str>,
+) -> Result<(), &'static str> {
+    submit_with_receipt_scoped(
+        writer, body, WriteScope::Diagnostic, deadline, check_live,
+    )
 }
 
 /// Exact ID and account-notification dispatch for both the native owner and
@@ -143,8 +174,24 @@ fn account_notification(method: &str) -> Result<bool, &'static str> {
     Ok(affects_account_authority(method))
 }
 
+fn owned_realtime_inbound_allowed(
+    event: &Inbound,
+    last_issued_id: u64,
+) -> Result<(), &'static str> {
+    match event {
+        Inbound::Response { id, .. } if *id > 0 && *id <= last_issued_id => Ok(()),
+        Inbound::Response { .. } => Err("codex_gateway:voice_response_id_unowned"),
+        Inbound::Notification { method, .. } if affects_account_authority(method) => {
+            Err("codex_gateway:voice_account_revision_changed")
+        }
+        Inbound::Notification { method, .. } if method.starts_with("thread/realtime/") => Ok(()),
+        Inbound::Notification { .. } => Err("codex_gateway:voice_notification_unexpected"),
+    }
+}
+
 struct WriteCommand {
     body: Vec<u8>,
+    scope: WriteScope,
     completed: SyncSender<WriteReceipt>,
 }
 
@@ -158,7 +205,8 @@ fn write_jsonl(
 ) {
     while let Ok(command) = receiver.recv() {
         if command.body.is_empty()
-            || command.body.len() > protocol::MAX_REQUEST_BYTES
+            || command.scope.limit() == 0
+            || command.body.len() > command.scope.limit()
             || command.body.last() != Some(&b'\n')
         {
             failed.store(true, Ordering::Release);
@@ -454,6 +502,89 @@ impl AppServer {
         }
     }
 
+    /// One request ID owner across diagnostic and future realtime messages.
+    /// This is unreachable from production without a VerifiedMediaAuthority.
+    pub(super) fn next_realtime_request_id(
+        &mut self,
+        pinned_account_revision: u64,
+        _admission: &super::realtime_rpc::VerifiedMediaAuthority,
+        cancelled: &AtomicBool,
+    ) -> Result<u64, &'static str> {
+        self.check_live(cancelled)?;
+        if self.account_dirty || self.account_revision() != pinned_account_revision {
+            return Err("codex_gateway:voice_account_revision_changed");
+        }
+        self.next_id.checked_add(1).ok_or("codex_gateway:request_id_exhausted")
+    }
+
+    /// Submit one typed V3 JSONL frame through the *existing* writer queue.
+    /// This does not wait for the model RPC response: the same owned reader
+    /// must observe that ACK separately to avoid blocking 200-ms audio ticks.
+    /// No production path can construct the sealed admission argument.
+    pub(super) fn queue_realtime_frame(
+        &mut self,
+        frame: super::realtime_rpc::RpcFrame,
+        pinned_account_revision: u64,
+        _admission: &super::realtime_rpc::VerifiedMediaAuthority,
+        cancelled: &AtomicBool,
+    ) -> Result<(), &'static str> {
+        let next = self.next_realtime_request_id(
+            pinned_account_revision, _admission, cancelled,
+        )?;
+        if frame.id != next {
+            return Err("codex_gateway:voice_rpc_id_out_of_order");
+        }
+        let max_bytes = frame.validate_for_transport()?;
+        self.next_id = next;
+        let writer = self.writer_tx.as_ref()
+            .ok_or("codex_gateway:writer_unavailable")?.clone();
+        let deadline = Instant::now() + RESPONSE_TIMEOUT;
+        submit_with_receipt_scoped(
+            &writer, frame.bytes, WriteScope::Realtime(max_bytes), deadline,
+            || self.check_live(cancelled),
+        )?;
+        if self.account_dirty || self.account_revision() != pinned_account_revision {
+            return Err("codex_gateway:voice_account_revision_changed");
+        }
+        Ok(())
+    }
+
+    /// Receive exact typed events on the SAME AppServer child/reader.
+    /// On account/provider change, never return stale voice text or ACKs.
+    /// Per-thread/turn/utterance IDs remain checked by RealtimeRpc and the
+    /// existing RealtimeObserver + CorrelationGate, not this pipe layer.
+    pub(super) fn next_realtime_event(
+        &mut self,
+        pinned_account_revision: u64,
+        _admission: &super::realtime_rpc::VerifiedMediaAuthority,
+        cancelled: &AtomicBool,
+    ) -> Result<Option<Inbound>, &'static str> {
+        self.check_live(cancelled)?;
+        if self.account_dirty || self.account_revision() != pinned_account_revision {
+            return Err("codex_gateway:voice_account_revision_changed");
+        }
+        let received = match self.receiver.recv_timeout(WAIT_SLICE) {
+            Ok(Ok(value)) => value,
+            Ok(Err(reason)) => return Err(reason),
+            Err(RecvTimeoutError::Timeout) => return Ok(None),
+            Err(RecvTimeoutError::Disconnected) => return Err("codex_gateway:reader_disconnected"),
+        };
+        // A separate reader thread updates revision BEFORE queueing a changed
+        // account notification. Refuse data regardless of delivery order.
+        if cancelled.load(Ordering::Acquire)
+            || self.account_revision() != pinned_account_revision
+        {
+            return Err("codex_gateway:voice_account_revision_changed");
+        }
+        if let Err(blocker) = owned_realtime_inbound_allowed(&received, self.next_id) {
+            if blocker == "codex_gateway:voice_account_revision_changed" {
+                self.account_dirty = true;
+            }
+            return Err(blocker);
+        }
+        Ok(Some(received))
+    }
+
     /// The read thread advances this revision BEFORE queueing account or
     /// provider events, including while the controller awaits an RPC.
     pub(super) fn account_revision(&self) -> u64 {
@@ -604,6 +735,7 @@ mod tests {
         let (ack, done) = mpsc::sync_channel(1);
         assert!(tx.try_send(WriteCommand {
             body: b"{\"method\":\"initialized\"}\n".to_vec(),
+            scope: WriteScope::Diagnostic,
             completed: ack,
         }).is_ok());
         drop(tx);
@@ -623,16 +755,96 @@ mod tests {
         let (first, _first_receipt) = mpsc::sync_channel(1);
         assert!(tx.try_send(WriteCommand {
             body: b"{\"method\":\"initialized\"}\n".to_vec(),
+            scope: WriteScope::Diagnostic,
             completed: first,
         }).is_ok());
         let (second, _second_receipt) = mpsc::sync_channel(1);
         assert!(matches!(
             tx.try_send(WriteCommand {
                 body: b"{\"method\":\"initialized\"}\n".to_vec(),
+            scope: WriteScope::Diagnostic,
                 completed: second,
             }),
             Err(TrySendError::Full(_))
         ));
+    }
+
+    #[test]
+    fn separate_writer_limits_preserve_diagnostics_and_realtime_pcm() {
+        use std::sync::Mutex;
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl Write for Capture {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        let mut audio = serde_json::to_vec(&serde_json::json!({
+            "id": 1,
+            "method": "thread/realtime/appendAudio",
+            "params": { "audio": {"data":"A".repeat(12_800)} }
+        })).unwrap();
+        audio.push(b'\n');
+        assert!(audio.len() > protocol::MAX_REQUEST_BYTES);
+        assert!(audio.len() < 24_576);
+
+        let owned = Arc::new(Mutex::new(Vec::new()));
+        let (tx, rx) = mpsc::sync_channel(1);
+        let (done, receipt) = mpsc::sync_channel(1);
+        tx.try_send(WriteCommand {
+            body: audio.clone(),
+            scope: WriteScope::Realtime(24_576),
+            completed: done,
+        }).unwrap();
+        drop(tx);
+        let failed = Arc::new(AtomicBool::new(false));
+        write_jsonl(Capture(Arc::clone(&owned)), rx, Arc::clone(&failed));
+        assert_eq!(receipt.recv().unwrap(), Ok(()));
+        assert_eq!(&*owned.lock().unwrap(), &audio);
+        assert!(!failed.load(Ordering::Acquire));
+
+        let (tx, rx) = mpsc::sync_channel(1);
+        let (done, receipt) = mpsc::sync_channel(1);
+        tx.try_send(WriteCommand {
+            body: audio,
+            scope: WriteScope::Diagnostic,
+            completed: done,
+        }).unwrap();
+        drop(tx);
+        let rejected = Arc::new(AtomicBool::new(false));
+        write_jsonl(Capture(Arc::new(Mutex::new(Vec::new()))), rx, Arc::clone(&rejected));
+        assert_eq!(receipt.recv().unwrap(), Err("codex_gateway:writer_frame_invalid"));
+        assert!(rejected.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn owned_realtime_dispatch_rejects_unowned_response_and_unrelated_events() {
+        let reply = Inbound::Response { id: 7, result: serde_json::json!({}) };
+        assert_eq!(owned_realtime_inbound_allowed(&reply, 7), Ok(()));
+        assert_eq!(
+            owned_realtime_inbound_allowed(&reply, 6),
+            Err("codex_gateway:voice_response_id_unowned")
+        );
+        let sdp = Inbound::Notification {
+            method: "thread/realtime/sdp".into(),
+            params: serde_json::json!({"threadId":"thread-1","sdp":"private"}),
+        };
+        assert_eq!(owned_realtime_inbound_allowed(&sdp, 7), Ok(()));
+        let account = Inbound::Notification {
+            method: "account/updated".into(), params: serde_json::Value::Null,
+        };
+        assert_eq!(
+            owned_realtime_inbound_allowed(&account, 7),
+            Err("codex_gateway:voice_account_revision_changed")
+        );
+        let unrelated = Inbound::Notification {
+            method: "thread/started".into(), params: serde_json::Value::Null,
+        };
+        assert_eq!(
+            owned_realtime_inbound_allowed(&unrelated, 7),
+            Err("codex_gateway:voice_notification_unexpected")
+        );
     }
 
     #[test]
@@ -688,6 +900,7 @@ mod tests {
         let (ack, done) = mpsc::sync_channel(1);
         assert!(tx.try_send(WriteCommand {
             body: b"{\"method\":\"initialized\"}\n".to_vec(),
+            scope: WriteScope::Diagnostic,
             completed: ack,
         }).is_ok());
         drop(tx);

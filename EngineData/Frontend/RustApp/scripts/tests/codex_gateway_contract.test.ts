@@ -152,6 +152,7 @@ test("P5 stages typed V3 WebRTC start/audio/stop envelopes without live RPC admi
   assert.match(realtimeRpc, /"thread\/realtime\/appendAudio"/);
   assert.match(realtimeRpc, /"thread\/realtime\/stop"/);
   assert.match(realtimeRpc, /"outputModality": "audio"/);
+  assert.match(realtimeRpc, /"clientManagedHandoffs": true/);
   assert.doesNotMatch(realtimeRpc, /"outputModality": "text"/);
   assert.match(realtime, /CloudAudioIgnored/);
   assert.match(realtime, /codex_realtime:session_failed/);
@@ -193,7 +194,9 @@ test("P5 stages typed V3 WebRTC start/audio/stop envelopes without live RPC admi
   assert.doesNotMatch(realtimeRpc, /voice_actor_synthesize|enqueue_meeting_playback|commit_meeting_turn/);
   assert.doesNotMatch(protocol, /"thread\/realtime\/start" \|/);
   assert.doesNotMatch(protocol, /"thread\/realtime\/appendAudio" \|/);
-  assert.doesNotMatch(transport, /realtime_rpc::/);
+  assert.match(transport, /fn queue_realtime_frame\(/);
+  assert.match(transport, /_admission: &super::realtime_rpc::VerifiedMediaAuthority/);
+  assert.doesNotMatch(gateway, /queue_realtime_frame\(/);
   assert.match(gateway, /"experimentalApi": false/);
   assert.match(gateway, /meeting_route_enabled: false/);
 });
@@ -201,7 +204,9 @@ test("P5 stages typed V3 WebRTC start/audio/stop envelopes without live RPC admi
 
 test("P6 keeps the account-only RPC allowlist and single read/write ownership", () => {
   assert.match(protocol, /"initialize" \| "account\/read" \| "account\/rateLimits\/read"/);
-  assert.doesNotMatch(transport, /realtime_rpc::/);
+  assert.match(transport, /fn queue_realtime_frame\(/);
+  assert.match(transport, /_admission: &super::realtime_rpc::VerifiedMediaAuthority/);
+  assert.doesNotMatch(gateway, /queue_realtime_frame\(/);
   assert.match(transport, /fn account_notification\(method: &str\)/);
   assert.match(transport, /account_notification\(&method\)\?/);
   assert.match(transport, /codex_gateway:unexpected_response_id/);
@@ -355,7 +360,9 @@ test("P10 rejects stale account and provider claims before notifications are deq
   assert.match(fakeServer, /reader_revision/);
   assert.match(gateway, /"experimentalApi": false/);
   assert.match(gateway, /meeting_route_enabled: false/);
-  assert.doesNotMatch(transport, /realtime_rpc::/);
+  assert.match(transport, /fn queue_realtime_frame\(/);
+  assert.match(transport, /_admission: &super::realtime_rpc::VerifiedMediaAuthority/);
+  assert.doesNotMatch(gateway, /queue_realtime_frame\(/);
   assert.doesNotMatch(protocol, /"thread\/realtime\/start" \|/);
 });
 
@@ -371,7 +378,25 @@ test("Codex TTS-only hook does not route through Local ASR/MT", () => {
   assert.doesNotMatch(only, /"asr_preload"|"transcribe"|"translate"|"translation_preload"/);
   assert.doesNotMatch(only, /\.provider_ready\s*(?:==|&&|\|\|)/);
   assert.match(helperProbe, /fn codex_voice_only_receipt_rejects_foreign_actor_path_or_stage/);
-  assert.match(realtime, /assert_eq!\(combined\.len\(\), 6\)/);
+  assert.match(realtime, /assert_eq!\(combined\.len\(\), 5\)/);
+  assert.match(gateway, /meeting_route_enabled: false/);
+});
+
+test("Codex realtime control uses the SAME owned JSONL writer/reader, with typed frame budgets", () => {
+  assert.match(transport, /enum WriteScope/);
+  assert.match(transport, /Self::Diagnostic => protocol::MAX_REQUEST_BYTES \+ 1/);
+  assert.match(transport, /fn submit_with_receipt_scoped\(/);
+  assert.match(transport, /fn queue_realtime_frame\(/);
+  assert.match(transport, /fn next_realtime_event\(/);
+  assert.match(transport, /fn owned_realtime_inbound_allowed\(/);
+  assert.match(transport, /codex_gateway:voice_account_revision_changed/);
+  assert.match(transport, /fn separate_writer_limits_preserve_diagnostics_and_realtime_pcm/);
+  assert.match(transport, /fn owned_realtime_dispatch_rejects_unowned_response_and_unrelated_events/);
+  assert.match(realtimeRpc, /fn validate_for_transport\(/);
+  assert.match(realtimeRpc, /fn wire_transport_budget_accepts_pcm_frame_but_rejects_forged_rpc/);
+  assert.match(realtimeRpc, /codex_wire:transport_frame_mismatch/);
+  assert.doesNotMatch(protocol, /"thread\/realtime\/start" \|/);
+  assert.match(gateway, /"experimentalApi": false/);
   assert.match(gateway, /meeting_route_enabled: false/);
 });
 
@@ -404,7 +429,8 @@ test("Codex text candidate cannot send inference, execute tools or commit to Mee
   assert.match(offlineText, /fn rejects_wrong_direction_empty_oversized_or_unsafe_source/);
   assert.match(offlineText, /fn exact_one_shot_final_or_explicit_failure_never_admits_tools/);
   assert.doesNotMatch(offlineText, /Command::new|send_helper_worker_task|voice_actor_synthesize|commit_meeting_turn|deliver_meeting_output/);
-  assert.doesNotMatch(transport, /text::|thread\/start|turn\/start/);
+  // Check outbound request method literals, not thread/started notifications.
+  assert.doesNotMatch(transport, /text::|"thread\/start"|"turn\/start"/);
   assert.doesNotMatch(protocol, /"turn\/start" \|/);
   assert.match(gateway, /meeting_route_enabled: false/);
 });

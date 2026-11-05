@@ -602,10 +602,18 @@ mod tests {
         let (_, entire) = single.convert(0, &data).unwrap();
         let combined: Vec<i16> = first.iter().chain(second.iter()).copied().collect();
         assert_eq!(combined, entire);
-        assert_eq!(combined.len(), 6);
+        // Linear interpolation needs the next source sample at the last
+        // fractional position: four source samples yield five immediately.
+        // The sixth output becomes available only with the fifth input.
+        assert_eq!(combined.len(), 5);
         assert_eq!((s0, s1), (0, 2));
         assert_eq!(combined[0], 0);
         assert!(combined[1] > 0 && combined[4] < 0);
+        let (next_start, next_pcm) = split.convert(4, &[0.5]).unwrap();
+        let (_, full_tail) = single.convert(4, &[0.5]).unwrap();
+        assert_eq!(next_start, 5);
+        assert_eq!(next_pcm, full_tail);
+        assert_eq!(next_pcm.len(), 2);
     }
 
     #[test]

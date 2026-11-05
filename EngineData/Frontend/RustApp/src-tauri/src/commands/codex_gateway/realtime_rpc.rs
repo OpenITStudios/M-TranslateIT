@@ -54,6 +54,76 @@ impl std::fmt::Debug for RpcFrame {
     }
 }
 
+impl RpcFrame {
+    /// Reject forged or mismatched typed envelopes before the larger JSONL
+    /// writer budget can be used. Account RPCs retain the 8-KiB gate.
+    pub(super) fn validate_for_transport(&self) -> Result<usize, &'static str> {
+        let budget = match self.method {
+            "thread/realtime/start" => START_MAX_BYTES,
+            "thread/realtime/appendAudio" => AUDIO_MAX_BYTES,
+            "thread/realtime/stop" => STOP_MAX_BYTES,
+            _ => return Err("codex_wire:method_not_realtime"),
+        };
+        if self.id == 0 || self.bytes.len() < 2 || self.bytes.len() > budget
+            || self.bytes.last() != Some(&b'\n')
+        {
+            return Err("codex_wire:transport_frame_invalid");
+        }
+        let value: Value = serde_json::from_slice(&self.bytes[..self.bytes.len() - 1])
+            .map_err(|_| "codex_wire:transport_frame_invalid")?;
+        let object = value.as_object().ok_or("codex_wire:transport_frame_invalid")?;
+        if object.len() != 3
+            || object.get("id").and_then(Value::as_u64) != Some(self.id)
+            || object.get("method").and_then(Value::as_str) != Some(self.method)
+        {
+            return Err("codex_wire:transport_frame_mismatch");
+        }
+        let params = object.get("params").and_then(Value::as_object)
+            .ok_or("codex_wire:transport_params_invalid")?;
+        let thread = params.get("threadId").and_then(Value::as_str)
+            .ok_or("codex_wire:transport_params_invalid")?;
+        if !valid_id(thread) {
+            return Err("codex_wire:transport_params_invalid");
+        }
+        let shape_ok = match self.method {
+            "thread/realtime/start" => {
+                params.len() == 9
+                    && params.get("clientManagedHandoffs") == Some(&Value::Bool(true))
+                    && params.get("version").and_then(Value::as_str) == Some("v3")
+                    && params.get("outputModality").and_then(Value::as_str) == Some("audio")
+                    && params.get("includeStartupContext") == Some(&Value::Bool(false))
+                    && params.get("voiceSessionId").and_then(Value::as_str).is_some_and(valid_id)
+                    && params.get("initialItems").and_then(Value::as_array).is_some_and(Vec::is_empty)
+                    && params.get("realtimeStartInstructions").and_then(Value::as_str) == Some(INSTRUCTIONS)
+                    && params.get("transport").and_then(Value::as_object).is_some_and(|transport| {
+                        transport.len() == 2
+                            && transport.get("type").and_then(Value::as_str) == Some("webrtc")
+                            && transport.get("sdp").and_then(Value::as_str).is_some_and(valid_sdp)
+                    })
+            }
+            "thread/realtime/appendAudio" => {
+                params.len() == 2 && params.get("audio").and_then(Value::as_object)
+                    .is_some_and(|audio| {
+                        audio.len() == 5
+                            && audio.get("sampleRate").and_then(Value::as_u64) == Some(AUDIO_RATE)
+                            && audio.get("numChannels").and_then(Value::as_u64) == Some(1)
+                            && audio.get("itemId").is_some_and(Value::is_null)
+                            && audio.get("samplesPerChannel").and_then(Value::as_u64)
+                                .is_some_and(|n| (1..=AUDIO_MAX_SAMPLES).contains(&n))
+                            && audio.get("data").and_then(Value::as_str)
+                                .is_some_and(|data| !data.is_empty() && data.len() <= 12_800)
+                    })
+            }
+            "thread/realtime/stop" => params.len() == 1,
+            _ => false,
+        };
+        if !shape_ok {
+            return Err("codex_wire:transport_params_invalid");
+        }
+        Ok(budget)
+    }
+}
+
 struct PendingAudio {
     rpc_id: u64,
     end_sample: u64,
@@ -207,6 +277,10 @@ impl RealtimeRpc {
                 "threadId": self.thread_id,
                 "voiceSessionId": self.voice_session_id,
                 "outputModality": "audio",
+                // Disable automatic Codex coding-agent delegation from speech.
+                // Future translation requires a separately admitted client
+                // action and a supported pre-execution tool restriction.
+                "clientManagedHandoffs": true,
                 "includeStartupContext": false,
                 "initialItems": [],
                 "version": "v3",
@@ -663,6 +737,7 @@ mod tests {
         assert_eq!(value["params"]["threadId"], "thread_1");
         assert_eq!(value["params"]["voiceSessionId"], "voice_1");
         assert_eq!(value["params"]["outputModality"], "audio");
+        assert_eq!(value["params"]["clientManagedHandoffs"], true);
         assert_eq!(value["params"]["transport"]["type"], "webrtc");
         assert_eq!(value["params"]["version"], "v3");
         assert_eq!(value["params"]["includeStartupContext"], false);
@@ -750,6 +825,25 @@ mod tests {
         stopped.ack_stop(15, &json!({})).unwrap();
         stopped.observe_closed(&json!({"threadId":"thread_1"})).unwrap();
         assert!(stopped.close_verified());
+    }
+
+    #[test]
+    fn wire_transport_budget_accepts_pcm_frame_but_rejects_forged_rpc() {
+        let stop = AtomicBool::new(false);
+        let mut session = live();
+        let mut queue = AudioFrameQueue::default();
+        queue.push(0, &vec![0; AUDIO_MAX_SAMPLES as usize]).unwrap();
+        let audio = session.send_queued_audio(11, 7, 2, &mut queue, &stop)
+            .unwrap().expect("audio frame");
+        assert!(audio.bytes.len() > super::super::protocol::MAX_REQUEST_BYTES);
+        assert_eq!(audio.validate_for_transport(), Ok(AUDIO_MAX_BYTES));
+
+        let mut forged = audio;
+        forged.method = "turn/start";
+        assert_eq!(forged.validate_for_transport(), Err("codex_wire:method_not_realtime"));
+        forged.method = "thread/realtime/appendAudio";
+        forged.id = 12;
+        assert_eq!(forged.validate_for_transport(), Err("codex_wire:transport_frame_mismatch"));
     }
 
     #[test]

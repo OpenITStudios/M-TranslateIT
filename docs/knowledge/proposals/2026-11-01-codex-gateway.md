@@ -252,6 +252,37 @@ It is a non-callback integration seam, not a running microphone pipeline,
 measured audio-quality proof or finished WebRTC owner. Do not invoke
 allocation-heavy conversion from a CPAL real-time callback.
 
+The existing AppServer JSONL writer and reader now have a **sealed typed
+realtime control path**, not a second Codex process: diagnostic requests
+still use their strict 8-KiB method allowlist, while a
+`RealtimeRpc::RpcFrame` with a separately proven
+`VerifiedMediaAuthority` can use its method-specific 32-KiB Start,
+24-KiB appendAudio or 1-KiB Stop frame budget.
+`AppServer.queue_realtime_frame` queues one validated frame without
+waiting for its model ACK, and `next_realtime_event` surfaces responses
+and realtime notifications on the same bounded reader; an account
+revision change revokes that path before stale events are returned.
+Real media auth has **no production constructor**, and
+`protocol::request` remains diagnostic-only. The currently initialized
+diagnostic App Server advertises `experimentalApi=false`, so this
+source-only control path cannot start Voice today.
+
+The candidate V3 Start also selects `clientManagedHandoffs=true`
+(the option used by Codex's upstream TUI) to avoid implicit delegation
+of spoken meeting content to the coding agent. This does **not**
+produce an admitted translation: safe client-managed translation,
+pre-execution tool restriction and final-text source binding are still
+missing, and the provider must not receive private speech until those
+permissions exist.
+
+The upstream browser/TUI still owns WebRTC offer/answer and ICE media
+negotiation externally. TranslateIT has no WebRTC peer yet: there is
+no media connection, no audio upload and no output playback. Before
+promotion, the single owned session must correlate actual realtime
+items with source windows and prove safe Stop, receiving network
+interruptions, and input speech privacy. Typed SDP envelopes or write
+receipts are not connectivity or transcription proof.
+
 The source-only integration now composes the **existing** queue and wire
 encoder: `AudioFrameQueue.pending_state` distinguishes empty from revoked;
 `RealtimeRpc.send_queued_audio` checks generation/source epoch, cancellation,
@@ -264,9 +295,11 @@ The source-only Pcm24kResampler now supplies conversion for 8–96-kHz
 mono f32 microphone samples, but real CPAL producer wiring,
 frame scheduling, audio-clock correctness on the target device,
 and WebRTC media negotiation are not implemented or proven.
-The partition-invariance fixture for four 16-kHz source samples
-now expects **six** 24-kHz output samples (previously asserted five);
-the synthetic Rust tests are AUTHORED, NOT EXECUTED.
+Correction from a source-only interpolation audit: four 16-kHz input
+samples produce **five immediately available** 24-kHz samples because
+the final fractional position still needs a fifth input sample. The
+next input permits two more samples. The partition-invariance fixture
+and reference note are reconciled; Rust tests are AUTHORED, NOT EXECUTED.
 
 The existing `CorrelationGate.observe_event` now feeds canonical
 `RealtimeObserver` events into the one-flight source/assistant pairing
