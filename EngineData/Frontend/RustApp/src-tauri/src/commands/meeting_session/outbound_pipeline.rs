@@ -82,6 +82,55 @@ fn verified_tts_output_in_dir(
     Some(resolved_expected)
 }
 
+// File identity is checked across validation and open, not only by length.
+// Unix inode/device is exact for the observed files; stable Windows std APIs
+// expose a best-effort creation/write-time/attribute comparison, not a file ID.
+fn checked_tts_metadata_matches_open(checked: &fs::Metadata, opened: &fs::Metadata) -> bool {
+    if !checked.is_file() || !opened.is_file() || checked.len() != opened.len() {
+        return false;
+    }
+    if !matches!(
+        (checked.modified(), opened.modified()),
+        (Ok(before), Ok(after)) if before == after
+    ) {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        checked.dev() == opened.dev() && checked.ino() == opened.ino()
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        opened.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+            && checked.creation_time() == opened.creation_time()
+            && checked.file_attributes() == opened.file_attributes()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        false
+    }
+}
+
+fn open_protected_tts_file(path: &Path) -> Option<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Keep reading allowed, but reject new writers and pathname deletion
+        // while this Meeting TTS handle is queued. Inspect reparse points
+        // themselves instead of silently following a late-created link.
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    options.open(path).ok()
+}
+
 // Keep a source-owned handle from accepted TTS output through the playback
 // queue; no WAV sample data is read or duplicated during admission.
 fn open_verified_tts_output_in_dir(
@@ -94,9 +143,15 @@ fn open_verified_tts_output_in_dir(
     if !entry.file_type().is_file() || entry.len() <= MIN_MEETING_TTS_WAV_BYTES {
         return None;
     }
-    let opened = fs::File::open(&path).ok()?;
+    let opened = open_protected_tts_file(&path)?;
     let opened_meta = opened.metadata().ok()?;
-    if !opened_meta.is_file() || opened_meta.len() != entry.len() {
+    // A same-sized substitute between symlink_metadata and open is not
+    // trusted. On Windows the acquired handle additionally denies new writes
+    // and renames. On Unix require the same device/inode.
+    let after_open_entry = fs::symlink_metadata(&path).ok()?;
+    if !checked_tts_metadata_matches_open(&entry, &opened_meta)
+        || !checked_tts_metadata_matches_open(&after_open_entry, &opened_meta)
+    {
         return None;
     }
     Some((path, opened))
@@ -620,7 +675,7 @@ pub(super) fn process_outbound_wav(
             runtime_claim: "meeting_outbound_tts_output_identity_mismatch".to_string(),
         };
     };
-    let playback_job = PreparedPlaybackJob {
+    let mut playback_job = PreparedPlaybackJob {
         generation,
         source_epoch,
         session_id: session_id.to_string(),
@@ -639,6 +694,9 @@ pub(super) fn process_outbound_wav(
         utterance_id,
         "queued",
     ) {
+        // Do not leave the Windows read-only share guard open during cleanup:
+        // the queued job has not yet transferred ownership to playback.
+        drop(playback_job.opened_tts_file.take());
         remove_temporary_tts_paths(&playback_job.requested_tts_path, &playback_job.actual_tts_path);
         update_outbound_status(
             generation, session_id, "attention_needed", event_sequence, false, false,
@@ -718,8 +776,9 @@ pub(super) fn process_outbound_wav(
 mod tests {
     use super::{
         cleanup_meeting_tts_for_scope_in_dir, cleanup_meeting_tts_for_session_in_dir,
-        expected_tts_path_in_dir, open_verified_tts_output_in_dir,
-        remove_temporary_tts_paths_in_dir, tts_output_path, verified_tts_output_in_dir,
+        checked_tts_metadata_matches_open, expected_tts_path_in_dir,
+        open_verified_tts_output_in_dir, remove_temporary_tts_paths_in_dir,
+        tts_output_path, verified_tts_output_in_dir,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -954,6 +1013,50 @@ mod tests {
         assert!(open_verified_tts_output_in_dir(
             &root, &request, path.to_string_lossy().as_ref(),
         ).is_some());
+        fs::remove_dir_all(root).expect("remove fixture");
+    }
+
+
+    #[cfg(unix)]
+    #[test]
+    fn same_size_file_swapped_before_handle_open_fails_identity_check() {
+        let root = temp_wav("admission-identity").with_extension("");
+        fs::create_dir_all(&root).expect("create isolated fixture");
+        let path = root.join("session-a_g7_s11.wav");
+        let original_path = root.join("prior.wav");
+        let mut replacement = one_frame_pcm16_wav();
+        replacement[44] = 42;
+        fs::write(&path, one_frame_pcm16_wav()).expect("write original file");
+        let checked = fs::symlink_metadata(&path).expect("inspect original entry");
+        fs::rename(&path, &original_path).expect("replace checked filename");
+        fs::write(&path, replacement).expect("create same-size replacement");
+        let opened = fs::File::open(&path).expect("open replacement");
+        let actual = opened.metadata().expect("read opened file metadata");
+        assert!(!checked_tts_metadata_matches_open(&checked, &actual),
+            "same size must not equate two different inodes");
+        assert!(checked_tts_metadata_matches_open(
+            &fs::symlink_metadata(&path).unwrap(), &actual,
+        ), "stable same-file admission stays valid");
+        drop(opened);
+        fs::remove_dir_all(root).expect("remove fixture");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn held_meeting_tts_handle_denies_new_writers_until_release() {
+        let root = temp_wav("protected-wav-open").with_extension("");
+        fs::create_dir_all(&root).expect("create isolated fixture");
+        let path = root.join("session-a_g7_s11.wav");
+        let requested = tts_output_path("session-a", 7, 11);
+        fs::write(&path, one_frame_pcm16_wav()).expect("write original audio");
+        let (_, held) = open_verified_tts_output_in_dir(
+            &root, &requested, path.to_string_lossy().as_ref(),
+        ).expect("open with Windows read-sharing guard");
+        assert!(fs::OpenOptions::new().write(true).open(&path).is_err(),
+            "no new writer may mutate the queued TTS WAV");
+        drop(held);
+        assert!(fs::OpenOptions::new().write(true).open(&path).is_ok(),
+            "write access returns after the last queued handle closes");
         fs::remove_dir_all(root).expect("remove fixture");
     }
 

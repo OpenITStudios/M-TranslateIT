@@ -185,10 +185,26 @@ pub(super) fn decode_wav_bytes(bytes: &[u8]) -> Result<DecodedWav, String> {
     })
 }
 
-// The caller opens the path once. All size checks and bytes come from that
-// same file handle; a subsequent rename/replacement of the path cannot switch
-// the file being decoded. This does not make in-place same-length writes
-// atomic or authenticate the file before its handle was opened.
+// The caller opens the path once. Size checks and decoded bytes come from
+// the same handle; a later pathname swap cannot redirect the WAV. Modification
+// timestamps are a low-cost best-effort same-size rewrite signal, not a
+// cryptographic integrity check or an atomic snapshot.
+fn wav_changed_during_read(
+    before: &fs::Metadata,
+    after: &fs::Metadata,
+    bytes_read: u64,
+) -> bool {
+    if before.len() != after.len() || bytes_read != after.len() {
+        return true;
+    }
+    match (before.modified(), after.modified()) {
+        (Ok(first), Ok(last)) => first != last,
+        // If the filesystem does not expose comparable write times, do not
+        // claim an unchanged complete WAV from this read.
+        _ => true,
+    }
+}
+
 pub(super) fn read_bounded_open_wav(mut file: fs::File) -> Result<Vec<u8>, String> {
     let initial = file.metadata().map_err(|_| "meeting_output:wav_read_failed".to_string())?;
     if !initial.is_file() {
@@ -206,9 +222,9 @@ pub(super) fn read_bounded_open_wav(mut file: fs::File) -> Result<Vec<u8>, Strin
     if bytes.len() as u64 > MAX_MEETING_OUTPUT_WAV_BYTES {
         return Err("meeting_output:wav_too_large".to_string());
     }
-    let final_len = file.metadata()
-        .map_err(|_| "meeting_output:wav_read_failed".to_string())?.len();
-    if initial.len() != final_len || bytes.len() as u64 != final_len {
+    let final_metadata = file.metadata()
+        .map_err(|_| "meeting_output:wav_read_failed".to_string())?;
+    if wav_changed_during_read(&initial, &final_metadata, bytes.len() as u64) {
         return Err("meeting_output:wav_changed_during_read".to_string());
     }
     Ok(bytes)
@@ -279,4 +295,38 @@ pub(super) fn delivery_deadline_ms(sample_count: usize, channels: u16, sample_ra
         .saturating_mul(2)
         .saturating_add(2_000)
         .clamp(MIN_DELIVERY_DEADLINE_MS, MAX_DELIVERY_DEADLINE_MS)
+}
+
+#[cfg(test)]
+mod read_consistency_tests {
+    use super::wav_changed_during_read;
+    use std::fs;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn same_length_modified_wav_is_not_accepted_as_unchanged() {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)
+            .expect("system time after epoch").as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "translateit-wav-mtime-{}-{nonce}.wav", std::process::id(),
+        ));
+        fs::write(&path, b"same sized WAV fixture").expect("create temporary fixture");
+        // set_modified needs write-attribute permission on Windows.
+        let file = fs::OpenOptions::new().read(true).write(true)
+            .open(&path).expect("open fixture with write attributes");
+        let earlier = UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+        let later = earlier + Duration::from_secs(120);
+        file.set_modified(earlier).expect("set deterministic original mtime");
+        let before = file.metadata().expect("read first metadata");
+        assert!(!wav_changed_during_read(&before, &before, before.len()));
+        file.set_modified(later).expect("simulate in-place same-size update");
+        let after = file.metadata().expect("read changed metadata");
+        assert_eq!(before.len(), after.len());
+        assert!(wav_changed_during_read(&before, &after, before.len()),
+            "same-length write-time changes must fail closed");
+        assert!(wav_changed_during_read(&before, &before, before.len() - 1),
+            "partial read must fail despite equal metadata");
+        drop(file);
+        fs::remove_file(path).expect("cleanup temporary fixture");
+    }
 }
