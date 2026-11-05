@@ -40,8 +40,11 @@ regression appeared.
 Ordinary terminology such as branch/cabang or required/diperlukan belongs in
 accepted meaning-cue alternatives, not exact-byte requirements. `strict_preserve`
 may only name existing `preserve` entries that require exact identity, such as
-the declared filename, email or ticket ID. Other unmatched literals remain review
-signals. Mixed cases need all their meanings checked: accepting diperlukan must
+the declared filename, email or ticket ID. Its checks use the original decoded
+Unicode codepoints and case (not NFKC/casefold) and reject attached identifier
+suffixes or prefixes. Ordinary `preserve` and meaning cues retain the existing
+normalized matching and accepted wording alternatives. Other unmatched literals
+remain review signals. Mixed cases need all their meanings checked: accepting diperlukan must
 not hide unresolved Meeting-sound identity, and accepting janganlah/lock file
 must not allow regenerate to become restore. Fixture cue variants are never sent
 to the worker as glossary, style, history or prompt content.

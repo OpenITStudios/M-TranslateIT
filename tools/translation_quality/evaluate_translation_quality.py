@@ -190,6 +190,30 @@ def declared_cue_present(normalized_text: str, cue: str) -> bool:
     return False
 
 
+def strict_literal_present(text: str, literal: str) -> bool:
+    """Match a declared filename/email/ID without Unicode or case folding."""
+    if not literal:
+        return False
+    start = 0
+    while (index := text.find(literal, start)) >= 0:
+        end = index + len(literal)
+        left = text[index - 1] if index else ""
+        right = text[end] if end < len(text) else ""
+        # Reject strings embedded inside larger identifiers, including
+        # attached filename extensions, email prefixes and version suffixes.
+        left_attached = bool(left) and (
+            left.isalnum() or left == "_"
+            or (left in ".-@+—" and index > 1 and text[index - 2].isalnum())
+        )
+        right_attached = bool(right) and (
+            right.isalnum() or right == "_"
+            or (right in ".-@+—" and end + 1 < len(text) and text[end + 1].isalnum())
+        )
+        if not left_attached and not right_attached:
+            return True
+        start = index + 1
+    return False
+
 def ordered_cue_pattern(cue: str | list[str]) -> str:
     options = cue if isinstance(cue, list) else [cue]
     unsigned = r"(?<!minus )(?<!negative )(?<!plus )(?<!positive )" if any(option[-1].isdecimal() for option in options) else ""
@@ -203,7 +227,14 @@ def ordered_cue_pattern(cue: str | list[str]) -> str:
 
 def invariant_result(case: dict, translated: str) -> dict:
     norm = normalize(translated)
-    missing_literals = [item for item in case["preserve"] if not declared_cue_present(norm, item)]
+    strict_literals = set(case.get("strict_preserve", []))
+    missing_literals = [
+        item for item in case["preserve"]
+        if not (
+            strict_literal_present(translated, item)
+            if item in strict_literals else declared_cue_present(norm, item)
+        )
+    ]
     missing_concepts = [
         group for group in case["required_any"]
         if not any(declared_cue_present(norm, option) for option in group)
@@ -224,7 +255,7 @@ def invariant_result(case: dict, translated: str) -> dict:
             r".*?".join(ordered_cue_pattern(cue) for cue in sequence), ordered_text
         ) is not None for sequence in case["ordered_any"])
     passed = bool(norm) and not missing_literals and not missing_concepts and not forbidden_hits and ordered_match
-    strict_missing = any(item in case.get("strict_preserve", []) for item in missing_literals)
+    strict_missing = any(item in strict_literals for item in missing_literals)
     quality_status = "FAIL" if not norm or forbidden_hits or strict_missing else "PASS" if passed else "REVIEW"
     return {
         "quality_status": quality_status,

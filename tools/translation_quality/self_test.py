@@ -55,6 +55,40 @@ def main() -> int:
     assert ambiguous["missing_concepts"]  # accepting required/diperlukan must not erase the unresolved sound concept
     changed_entity = evaluator.invariant_result(cases_by_id["en-id-entity-001"], "Kirim laporan ke other@example.com dan biarkan tiket MIV-204 tetap terbuka.")
     assert changed_entity["quality_status"] == "FAIL"
+
+    # Strict identity protects exact UTF-8-decoded codepoints, case and
+    # identifier boundaries, while ordinary meaning cues stay normalized.
+    assert evaluator.strict_literal_present("Send it to team@example.com.", "team@example.com")
+    assert not evaluator.strict_literal_present("Send it to TEAM@example.com.", "team@example.com")
+    assert not evaluator.strict_literal_present("Send it to team@example.com.br.", "team@example.com")
+    assert not evaluator.strict_literal_present("Ticket MIV-2045 is open.", "MIV-204")
+    assert evaluator.strict_literal_present("Ticket (MIV-204) is open.", "MIV-204")
+    for case_id, alterations in (
+        ("en-id-entity-001", (
+            ("team@example.com", "TEAM@example.com"),
+            ("team@example.com", "x.team@example.com"),
+            ("team@example.com", "team@example.com.br"),
+            ("MIV-204", "miv-204"),
+            ("MIV-204", "MIV-2045"),
+            ("MIV-204", "MIV-204-2"),
+        )),
+        ("id-en-unicode-001", (
+            ("Rencana—Final_v2.1", "rencana—Final_v2.1"),
+            ("Rencana—Final_v2.1", "Rencana-Final_v2.1"),
+            ("Rencana—Final_v2.1", "Rencana—Final_ｖ2.1"),
+            ("Rencana—Final_v2.1", "Rencana—Final_v2.1.backup"),
+        )),
+    ):
+        case = cases_by_id[case_id]
+        faithful = case["references"][0]
+        assert evaluator.invariant_result(case, faithful)["quality_status"] == "PASS"
+        for original, substituted in alterations:
+            assert original in faithful
+            changed = faithful.replace(original, substituted, 1)
+            result = evaluator.invariant_result(case, changed)
+            assert result["quality_status"] == "FAIL", (case_id, substituted, result)
+            assert original in result["missing_literals"], (case_id, substituted, result)
+            assert "literal_omission" in result["critical_issue_types"]
     fast = evaluator.select_suite(corpus, "fast")
     assert len(fast["cases"]) < len(corpus["cases"])
     assert {"en-id-budget-purpose-001", "en-id-meet-010", "id-en-informal-workplace-005"}.issubset(
