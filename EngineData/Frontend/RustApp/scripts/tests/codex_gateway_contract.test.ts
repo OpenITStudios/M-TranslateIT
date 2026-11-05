@@ -350,6 +350,11 @@ test("Codex text candidate cannot send inference, execute tools or commit to Mee
   assert.match(offlineText, /"outputSchema"/);
   assert.match(offlineText, /"additionalProperties": false/);
   assert.match(offlineText, /MAX_SOURCE_BYTES: usize = 4 \* 1024/);
+  assert.match(offlineText, /super::protocol::MAX_REQUEST_BYTES - RPC_ID_AND_NEWLINE_RESERVE_BYTES/);
+  assert.match(offlineText, /codex_text:request_too_large/);
+  assert.match(offlineText, /method != "turn\/completed"/);
+  assert.match(offlineText, /codex_text:not_completed_event/);
+  assert.match(offlineText, /fn escaped_utterances_cannot_exceed_existing_rpc_frame_budget/);
   assert.match(offlineText, /codex_text:foreign_thread/);
   assert.match(offlineText, /codex_text:items_not_fully_loaded/);
   assert.match(offlineText, /codex_text:tool_or_unknown_item/);

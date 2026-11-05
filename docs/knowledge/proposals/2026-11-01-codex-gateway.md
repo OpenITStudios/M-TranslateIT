@@ -862,6 +862,13 @@ thread/turn/generation/epoch/sequence binding, one-shot final acceptance
 and rejection of ambiguous, incomplete, oversized or tool-bearing results.
 It performs no model requests, is not registered in the account-only JSONL
 allowlist and cannot produce a Meeting translation commit or TTS output.
+The offline request builder now checks its **fully serialized nested JSON**
+against the existing 8-KiB JSONL budget, reserving 32 bytes for a future u64
+RPC ID and newline. A 4-KiB source that expands after escaping fails
+explicitly instead of being truncated. Final response evidence requires the
+literal upstream `turn/completed` event; a premature or unrelated event
+consumes the one-shot evidence gate. Neither check enables inference or proves
+Codex is a tool-free translator.
 
 **Safety gate:** Codex is a coding agent, not a proven tool-free translator.
 `sandbox=read-only` and `approvalPolicy=never` do not prohibit all

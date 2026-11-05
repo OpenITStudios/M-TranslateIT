@@ -8,6 +8,8 @@ use serde_json::{json, Value};
 const MAX_SOURCE_BYTES: usize = 4 * 1024;
 const MAX_TRANSLATION_BYTES: usize = 8 * 1024;
 const MAX_ITEMS: usize = 32;
+// Headroom for the u64 RPC ID field and JSONL newline.
+const RPC_ID_AND_NEWLINE_RESERVE_BYTES: usize = 32;
 
 const INSTRUCTIONS: &str = "Translate exactly one independent Indonesian-English or English-Indonesian \
 utterance. Preserve meaning, negations, corrections, conditions, quantifiers, numbers, units, \
@@ -55,7 +57,7 @@ pub(super) fn offline_turn_start(
     // Source is isolated JSON data; prompt instructions must not come from it.
     let input = json!({"source_language": from, "target_language": to, "utterance": utterance})
         .to_string();
-    Ok(json!({"method": "turn/start", "params": {
+    let request = json!({"method": "turn/start", "params": {
         "threadId": thread_id,
         "input": [{"type": "text", "text": input, "text_elements": []}],
         "outputSchema": {
@@ -64,7 +66,15 @@ pub(super) fn offline_turn_start(
             "required": ["translation"],
             "additionalProperties": false
         }
-    }}))
+    }});
+    // A 4-KiB source may expand beyond 8 KiB through nested JSON escaping.
+    // Check the actual serialized envelope; never truncate meeting speech.
+    let serialized = serde_json::to_vec(&request)
+        .map_err(|_| "codex_text:request_encoding_failed")?;
+    if serialized.len() > super::protocol::MAX_REQUEST_BYTES - RPC_ID_AND_NEWLINE_RESERVE_BYTES {
+        return Err("codex_text:request_too_large");
+    }
+    Ok(request)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,13 +123,16 @@ impl FinalTurnEvidence {
         self.consumed = true;
     }
 
-    pub(super) fn take_completed(&mut self, notification: &Value)
+    pub(super) fn take_completed(&mut self, method: &str, notification: &Value)
         -> Result<UnverifiedTextTranslation, &'static str>
     {
         if self.consumed {
             return Err("codex_text:already_consumed");
         }
         self.consumed = true;
+        if method != "turn/completed" {
+            return Err("codex_text:not_completed_event");
+        }
         if notification.get("threadId").and_then(Value::as_str) != Some(self.thread.as_str()) {
             return Err("codex_text:foreign_thread");
         }
@@ -223,6 +236,20 @@ mod tests {
     }
 
     #[test]
+    fn escaped_utterances_cannot_exceed_existing_rpc_frame_budget() {
+        let ordinary = offline_turn_start("thread-1", "id", "en", "Selamat pagi.").unwrap();
+        let bytes = serde_json::to_vec(&ordinary).unwrap();
+        assert!(bytes.len() + RPC_ID_AND_NEWLINE_RESERVE_BYTES
+            <= super::super::protocol::MAX_REQUEST_BYTES);
+        // The source fits 4 KiB, but nested JSON escapes exceed 8 KiB.
+        let escaped = format!("a{}", "\n".repeat(MAX_SOURCE_BYTES - 1));
+        assert_eq!(
+            offline_turn_start("thread-1", "id", "en", &escaped).unwrap_err(),
+            "codex_text:request_too_large"
+        );
+    }
+
+    #[test]
     fn rejects_wrong_direction_empty_oversized_or_unsafe_source() {
         assert!(offline_turn_start("thread-1", "id", "id", "Test").is_err());
         assert!(offline_turn_start("thread-1", "id", "en", "").is_err());
@@ -233,22 +260,32 @@ mod tests {
     #[test]
     fn exact_one_shot_final_or_explicit_failure_never_admits_tools() {
         let mut gate = FinalTurnEvidence::new(lease(), "thread-1", "turn-1").unwrap();
-        let result = gate.take_completed(&completed(r#"{"translation":"Do not delete a.txt."}"#)).unwrap();
+        let result = gate.take_completed("turn/completed", &completed(r#"{"translation":"Do not delete a.txt."}"#)).unwrap();
         assert_eq!(result.source, lease());
         assert_eq!(result.text, "Do not delete a.txt.");
         assert!(!format!("{result:?}").contains("Do not delete"));
-        assert_eq!(gate.take_completed(&completed(r#"{"translation":"Late"}"#)).unwrap_err(),
+        assert_eq!(gate.take_completed("turn/completed", &completed(r#"{"translation":"Late"}"#)).unwrap_err(),
             "codex_text:already_consumed");
 
         let mut gate = FinalTurnEvidence::new(lease(), "thread-1", "turn-1").unwrap();
         let mut tool = completed(r#"{"translation":"Safe"}"#);
         tool["turn"]["items"].as_array_mut().unwrap()
             .push(json!({"type": "commandExecution", "id": "tool-1"}));
-        assert_eq!(gate.take_completed(&tool).unwrap_err(), "codex_text:tool_or_unknown_item");
+        assert_eq!(gate.take_completed("turn/completed", &tool).unwrap_err(), "codex_text:tool_or_unknown_item");
+
+        let mut gate = FinalTurnEvidence::new(lease(), "thread-1", "turn-1").unwrap();
+        assert_eq!(
+            gate.take_completed("turn/started", &completed(r#"{"translation":"Early"}"#)).unwrap_err(),
+            "codex_text:not_completed_event"
+        );
+        assert_eq!(
+            gate.take_completed("turn/completed", &completed(r#"{"translation":"Late"}"#)).unwrap_err(),
+            "codex_text:already_consumed"
+        );
 
         let mut gate = FinalTurnEvidence::new(lease(), "thread-1", "turn-1").unwrap();
         gate.revoke();
-        assert!(gate.take_completed(&completed(r#"{"translation":"Late"}"#)).is_err());
+        assert!(gate.take_completed("turn/completed", &completed(r#"{"translation":"Late"}"#)).is_err());
     }
 
     #[test]
@@ -256,17 +293,17 @@ mod tests {
         let mut gate = FinalTurnEvidence::new(lease(), "thread-1", "turn-1").unwrap();
         let mut bad = completed(r#"{"translation":"Hi"}"#);
         bad["threadId"] = json!("other-thread");
-        assert_eq!(gate.take_completed(&bad).unwrap_err(), "codex_text:foreign_thread");
-        assert!(gate.take_completed(&completed(r#"{"translation":"Hi"}"#)).is_err());
+        assert_eq!(gate.take_completed("turn/completed", &bad).unwrap_err(), "codex_text:foreign_thread");
+        assert!(gate.take_completed("turn/completed", &completed(r#"{"translation":"Hi"}"#)).is_err());
 
         for raw in ["hello", r#"{"translation":""}"#, r#"{"translation":"Hi","extra":1}"#] {
             let mut gate = FinalTurnEvidence::new(lease(), "thread-1", "turn-1").unwrap();
-            assert!(gate.take_completed(&completed(raw)).is_err());
+            assert!(gate.take_completed("turn/completed", &completed(raw)).is_err());
         }
 
         let mut gate = FinalTurnEvidence::new(lease(), "thread-1", "turn-1").unwrap();
         let mut partial = completed(r#"{"translation":"Hi"}"#);
         partial["turn"]["itemsView"] = json!("summary");
-        assert_eq!(gate.take_completed(&partial).unwrap_err(), "codex_text:items_not_fully_loaded");
+        assert_eq!(gate.take_completed("turn/completed", &partial).unwrap_err(), "codex_text:items_not_fully_loaded");
     }
 }
