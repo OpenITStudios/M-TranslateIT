@@ -238,7 +238,13 @@ report from the existing offline persistent-worker reporting format:
 - a 40-character source revision, declared model/revision identity and
   64-character manifest checksum;
 - each recorded canonical response must declare successful translation,
-  complete EOS, matching model/revision, and matching captured output.
+  complete EOS, matching model/revision, and matching captured output;
+- every declared `case_id`, its position, and the response language direction
+  must match the existing corpus's emitted request order. The response's
+  `source_language`, `target_language`, and `direction_pair` must agree.
+
+These checks prevent accidental case reordering or mislabeled language responses;
+they cannot establish which source text was actually provided to the worker.
 
 These are **untrusted assertions inside a JSON report**, not an attestation:
 anyone could construct a matching JSON object. The result loader identifies a

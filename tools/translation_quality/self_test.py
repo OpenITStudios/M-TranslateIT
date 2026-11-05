@@ -194,8 +194,18 @@ def main() -> int:
     assert probe["comparison"]["promotion_safe_on_declared_critical_invariants"]
     # Explicitly simulated worker metadata tests the declared admission seam.
     # This is not a real worker execution or authenticated result.
-    labeled_base = {**baseline_bundle, "worker_run_declared_suite": "full"}
-    labeled_cand = {**candidate_bundle, "worker_run_declared_suite": "full"}
+    expected_case_directions = [
+        [item["case_id"], f"{item['request']['source_language']}->{item['request']['target_language']}"]
+        for item in evaluator.emit_requests(corpus)["requests"]
+    ]
+    labeled_base = {
+        **baseline_bundle, "worker_run_declared_suite": "full",
+        "worker_run_declared_case_directions": expected_case_directions,
+    }
+    labeled_cand = {
+        **candidate_bundle, "worker_run_declared_suite": "full",
+        "worker_run_declared_case_directions": expected_case_directions,
+    }
     reviewable = evaluator.compare_case(corpus, labeled_base, labeled_cand, focus)
     assert reviewable["review_status"] == "BILINGUAL_REVIEW_REQUIRED"
     assert reviewable["worker_receipts_declared"]
@@ -206,6 +216,28 @@ def main() -> int:
         focus,
     )
     assert wrong_profile["review_status"] == "RESULTS_ONLY_NO_WORKER_RECEIPT"
+    # A complete and correctly named bundle still cannot pass when its
+    # row identities or language directions disagree with emitted requests.
+    reversed_order = evaluator.compare_case(
+        corpus, {**labeled_base,
+                 "worker_run_declared_case_directions": list(reversed(expected_case_directions))},
+        labeled_cand, focus,
+    )
+    assert reversed_order["review_status"] == "RESULTS_ONLY_NO_WORKER_RECEIPT"
+    changed_direction = [list(item) for item in expected_case_directions]
+    changed_direction[0][1] = "en->id" if changed_direction[0][1] == "id->en" else "id->en"
+    switched = evaluator.compare_case(
+        corpus, labeled_base,
+        {**labeled_cand, "worker_run_declared_case_directions": changed_direction}, focus,
+    )
+    assert switched["review_status"] == "RESULTS_ONLY_NO_WORKER_RECEIPT"
+    changed_id = [list(item) for item in expected_case_directions]
+    changed_id[0][0] = "forged-case-id"
+    renamed = evaluator.compare_case(
+        corpus, {**labeled_base, "worker_run_declared_case_directions": changed_id},
+        labeled_cand, focus,
+    )
+    assert renamed["review_status"] == "RESULTS_ONLY_NO_WORKER_RECEIPT"
     assert probe["request"]["text"] == cases_by_id[focus]["source"]
     assert "context_pairs" not in probe["request"]
     # A declared fast-suite recovery never becomes a release-quality decision.
@@ -691,6 +723,9 @@ def main() -> int:
                     "finished_with_eos": True,
                     "hit_token_ceiling": False,
                     "translation_contract": "canonical_bidirectional_id_en",
+                    "direction_pair": "en->id",
+                    "source_language": "en",
+                    "target_language": "id",
                     "model_id": fake_model,
                     "model_revision": fake_revision,
                     "translated_text": perfect[focus],
@@ -700,6 +735,7 @@ def main() -> int:
         result_file.write_text(json.dumps(synthetic_worker_report), encoding="utf-8")
         synthetic_loaded = evaluator.load_result_bundle(result_file)
         assert synthetic_loaded["worker_run_declared_suite"] == "full"
+        assert synthetic_loaded["worker_run_declared_case_directions"] == [[focus, "en->id"]]
         assert synthetic_loaded["source_identity"] == synthetic_worker_report["source_identity"]
         for field, bad in (
             ("worker_terminated", False),
@@ -717,6 +753,10 @@ def main() -> int:
             {**synthetic_worker_report["results"][0]["response"], "finished_with_eos": False},
             {**synthetic_worker_report["results"][0]["response"], "model_revision": "0" * 40},
             {**synthetic_worker_report["results"][0]["response"], "translated_text": "different"},
+            {**synthetic_worker_report["results"][0]["response"], "direction_pair": "id->en"},
+            {**synthetic_worker_report["results"][0]["response"], "source_language": "id"},
+            {**synthetic_worker_report["results"][0]["response"], "target_language": "en"},
+            {**synthetic_worker_report["results"][0]["response"], "direction_pair": "unknown"},
         ):
             changed_row = {**synthetic_worker_report["results"][0], "response": bad_response}
             result_file.write_text(

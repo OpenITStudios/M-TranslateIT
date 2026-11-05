@@ -330,6 +330,13 @@ def declared_worker_receipt_suite(raw: dict | list) -> str | None:
             response.get("translated_text") != row.get("translated_text"),
         )):
             return None
+        pair = response.get("direction_pair")
+        if pair not in ("id->en", "en->id"):
+            return None
+        source_language, target_language = pair.split("->")
+        if (response.get("source_language") != source_language
+                or response.get("target_language") != target_language):
+            return None
     return name.removeprefix("translation-")
 
 
@@ -383,6 +390,10 @@ def load_result_bundle(path: Path) -> dict:
         "corpus_fingerprint": (raw.get("corpus_fingerprint", "").strip() if isinstance(raw, dict) else ""),
         "source_identity": (raw.get("source_identity", "").strip() if isinstance(raw, dict) else ""),
         "worker_run_declared_suite": declared_worker_receipt_suite(raw),
+        "worker_run_declared_case_directions": (
+            [[row["case_id"], row["response"]["direction_pair"]] for row in rows]
+            if declared_worker_receipt_suite(raw) is not None else None
+        ),
     }
 
 def load_results(path: Path) -> dict[str, str]:
@@ -690,9 +701,15 @@ def compare_case(corpus: dict, baseline_bundle: dict, candidate_bundle: dict, ca
     target_recovered = case_id in comparison["critical_recoveries"]
     # Only an exact canonical worker-report profile may reach the human-review
     # handoff. Legacy/handcrafted results remain gradeable but not admissible.
+    expected_case_directions = [
+        [item["case_id"], f"{item['request']['source_language']}->{item['request']['target_language']}"]
+        for item in emit_requests(corpus)["requests"]
+    ]
     worker_receipts_declared = (
         baseline_bundle.get("worker_run_declared_suite") == before["suite"]
         and candidate_bundle.get("worker_run_declared_suite") == before["suite"]
+        and baseline_bundle.get("worker_run_declared_case_directions") == expected_case_directions
+        and candidate_bundle.get("worker_run_declared_case_directions") == expected_case_directions
     )
     if not evidence_complete or not distinct_identities:
         review_status = "UNVERIFIED"
