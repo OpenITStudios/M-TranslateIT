@@ -31,6 +31,9 @@ fn tts_output_path(session_id: &str, generation: u64, event_sequence: u64) -> St
 }
 
 const MEETING_TTS_REQUEST_PREFIX: &str = "UserData/CacheData/meeting_tts/";
+// The canonical WAV decoder later validates the container and audio samples.
+// At admission, reject files that cannot even contain one sampled WAV frame.
+const MIN_MEETING_TTS_WAV_BYTES: u64 = 44;
 
 fn meeting_tts_directory() -> PathBuf {
     PathBuf::from(ProjectPaths::discover().user_cache_dir).join("meeting_tts")
@@ -58,15 +61,24 @@ fn verified_tts_output_in_dir(
     reported_path: &str,
 ) -> Option<PathBuf> {
     let expected = expected_tts_path_in_dir(tts_dir, requested_path)?;
-    let parent = fs::canonicalize(tts_dir).ok()?;
-    let resolved_expected = fs::canonicalize(expected).ok()?;
-    // A symlinked output must not escape its owned per-session cache directory.
-    if resolved_expected.parent() != Some(parent.as_path())
-        || fs::canonicalize(reported_path).ok()? != resolved_expected
-        || !fs::metadata(&resolved_expected).ok()?.is_file()
+    // Inspect the original path before canonicalization. A symlink to another
+    // file within this SAME cache directory otherwise passes the parent check
+    // and can borrow a different session's WAV identity.
+    let owned_entry = fs::symlink_metadata(&expected).ok()?;
+    if !owned_entry.file_type().is_file()
+        || owned_entry.len() <= MIN_MEETING_TTS_WAV_BYTES
     {
         return None;
     }
+    let parent = fs::canonicalize(tts_dir).ok()?;
+    let resolved_expected = fs::canonicalize(&expected).ok()?;
+    if resolved_expected.parent() != Some(parent.as_path())
+        || fs::canonicalize(reported_path).ok()? != resolved_expected
+    {
+        return None;
+    }
+    // This cheap metadata/path gate is not a WAV decoder. The existing
+    // playback owner decodes and validates samples before stream creation.
     Some(resolved_expected)
 }
 
@@ -688,6 +700,26 @@ mod tests {
         std::env::temp_dir().join(format!("translateit-{label}-{nonce}.wav"))
     }
 
+    fn one_frame_pcm16_wav() -> Vec<u8> {
+        // A genuinely structured 46-byte WAV: 44-byte PCM16 mono header
+        // plus one 16-bit sample. Full decoding belongs to meeting_output.
+        let mut wav = Vec::with_capacity(46);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&38u32.to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&16_000u32.to_le_bytes());
+        wav.extend_from_slice(&32_000u32.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&2u32.to_le_bytes());
+        wav.extend_from_slice(&0i16.to_le_bytes());
+        wav
+    }
+
     #[test]
     fn tts_output_path_is_generation_and_event_scoped() {
         assert_eq!(
@@ -774,6 +806,52 @@ mod tests {
         fs::remove_dir_all(root).expect("remove isolated root");
     }
 
+
+    #[cfg(unix)]
+    #[test]
+    fn same_directory_symlink_cannot_borrow_another_session_wav() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_wav("tts-same-dir-symlink").with_extension("");
+        fs::create_dir_all(&root).expect("create isolated tts root");
+        let requested = tts_output_path("session-a", 7, 11);
+        let expected = root.join("session-a_g7_s11.wav");
+        let foreign = root.join("session-b_g7_s11.wav");
+        fs::write(&foreign, one_frame_pcm16_wav()).expect("write foreign session audio");
+        symlink(&foreign, &expected).expect("create internal symlink");
+        assert!(verified_tts_output_in_dir(
+            &root, &requested, expected.to_string_lossy().as_ref(),
+        ).is_none(), "same-directory symlink must not borrow foreign audio");
+
+        fs::remove_dir_all(root).expect("remove isolated root");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn same_directory_symlink_cannot_borrow_another_session_wav_when_supported() {
+        use std::os::windows::fs::symlink_file;
+
+        let root = temp_wav("tts-same-dir-symlink").with_extension("");
+        fs::create_dir_all(&root).expect("create isolated tts root");
+        let requested = tts_output_path("session-a", 7, 11);
+        let expected = root.join("session-a_g7_s11.wav");
+        let foreign = root.join("session-b_g7_s11.wav");
+        fs::write(&foreign, one_frame_pcm16_wav()).expect("write foreign session audio");
+        match symlink_file(&foreign, &expected) {
+            Ok(()) => {
+                assert!(verified_tts_output_in_dir(
+                    &root, &requested, expected.to_string_lossy().as_ref(),
+                ).is_none(), "same-directory symlink must not borrow foreign audio");
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                // Creating symlinks can require Windows Developer Mode or
+                // a privilege. This fixture is unavailable, NOT proven.
+            }
+            Err(error) => panic!("could not create symlink fixture: {error}"),
+        }
+        fs::remove_dir_all(root).expect("remove isolated root");
+    }
+
     #[test]
     fn tts_playback_requires_matching_reported_and_owned_absolute_paths() {
         let root = temp_wav("verified-tts-root").with_extension("");
@@ -781,8 +859,8 @@ mod tests {
         let request = tts_output_path("session-a", 7, 11);
         let expected = root.join("session-a_g7_s11.wav");
         let unrelated = root.join("session-b_g7_s11.wav");
-        fs::write(&expected, b"requested").expect("write requested");
-        fs::write(&unrelated, b"unrelated").expect("write unrelated");
+        fs::write(&expected, one_frame_pcm16_wav()).expect("write requested");
+        fs::write(&unrelated, one_frame_pcm16_wav()).expect("write unrelated");
 
         let owned = verified_tts_output_in_dir(
             &root, &request, expected.to_string_lossy().as_ref(),
@@ -797,6 +875,16 @@ mod tests {
             "missing output cannot be promoted",
         );
         assert!(expected_tts_path_in_dir(&root, &request).is_some());
+
+        // A valid path must not admit an empty or header-only result.
+        fs::write(&expected, []).expect("truncate owned output");
+        assert!(verified_tts_output_in_dir(
+            &root, &request, expected.to_string_lossy().as_ref()
+        ).is_none(), "empty owned WAV cannot be queued");
+        fs::write(&expected, vec![0u8; 44]).expect("write header-only output");
+        assert!(verified_tts_output_in_dir(
+            &root, &request, expected.to_string_lossy().as_ref()
+        ).is_none(), "header-only WAV cannot be queued");
 
         fs::remove_dir_all(root).expect("remove isolated root");
     }
