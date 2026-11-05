@@ -384,16 +384,23 @@ def load_result_bundle(path: Path) -> dict:
             raise ValueError(f"{case_id}: translated_text exceeds size limit")
         # Empty text is retained for normal FAIL grading; never synthesize "None".
         output[case_id] = translated.strip()
+    worker_suite = declared_worker_receipt_suite(raw)
     return {
         "results": output,
         "result_file_sha256": hashlib.sha256(raw_bytes).hexdigest(),
         "corpus_fingerprint": (raw.get("corpus_fingerprint", "").strip() if isinstance(raw, dict) else ""),
         "source_identity": (raw.get("source_identity", "").strip() if isinstance(raw, dict) else ""),
-        "worker_run_declared_suite": declared_worker_receipt_suite(raw),
+        "worker_run_declared_suite": worker_suite,
         "worker_run_declared_case_directions": (
             [[row["case_id"], row["response"]["direction_pair"]] for row in rows]
-            if declared_worker_receipt_suite(raw) is not None else None
+            if worker_suite is not None else None
         ),
+        "worker_run_declared_selection": raw.get("selection") if worker_suite is not None else None,
+        "worker_run_declared_evaluation": raw.get("evaluation") if worker_suite is not None else None,
+        "worker_run_declared_checks": raw.get("checks") if worker_suite is not None else None,
+        "worker_run_declared_counts": raw.get("counts") if worker_suite is not None else None,
+        "worker_run_declared_verdict": raw.get("verdict") if worker_suite is not None else None,
+        "worker_run_declared_rejected": raw.get("rejected") if worker_suite is not None else None,
     }
 
 def load_results(path: Path) -> dict[str, str]:
@@ -476,6 +483,45 @@ def evaluate(
         "cases": rows,
         "note": "Similarity is informational. Missing lexical cues require REVIEW; declared contrary patterns or missing strict literals FAIL. Legacy critical_failures counts unmatched checks, not confirmed meaning errors. PASS is limited to declared checks, not general semantic proof.",
     }
+
+
+def declared_worker_report_consistent(corpus: dict, bundle: dict) -> bool:
+    """Verify a reported worker-run grade against canonical grading, not execution."""
+    suite = "fast" if corpus.get("selection") else "full"
+    if (bundle.get("worker_run_declared_suite") != suite
+            or bundle.get("worker_run_declared_selection") != corpus.get("selection")
+            or bundle.get("worker_run_declared_rejected") != {}):
+        return False
+    grade = evaluate(
+        corpus, bundle["results"],
+        result_corpus_fingerprint=bundle.get("corpus_fingerprint", ""),
+        source_identity=bundle.get("source_identity", ""),
+    )
+    if (not grade["complete_result_set"]
+            or bundle.get("worker_run_declared_evaluation") != grade
+            or bundle.get("worker_run_declared_verdict") != grade["verdict"]):
+        return False
+    checks = []
+    for index, row in enumerate(grade["cases"]):
+        status = row["quality_status"]
+        checks.append({
+            "case_id": row["case_id"],
+            "status": status,
+            "first_wrong_stage": (
+                "translation_quality_check" if status in ("FAIL", "REVIEW") else None
+            ),
+            "requires_linguistic_review": not row["critical_pass"],
+            "expected": "complete canonical model output and declared semantic invariants",
+            "evidence": f"#/evaluation/cases/{index}",
+        })
+    counts = {
+        state: sum(row["status"] == state for row in checks)
+        for state in ("PASS", "REVIEW", "FAIL", "UNVERIFIED")
+    }
+    return (
+        bundle.get("worker_run_declared_checks") == checks
+        and bundle.get("worker_run_declared_counts") == counts
+    )
 
 
 def triage_case(corpus: dict, bundle: dict, case_id: str) -> dict:
@@ -710,6 +756,8 @@ def compare_case(corpus: dict, baseline_bundle: dict, candidate_bundle: dict, ca
         and candidate_bundle.get("worker_run_declared_suite") == before["suite"]
         and baseline_bundle.get("worker_run_declared_case_directions") == expected_case_directions
         and candidate_bundle.get("worker_run_declared_case_directions") == expected_case_directions
+        and declared_worker_report_consistent(corpus, baseline_bundle)
+        and declared_worker_report_consistent(corpus, candidate_bundle)
     )
     if not evidence_complete or not distinct_identities:
         review_status = "UNVERIFIED"
@@ -769,8 +817,9 @@ def compare_case(corpus: dict, baseline_bundle: dict, candidate_bundle: dict, ca
         "note": (
             "A focused contrast reuses existing declared checks and exact selected "
             "result sets. It neither executes a model nor proves semantic quality. "
-            "Worker reports are checked for declared structure only, not "
-            "authenticated execution. BILINGUAL_REVIEW_REQUIRED is not an "
+            "Worker report grading, counts and checks are reconciled against "
+            "the canonical evaluator, but cannot authenticate execution. "
+            "BILINGUAL_REVIEW_REQUIRED is not an "
             "acceptance or promotion decision. "
             "Only independent bilingual and integrated runtime evidence can "
             "establish the remaining quality and product gates."

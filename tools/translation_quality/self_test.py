@@ -198,14 +198,43 @@ def main() -> int:
         [item["case_id"], f"{item['request']['source_language']}->{item['request']['target_language']}"]
         for item in evaluator.emit_requests(corpus)["requests"]
     ]
-    labeled_base = {
-        **baseline_bundle, "worker_run_declared_suite": "full",
-        "worker_run_declared_case_directions": expected_case_directions,
-    }
-    labeled_cand = {
-        **candidate_bundle, "worker_run_declared_suite": "full",
-        "worker_run_declared_case_directions": expected_case_directions,
-    }
+    # Synthetic reported grades are constructed from the canonical evaluator,
+    # not from real MiLMMT calls; corrupted summaries must fail closed.
+    def synthetic_reported_bundle(bundle):
+        grade = evaluator.evaluate(
+            corpus, bundle["results"],
+            result_corpus_fingerprint=bundle["corpus_fingerprint"],
+            source_identity=bundle["source_identity"],
+        )
+        checks = [{
+            "case_id": row["case_id"],
+            "status": row["quality_status"],
+            "first_wrong_stage": (
+                "translation_quality_check"
+                if row["quality_status"] in ("FAIL", "REVIEW") else None
+            ),
+            "requires_linguistic_review": not row["critical_pass"],
+            "expected": "complete canonical model output and declared semantic invariants",
+            "evidence": f"#/evaluation/cases/{index}",
+        } for index, row in enumerate(grade["cases"])]
+        counts = {
+            status: sum(row["status"] == status for row in checks)
+            for status in ("PASS", "REVIEW", "FAIL", "UNVERIFIED")
+        }
+        return {
+            **bundle,
+            "worker_run_declared_suite": "full",
+            "worker_run_declared_case_directions": expected_case_directions,
+            "worker_run_declared_selection": None,
+            "worker_run_declared_evaluation": grade,
+            "worker_run_declared_checks": checks,
+            "worker_run_declared_counts": counts,
+            "worker_run_declared_verdict": grade["verdict"],
+            "worker_run_declared_rejected": {},
+        }
+
+    labeled_base = synthetic_reported_bundle(baseline_bundle)
+    labeled_cand = synthetic_reported_bundle(candidate_bundle)
     reviewable = evaluator.compare_case(corpus, labeled_base, labeled_cand, focus)
     assert reviewable["review_status"] == "BILINGUAL_REVIEW_REQUIRED"
     assert reviewable["worker_receipts_declared"]
@@ -238,6 +267,35 @@ def main() -> int:
         labeled_cand, focus,
     )
     assert renamed["review_status"] == "RESULTS_ONLY_NO_WORKER_RECEIPT"
+    for corrupt_name, corrupted in (
+        ("evaluation", {
+            **labeled_cand,
+            "worker_run_declared_evaluation": {
+                **labeled_cand["worker_run_declared_evaluation"],
+                "verdict": "FAIL",
+            },
+        }),
+        ("checks", {
+            **labeled_cand,
+            "worker_run_declared_checks": labeled_cand["worker_run_declared_checks"][:-1],
+        }),
+        ("counts", {
+            **labeled_cand,
+            "worker_run_declared_counts": {
+                **labeled_cand["worker_run_declared_counts"],
+                "PASS": 0,
+            },
+        }),
+        ("verdict", {**labeled_cand, "worker_run_declared_verdict": "FAIL"}),
+        ("rejected", {**labeled_cand, "worker_run_declared_rejected": {
+            "case": "unexpected_rejection",
+        }}),
+        ("selection", {**labeled_cand, "worker_run_declared_selection": {
+            "name": "fast",
+        }}),
+    ):
+        altered = evaluator.compare_case(corpus, labeled_base, corrupted, focus)
+        assert altered["review_status"] == "RESULTS_ONLY_NO_WORKER_RECEIPT", corrupt_name
     assert probe["request"]["text"] == cases_by_id[focus]["source"]
     assert "context_pairs" not in probe["request"]
     # A declared fast-suite recovery never becomes a release-quality decision.
@@ -698,6 +756,8 @@ def main() -> int:
         assert loaded["result_file_sha256"] == hashlib.sha256(result_bytes).hexdigest()
         assert evaluator.regrade_retained(original_corpus, corpus, loaded)["changed_cases"]
         assert loaded["worker_run_declared_suite"] is None
+        assert loaded["worker_run_declared_evaluation"] is None
+        assert loaded["worker_run_declared_checks"] is None
 
         # Synthetic receipt samples validate structural shape, not actual inference.
         fake_model = "milmmt-46-1b-v1.0"
@@ -736,6 +796,9 @@ def main() -> int:
         synthetic_loaded = evaluator.load_result_bundle(result_file)
         assert synthetic_loaded["worker_run_declared_suite"] == "full"
         assert synthetic_loaded["worker_run_declared_case_directions"] == [[focus, "en->id"]]
+        assert synthetic_loaded["worker_run_declared_evaluation"] is None
+        assert synthetic_loaded["worker_run_declared_checks"] is None
+        assert not evaluator.declared_worker_report_consistent(corpus, synthetic_loaded)
         assert synthetic_loaded["source_identity"] == synthetic_worker_report["source_identity"]
         for field, bad in (
             ("worker_terminated", False),

@@ -241,10 +241,14 @@ report from the existing offline persistent-worker reporting format:
   complete EOS, matching model/revision, and matching captured output;
 - every declared `case_id`, its position, and the response language direction
   must match the existing corpus's emitted request order. The response's
-  `source_language`, `target_language`, and `direction_pair` must agree.
+  `source_language`, `target_language`, and `direction_pair` must agree;
+- the report's `selection`, `evaluation`, per-case `checks`, `counts`,
+  `verdict`, and empty `rejected` must agree exactly with fresh grading
+  of the captured outputs by the existing canonical evaluator.
 
-These checks prevent accidental case reordering or mislabeled language responses;
-they cannot establish which source text was actually provided to the worker.
+These checks prevent accidental case reordering, mislabeled language responses
+and contradictory result summaries. They cannot establish which source text
+was actually provided to the worker or authenticate the reported execution.
 
 These are **untrusted assertions inside a JSON report**, not an attestation:
 anyone could construct a matching JSON object. The result loader identifies a
