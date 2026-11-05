@@ -35,7 +35,9 @@ test("Codex App Server has one owned stdio process, bounded reader and no paid k
   assert.match(transport, /codex_gateway:write_timeout/);
   assert.match(transport, /codex_gateway:writer_queue_full/);
   assert.match(transport, /self\.writer_tx\.take\(\)/);
-  assert.match(transport, /self\.writer\.is_none\(\) && self\.reader\.is_none\(\)/);
+  assert.match(transport, /fn cleanup_proven\(/);
+  assert.match(transport, /child_reaped && writer_released && reader_released && cleanup_failure\.is_none\(\)/);
+  assert.match(transport, /Ok\(cleanup_proven\(/);
   assert.match(transport, /fn notification_dispatch_retains_only_account_changes_and_denies_voice/);
   assert.match(transport, /fn writer_ack_preserves_exact_jsonl_without_using_the_control_thread_for_io/);
   assert.match(transport, /fn writer_failure_stays_redacted_and_poisoned/);
@@ -79,7 +81,7 @@ test("Native commands are actually wired to the diagnostics client", () => {
   assert.match(diagnostics, /codexGatewayApi\[action\]/);
   assert.match(shutdown, /codex_gateway::shutdown_for_app_exit/);
   assert.match(gateway, /meeting_stop_cleanup_pending/);
-  assert.match(gateway, /refresh_account\(generation, &mut server, &cancellation\)/);
+  assert.match(gateway, /refresh_account\(generation, &mut server, &cancellation, &diagnostic\)/);
   assert.match(gateway, /account_changed_during_probe/);
   assert.match(transport, /refuse_unadmitted_event/);
 });
