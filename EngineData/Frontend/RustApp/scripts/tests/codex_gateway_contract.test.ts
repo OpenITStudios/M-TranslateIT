@@ -129,6 +129,9 @@ test("P3 source/assistant correlation is one-flight and always unverified", () =
   assert.match(correlation, /struct SourceWindow/);
   assert.match(correlation, /struct UnverifiedPair/);
   assert.match(correlation, /struct CorrelationGate/);
+  assert.match(correlation, /fn observe_event\(/);
+  assert.match(correlation, /fn completed_realtime_items_form_only_one_unverified_pair/);
+  assert.match(correlation, /fn invalid_realtime_item_revokes_the_pairing_boundary/);
   assert.match(correlation, /codex_correlation:assistant_without_source/);
   assert.match(correlation, /codex_correlation:source_ambiguous/);
   assert.match(correlation, /codex_correlation:overlapping_source/);
@@ -169,6 +172,10 @@ test("P5 stages typed V3 WebRTC start/audio/stop envelopes without live RPC admi
   assert.match(realtimeRpc, /fn confirm_media_ready/);
   assert.match(realtimeRpc, /_admission: &VerifiedMediaAuthority/);
   assert.match(realtimeRpc, /fn acked_through_sample/);
+  assert.match(realtime, /fn pending_state\(/);
+  assert.match(realtimeRpc, /fn send_queued_audio\(/);
+  assert.match(realtimeRpc, /fn prepare_stop_with_queue\(/);
+  assert.match(realtimeRpc, /fn queued_audio_never_pops_without_authority_and_stop_retires_queue/);
   assert.match(realtimeRpc, /codex_wire:stale_audio_generation/);
   assert.match(realtimeRpc, /codex_wire:audio_backpressure/);
   assert.match(realtimeRpc, /codex_wire:audio_clock_gap/);

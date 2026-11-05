@@ -3,7 +3,8 @@
 //! link. A provisional pair is NOT a translation commit or permission for TTS.
 //! This state is local to the existing Codex gateway, not a second Meeting owner.
 
-use super::realtime::Observation;
+use super::realtime::{Observation, RealtimeObserver};
+use serde_json::Value;
 
 const MAX_CANDIDATE_BYTES: usize = 8 * 1024;
 const MAX_UTTERANCE_SAMPLES: u64 = 24_000 * 60;
@@ -122,6 +123,36 @@ impl CorrelationGate {
         }
     }
 
+    /// Compose the existing role-bearing realtime observer with the one-flight
+    /// correlation gate; NEVER promote this provisional pair to GPT-SoVITS.
+    /// An invalid provider event retires both boundaries immediately.
+    pub(super) fn observe_event(
+        &mut self,
+        observer: &mut RealtimeObserver,
+        method: &str,
+        params: &Value,
+    ) -> Result<Option<UnverifiedPair>, &'static str> {
+        // A prior answer has already exhausted this one-flight boundary.
+        // Revoke the event observer before examining any late/duplicate
+        // provider item, so stale text cannot be paired with another window.
+        if self.retired {
+            observer.revoke();
+            return Err("codex_correlation:retired");
+        }
+        let observation = match observer.observe(method, params) {
+            Ok(value) => value,
+            Err(blocker) => {
+                self.revoke();
+                return Err(blocker);
+            }
+        };
+        let result = self.observe(observation);
+        if result.is_err() {
+            observer.revoke();
+        }
+        result
+    }
+
     pub(super) fn revoke(&mut self) {
         self.active = None;
         self.source = None;
@@ -145,6 +176,7 @@ fn valid_candidate(id: &str, text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn lease() -> SourceWindow {
         SourceWindow {
@@ -187,6 +219,74 @@ mod tests {
         assert!(!debug.contains("Tiga belas, bukan tiga puluh."));
         assert_eq!(gate.observe(assistant()), Err("codex_correlation:retired"));
         assert_eq!(gate.begin(lease()), Err("codex_correlation:retired"));
+    }
+
+    #[test]
+    fn completed_realtime_items_form_only_one_unverified_pair() {
+        let mut observer = RealtimeObserver::new("thr_1").unwrap();
+        let mut gate = CorrelationGate::default();
+        assert_eq!(
+            gate.observe_event(&mut observer, "thread/realtime/started",
+                &json!({"threadId":"thr_1","realtimeSessionId":"sess_1","version":"v3"})),
+            Ok(None)
+        );
+        gate.begin(lease()).unwrap();
+        assert_eq!(
+            gate.observe_event(&mut observer, "thread/realtime/outputAudio/delta",
+                &json!({"threadId":"thr_1","audio":{"data":"private-audio"}})),
+            Ok(None)
+        );
+        let source = json!({"threadId":"thr_1","item":{
+            "id":"src_1","realtimeSessionId":"sess_1",
+            "type":"transcriptSegment","role":"user","text":"Jangan hapus file."
+        }});
+        let reply = json!({"threadId":"thr_1","item":{
+            "id":"out_1","realtimeSessionId":"sess_1",
+            "type":"transcriptSegment","role":"assistant","text":"Do not delete the file."
+        }});
+        assert_eq!(
+            gate.observe_event(&mut observer, "thread/realtime/item/completed", &source),
+            Ok(None)
+        );
+        let candidate = gate.observe_event(
+            &mut observer, "thread/realtime/item/completed", &reply
+        ).unwrap().expect("provisional pair only");
+        assert_eq!(candidate.source, lease());
+        assert_eq!(candidate.source_item_id, "src_1");
+        assert_eq!(candidate.assistant_item_id, "out_1");
+        assert_eq!(candidate.assistant_text, "Do not delete the file.");
+        assert!(!format!("{candidate:?}").contains("Do not delete the file."));
+        assert!(gate.is_retired());
+        assert_eq!(
+            gate.observe_event(&mut observer, "thread/realtime/item/completed", &reply),
+            Err("codex_correlation:retired")
+        );
+    }
+
+    #[test]
+    fn invalid_realtime_item_revokes_the_pairing_boundary() {
+        let mut observer = RealtimeObserver::new("thr_1").unwrap();
+        let mut gate = CorrelationGate::default();
+        gate.begin(lease()).unwrap();
+        assert_eq!(
+            gate.observe_event(&mut observer, "thread/realtime/started",
+                &json!({"threadId":"thr_1","realtimeSessionId":"sess_1","version":"v3"})),
+            Ok(None)
+        );
+        assert_eq!(
+            gate.observe_event(&mut observer, "thread/realtime/item/completed",
+                &json!({"threadId":"foreign","item":{
+                    "id":"bad","realtimeSessionId":"sess_1",
+                    "type":"transcriptSegment","role":"assistant","text":"No"
+                }})),
+            Err("codex_realtime:foreign_thread")
+        );
+        assert!(gate.is_retired());
+        assert_eq!(
+            observer.observe("thread/realtime/outputAudio/delta",
+                &json!({"threadId":"thr_1"})),
+            Err("codex_realtime:session_revoked")
+        );
     }
 
     #[test]

@@ -231,6 +231,26 @@ The offline RealtimeObserver also distinguishes a typed
 A failed Voice session cannot be reported as a clean completion.
 The synthetic Rust fixtures cover these cases without executing Codex.
 
+The source-only integration now composes the **existing** queue and wire
+encoder: `AudioFrameQueue.pending_state` distinguishes empty from revoked;
+`RealtimeRpc.send_queued_audio` checks generation/source epoch, cancellation,
+Live state, inflight capacity and ACK deadline **before dequeuing** an
+encoded 24-kHz PCM frame, then returns the bounded `appendAudio` envelope.
+Overflow or invalid authority revokes both the queue and RPC lease;
+`prepare_stop_with_queue` revokes any queued audio before the existing
+two-sided Stop handshake. These functions do not send a network request.
+They assume already-correct PCM16 mono 24-kHz samples: real Windows
+resampling, clock sync, frame scheduling and WebRTC media negotiation
+are still not implemented or proven.
+
+The existing `CorrelationGate.observe_event` now feeds canonical
+`RealtimeObserver` events into the one-flight source/assistant pairing
+gate. Drafts and cloud audio are ignored; wrong-thread/session/duplicate,
+incomplete or ambiguous ordering revokes, and even a well-formed
+`UnverifiedPair` has **no Meeting/TTS authority**, provider causal link
+or proof of translation fidelity. This is an integration seam for
+future authorized operation, NOT a live Codex invocation or provider.
+
 A single `RealtimeRpc` state machine requires Start RPC ACK, matching
 `thread/realtime/started` event (v3 + session ID), matching SDP answer,
 then a separate verified media/entitlement signal before audio admission.

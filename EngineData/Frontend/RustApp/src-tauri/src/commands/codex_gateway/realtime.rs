@@ -273,6 +273,16 @@ impl AudioFrameQueue {
         Ok(())
     }
 
+    /// Distinguish an empty queue from a revoked audio continuity lease.
+    /// A revoked frame queue must never be treated as an ordinary idle tick.
+    pub(super) fn pending_state(&self) -> Result<bool, &'static str> {
+        if self.invalid {
+            Err("codex_realtime:audio_queue_revoked")
+        } else {
+            Ok(!self.frames.is_empty())
+        }
+    }
+
     pub(super) fn pop(&mut self) -> Option<(u64, Value)> {
         if self.invalid {
             return None;
@@ -456,7 +466,9 @@ mod tests {
     #[test]
     fn bounded_pcm_queue_preserves_clock_and_revokes_on_gap() {
         let mut q = AudioFrameQueue::default();
+        assert_eq!(q.pending_state(), Ok(false));
         q.push(100, &[0,1]).unwrap();
+        assert_eq!(q.pending_state(), Ok(true));
         q.push(102, &[-1]).unwrap();
         let (_, first) = q.pop().unwrap();
         assert_eq!(first["sampleRate"], AUDIO_RATE);
@@ -466,6 +478,7 @@ mod tests {
         let (_, second) = q.pop().unwrap();
         assert_eq!(second["data"], "//8=");
         assert_eq!(q.push(105, &[0]), Err("codex_realtime:audio_clock_gap"));
+        assert_eq!(q.pending_state(), Err("codex_realtime:audio_queue_revoked"));
         assert!(q.pop().is_none());
     }
 

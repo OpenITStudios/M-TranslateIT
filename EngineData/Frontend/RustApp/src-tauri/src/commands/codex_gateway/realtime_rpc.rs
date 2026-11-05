@@ -319,6 +319,69 @@ impl RealtimeRpc {
             && self.pending_audio.len() < MAX_INFLIGHT_AUDIO
     }
 
+    /// Offline integration boundary: send the next bounded 24-kHz PCM frame
+    /// from the existing local source-clock queue through the P5 JSONL encoder.
+    /// This only RETURNS an envelope; no App Server request or media connection
+    /// is performed. The sealed media authority still has no production ctor.
+    ///
+    /// Never pop a source frame when the transport cannot accept it. On
+    /// overflow/late/generation mismatch revoke both sides, not drop words.
+    pub(super) fn send_queued_audio(
+        &mut self,
+        id: u64,
+        generation: u64,
+        source_epoch: u64,
+        queue: &mut super::realtime::AudioFrameQueue,
+        cancelled: &AtomicBool,
+    ) -> Result<Option<RpcFrame>, &'static str> {
+        if cancelled.load(Ordering::Acquire) {
+            queue.revoke();
+            self.revoke();
+            return Err("codex_wire:cancelled");
+        }
+        if generation != self.generation || source_epoch != self.source_epoch {
+            queue.revoke();
+            self.revoke();
+            return Err("codex_wire:stale_audio_generation");
+        }
+        if self.phase != Phase::Live {
+            queue.revoke();
+            // StopPending retains its Stop ACK/close authority.
+            return Err("codex_wire:audio_not_live");
+        }
+        // Poll the outstanding receipt deadline even on an idle source
+        // tick. Silent input must not hide an unacknowledged audio request.
+        if let Err(blocker) = self.enforce_ack_deadline(Instant::now()) {
+            queue.revoke();
+            return Err(blocker);
+        }
+        match queue.pending_state() {
+            Ok(false) => return Ok(None),
+            Ok(true) => {}
+            Err(_) => {
+                self.revoke();
+                return Err("codex_wire:audio_queue_revoked");
+            }
+        }
+        if !self.can_enqueue_audio(cancelled) {
+            queue.revoke();
+            self.revoke();
+            return Err("codex_wire:audio_backpressure");
+        }
+        let Some((start_sample, audio)) = queue.pop() else {
+            queue.revoke();
+            self.revoke();
+            return Err("codex_wire:audio_queue_inconsistent");
+        };
+        match self.send_audio(id, generation, source_epoch, start_sample, audio, cancelled) {
+            Ok(frame) => Ok(Some(frame)),
+            Err(blocker) => {
+                queue.revoke();
+                Err(blocker)
+            }
+        }
+    }
+
     pub(super) fn send_audio(
         &mut self,
         id: u64,
@@ -464,6 +527,17 @@ impl RealtimeRpc {
         self.pending_audio.clear();
         self.next_audio_sample = None;
         self.acked_through_sample = None;
+    }
+
+    /// Revoke queued private audio before requesting the existing upstream
+    /// Stop handshake. Pending RPC receipts remain owned by RealtimeRpc.
+    pub(super) fn prepare_stop_with_queue(
+        &mut self,
+        id: u64,
+        queue: &mut super::realtime::AudioFrameQueue,
+    ) -> Result<RpcFrame, &'static str> {
+        queue.revoke();
+        self.prepare_stop(id)
     }
 
     pub(super) fn prepare_stop(&mut self, id: u64) -> Result<RpcFrame, &'static str> {
@@ -621,10 +695,12 @@ mod tests {
         let mut queue = AudioFrameQueue::default();
         queue.push(0, &[0, 1]).unwrap();
         queue.push(2, &[-1]).unwrap();
-        let (start, audio) = queue.pop().unwrap();
-        let first = session.send_audio(11, 7, 2, start, audio, &stop).unwrap();
-        let (_, audio) = queue.pop().unwrap();
-        let second = session.send_audio(12, 7, 2, 2, audio, &stop).unwrap();
+        let first = session.send_queued_audio(11, 7, 2, &mut queue, &stop)
+            .unwrap().expect("first queued frame");
+        let second = session.send_queued_audio(12, 7, 2, &mut queue, &stop)
+            .unwrap().expect("second queued frame");
+        assert_eq!(queue.pending_state(), Ok(false));
+        assert!(session.send_queued_audio(13, 7, 2, &mut queue, &stop).unwrap().is_none());
         let first_value: Value = serde_json::from_slice(&first.bytes).unwrap();
         assert_eq!(first_value["method"], "thread/realtime/appendAudio");
         assert_eq!(first_value["params"]["audio"]["data"], "AAABAA==");
@@ -636,6 +712,44 @@ mod tests {
         assert!(session.pending_audio.is_empty());
         assert_eq!(session.next_audio_sample, Some(3));
         assert_eq!(session.acked_through_sample(), Some(3));
+    }
+
+    #[test]
+    fn queued_audio_never_pops_without_authority_and_stop_retires_queue() {
+        let cancelled = AtomicBool::new(false);
+        let mut session = fresh();
+        let mut queue = AudioFrameQueue::default();
+        queue.push(0, &[5]).unwrap();
+        assert_eq!(
+            session.send_queued_audio(11, 7, 2, &mut queue, &cancelled),
+            Err("codex_wire:audio_not_live")
+        );
+        assert_eq!(queue.pending_state(), Err("codex_realtime:audio_queue_revoked"));
+
+        let mut stale = live();
+        let mut stale_queue = AudioFrameQueue::default();
+        stale_queue.push(0, &[5]).unwrap();
+        assert_eq!(
+            stale.send_queued_audio(11, 7, 3, &mut stale_queue, &cancelled),
+            Err("codex_wire:stale_audio_generation")
+        );
+        assert_eq!(stale.phase(), Phase::Revoked);
+        assert_eq!(stale_queue.pending_state(), Err("codex_realtime:audio_queue_revoked"));
+
+        let mut stopped = live();
+        let mut pending = AudioFrameQueue::default();
+        pending.push(0, &[1]).unwrap();
+        let stop_frame = stopped.prepare_stop_with_queue(15, &mut pending).unwrap();
+        assert_eq!(stop_frame.method, "thread/realtime/stop");
+        assert_eq!(pending.pending_state(), Err("codex_realtime:audio_queue_revoked"));
+        assert_eq!(stopped.phase(), Phase::StopPending);
+        assert_eq!(
+            stopped.send_queued_audio(16, 7, 2, &mut pending, &cancelled),
+            Err("codex_wire:audio_not_live")
+        );
+        stopped.ack_stop(15, &json!({})).unwrap();
+        stopped.observe_closed(&json!({"threadId":"thread_1"})).unwrap();
+        assert!(stopped.close_verified());
     }
 
     #[test]
