@@ -2,6 +2,8 @@
 
 Repository state is authoritative. Chat history and old evidence are supporting context only.
 
+**Portable engineering/UI method (v0.1):** [Universal Engineering Harness](https://github.com/OpenITStudios/M-LazyDesigner/blob/e889e9ae26700790d28db9c0df6f1f4f91712055/docs/04-system/universal-engineering-harness.md) considers **Ponytail, Harness², DeepSeek Harness, REA and UI UX Pro Max** for matching system/UI tasks; consult only evidence that changes the decision. This is not a seventh Skill, a new AI model/runtime, or permission for cloud inference, CI, or device capture. Existing `Local` authority, private-data/inference limits, application design, REA runbook and native proof gates override all external methods.
+
 ## Branch and execution authority
 
 **Local-only development model:** `Local` owns current development, source, verification planning, governance, and continuation. The GitHub default branch `main` is reserved for finalized outcomes only; it must not be modified or used as development/CI fallback before explicit release approval.
