@@ -207,9 +207,29 @@ The source-only `codex_gateway/realtime_rpc.rs` now builds precisely scoped
 disables unrelated startup context. This is **not text-only realtime**: under
 the reviewed Codex version, V3 WebRTC still uses audio output and any
 role-bearing text remains unverified until a live run establishes its meaning.
+A source follow-up at upstream `openai/codex` commit
+`f69c660a83b5279653085390b9be9aad7e6fd2d1` confirms the core
+`realtime_conversation.rs` rejects `outputModality=text` for any
+version other than V2, while WebRTC accepts V1/V3 only.
+Do not switch the V3 start envelope to text: it would be rejected before
+the desired STT/translation output could exist. The user-approved target is
+**audio captured locally → Codex STT+translation → English translation text
+→ the already-selected local GPT-SoVITS voice → one Meeting microphone**.
+The Codex-generated audio associated with the currently supported V3
+output mode must be ignored; only independently validated source/assistant
+transcripts may be considered for later admission. This does not prove
+audio input entitlement under the ChatGPT subscription, source/response
+causality, provider translation fidelity, low latency or zero additional
+charges. No production Voice route is enabled.
 The RPC encoder does not create a Codex thread, initiate WebRTC peer
 negotiation, or authenticate Voice. A real media/data-channel owner is not
 yet implemented.
+
+The offline RealtimeObserver also distinguishes a typed
+`realtimeSessionClosed` item with `outcome=ended` (clean) from
+`outcome=failed` or missing/unknown outcomes (fatal, revoke).
+A failed Voice session cannot be reported as a clean completion.
+The synthetic Rust fixtures cover these cases without executing Codex.
 
 A single `RealtimeRpc` state machine requires Start RPC ACK, matching
 `thread/realtime/started` event (v3 + session ID), matching SDP answer,

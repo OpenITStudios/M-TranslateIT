@@ -177,8 +177,17 @@ impl RealtimeObserver {
                         }
                     }
                     Some("realtimeSessionClosed") => {
-                        self.revoke();
-                        Ok(Observation::Closed)
+                        // An upstream realtime item distinguishes ended from failed.
+                        // Only a successful outcome can be a clean session close.
+                        // observe() revokes the session on every error.
+                        match item.get("outcome").and_then(Value::as_str) {
+                            Some("ended") => {
+                                self.revoke();
+                                Ok(Observation::Closed)
+                            }
+                            Some("failed") => Err("codex_realtime:session_failed"),
+                            _ => Err("codex_realtime:session_outcome_invalid"),
+                        }
                     }
                     Some("realtimeSessionStarted" | "bemItemPromoted") => Ok(Observation::Ignored),
                     _ => Err("codex_realtime:item_type_unrecognized"),
@@ -387,6 +396,46 @@ mod tests {
         assert_eq!(
             thread.observe("thread/realtime/closed", &json!({"threadId":"foreign"})),
             Err("codex_realtime:foreign_thread")
+        );
+    }
+
+    #[test]
+    fn failed_or_missing_realtime_outcome_cannot_become_a_clean_close() {
+        let closed = |outcome: Value| json!({
+            "threadId": "thr_a",
+            "item": {
+                "id": "close_1",
+                "realtimeSessionId": "sess_a",
+                "type": "realtimeSessionClosed",
+                "outcome": outcome
+            }
+        });
+
+        let mut ended = observer();
+        assert_eq!(
+            ended.observe("thread/realtime/item/completed", &closed(json!("ended"))),
+            Ok(Observation::Closed)
+        );
+        assert_eq!(
+            ended.observe("thread/realtime/item/completed", &closed(json!("ended"))),
+            Err("codex_realtime:session_revoked")
+        );
+
+        let mut failed = observer();
+        assert_eq!(
+            failed.observe("thread/realtime/item/completed", &closed(json!("failed"))),
+            Err("codex_realtime:session_failed")
+        );
+        assert_eq!(
+            failed.observe("thread/realtime/transcript/done",
+                &json!({"threadId":"thr_a","role":"assistant","text":"late"})),
+            Err("codex_realtime:session_revoked")
+        );
+
+        let mut invalid = observer();
+        assert_eq!(
+            invalid.observe("thread/realtime/item/completed", &closed(Value::Null)),
+            Err("codex_realtime:session_outcome_invalid")
         );
     }
 

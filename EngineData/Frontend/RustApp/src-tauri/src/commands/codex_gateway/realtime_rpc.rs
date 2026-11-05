@@ -2,6 +2,10 @@
 //! future Codex Realtime WebRTC session. This is NOT connected to the P1
 //! AppServer transport, not a second Meeting owner and not a Voice entitlement.
 //! The currently admitted P1 RPC allowlist remains account-read-only.
+//! Upstream Codex V3 WebRTC rejects outputModality=text (V2-only). V3 uses
+//! audio output; realtime.rs discards cloud outputAudio and must never route
+//! it into the Meeting microphone. Assistant text is still unverified, not a
+//! GPT-SoVITS or Meeting commit. No account Voice entitlement is established.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};

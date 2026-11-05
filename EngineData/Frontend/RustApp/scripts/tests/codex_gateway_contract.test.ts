@@ -147,6 +147,11 @@ test("P5 stages typed V3 WebRTC start/audio/stop envelopes without live RPC admi
   assert.match(realtimeRpc, /"thread\/realtime\/appendAudio"/);
   assert.match(realtimeRpc, /"thread\/realtime\/stop"/);
   assert.match(realtimeRpc, /"outputModality": "audio"/);
+  assert.doesNotMatch(realtimeRpc, /"outputModality": "text"/);
+  assert.match(realtime, /CloudAudioIgnored/);
+  assert.match(realtime, /codex_realtime:session_failed/);
+  assert.match(realtime, /codex_realtime:session_outcome_invalid/);
+  assert.match(realtime, /fn failed_or_missing_realtime_outcome_cannot_become_a_clean_close/);
   assert.match(realtimeRpc, /"version": "v3"/);
   assert.match(realtimeRpc, /"type": "webrtc"/);
   assert.match(realtimeRpc, /"includeStartupContext": false/);
