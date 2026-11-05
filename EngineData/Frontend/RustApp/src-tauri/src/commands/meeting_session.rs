@@ -388,6 +388,9 @@ fn generation_is_starting(generation: u64) -> bool {
 }
 
 fn incoming_session_is_eligible(session_id: &str) -> bool {
+    // This predicate is also called while the deferred incoming queue is
+    // locked: do not acquire Settings IO here. Engine admission happens
+    // immediately before each local incoming ASR/MT worker request.
     if !incoming_lane_enabled(session_id) {
         return false;
     }
@@ -397,6 +400,7 @@ fn incoming_session_is_eligible(session_id: &str) -> bool {
         .map(|snapshot| {
             snapshot.owner_id == APPLICATION_MEETING_OWNER_ID
                 && snapshot.session_id == session_id
+                && snapshot.authority_active
                 && snapshot.phase == "live"
         })
         .unwrap_or(false)

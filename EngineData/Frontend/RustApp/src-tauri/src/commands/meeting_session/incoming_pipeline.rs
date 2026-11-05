@@ -50,7 +50,12 @@ fn process_incoming_wav_with_direction(
     deferred_direction: Option<(String, String)>,
 ) -> IncomingAudioProcessResult {
     let retrying_deferred = deferred_enqueued_unix_ms.is_some();
-    if !incoming_session_is_eligible(session_id) {
+    // Codex selection must not borrow Local Faster-Whisper even for optional
+    // incoming captions. Check outside deferred queue ownership so no
+    // settings-IO lock is taken while the queue mutex is held.
+    if !incoming_session_is_eligible(session_id)
+        || !super::local_translated_meeting_route_admitted()
+    {
         return IncomingAudioProcessResult::Complete;
     }
     let settings = load_settings();
@@ -231,6 +236,13 @@ fn translate_and_commit_incoming_transcript(
     target_language: &str,
     allow_defer: bool,
 ) -> bool {
+    // A deferred transcript can outlive the earlier ASR admission. Never
+    // start MiLMMT under a Codex/unverified engine or revoked Meeting.
+    if !incoming_session_is_eligible(session_id)
+        || !super::local_translated_meeting_route_admitted()
+    {
+        return false;
+    }
     update_incoming_status(
         session_id,
         "translating",
