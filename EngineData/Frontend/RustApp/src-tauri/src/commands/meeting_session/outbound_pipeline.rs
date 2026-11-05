@@ -82,9 +82,28 @@ fn verified_tts_output_in_dir(
     Some(resolved_expected)
 }
 
-// A queued file can disappear or become a symlink before the playback thread
-// reaches it. Reuse the same owned-path gate at the last source-level
-// boundary; do not create a second WAV decoder or trust the queued pathname.
+// Keep a source-owned handle from accepted TTS output through the playback
+// queue; no WAV sample data is read or duplicated during admission.
+fn open_verified_tts_output_in_dir(
+    tts_dir: &Path,
+    requested_path: &str,
+    reported_path: &str,
+) -> Option<(PathBuf, fs::File)> {
+    let path = verified_tts_output_in_dir(tts_dir, requested_path, reported_path)?;
+    let entry = fs::symlink_metadata(&path).ok()?;
+    if !entry.file_type().is_file() || entry.len() <= MIN_MEETING_TTS_WAV_BYTES {
+        return None;
+    }
+    let opened = fs::File::open(&path).ok()?;
+    let opened_meta = opened.metadata().ok()?;
+    if !opened_meta.is_file() || opened_meta.len() != entry.len() {
+        return None;
+    }
+    Some((path, opened))
+}
+
+// Reuse the original path gate as a last-moment P11 check, while the P13
+// decoder reads the already-opened file rather than resolving its pathname.
 pub(super) fn prepared_tts_output_still_owned(requested_path: &str, actual_path: &str) -> bool {
     verified_tts_output_in_dir(
         &meeting_tts_directory(), requested_path, actual_path,
@@ -575,7 +594,7 @@ pub(super) fn process_outbound_wav(
         };
     }
 
-    let Some(verified_tts_path) = verified_tts_output_in_dir(
+    let Some((verified_tts_path, opened_tts_file)) = open_verified_tts_output_in_dir(
         &meeting_tts_directory(),
         &requested_tts_path,
         &tts_path,
@@ -609,6 +628,7 @@ pub(super) fn process_outbound_wav(
         utterance_id,
         requested_tts_path,
         actual_tts_path: verified_tts_path.to_string_lossy().into_owned(),
+        opened_tts_file: Some(opened_tts_file),
         timing,
         prepared_at: Instant::now(),
     };
@@ -698,8 +718,8 @@ pub(super) fn process_outbound_wav(
 mod tests {
     use super::{
         cleanup_meeting_tts_for_scope_in_dir, cleanup_meeting_tts_for_session_in_dir,
-        expected_tts_path_in_dir, remove_temporary_tts_paths_in_dir, tts_output_path,
-        verified_tts_output_in_dir,
+        expected_tts_path_in_dir, open_verified_tts_output_in_dir,
+        remove_temporary_tts_paths_in_dir, tts_output_path, verified_tts_output_in_dir,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -885,6 +905,56 @@ mod tests {
             Err(error) => panic!("could not create symlink fixture: {error}"),
         }
         fs::remove_dir_all(root).expect("remove isolated root");
+    }
+
+
+    #[cfg(unix)]
+    #[test]
+    fn accepted_tts_handle_preserves_original_bytes_after_queued_path_swap() {
+        use std::io::Read;
+
+        let root = temp_wav("queued-handle-identity").with_extension("");
+        fs::create_dir_all(&root).expect("create isolated TTS fixture");
+        let request = tts_output_path("session-a", 7, 11);
+        let path = root.join("session-a_g7_s11.wav");
+        let retained = root.join("original.wav");
+        let original = one_frame_pcm16_wav();
+        let mut replacement = original.clone();
+        replacement[44] = 0x7f;
+        fs::write(&path, &original).expect("create admitted TTS file");
+        let (approved, mut opened) = open_verified_tts_output_in_dir(
+            &root, &request, path.to_string_lossy().as_ref(),
+        ).expect("admitted WAV holds the original file handle");
+        assert_eq!(approved, fs::canonicalize(&path).unwrap());
+
+        fs::rename(&path, &retained).expect("rename original WAV");
+        fs::write(&path, &replacement).expect("install same-length replacement");
+        let mut pinned_bytes = Vec::new();
+        opened.read_to_end(&mut pinned_bytes).expect("read original open handle");
+        assert_eq!(pinned_bytes, original);
+        assert_eq!(fs::read(&path).unwrap(), replacement);
+        drop(opened);
+        fs::remove_dir_all(root).expect("remove isolated fixture");
+    }
+
+    #[test]
+    fn opened_tts_handle_admission_rejects_missing_and_header_only_wav() {
+        let root = temp_wav("queued-handle-negative").with_extension("");
+        fs::create_dir_all(&root).expect("create isolated fixture");
+        let request = tts_output_path("session-a", 7, 11);
+        let path = root.join("session-a_g7_s11.wav");
+        assert!(open_verified_tts_output_in_dir(
+            &root, &request, path.to_string_lossy().as_ref(),
+        ).is_none());
+        fs::write(&path, vec![0u8; 44]).expect("create undersized WAV");
+        assert!(open_verified_tts_output_in_dir(
+            &root, &request, path.to_string_lossy().as_ref(),
+        ).is_none());
+        fs::write(&path, one_frame_pcm16_wav()).expect("create valid WAV");
+        assert!(open_verified_tts_output_in_dir(
+            &root, &request, path.to_string_lossy().as_ref(),
+        ).is_some());
+        fs::remove_dir_all(root).expect("remove fixture");
     }
 
     #[test]

@@ -1,9 +1,12 @@
+use std::fs::File;
 use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::{Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::engine::audio::meeting_output::{deliver_meeting_output_wav_for_source, MAX_DELIVERY_DEADLINE_MS};
+use crate::engine::audio::meeting_output::{
+    deliver_meeting_output_open_wav_for_source, MAX_DELIVERY_DEADLINE_MS,
+};
 use crate::engine::runtime_state::runtime_generation_is_authoritative;
 use crate::engine::audio::original_voice_pcm;
 use crate::engine::audio::meeting_sound_capture::meeting_sound_capture_status;
@@ -52,6 +55,7 @@ pub(super) struct PreparedPlaybackJob {
     pub(super) utterance_id: u64,
     pub(super) requested_tts_path: String,
     pub(super) actual_tts_path: String,
+    pub(super) opened_tts_file: Option<File>,
     pub(super) timing: OutboundTimingContext,
     pub(super) prepared_at: Instant,
 }
@@ -77,7 +81,10 @@ fn playback_runtime_store() -> &'static Mutex<Option<MeetingPlaybackRuntime>> {
     MEETING_PLAYBACK_RUNTIME.get_or_init(|| Mutex::new(None))
 }
 
-fn cleanup_job(job: &PreparedPlaybackJob) {
+fn cleanup_job(job: &mut PreparedPlaybackJob) {
+    // Release the opened handle first, so Windows cleanup may delete the
+    // session-owned file without waiting for this queued job to be dropped.
+    drop(job.opened_tts_file.take());
     remove_temporary_tts_paths(&job.requested_tts_path, &job.actual_tts_path);
 }
 
@@ -94,9 +101,9 @@ fn sequence_is_monotonic(last_sequence: u64, candidate: u64) -> bool {
     candidate > last_sequence
 }
 
-fn process_playback_job(job: PreparedPlaybackJob, last_sequence: &mut u64) {
+fn process_playback_job(mut job: PreparedPlaybackJob, last_sequence: &mut u64) {
     if !sequence_is_monotonic(*last_sequence, job.event_sequence) {
-        cleanup_job(&job);
+        cleanup_job(&mut job);
         let _ = update_committed_turn_delivery_state(
             &job.session_id,
             job.generation,
@@ -119,7 +126,7 @@ fn process_playback_job(job: PreparedPlaybackJob, last_sequence: &mut u64) {
         || !original_voice_pcm::translated_epoch_matches(job.generation, job.source_epoch)
         || !super::local_translated_meeting_route_admitted()
     {
-        cleanup_job(&job);
+        cleanup_job(&mut job);
         mark_interrupted(&job);
         return;
     }
@@ -145,7 +152,7 @@ fn process_playback_job(job: PreparedPlaybackJob, last_sequence: &mut u64) {
     let bound_output_device = match get_bound_virtual_mic_output_device(job.generation) {
         Ok(device) => device,
         Err(blocker) => {
-            cleanup_job(&job);
+            cleanup_job(&mut job);
             let _ = update_committed_turn_delivery_state(
                 &job.session_id,
                 job.generation,
@@ -170,7 +177,7 @@ fn process_playback_job(job: PreparedPlaybackJob, last_sequence: &mut u64) {
         || !original_voice_pcm::translated_epoch_matches(job.generation, job.source_epoch)
         || !super::local_translated_meeting_route_admitted()
     {
-        cleanup_job(&job);
+        cleanup_job(&mut job);
         mark_interrupted(&job);
         return;
     }
@@ -182,7 +189,7 @@ fn process_playback_job(job: PreparedPlaybackJob, last_sequence: &mut u64) {
         job.event_sequence,
         job.utterance_id,
     ) {
-        cleanup_job(&job);
+        cleanup_job(&mut job);
         update_outbound_status(
             job.generation,
             &job.session_id,
@@ -227,7 +234,7 @@ fn process_playback_job(job: PreparedPlaybackJob, last_sequence: &mut u64) {
     if !original_voice_pcm::translated_epoch_matches(job.generation, job.source_epoch)
         || !super::local_translated_meeting_route_admitted()
     {
-        cleanup_job(&job);
+        cleanup_job(&mut job);
         mark_interrupted(&job);
         set_outbound_playback_activity(job.generation, &job.session_id, job.event_sequence, false);
         drop(suppression_guard);
@@ -238,10 +245,15 @@ fn process_playback_job(job: PreparedPlaybackJob, last_sequence: &mut u64) {
     // not follow a substituted symlink or use an expired/missing file.
     // This cannot prevent an external writer from mutating file bytes after
     // this check; the canonical decoder remains the audio-format authority.
-    if !prepared_tts_output_still_owned(
+    let owned_file = if prepared_tts_output_still_owned(
         &job.requested_tts_path, &job.actual_tts_path,
     ) {
-        cleanup_job(&job);
+        job.opened_tts_file.take()
+    } else {
+        None
+    };
+    let Some(owned_file) = owned_file else {
+        cleanup_job(&mut job);
         let _ = update_committed_turn_delivery_state(
             &job.session_id,
             job.generation,
@@ -263,10 +275,12 @@ fn process_playback_job(job: PreparedPlaybackJob, last_sequence: &mut u64) {
             "Prepared voice WAV lost its session-owned file identity while queued. No playback was attempted.",
         );
         return;
-    }
+    };
     let delivery_started_at = Instant::now();
-    let route = deliver_meeting_output_wav_for_source(
-        &job.actual_tts_path,
+    // The TTS-admitted handle supplies the decoder; no second path open can
+    // replace the accepted WAV with another session's file during this gap.
+    let route = deliver_meeting_output_open_wav_for_source(
+        owned_file,
         Some(bound_output_device.as_str()),
         job.generation,
         job.source_epoch,
@@ -313,7 +327,7 @@ fn process_playback_job(job: PreparedPlaybackJob, last_sequence: &mut u64) {
         );
     }
 
-    cleanup_job(&job);
+    cleanup_job(&mut job);
 
     if !generation_is_live(job.generation)
         || !original_voice_pcm::translated_epoch_matches(job.generation, job.source_epoch)
@@ -400,9 +414,9 @@ pub(super) fn start_meeting_playback_runtime(
         .name("translateit-meeting-playback".to_string())
         .spawn(move || {
             let mut last_sequence = 0u64;
-            while let Ok(job) = receiver.recv() {
+            while let Ok(mut job) = receiver.recv() {
                 if job.generation != generation || job.session_id != thread_session_id {
-                    cleanup_job(&job);
+                    cleanup_job(&mut job);
                     mark_interrupted(&job);
                     continue;
                 }
@@ -456,7 +470,7 @@ fn enqueue_with_deadline<T>(
     }
 }
 
-pub(super) fn enqueue_meeting_playback(job: PreparedPlaybackJob) -> Result<(), String> {
+pub(super) fn enqueue_meeting_playback(mut job: PreparedPlaybackJob) -> Result<(), String> {
     // Only the canonical source/turn owner may admit a Local prepared WAV.
     // Unverified Codex assistant text never enters this queue.
     if !super::local_translated_meeting_route_admitted() {
@@ -478,7 +492,7 @@ pub(super) fn enqueue_meeting_playback(job: PreparedPlaybackJob) -> Result<(), S
     let sender = match sender {
         Ok(sender) => sender,
         Err(blocker) => {
-            cleanup_job(&job);
+            cleanup_job(&mut job);
             return Err(blocker);
         }
     };
@@ -490,8 +504,8 @@ pub(super) fn enqueue_meeting_playback(job: PreparedPlaybackJob) -> Result<(), S
         || generation_is_live(generation),
     ) {
         Ok(()) => Ok(()),
-        Err((job, blocker)) => {
-            cleanup_job(&job);
+        Err((mut job, blocker)) => {
+            cleanup_job(&mut job);
             Err(blocker.to_string())
         }
     }

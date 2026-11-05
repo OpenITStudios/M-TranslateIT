@@ -1,4 +1,5 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use std::fs::File;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -17,9 +18,10 @@ mod original;
 
 pub use original::{start_original_voice_output, stop_original_voice_output, original_voice_output_healthy};
 
-use audio_format::{decode_wav_file, delivery_deadline_ms, prepare_output_samples};
-#[cfg(test)]
-use audio_format::decode_wav_bytes;
+use audio_format::{
+    decode_wav_bytes, decode_wav_file, delivery_deadline_ms,
+    prepare_output_samples, read_bounded_open_wav,
+};
 
 const MAX_MEETING_OUTPUT_WAV_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_OUTPUT_CHANNELS: u16 = 8;
@@ -574,18 +576,47 @@ fn blocked(blocker: &str, execution_attempted: bool) -> MeetingOutputDeliveryRep
     }
 }
 
+// Keep path-based callers unchanged. Meeting's prepared TTS queue owns a
+// File opened at synthesis admission, and passes it to the same WAV decoder.
+enum MeetingWavInput<'a> {
+    Path(&'a str),
+    Opened(File),
+}
+
+fn decode_meeting_wav_input(input: MeetingWavInput<'_>) -> Result<audio_format::DecodedWav, String> {
+    match input {
+        MeetingWavInput::Path(path) => decode_wav_file(Path::new(path)),
+        MeetingWavInput::Opened(file) => {
+            let bytes = read_bounded_open_wav(file)?;
+            decode_wav_bytes(&bytes)
+        }
+    }
+}
+
+pub(crate) fn deliver_meeting_output_open_wav_for_source(
+    source_audio_file: File, selected_output_device: Option<&str>, generation: u64, source_epoch: u64,
+) -> MeetingOutputDeliveryReport {
+    deliver_meeting_output_wav_inner(
+        MeetingWavInput::Opened(source_audio_file), selected_output_device,
+        generation, Some(source_epoch),
+    )
+}
 pub fn deliver_meeting_output_wav_for_source(
     source_audio_path: &str, selected_output_device: Option<&str>, generation: u64, source_epoch: u64,
 ) -> MeetingOutputDeliveryReport {
-    deliver_meeting_output_wav_inner(source_audio_path, selected_output_device, generation, Some(source_epoch))
+    deliver_meeting_output_wav_inner(
+        MeetingWavInput::Path(source_audio_path), selected_output_device, generation, Some(source_epoch),
+    )
 }
 pub fn deliver_meeting_output_wav(
     source_audio_path: &str, selected_output_device: Option<&str>, generation: u64,
 ) -> MeetingOutputDeliveryReport {
-    deliver_meeting_output_wav_inner(source_audio_path, selected_output_device, generation, None)
+    deliver_meeting_output_wav_inner(
+        MeetingWavInput::Path(source_audio_path), selected_output_device, generation, None,
+    )
 }
 fn deliver_meeting_output_wav_inner(
-    source_audio_path: &str, selected_output_device: Option<&str>, generation: u64, source_epoch: Option<u64>,
+    input: MeetingWavInput<'_>, selected_output_device: Option<&str>, generation: u64, source_epoch: Option<u64>,
 ) -> MeetingOutputDeliveryReport {
     if !runtime_generation_is_authoritative(generation) {
         return blocked("meeting_output:generation_not_authoritative", false);
@@ -600,7 +631,7 @@ fn deliver_meeting_output_wav_inner(
         return blocked("meeting_output:selected_output_device_missing", false);
     };
 
-    let wav = match decode_wav_file(Path::new(source_audio_path)) {
+    let wav = match decode_meeting_wav_input(input) {
         Ok(value) => value,
         Err(blocker) => {
             return blocked(&blocker, false)
@@ -751,7 +782,8 @@ fn deliver_meeting_output_wav_inner(
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_wav_bytes, decode_wav_file, delivery_deadline_ms, prepare_output_samples, projected_unix_ms,
+        decode_meeting_wav_input, decode_wav_bytes, decode_wav_file, delivery_deadline_ms,
+        prepare_output_samples, projected_unix_ms, MeetingWavInput,
         stream_start_to_first_audio_ms, wait_for_output_completion, wait_for_output_tail,
         install_cancel_control, clear_cancel_control, cancel_meeting_output_for_generation,
         cancel_control, release_output_stream, signal_output_callback_failure,
@@ -1105,6 +1137,33 @@ mod tests {
         );
         fs::remove_file(path).expect("remove replacement fixture");
         fs::remove_file(old_path).expect("remove retained original fixture");
+    }
+
+
+    #[cfg(unix)]
+    #[test]
+    fn held_queue_handle_decodes_original_after_same_size_path_replacement() {
+        use std::fs;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)
+            .expect("clock after epoch").as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "translateit-held-decoder-{}-{nonce}.wav", std::process::id(),
+        ));
+        let original_path = path.with_extension("retained");
+        let original = pcm16_wav(16_000, 1, &[10_000, -10_000]);
+        let replacement = pcm16_wav(16_000, 1, &[20_000, -20_000]);
+        fs::write(&path, original).expect("write admitted WAV");
+        let opened = fs::File::open(&path).expect("retain original file handle");
+        fs::rename(&path, &original_path).expect("replace path after admission");
+        fs::write(&path, replacement).expect("write different WAV with equal length");
+        let decoded = decode_meeting_wav_input(MeetingWavInput::Opened(opened))
+            .expect("decode through pinned file handle");
+        assert_eq!(decoded.samples.len(), 2);
+        assert_eq!(decoded.samples[0], 10_000.0_f32 / 32768.0_f32);
+        assert_eq!(decoded.samples[1], -10_000.0_f32 / 32768.0_f32);
+        fs::remove_file(path).expect("remove replacement");
+        fs::remove_file(original_path).expect("remove original");
     }
 
     #[test]
