@@ -106,17 +106,36 @@ pub(super) struct FinalTurnEvidence {
     lease: SourceLease,
     thread: String,
     turn: String,
+    expected_input: String,
     consumed: bool,
 }
 
 impl FinalTurnEvidence {
-    pub(super) fn new(lease: SourceLease, thread: &str, turn: &str)
+    pub(super) fn new(lease: SourceLease, thread: &str, turn: &str, request: &Value)
         -> Result<Self, &'static str>
     {
         if lease.generation == 0 || lease.sequence == 0 || !safe_id(thread) || !safe_id(turn) {
             return Err("codex_text:identity_invalid");
         }
-        Ok(Self { lease, thread: thread.to_string(), turn: turn.to_string(), consumed: false })
+        if request.get("method").and_then(Value::as_str) != Some("turn/start")
+            || request.pointer("/params/threadId").and_then(Value::as_str) != Some(thread)
+        {
+            return Err("codex_text:source_request_invalid");
+        }
+        let input = request.pointer("/params/input").and_then(Value::as_array)
+            .ok_or("codex_text:source_request_invalid")?;
+        if input.len() != 1 || input[0].get("type").and_then(Value::as_str) != Some("text") {
+            return Err("codex_text:source_request_invalid");
+        }
+        let expected = input[0].get("text").and_then(Value::as_str)
+            .ok_or("codex_text:source_request_invalid")?;
+        if !safe_text(expected, super::protocol::MAX_REQUEST_BYTES) {
+            return Err("codex_text:source_request_invalid");
+        }
+        Ok(Self {
+            lease, thread: thread.to_string(), turn: turn.to_string(),
+            expected_input: expected.to_string(), consumed: false,
+        })
     }
 
     pub(super) fn revoke(&mut self) {
@@ -155,10 +174,29 @@ impl FinalTurnEvidence {
             return Err("codex_text:items_out_of_bounds");
         }
         let mut final_text: Option<String> = None;
+        let mut source_seen = false;
         for item in items {
             match item.get("type").and_then(Value::as_str) {
-                Some("userMessage" | "reasoning") => {}
+                Some("userMessage") => {
+                    if source_seen {
+                        return Err("codex_text:duplicate_source");
+                    }
+                    let content = item.get("content").and_then(Value::as_array)
+                        .ok_or("codex_text:source_missing")?;
+                    if content.len() != 1
+                        || content[0].get("type").and_then(Value::as_str) != Some("text")
+                        || content[0].get("text").and_then(Value::as_str)
+                            != Some(self.expected_input.as_str())
+                    {
+                        return Err("codex_text:source_mismatch");
+                    }
+                    source_seen = true;
+                }
+                Some("reasoning") => {}
                 Some("agentMessage") => {
+                    if !source_seen {
+                        return Err("codex_text:assistant_before_source");
+                    }
                     let phase = item.get("phase");
                     if matches!(phase.and_then(Value::as_str), Some("commentary" | "partial_answer")) {
                         continue;
@@ -195,6 +233,9 @@ impl FinalTurnEvidence {
                 _ => return Err("codex_text:tool_or_unknown_item"),
             }
         }
+        if !source_seen {
+            return Err("codex_text:source_missing");
+        }
         Ok(UnverifiedTextTranslation {
             source: self.lease,
             text: final_text.ok_or("codex_text:final_missing")?,
@@ -210,11 +251,20 @@ mod tests {
         SourceLease { generation: 9, epoch: 2, sequence: 3 }
     }
 
+    fn request() -> Value {
+        offline_turn_start("thread-1", "id", "en", "Jangan hapus a.txt.").unwrap()
+    }
+
+    fn gate() -> FinalTurnEvidence {
+        FinalTurnEvidence::new(lease(), "thread-1", "turn-1", &request()).unwrap()
+    }
+
     fn completed(raw: &str) -> Value {
+        let content = request()["params"]["input"].clone();
         json!({"threadId": "thread-1", "turn": {
             "id": "turn-1", "status": "completed", "error": null, "itemsView": "full",
             "items": [
-                {"type": "userMessage", "id": "src"},
+                {"type": "userMessage", "id": "src", "content": content},
                 {"type": "agentMessage", "id": "reply", "phase": "final_answer", "text": raw}
             ]
         }})
@@ -259,7 +309,7 @@ mod tests {
 
     #[test]
     fn exact_one_shot_final_or_explicit_failure_never_admits_tools() {
-        let mut gate = FinalTurnEvidence::new(lease(), "thread-1", "turn-1").unwrap();
+        let mut gate = gate();
         let result = gate.take_completed("turn/completed", &completed(r#"{"translation":"Do not delete a.txt."}"#)).unwrap();
         assert_eq!(result.source, lease());
         assert_eq!(result.text, "Do not delete a.txt.");
@@ -267,13 +317,13 @@ mod tests {
         assert_eq!(gate.take_completed("turn/completed", &completed(r#"{"translation":"Late"}"#)).unwrap_err(),
             "codex_text:already_consumed");
 
-        let mut gate = FinalTurnEvidence::new(lease(), "thread-1", "turn-1").unwrap();
+        let mut gate = gate();
         let mut tool = completed(r#"{"translation":"Safe"}"#);
         tool["turn"]["items"].as_array_mut().unwrap()
             .push(json!({"type": "commandExecution", "id": "tool-1"}));
         assert_eq!(gate.take_completed("turn/completed", &tool).unwrap_err(), "codex_text:tool_or_unknown_item");
 
-        let mut gate = FinalTurnEvidence::new(lease(), "thread-1", "turn-1").unwrap();
+        let mut gate = gate();
         assert_eq!(
             gate.take_completed("turn/started", &completed(r#"{"translation":"Early"}"#)).unwrap_err(),
             "codex_text:not_completed_event"
@@ -283,25 +333,55 @@ mod tests {
             "codex_text:already_consumed"
         );
 
-        let mut gate = FinalTurnEvidence::new(lease(), "thread-1", "turn-1").unwrap();
+        let mut gate = gate();
         gate.revoke();
         assert!(gate.take_completed("turn/completed", &completed(r#"{"translation":"Late"}"#)).is_err());
     }
 
     #[test]
+    fn wrong_utterance_or_direction_and_duplicate_source_are_rejected() {
+        let mut changed = completed(r#"{"translation":"Wrong source"}"#);
+        changed["turn"]["items"][0]["content"][0]["text"] =
+            offline_turn_start("thread-1", "en", "id", "Do not delete a.txt.")
+                .unwrap()["params"]["input"][0]["text"].clone();
+        assert_eq!(
+            gate().take_completed("turn/completed", &changed).unwrap_err(),
+            "codex_text:source_mismatch"
+        );
+
+        let mut missing = completed(r#"{"translation":"No source"}"#);
+        missing["turn"]["items"].as_array_mut().unwrap().remove(0);
+        assert_eq!(
+            gate().take_completed("turn/completed", &missing).unwrap_err(),
+            "codex_text:assistant_before_source"
+        );
+
+        let mut duplicate = completed(r#"{"translation":"Repeated"}"#);
+        let user = duplicate["turn"]["items"][0].clone();
+        duplicate["turn"]["items"].as_array_mut().unwrap().push(user);
+        assert_eq!(
+            gate().take_completed("turn/completed", &duplicate).unwrap_err(),
+            "codex_text:duplicate_source"
+        );
+
+        let wrong_thread_request = offline_turn_start("another-thread", "id", "en", "Halo").unwrap();
+        assert!(FinalTurnEvidence::new(lease(), "thread-1", "turn-1", &wrong_thread_request).is_err());
+    }
+
+    #[test]
     fn rejected_turn_cannot_become_a_result_on_later_events() {
-        let mut gate = FinalTurnEvidence::new(lease(), "thread-1", "turn-1").unwrap();
+        let mut gate = gate();
         let mut bad = completed(r#"{"translation":"Hi"}"#);
         bad["threadId"] = json!("other-thread");
         assert_eq!(gate.take_completed("turn/completed", &bad).unwrap_err(), "codex_text:foreign_thread");
         assert!(gate.take_completed("turn/completed", &completed(r#"{"translation":"Hi"}"#)).is_err());
 
         for raw in ["hello", r#"{"translation":""}"#, r#"{"translation":"Hi","extra":1}"#] {
-            let mut gate = FinalTurnEvidence::new(lease(), "thread-1", "turn-1").unwrap();
+            let mut gate = gate();
             assert!(gate.take_completed("turn/completed", &completed(raw)).is_err());
         }
 
-        let mut gate = FinalTurnEvidence::new(lease(), "thread-1", "turn-1").unwrap();
+        let mut gate = gate();
         let mut partial = completed(r#"{"translation":"Hi"}"#);
         partial["turn"]["itemsView"] = json!("summary");
         assert_eq!(gate.take_completed("turn/completed", &partial).unwrap_err(), "codex_text:items_not_fully_loaded");

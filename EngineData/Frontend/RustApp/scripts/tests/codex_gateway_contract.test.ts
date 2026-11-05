@@ -356,6 +356,11 @@ test("Codex text candidate cannot send inference, execute tools or commit to Mee
   assert.match(offlineText, /codex_text:not_completed_event/);
   assert.match(offlineText, /fn escaped_utterances_cannot_exceed_existing_rpc_frame_budget/);
   assert.match(offlineText, /codex_text:foreign_thread/);
+  assert.match(offlineText, /expected_input: String/);
+  assert.match(offlineText, /codex_text:source_mismatch/);
+  assert.match(offlineText, /codex_text:duplicate_source/);
+  assert.match(offlineText, /codex_text:assistant_before_source/);
+  assert.match(offlineText, /fn wrong_utterance_or_direction_and_duplicate_source_are_rejected/);
   assert.match(offlineText, /codex_text:items_not_fully_loaded/);
   assert.match(offlineText, /codex_text:tool_or_unknown_item/);
   assert.match(offlineText, /codex_text:ambiguous_final/);

@@ -860,6 +860,12 @@ and optional JSON output schemas. The existing gateway now owns one
 utterance, strict ID↔EN direction, structured single-field output, exact
 thread/turn/generation/epoch/sequence binding, one-shot final acceptance
 and rejection of ambiguous, incomplete, oversized or tool-bearing results.
+The gate additionally binds the exact serialized one-utterance request to
+the completed turn's single text user-message item: changed direction or
+source, missing/duplicate source and answer-before-source are rejected.
+Matching this source is structural evidence, not proof of semantic fidelity.
+A real App Server may not include full turn items in `turn/completed`;
+the candidate remains offline until event/item availability is validated.
 It performs no model requests, is not registered in the account-only JSONL
 allowlist and cannot produce a Meeting translation commit or TTS output.
 The offline request builder now checks its **fully serialized nested JSON**
