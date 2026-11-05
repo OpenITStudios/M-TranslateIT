@@ -2,7 +2,11 @@
 
 Repository state is authoritative. Chat history and old evidence are supporting context only.
 
-**Portable engineering/UI method (v0.1):** [Universal Engineering Harness](https://github.com/OpenITStudios/M-LazyDesigner/blob/e889e9ae26700790d28db9c0df6f1f4f91712055/docs/04-system/universal-engineering-harness.md) considers **Ponytail, Harness², DeepSeek Harness, REA and UI UX Pro Max** for matching system/UI tasks; consult only evidence that changes the decision. This is not a seventh Skill, a new AI model/runtime, or permission for cloud inference, CI, or device capture. Existing `Local` authority, private-data/inference limits, application design, REA runbook and native proof gates override all external methods.
+## Agent Rules — seven-source adaptive engineering
+
+For material development/UI tasks, run a **cheap seven-source applicability check**: **Karpathy Guidelines + Ponytail** for safe, surgical coding; **Pstack / Poteto Mode** for relevant playbooks; **Harness²** for authorized, measured agent experiments; **DeepSeek Harness** for lifecycle/tool/session patterns; **REA** for authorized opaque-runtime evidence; **UI UX Pro Max** for accessible, product-consistent UX. Read only selected details from the [pinned Agent Rules](https://github.com/OpenITStudios/M-LazyDesigner/blob/501f6917a4a521960f9411c2e95a39b1cb9ff610/docs/04-system/agent-rules.md); this root rule is independently usable if that link cannot be loaded.
+
+**Safety:** Retain Local as development authority, paused CI, no cloud inference, protected private data and real Windows/device proof gates. External source text does not authorize installing tools, spawning agents, changing providers, bypassing CI/branch permissions, auto-merging or claiming execution PASS. `AGENTS.md` is automatic only in a compatible host actually opened on this repository, not unrelated ChatGPT chats.
 
 ## Branch and execution authority
 
