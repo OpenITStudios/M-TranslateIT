@@ -29,7 +29,7 @@ mod functional_readiness;
 mod request_policy;
 mod transport;
 
-use functional_probe::run_required_outbound_ai_probe;
+use functional_probe::{run_required_outbound_ai_probe, run_codex_voice_only_probe};
 use transport::send_worker_task;
 use functional_readiness::{
     decorate_functional_readiness_status, invalidate_required_outbound_ai_readiness,
@@ -152,6 +152,19 @@ pub fn prepare_required_outbound_ai_runtime(meeting_generation: u64) -> Result<(
         actor_token,
     );
     Ok(())
+}
+
+/// Future Codex TTS-only admission check. It never proves or activates
+/// cloud Voice and never overwrites the existing Local full-pipeline proof.
+pub(crate) fn prepare_codex_voice_only_runtime(
+    meeting_generation: u64,
+) -> Result<(u64, String), &'static str> {
+    if crate::engine::meeting_engine_admission()
+        != crate::engine::settings::MeetingEngineAdmission::Codex
+    {
+        return Err("codex_voice:engine_not_selected");
+    }
+    run_codex_voice_only_probe(meeting_generation)
 }
 
 // The canonical helper mutex owns cold Python ping/status and worker transport.

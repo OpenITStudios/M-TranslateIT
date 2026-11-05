@@ -231,6 +231,18 @@ The offline RealtimeObserver also distinguishes a typed
 A failed Voice session cannot be reported as a clean completion.
 The synthetic Rust fixtures cover these cases without executing Codex.
 
+The existing Python helper now has a Codex-specific source-only
+**GPT-SoVITS voice-only readiness probe**. It calls only the existing
+`voice_actor_preflight` and `voice_actor_synthesize` handlers with a
+fixed English fixture, validates the exact helper generation, actor token
+and requested output path, checks a minimal RIFF/WAVE header and removes
+only that owned fixture file. It explicitly does **not** call
+`asr_preload`, `transcribe`, `translation_preload` or `translate`;
+the full Local ASR/MiLMMT/TTS readiness cache is not overwritten.
+The helper entrypoint checks that Codex is the selected engine.
+This is not wired to a production Codex Meeting Start; synthesized
+voice quality and native runtime behavior remain unverified.
+
 A bounded streaming mono-f32 microphone adapter now exists in the
 same `realtime.rs` owner: `Pcm24kResampler` converts supported
 8–96-kHz capture sample rates to the P5 24-kHz PCM16 sample clock,
@@ -248,9 +260,13 @@ encoded 24-kHz PCM frame, then returns the bounded `appendAudio` envelope.
 Overflow or invalid authority revokes both the queue and RPC lease;
 `prepare_stop_with_queue` revokes any queued audio before the existing
 two-sided Stop handshake. These functions do not send a network request.
-They assume already-correct PCM16 mono 24-kHz samples: real Windows
-resampling, clock sync, frame scheduling and WebRTC media negotiation
-are still not implemented or proven.
+The source-only Pcm24kResampler now supplies conversion for 8–96-kHz
+mono f32 microphone samples, but real CPAL producer wiring,
+frame scheduling, audio-clock correctness on the target device,
+and WebRTC media negotiation are not implemented or proven.
+The partition-invariance fixture for four 16-kHz source samples
+now expects **six** 24-kHz output samples (previously asserted five);
+the synthetic Rust tests are AUTHORED, NOT EXECUTED.
 
 The existing `CorrelationGate.observe_event` now feeds canonical
 `RealtimeObserver` events into the one-flight source/assistant pairing

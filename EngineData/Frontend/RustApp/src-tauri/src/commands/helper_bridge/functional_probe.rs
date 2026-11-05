@@ -1,5 +1,7 @@
 use serde_json::{json, Value};
 use std::fs;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 use crate::engine::runtime_state::runtime_generation_is_authoritative;
 
@@ -157,6 +159,90 @@ pub(super) fn run_required_outbound_ai_probe(
 }
 
 
+/// Source-only Codex voice preparation: GPT-SoVITS without local ASR or MT.
+/// No Codex Meeting Start caller or cloud-audio admission exists yet.
+pub(super) fn run_codex_voice_only_probe(
+    meeting_generation: u64,
+) -> Result<(u64, String), &'static str> {
+    if meeting_generation == 0 || !runtime_generation_is_authoritative(meeting_generation) {
+        return Err("codex_voice:meeting_authority_missing");
+    }
+    let helper = get_helper_bridge_status();
+    // provider_ready verifies the *entire Local* pipeline, not voice alone.
+    if helper.state != "ready" || helper.generation_token == 0 {
+        return Err("codex_voice:helper_not_running");
+    }
+    let helper_generation = helper.generation_token;
+    let output_path = PathBuf::from(
+        crate::engine::paths::ProjectPaths::discover().user_cache_dir
+    ).join("helper_functional_readiness/codex_voice_only.wav");
+    if !output_path.is_absolute() {
+        return Err("codex_voice:output_root_unverified");
+    }
+    let requested = output_path.to_string_lossy().into_owned();
+    let preflight = send_worker_task(
+        "voice_actor_preflight",
+        json!({"meeting_generation":meeting_generation, "meeting_start_prepare":true}),
+    );
+    let preflight_json = worker_response_value(&preflight);
+    let Some(token) = preflight_json.get("actor_token").and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && value.len() <= 512)
+        .filter(|_| preflight.ok && preflight.task == "voice_actor_preflight"
+            && preflight.generation_token == helper_generation
+            && preflight_json.get("stage").and_then(Value::as_str)
+                == Some("voice_actor_preflight"))
+        .map(str::to_owned)
+    else { return Err("codex_voice:actor_preflight_failed"); };
+    if !runtime_generation_is_authoritative(meeting_generation) {
+        return Err("codex_voice:meeting_authority_lost");
+    }
+    let voice = send_worker_task(
+        "voice_actor_synthesize",
+        json!({
+            "text":"Please continue.",
+            "output_path":requested,
+            "expected_actor_token":token,
+            "meeting_generation":meeting_generation,
+            "meeting_start_prepare":true,
+        }),
+    );
+    let valid = voice.generation_token == helper_generation
+        && voice_only_receipt_matches(&voice, &token, &output_path)
+        && voice_only_probe_has_wav_header(&output_path);
+    // Delete only the fixed request path, never an arbitrary worker-supplied path.
+    let _ = fs::remove_file(&output_path);
+    if !valid { return Err("codex_voice:synthesis_unverified"); }
+    let after = get_helper_bridge_status();
+    if after.state != "ready" || after.generation_token != helper_generation
+        || !runtime_generation_is_authoritative(meeting_generation)
+    {
+        return Err("codex_voice:voice_or_meeting_authority_changed");
+    }
+    Ok((helper_generation, token))
+}
+
+/// A receipt alone cannot establish sound quality or semantic correctness.
+fn voice_only_receipt_matches(
+    response: &super::HelperBridgeWorkerResponse, token: &str, expected_path: &Path
+) -> bool {
+    let body = worker_response_value(response);
+    response.ok && response.task == "voice_actor_synthesize" && !token.is_empty()
+        && body.get("stage").and_then(Value::as_str) == Some("voice_actor_synthesize")
+        && body.get("actor_token").and_then(Value::as_str) == Some(token)
+        && body.get("output_path").and_then(Value::as_str)
+            .is_some_and(|path| Path::new(path) == expected_path)
+}
+
+/// Minimum WAV signature only, never a claim of audible/verified output.
+fn voice_only_probe_has_wav_header(path: &Path) -> bool {
+    let Ok(meta) = fs::symlink_metadata(path) else { return false; };
+    if !meta.file_type().is_file() || meta.len() <= 44 { return false; }
+    let Ok(mut file) = fs::File::open(path) else { return false; };
+    let mut header = [0_u8; 12];
+    file.read_exact(&mut header).is_ok()
+        && header.starts_with(b"RIFF") && &header[8..12] == b"WAVE"
+}
+
 #[cfg(test)]
 mod tests {
     use super::remove_probe_output_paths;
@@ -169,6 +255,24 @@ mod tests {
             .map(|value| value.as_nanos())
             .unwrap_or(0);
         std::env::temp_dir().join(format!("translateit-probe-{label}-{nonce}.wav"))
+    }
+
+    #[test]
+    fn codex_voice_only_receipt_rejects_foreign_actor_path_or_stage() {
+        let path = super::Path::new("C:/user/cache/codex_voice_only.wav");
+        let response = |actor: &str, reported: &str, stage: &str| super::super::HelperBridgeWorkerResponse {
+            ok: true, state: "ready".into(), task: "voice_actor_synthesize".into(),
+            request_id: "test".into(), scheduler_priority: "meeting_outbound".into(),
+            message: String::new(), generation_token: 7, runtime_claim: "synthetic".into(),
+            worker_response_json: serde_json::json!({
+                "actor_token":actor, "output_path":reported, "stage":stage
+            }).to_string(),
+        };
+        let expected = "C:/user/cache/codex_voice_only.wav";
+        assert!(super::voice_only_receipt_matches(&response("actor",expected,"voice_actor_synthesize"),"actor",path));
+        assert!(!super::voice_only_receipt_matches(&response("other",expected,"voice_actor_synthesize"),"actor",path));
+        assert!(!super::voice_only_receipt_matches(&response("actor","C:/foreign.wav","voice_actor_synthesize"),"actor",path));
+        assert!(!super::voice_only_receipt_matches(&response("actor",expected,"transcribe"),"actor",path));
     }
 
     #[test]

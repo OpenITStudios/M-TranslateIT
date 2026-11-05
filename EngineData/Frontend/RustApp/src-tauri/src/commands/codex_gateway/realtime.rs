@@ -602,7 +602,7 @@ mod tests {
         let (_, entire) = single.convert(0, &data).unwrap();
         let combined: Vec<i16> = first.iter().chain(second.iter()).copied().collect();
         assert_eq!(combined, entire);
-        assert_eq!(combined.len(), 5);
+        assert_eq!(combined.len(), 6);
         assert_eq!((s0, s1), (0, 2));
         assert_eq!(combined[0], 0);
         assert!(combined[1] > 0 && combined[4] < 0);

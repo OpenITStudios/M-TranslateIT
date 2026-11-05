@@ -13,6 +13,8 @@ const realtime = read("commands/codex_gateway/realtime.rs");
 const realtimeRpc = read("commands/codex_gateway/realtime_rpc.rs");
 const offlineText = read("commands/codex_gateway/text.rs");
 const correlation = read("commands/codex_gateway/correlation.rs");
+const helperBridge = read("commands/helper_bridge.rs");
+const helperProbe = read("commands/helper_bridge/functional_probe.rs");
 const registry = read("commands/registry.rs");
 const shutdown = read("commands/application_runtime/shutdown.rs");
 const frontend = readFileSync(
@@ -355,6 +357,22 @@ test("P10 rejects stale account and provider claims before notifications are deq
   assert.match(gateway, /meeting_route_enabled: false/);
   assert.doesNotMatch(transport, /realtime_rpc::/);
   assert.doesNotMatch(protocol, /"thread\/realtime\/start" \|/);
+});
+
+test("Codex TTS-only hook does not route through Local ASR/MT", () => {
+  assert.match(helperBridge, /fn prepare_codex_voice_only_runtime\(/);
+  assert.match(helperBridge, /MeetingEngineAdmission::Codex/);
+  const only = helperProbe.split("pub(super) fn run_codex_voice_only_probe(")[1]?.split("#[cfg(test)]")[0] ?? "";
+  assert.ok(only.length > 0);
+  assert.match(only, /"voice_actor_preflight"/);
+  assert.match(only, /"voice_actor_synthesize"/);
+  assert.match(only, /voice_only_receipt_matches/);
+  assert.match(only, /voice_only_probe_has_wav_header/);
+  assert.doesNotMatch(only, /"asr_preload"|"transcribe"|"translate"|"translation_preload"/);
+  assert.doesNotMatch(only, /\.provider_ready\s*(?:==|&&|\|\|)/);
+  assert.match(helperProbe, /fn codex_voice_only_receipt_rejects_foreign_actor_path_or_stage/);
+  assert.match(realtime, /assert_eq!\(combined\.len\(\), 6\)/);
+  assert.match(gateway, /meeting_route_enabled: false/);
 });
 
 test("Codex text candidate cannot send inference, execute tools or commit to Meeting", () => {
