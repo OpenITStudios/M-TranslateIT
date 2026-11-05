@@ -165,6 +165,91 @@ def main() -> int:
         assert "unknown translation quality case id" in str(error)
     else:
         raise AssertionError("case triage accepted unknown case")
+    # Controlled candidate contrast: P1 case triage plus existing full comparator.
+    focus = "en-id-budget-purpose-001"
+    original_error = "Anggaran pembangunannya adalah lima belas juta rupiah."
+    baseline_bundle = {
+        "results": {**perfect, focus: original_error},
+        "corpus_fingerprint": fingerprint,
+        "source_identity": "synthetic-baseline",
+        "result_file_sha256": "a" * 64,
+    }
+    candidate_bundle = {
+        "results": perfect,
+        "corpus_fingerprint": fingerprint,
+        "source_identity": "synthetic-candidate",
+        "result_file_sha256": "b" * 64,
+    }
+    probe = evaluator.compare_case(corpus, baseline_bundle, candidate_bundle, focus)
+    assert probe["review_status"] == "BILINGUAL_REVIEW_REQUIRED"
+    assert probe["target_declared_recovery"]
+    assert probe["declared_provenance_complete"]
+    assert probe["distinct_declared_source_identities"]
+    assert probe["baseline"]["triage_status"] == "FAIL"
+    assert probe["candidate"]["triage_status"] == "PASS"
+    assert probe["baseline"]["translated_text"] == original_error
+    assert focus in probe["comparison"]["critical_recoveries"]
+    assert not probe["comparison"]["critical_regressions"]
+    assert probe["comparison"]["promotion_safe_on_declared_critical_invariants"]
+    assert probe["request"]["text"] == cases_by_id[focus]["source"]
+    assert "context_pairs" not in probe["request"]
+    # A declared fast-suite recovery never becomes a release-quality decision.
+    fast_base = {
+        **baseline_bundle, "corpus_fingerprint": fast_fingerprint,
+        "results": {**fast_perfect, focus: original_error},
+    }
+    fast_candidate = {
+        **candidate_bundle, "corpus_fingerprint": fast_fingerprint,
+        "results": fast_perfect,
+    }
+    fast_probe = evaluator.compare_case(fast, fast_base, fast_candidate, focus)
+    assert fast_probe["review_status"] == "FAST_DIAGNOSTIC_ONLY"
+    assert not fast_probe["full_regression_evaluated"]
+    assert not fast_probe["comparison"]["promotion_safe_on_declared_critical_invariants"]
+    # Improving the focus cannot hide an added failure in another case.
+    new_regression = {
+        **candidate_bundle,
+        "results": {**perfect, "id-en-negation-001": "I will attend the meeting tomorrow."},
+    }
+    rejected = evaluator.compare_case(corpus, baseline_bundle, new_regression, focus)
+    assert rejected["review_status"] == "REJECT_DECLARED_REGRESSION"
+    assert "id-en-negation-001" in rejected["comparison"]["critical_regressions"]
+    # One focused recovery is insufficient while another existing failure remains.
+    still_failing = {
+        **baseline_bundle,
+        "results": {
+            **baseline_bundle["results"],
+            "id-en-negation-001": "I will attend the meeting tomorrow.",
+        },
+    }
+    unresolved = evaluator.compare_case(corpus, still_failing, new_regression, focus)
+    assert unresolved["review_status"] == "UNRESOLVED_DECLARED_FAILURES"
+    assert unresolved["target_declared_recovery"]
+    assert not unresolved["comparison"]["critical_regressions"]
+    unchanged = evaluator.compare_case(corpus, baseline_bundle, {
+        **candidate_bundle, "results": baseline_bundle["results"],
+    }, focus)
+    assert unchanged["review_status"] == "NO_DECLARED_RECOVERY"
+    missing = evaluator.compare_case(corpus, baseline_bundle, {
+        **candidate_bundle, "results": {k: v for k, v in perfect.items() if k != focus},
+    }, focus)
+    assert missing["review_status"] == "UNVERIFIED"
+    assert missing["candidate"]["triage_status"] == "UNVERIFIED"
+    mismatched = evaluator.compare_case(corpus, baseline_bundle, {
+        **candidate_bundle, "corpus_fingerprint": "0" * 64,
+    }, focus)
+    assert mismatched["review_status"] == "UNVERIFIED"
+    same_identity = evaluator.compare_case(corpus, baseline_bundle, {
+        **candidate_bundle, "source_identity": baseline_bundle["source_identity"],
+    }, focus)
+    assert same_identity["review_status"] == "UNVERIFIED"
+    assert not same_identity["distinct_declared_source_identities"]
+    try:
+        evaluator.compare_case(corpus, baseline_bundle, candidate_bundle, "unknown-case")
+    except ValueError as error:
+        assert "unknown translation quality case id" in str(error)
+    else:
+        raise AssertionError("controlled contrast accepted unknown focus case")
     assert report["provenance_matches_corpus"] is True
     assert report["group_critical_pass_rates"]["id-en"] == 1.0
     assert report["group_critical_pass_rates"]["contextual_meeting"] == 1.0

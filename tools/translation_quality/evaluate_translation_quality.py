@@ -613,6 +613,93 @@ def compare_reports(
     }
 
 
+def compare_case(corpus: dict, baseline_bundle: dict, candidate_bundle: dict, case_id: str) -> dict:
+    """Contrast a focused case against all declared regression risks, without inference."""
+    before = triage_case(corpus, baseline_bundle, case_id)
+    after = triage_case(corpus, candidate_bundle, case_id)
+    comparison = compare_reports(
+        corpus,
+        baseline_bundle["results"], candidate_bundle["results"],
+        baseline_corpus_fingerprint=baseline_bundle.get("corpus_fingerprint", ""),
+        candidate_corpus_fingerprint=candidate_bundle.get("corpus_fingerprint", ""),
+        baseline_source_identity=baseline_bundle.get("source_identity", ""),
+        candidate_source_identity=candidate_bundle.get("source_identity", ""),
+    )
+    # Identical declared source identities cannot distinguish an experiment's
+    # baseline from its candidate. This remains declared provenance, not a
+    # cryptographic proof that either model execution actually occurred.
+    distinct_identities = bool(
+        before["declared_source_identity"]
+        and after["declared_source_identity"]
+        and before["declared_source_identity"] != after["declared_source_identity"]
+    )
+    evidence_complete = bool(
+        before["declared_provenance_complete"]
+        and after["declared_provenance_complete"]
+        and comparison["complete_result_sets"]
+        and comparison["promotion_provenance_complete"]
+    )
+    target_recovered = case_id in comparison["critical_recoveries"]
+    if not evidence_complete or not distinct_identities:
+        review_status = "UNVERIFIED"
+    elif comparison["critical_regressions"]:
+        review_status = "REJECT_DECLARED_REGRESSION"
+    elif not target_recovered:
+        review_status = "NO_DECLARED_RECOVERY"
+    elif not comparison["full_regression_evaluated"]:
+        review_status = "FAST_DIAGNOSTIC_ONLY"
+    elif not comparison["promotion_safe_on_declared_critical_invariants"]:
+        review_status = "UNRESOLVED_DECLARED_FAILURES"
+    else:
+        review_status = "BILINGUAL_REVIEW_REQUIRED"
+    return {
+        "schema": "translateit.translation_quality.case_comparison.v1",
+        "focus_case_id": case_id,
+        "corpus_fingerprint": comparison["corpus_fingerprint"],
+        "suite": before["suite"],
+        "full_regression_evaluated": comparison["full_regression_evaluated"],
+        "declared_provenance_complete": evidence_complete,
+        "distinct_declared_source_identities": distinct_identities,
+        "review_status": review_status,
+        "target_declared_recovery": target_recovered,
+        "source": before["source"],
+        "references": before["references"],
+        "risk_tags": before["risk_tags"],
+        "request": before["request"],
+        "baseline": {
+            "declared_source_identity": before["declared_source_identity"],
+            "result_file_sha256": before["result_file_sha256"],
+            "translated_text": before["translated_text"],
+            "triage_status": before["triage_status"],
+            "declared_checks": before["declared_checks"],
+        },
+        "candidate": {
+            "declared_source_identity": after["declared_source_identity"],
+            "result_file_sha256": after["result_file_sha256"],
+            "translated_text": after["translated_text"],
+            "triage_status": after["triage_status"],
+            "declared_checks": after["declared_checks"],
+        },
+        "comparison": {
+            "critical_regressions": comparison["critical_regressions"],
+            "critical_regression_details": comparison["critical_regression_details"],
+            "critical_regressions_by_risk_tag": comparison["critical_regressions_by_risk_tag"],
+            "critical_recoveries": comparison["critical_recoveries"],
+            "candidate_quality_counts": comparison["candidate_quality_counts"],
+            "promotion_safe_on_declared_critical_invariants": (
+                comparison["promotion_safe_on_declared_critical_invariants"]
+            ),
+        },
+        "note": (
+            "A focused contrast reuses existing declared checks and exact selected "
+            "result sets. It neither executes a model nor proves semantic quality. "
+            "BILINGUAL_REVIEW_REQUIRED is not an acceptance or promotion decision. "
+            "Only independent bilingual and integrated runtime evidence can "
+            "establish the remaining quality and product gates."
+        ),
+    }
+
+
 def regrade_retained(original_corpus: dict, current_corpus: dict, bundle: dict) -> dict:
     """Regrade identical requests, never certify new model execution or release."""
     original_fingerprint = corpus_fingerprint(original_corpus)
@@ -718,7 +805,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "command",
-        choices=("validate-corpus", "stats", "emit-requests", "evaluate", "compare", "regrade-retained", "triage-case"),
+        choices=("validate-corpus", "stats", "emit-requests", "evaluate", "compare", "regrade-retained", "triage-case", "compare-case"),
     )
     parser.add_argument("--corpus", type=Path, required=True)
     parser.add_argument("--original-corpus", type=Path)
@@ -766,6 +853,19 @@ def main() -> int:
             return 1
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
+    if args.command == "compare-case":
+        if args.baseline is None or args.candidate is None or args.case_id is None:
+            parser.error("--baseline, --candidate and --case-id are required for compare-case")
+        try:
+            baseline = load_result_bundle(args.baseline)
+            candidate = load_result_bundle(args.candidate)
+            report = compare_case(corpus, baseline, candidate, args.case_id)
+        except (OSError, ValueError) as error:
+            print(json.dumps({"ok": False, "blocker": str(error)}, ensure_ascii=False, indent=2))
+            return 1
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        # Exit 0 means reviewable declared evidence, never linguistic acceptance.
+        return 0 if report["review_status"] == "BILINGUAL_REVIEW_REQUIRED" else 1
     if args.command == "compare":
         if args.baseline is None or args.candidate is None:
             parser.error("--baseline and --candidate are required for compare")

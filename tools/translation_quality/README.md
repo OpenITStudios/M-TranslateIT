@@ -165,6 +165,62 @@ Treat unexpected additions as hypotheses for bilingual review, not automatic
 permission to rewrite model output. Candidate promotion still requires the
 existing full comparison and held-out bilingual evaluation.
 
+### Controlled candidate contrast — Harness²-inspired development pattern
+
+Use an explicit **Propose → Probe → Compare → Review** sequence for one
+observed regression. This is an adapted developer procedure, **not** Harness²
+or DeepSeek Harness running in the product. It adds no autonomous agent,
+runtime service, model fallback or persistent experiment ledger.
+
+1. **Propose:** identify the first suspected owner (ASR source, translation
+   model, decoding, evaluator cue), one falsifiable hypothesis, a minimal
+   candidate change and the risk tags it might harm. Preserve that decision
+   and the source identity through the existing commit `Work/State/Proof`
+   convention. Do not tune the frozen held-out corpus against the candidate.
+2. **Probe:** only in a separately authorized exact-source model-capable
+   environment, obtain independent baseline/candidate result bundles using
+   the existing canonical worker runner. Run the existing 28-case fast suite
+   first for diagnosis, then all 191 regression cases before any promotion
+   discussion; do not relabel fast output as full.
+3. **Compare:** use the existing `compare` for the full grading contract,
+   or the focused read-only command below for a contrastive view of the
+   targeted case **and** all regressions across the selected suite:
+
+```powershell
+python -X utf8 tools/translation_quality/evaluate_translation_quality.py compare-case --corpus tools/translation_quality/corpus/translation_quality_v1.json --baseline <baseline-full.json> --candidate <candidate-full.json> --case-id en-id-budget-purpose-001
+```
+
+The output includes the exact focused source/request, both captured outputs,
+declared-check changes, corpus fingerprint, result-file digests, complete
+regression/recovery case IDs, and risk-tag impact. `compare-case` is a
+projection of the existing canonical `compare_reports` and P1
+`triage_case`; it does not implement a second scoring system or run a model.
+
+The declared `review_status` is fail-closed:
+
+- `UNVERIFIED`: incomplete/mismatched source or corpus evidence, or the
+  baseline/candidate have indistinguishable declared source identities;
+- `REJECT_DECLARED_REGRESSION`: any new declared failure, even on a case
+  whose baseline was already failing;
+- `NO_DECLARED_RECOVERY`: the target did not recover its declared checks;
+- `FAST_DIAGNOSTIC_ONLY`: target recovered within the fast suite;
+- `UNRESOLVED_DECLARED_FAILURES`: full-suite target recovery still leaves
+  unresolved other declared failures;
+- `BILINGUAL_REVIEW_REQUIRED`: complete full-suite comparison found a
+  declared recovery, no introduced declared regressions, and a PASS
+  candidate on the existing checks. **This is not semantic acceptance.**
+
+The command exits 0 **only** for `BILINGUAL_REVIEW_REQUIRED`; all other
+states exit nonzero. Even exit 0 cannot prove inference occurred or bypass
+independent blind bilingual evaluation, held-out evidence, the integrated
+Windows acceptance phase, and explicit promotion approval.
+
+4. **Review/compose:** inspect the existing human-evaluation protocol,
+   retain baseline on unresolved or worsening evidence, and adopt at most
+   the bounded reviewed change in a separate authorized decision. Do not
+   silently rewrite a model output or inject prior utterances, a glossary,
+   prompts or previous translations into canonical Meeting inference.
+
 ### Execute the selected translation stage
 
 The existing persistent-worker runner accepts the same selection. From a clean,
