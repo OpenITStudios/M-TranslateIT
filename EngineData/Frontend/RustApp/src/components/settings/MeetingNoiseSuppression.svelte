@@ -42,18 +42,18 @@
   }
 </script>
 
-<div class="flex items-start justify-between gap-5 border-t border-[var(--ti-border)] px-5 py-4">
-  <div class="min-w-0">
+<div class="flex flex-wrap items-start justify-between gap-5 border-t border-[var(--ti-border)] px-5 py-4">
+  <div class="min-w-0 flex-1">
     <span class="ti-field-label">Noise suppression</span>
     <strong class="mt-1.5 block text-[13px] font-semibold leading-5">
       {settings.audio.noise_suppression === "off" ? "Off" : "Auto · recommended"}
     </strong>
-    <p class="mb-0 mt-1 text-[11.5px] leading-5 text-[var(--ti-text-soft)]">
+    <p class="mb-0 mt-1 text-[12.5px] leading-5 text-[var(--ti-text-muted)]">
       Auto reduces faint background noise after a phrase is detected, before recognizing its words. It does not remove all noise or change the sound of your call directly.
     </p>
   </div>
   <select
-    class="ti-field min-h-9 w-[180px] px-3"
+    class="ti-field w-full shrink-0 px-3 sm:w-[180px]"
     disabled={locked || saving}
     value={settings.audio.noise_suppression === "off" ? "off" : "auto"}
     aria-label="Noise suppression"

@@ -336,17 +336,17 @@
   });
 </script>
 
-<main class="flex h-screen min-h-0 items-start justify-center overflow-y-auto bg-[var(--ti-bg)] px-8 py-10" aria-label="TranslateIT Setup">
+<main class="flex h-screen min-h-0 items-start justify-center overflow-y-auto bg-[var(--ti-bg)] px-4 py-6 sm:px-8 sm:py-10" aria-label="TranslateIT Setup">
   <section class="ti-panel w-full max-w-[900px] shrink-0 overflow-hidden">
-    <header class="flex items-center gap-3 border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-7 py-5">
+    <header class="flex flex-wrap items-center gap-3 border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-4 sm:px-7">
       <div class="grid size-10 place-items-center rounded-[12px] border border-[var(--ti-border-strong)] bg-[var(--ti-surface-raised)] text-base font-bold">T</div>
       <div>
         <strong class="block text-sm font-semibold">TranslateIT</strong>
         <span class="mt-0.5 block text-xs text-[var(--ti-text-muted)]">{step === 1 ? "Get started" : "Meeting setup"}</span>
       </div>
-      {#if step > 1}
-        <div class="ml-auto min-w-44" role="progressbar" aria-label="Meeting setup progress" aria-valuemin="1" aria-valuemax="4" aria-valuenow={step}>
-          <div class="text-[11px] font-semibold text-[var(--ti-text-muted)]">Step {step} of 4</div>
+      {#if snapshot !== null && !engineSettingsUnverified}
+        <div class="ml-auto min-w-44" role="progressbar" aria-label="Setup step" aria-valuemin="1" aria-valuemax="4" aria-valuenow={step}>
+          <div class="text-[12px] font-semibold text-[var(--ti-text-muted)]">Step {step} of 4</div>
           <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--ti-border)]">
             <div class="h-full rounded-full bg-[var(--ti-accent)]" style={`width:${step * 25}%`}></div>
           </div>
@@ -354,7 +354,7 @@
       {/if}
     </header>
 
-    <section class="mx-auto grid max-w-[720px] gap-6 px-8 py-9">
+    <section class="mx-auto grid max-w-[720px] gap-5 px-5 py-7 sm:px-8 sm:py-9">
       {#if snapshot === null}
         <p class="m-0 text-sm leading-6 text-[var(--ti-text-muted)]" role="status">
           Checking saved engine settings before setup can continue.
@@ -387,18 +387,18 @@
         {#if step === 1}
         <div>
           <span class="ti-kicker">Meeting setup</span>
-          <h1 class="ti-page-title text-[2.2rem]">Set up Meeting translation</h1>
-          <p class="ti-page-copy">Set up your microphone and English voice for meetings. You can finish setup later.</p>
+          <h1 class="ti-page-title">Set up Meeting translation</h1>
+          <p class="ti-page-copy">Follow four steps to select your microphone, configure your calling app, and choose an English voice. You can finish later.</p>
         </div>
       {:else if step === 2}
         <div>
           <span class="ti-kicker">Microphone</span>
-          <h1 class="ti-page-title">Which microphone do you speak into?</h1>
-          <p class="ti-page-copy">Choose the microphone you speak into. If unsure, keep Windows Default. Save your choice before continuing.</p>
+          <h1 class="ti-page-title">Choose your microphone</h1>
+          <p class="ti-page-copy">Select the microphone you speak into. If unsure, keep Windows Default. Save your choice before continuing.</p>
         </div>
-        <div class="grid grid-cols-[1fr_auto] items-end gap-3">
-          <label class="grid gap-2">
-            <span class="ti-field-label">Microphone</span>
+        <div class="grid grid-cols-1 items-end gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+          <label class="grid min-w-0 gap-2">
+            <span class="ti-field-label">Microphone you speak into</span>
             <select class="ti-field min-h-11 px-3" disabled={busy} value={selectedMicrophone} onchange={(event) => { selectedMicrophone = selectValue(event); }}>
               <option value="">Windows Default</option>
               {#each microphoneDevices() as device (deviceId(device))}
@@ -427,23 +427,23 @@
         {/if}
       {:else if step === 3}
         <div>
-          <span class="ti-kicker">Meeting app</span>
-          <h1 class="ti-page-title">Choose TranslateIT as your call microphone</h1>
-          <p class="ti-page-copy">In the audio settings of Zoom, Google Meet, Discord, or your calling app, select the TranslateIT microphone once it is available.</p>
+          <span class="ti-kicker">Calling app</span>
+          <h1 class="ti-page-title">Select the audio device in your calling app</h1>
+          <p class="ti-page-copy">In Discord, Zoom, Google Meet, or another calling app, choose the exact device name shown below as your microphone input.</p>
         </div>
-        <div class="rounded-[var(--ti-radius-md)] border border-[var(--ti-border-strong)] bg-[var(--ti-surface-raised)] p-5">
-          <span class="ti-field-label">TranslateIT microphone for your meeting app</span>
+        <div class="ti-subtle-card p-5">
+          <span class="ti-field-label">Device name to select</span>
           <strong class="mt-2 block break-words text-base font-semibold">{currentMeetingMicrophone()}</strong>
-          <p class="mb-0 mt-2 text-xs leading-5 text-[var(--ti-text-muted)]">Check Again verifies only the TranslateIT device in Windows. It cannot confirm which microphone your calling app selected.</p>
+          <p class="mb-0 mt-2 text-xs leading-5 text-[var(--ti-text-muted)]">Check Again verifies that Windows sees this device. It cannot confirm your calling app's microphone selection.</p>
         </div>
         <div class="ti-subtle-card overflow-hidden">
           <StatusRow
-            label="TranslateIT microphone"
+            label="Audio route in Windows"
             value={currentMeetingMicrophone()}
-            detail={routeCheck === "ready" ? "Available in Windows. Select it separately in your calling app."
+            detail={routeCheck === "ready" ? "Available in Windows. Select the same device in your calling app."
               : routeCheck === "unavailable" ? "Couldn't check the Windows device status. Select Check Again."
-              : routeCheck === "checking" ? "Checking the TranslateIT microphone in Windows..."
-              : "TranslateIT needs to finish setting up this microphone."}
+              : routeCheck === "checking" ? "Checking the audio route in Windows..."
+              : "The virtual audio route needs setup before you can continue."}
             status={routeCheck === "ready" ? "Available" : routeCheck === "unavailable" ? "Unable to check" : routeCheck === "checking" ? "Checking" : "Setup Needed"}
             tone={routeCheck === "ready" ? "good" : routeCheck === "setup_needed" ? "warning" : "neutral"}
           />

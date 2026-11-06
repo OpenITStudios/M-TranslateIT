@@ -188,30 +188,30 @@
     <header class="ti-page-header">
       <div>
         <h2 class="ti-page-title">Settings</h2>
-        <p class="ti-page-copy">Audio and meeting preferences.</p>
+        <p class="ti-page-copy">Manage your microphone, captions, and meeting setup.</p>
       </div>
     </header>
     <div class="grid grid-cols-1 gap-5 lg:grid-cols-[190px_minmax(0,1fr)]">
-      <nav class="flex flex-col gap-1 self-start rounded-[var(--ti-radius-md)] bg-[var(--ti-surface-soft)] p-3" aria-label="Settings categories">
-        <p class="px-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--ti-text-soft)]">App Settings</p>
-        <button type="button" class={"rounded-[8px] px-3 py-2.5 text-left text-[13px] " + (tab === "meeting" ? "bg-[var(--ti-surface-raised)] font-semibold" : "hover:bg-[var(--ti-surface-raised)]")}
+      <nav class="flex flex-col gap-1 self-start rounded-[var(--ti-radius-md)] bg-[var(--ti-surface-soft)] p-2.5" aria-label="Settings categories">
+        <p class="px-3 pb-1 pt-2 text-[12px] font-semibold text-[var(--ti-text-muted)]">Settings</p>
+        <button type="button" class={"flex min-h-10 items-center rounded-[var(--ti-radius-sm)] border-l-2 px-3 text-left text-[13px] transition-colors " + (tab === "meeting" ? "border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] font-semibold text-[var(--ti-text)]" : "border-transparent text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)] hover:text-[var(--ti-text)]")}
           aria-current={tab === "meeting" ? "page" : undefined}
           onclick={() => { tab = "meeting"; diagnosticsOpen = false; }}>Voice &amp; Audio</button>
-        <button type="button" class={"rounded-[8px] px-3 py-2.5 text-left text-[13px] " + (tab === "translation" ? "bg-[var(--ti-surface-raised)] font-semibold" : "hover:bg-[var(--ti-surface-raised)]")}
+        <button type="button" class={"flex min-h-10 items-center rounded-[var(--ti-radius-sm)] border-l-2 px-3 text-left text-[13px] transition-colors " + (tab === "translation" ? "border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] font-semibold text-[var(--ti-text)]" : "border-transparent text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)] hover:text-[var(--ti-text)]")}
           aria-current={tab === "translation" ? "page" : undefined}
           onclick={() => { tab = "translation"; diagnosticsOpen = false; }}>Meeting Captions</button>
-        <p class="mt-3 px-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--ti-text-soft)]">Support</p>
-        <button type="button" class={"rounded-[8px] px-3 py-2.5 text-left text-[13px] " + (tab === "advanced" ? "bg-[var(--ti-surface-raised)] font-semibold" : "hover:bg-[var(--ti-surface-raised)]")}
+        <p class="mt-3 px-3 pb-1 text-[12px] font-semibold text-[var(--ti-text-muted)]">Support</p>
+        <button type="button" class={"flex min-h-10 items-center rounded-[var(--ti-radius-sm)] border-l-2 px-3 text-left text-[13px] transition-colors " + (tab === "advanced" ? "border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] font-semibold text-[var(--ti-text)]" : "border-transparent text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)] hover:text-[var(--ti-text)]")}
           aria-current={tab === "advanced" ? "page" : undefined}
           onclick={() => { tab = "advanced"; diagnosticsOpen = false; }}>Help</button>
       </nav>
       <div class="min-w-0">
     {#if tab === "meeting"}
-      <article  class="ti-panel overflow-hidden">
+      <article class="ti-panel overflow-hidden">
         <header class="flex items-start justify-between gap-5 border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-4">
           <div>
-            <h3 class="m-0 text-[15px] font-semibold tracking-[-0.015em]">Voice &amp; Audio</h3>
-            <p class="mb-0 mt-1 text-[12px] text-[var(--ti-text-muted)]">Choose devices here once. Meeting uses your saved preferences automatically.</p>
+            <h3 class="m-0 text-[16px] font-semibold tracking-[-0.015em]">Voice &amp; Audio</h3>
+            <p class="mb-0 mt-1 text-[12px] text-[var(--ti-text-muted)]">Choose your audio devices here. Changes are saved only after Windows confirms them.</p>
           </div>
           {#if meetingResourcesLocked}
             <StatusBadge label="In Use" tone="neutral" />
@@ -220,7 +220,7 @@
           {/if}
         </header>
 
-        <div class="grid grid-cols-2 gap-5 p-5">
+        <div class="grid grid-cols-1 gap-5 p-5 2xl:grid-cols-2">
           <label class="grid min-w-0 gap-2">
             <span class="ti-field-label">Microphone</span>
             <select class="ti-field min-h-10 px-3" disabled={meetingResourcesLocked || devicesLoading || deviceSaving} value={currentDevice("microphone")} onchange={(event) => void changeDevice("microphone", selectValue(event))}>
@@ -232,7 +232,7 @@
                 <option value={currentDevice("microphone")}>{currentDevice("microphone")} · unavailable</option>
               {/if}
             </select>
-            <small class="text-[11.5px] leading-5 text-[var(--ti-text-soft)]">Your actual microphone, not CABLE Output. This feeds speech recognition, not the calling app directly.</small>
+            <small class="text-[12.5px] leading-5 text-[var(--ti-text-muted)]">Choose the microphone you speak into, not the virtual audio device used in your calling app.</small>
           </label>
 
           <label class="grid min-w-0 gap-2">
@@ -246,7 +246,7 @@
                 <option value={currentDevice("meeting-sound")}>{currentDevice("meeting-sound")} · unavailable</option>
               {/if}
             </select>
-            <small class="text-[11.5px] leading-5 text-[var(--ti-text-soft)]">For optional incoming captions, choose the same physical speaker/headset output selected in your calling app. TranslateIT does not change its speaker setting.</small>
+            <small class="text-[12.5px] leading-5 text-[var(--ti-text-muted)]">Optional for incoming captions. Select the headphones or speakers used by your call. This does not change the calling app’s audio settings.</small>
           </label>
         </div>
 
@@ -273,14 +273,14 @@
 
         <div class="flex items-start justify-between gap-5 border-t border-[var(--ti-border)] px-5 py-4">
           <div class="min-w-0">
-            <span class="ti-field-label">TranslateIT microphone</span>
+            <span class="ti-field-label">Microphone to select in your calling app</span>
             <strong class="mt-1.5 block break-words text-[13px] font-semibold leading-5">{meetingMicrophoneDevice}</strong>
-            <p class="mb-0 mt-1 text-[11.5px] leading-5 text-[var(--ti-text-soft)]">
-              {routeCheck === "unavailable" ? "Couldn't check the virtual microphone. Check Again before changing your call settings."
-                : routeCheck === "checking" ? "Checking the virtual microphone in Windows..."
+            <p class="mb-0 mt-1 text-[12.5px] leading-5 text-[var(--ti-text-muted)]">
+              {routeCheck === "unavailable" ? "Couldn't check this Windows audio device. Select Check Again."
+                : routeCheck === "checking" ? "Checking the audio device in Windows..."
                 : virtualMicrophoneReady
-                  ? "Choose this as the calling app's microphone INPUT. Its speaker OUTPUT should remain your physical headset or speakers."
-                  : "TranslateIT's virtual microphone route is not ready. Check VB-CABLE or run Repair Setup before Meeting translation."}
+                  ? "Select the exact device name above as the microphone input in your calling app. Windows availability does not confirm the app's selection."
+                  : "The virtual audio route is not ready. Check VB-CABLE or select Repair Setup."}
             </p>
           </div>
           {#if !virtualMicrophoneReady}
@@ -309,8 +309,8 @@
     {:else if !diagnosticsOpen}
       <article class="ti-panel overflow-hidden">
         <header class="border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-4">
-          <h3 class="m-0 text-[15px] font-semibold">Is everything ready?</h3>
-          <p class="mb-0 mt-1 text-[12px] text-[var(--ti-text-muted)]">Most users can stop here. Open technical details only if something is not working.</p>
+          <h3 class="m-0 text-[16px] font-semibold">Meeting readiness</h3>
+          <p class="mb-0 mt-1 text-[12px] text-[var(--ti-text-muted)]">Check the current setup. Open Diagnostics only if you need to investigate a problem.</p>
         </header>
 
         <div class="divide-y divide-[var(--ti-border)]">

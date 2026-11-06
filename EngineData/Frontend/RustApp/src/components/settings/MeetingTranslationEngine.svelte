@@ -70,12 +70,18 @@
       {needsReconfirmation ? "Engine settings · verification required"
         : settings.translation_engine === "codex" ? "Codex Voice · not yet available" : "Local · offline"}
     </strong>
-    <p class="mb-0 mt-1 text-[11.5px] leading-5 text-[var(--ti-text-soft)]">
-      Local uses Whisper, MiLMMT and the selected GPT-SoVITS voice.
-      Codex Voice is an optional future route and cannot start translation until its audio access,
-      included-usage terms and translated-text output are verified.
-      Selecting Codex does not send microphone audio or enable cloud inference.
+    <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">
+      Local runs on this computer after setup. Codex Voice is experimental and cannot start Meeting translation yet.
     </p>
+    <details class="mt-2 text-[12.5px] leading-5 text-[var(--ti-text-muted)]">
+      <summary class="cursor-pointer font-medium">About translation engines</summary>
+      <p class="mb-0 mt-2">
+        Local uses Whisper, MiLMMT and the selected GPT-SoVITS voice.
+        Codex Voice is an optional future route and cannot start translation until its audio access,
+        included-usage terms and translated-text output are verified.
+        Selecting Codex does not send microphone audio or enable cloud inference.
+      </p>
+    </details>
     {#if needsReconfirmation}
       <p class="mb-0 mt-2 text-[12px] leading-5 text-[var(--ti-text-muted)]" role="alert">
         Saved engine settings could not be verified. Confirm the intended
@@ -96,7 +102,7 @@
     {/if}
   </div>
   <select
-    class="ti-field min-h-9 w-[228px] px-3"
+    class="ti-field w-full shrink-0 px-3 sm:w-[228px]"
     aria-label="Translation engine"
     disabled={locked || saving}
     value={settings.translation_engine === "codex" ? "codex" : "local"}

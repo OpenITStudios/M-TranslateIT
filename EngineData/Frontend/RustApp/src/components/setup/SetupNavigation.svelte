@@ -33,7 +33,7 @@
   } = $props();
 </script>
 
-<footer class="flex items-center justify-between gap-4 border-t border-[var(--ti-border)] pt-5">
+<footer class="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--ti-border)] pt-5" aria-label="Setup navigation">
   <div>
     {#if step > 1}
       <button type="button" class="ti-button ti-button-secondary" disabled={busy} onclick={onBack}>
