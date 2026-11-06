@@ -380,6 +380,33 @@ def create_tts_runtime(
 
 
 def english_sentence_cardinals(text: str) -> str:
+    # A version token such as "v1.2.3" is neither a decimal number nor
+    # several sentences. Expand only explicit dotted versions so pinned
+    # GPT-SoVITS cut1/English normalization cannot split or fuse components.
+    version_pattern = re.compile(
+        r"(?<![\w./:=+?&#-])(?P<label>v|version +)"
+        r"(?P<parts>[0-9]{1,4}(?:\.[0-9]{1,3}){2,3})"
+        r"(?![\w/:=+?#&-]|\.[0-9])",
+        re.IGNORECASE,
+    )
+
+    def render_version(match: re.Match[str]) -> str:
+        import inflect
+
+        engine = inflect.engine()
+
+        def component_words(component: str) -> str:
+            if len(component) > 1 and component.startswith("0"):
+                return " ".join(engine.number_to_words(int(digit)) for digit in component)
+            return engine.number_to_words(int(component))
+
+        spoken = " point ".join(
+            component_words(part) for part in match.group("parts").split(".")
+        )
+        prefix = "Version" if match.group("label")[0].isupper() else "version"
+        return f"{prefix} {spoken}"
+
+    text = version_pattern.sub(render_version, text)
     # Resolve standalone clock times before upstream cut1 treats ':' as a
     # sentence delimiter. Preserve ports, timestamps, offsets and time ranges
     # which are not unambiguously standalone HH:MM clock values.
