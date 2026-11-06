@@ -21,7 +21,7 @@ def load_provider_module():
     ('Use 00125. Not 150.', 'Use zero zero one two five. Not 150.'),
     ('Use the 125th item. Not 150th.', 'Use the 125th item. Not 150th.'),
     ('Use 125, not 150.', 'Use 125, not 150.'),
-    ('Version 1.2.3. Not ID125.', 'Version 1.2.3. Not ID125.'),
+    ('Version 1.2.3. Not ID125.', 'Version one point two point three. Not ID125.'),
     ('The payment is $125. Please confirm.',
      'The payment is one hundred and twenty-five dollars. Please confirm.'),
     ('Charge $1.50. Then stop.', 'Charge one dollar and fifty cents. Then stop.'),
