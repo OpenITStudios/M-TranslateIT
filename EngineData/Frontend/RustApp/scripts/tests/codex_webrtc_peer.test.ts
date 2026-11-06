@@ -131,6 +131,41 @@ test("P24 reject invalid SDP and failed transport before media admission", async
   assert.equal(failed.phase(), "revoked");
 });
 
+test("P25 negotiates one SDP offer using a caller-owned signal exchange", async () => {
+  const mock = new FakePeer();
+  const peer = new CodexRealtimePeer(LEASE, () => mock as unknown as RTCPeerConnection);
+  let requests = 0;
+  await peer.negotiate(LEASE, async (offer, lease, signal) => {
+    requests++;
+    assert.equal(offer, SDP);
+    assert.deepEqual(lease, LEASE);
+    assert.equal(signal.aborted, false);
+    return SDP;
+  });
+  assert.equal(requests, 1);
+  assert.equal(peer.phase(), "signalling-ready");
+  peer.close();
+});
+
+test("P25 Stop during native SDP exchange rejects a late answer", async () => {
+  const mock = new FakePeer();
+  const peer = new CodexRealtimePeer(LEASE, () => mock as unknown as RTCPeerConnection);
+  let requests = 0;
+  await assert.rejects(
+    peer.negotiate(LEASE, async (_offer, _lease, signal) => {
+      requests++;
+      peer.close();
+      assert.equal(signal.aborted, true);
+      return SDP;
+    }),
+    /codex_webrtc:signalling_unavailable/,
+  );
+  assert.equal(requests, 1);
+  assert.equal(peer.phase(), "closed");
+  assert.equal(mock.connectionState, "closed");
+  await assert.rejects(peer.prepareOffer(LEASE), /codex_webrtc:session_closed/);
+});
+
 test("P24 drops remote cloud audio and unexpected data channels", async () => {
   const mock = new FakePeer();
   const rtc = new CodexRealtimePeer(LEASE, () => mock as unknown as RTCPeerConnection);

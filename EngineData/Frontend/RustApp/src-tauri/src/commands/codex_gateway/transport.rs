@@ -189,6 +189,33 @@ fn owned_realtime_inbound_allowed(
     }
 }
 
+/// The existing RealtimeRpc owner verifies each of the three upstream
+/// signalling receipts. The JSONL reader can deliver them in any order.
+/// SDP is private; never log or Debug the answer.
+fn observe_realtime_start_signal(
+    rpc: &mut super::realtime_rpc::RealtimeRpc,
+    start_id: u64,
+    answer: &mut Option<String>,
+    event: Inbound,
+) -> Result<(), &'static str> {
+    let result = match event {
+        Inbound::Response { id, result } if id == start_id =>
+            rpc.ack_start(id, &result),
+        Inbound::Notification { method, params } if method == "thread/realtime/started" =>
+            rpc.observe_started(&params),
+        Inbound::Notification { method, params } if method == "thread/realtime/sdp" => {
+            rpc.observe_answer(&params)?;
+            let sdp = params.get("sdp").and_then(Value::as_str)
+                .ok_or("codex_gateway:voice_sdp_missing")?;
+            *answer = Some(sdp.to_owned());
+            Ok(())
+        }
+        _ => Err("codex_gateway:voice_signalling_event_unexpected"),
+    };
+    if result.is_err() { rpc.revoke(); }
+    result
+}
+
 struct WriteCommand {
     body: Vec<u8>,
     scope: WriteScope,
@@ -585,6 +612,46 @@ impl AppServer {
         Ok(Some(received))
     }
 
+    /// Source-only SDP handshake on the SAME owned AppServer child/reader.
+    /// Caller holds a sealed VerifiedMediaAuthority: no production constructor.
+    /// This cannot authorize WebRTC media, model output or Meeting playback.
+    pub(super) fn exchange_realtime_offer(
+        &mut self,
+        rpc: &mut super::realtime_rpc::RealtimeRpc,
+        offer_sdp: &str,
+        account_revision: u64,
+        admission: &super::realtime_rpc::VerifiedMediaAuthority,
+        cancelled: &AtomicBool,
+    ) -> Result<String, &'static str> {
+        let operation = (|| {
+            let start_id = self.next_realtime_request_id(
+                account_revision, admission, cancelled,
+            )?;
+            let frame = rpc.start(start_id, offer_sdp, cancelled)?;
+            self.queue_realtime_frame(frame, account_revision, admission, cancelled)?;
+            let deadline = Instant::now() + RESPONSE_TIMEOUT;
+            let mut answer = None;
+            loop {
+                if cancelled.load(Ordering::Acquire) {
+                    return Err("codex_gateway:cancelled");
+                }
+                if Instant::now() >= deadline {
+                    return Err("codex_gateway:voice_signalling_timeout");
+                }
+                if let Some(event) = self.next_realtime_event(
+                    account_revision, admission, cancelled,
+                )? {
+                    observe_realtime_start_signal(rpc, start_id, &mut answer, event)?;
+                }
+                if rpc.phase() == super::realtime_rpc::Phase::AwaitMedia {
+                    return answer.ok_or("codex_gateway:voice_signalling_missing_answer");
+                }
+            }
+        })();
+        if operation.is_err() { rpc.revoke(); }
+        operation
+    }
+
     /// The read thread advances this revision BEFORE queueing account or
     /// provider events, including while the controller awaits an RPC.
     pub(super) fn account_revision(&self) -> u64 {
@@ -767,6 +834,59 @@ mod tests {
             }),
             Err(TrySendError::Full(_))
         ));
+    }
+
+    #[test]
+    fn realtime_start_signalling_accepts_ack_started_sdp_in_any_order() {
+        use super::super::realtime_rpc::{Phase, RealtimeRpc};
+        let offer = "v=0\r\no=local 1 2 IN IP4 127.0.0.1\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
+        let answer = "v=0\r\no=remote 2 3 IN IP4 127.0.0.1\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
+        for order in [[0, 1, 2], [2, 1, 0], [1, 0, 2]] {
+            let cancelled = AtomicBool::new(false);
+            let mut rpc = RealtimeRpc::new("thread_1", "voice_1", 7, 2).unwrap();
+            rpc.start(10, offer, &cancelled).unwrap();
+            let mut browser_answer = None;
+            for item in order {
+                let event = match item {
+                    0 => Inbound::Response { id: 10, result: serde_json::json!({}) },
+                    1 => Inbound::Notification {
+                        method: "thread/realtime/started".into(),
+                        params: serde_json::json!({
+                            "threadId":"thread_1","version":"v3","realtimeSessionId":"session_1"
+                        }),
+                    },
+                    _ => Inbound::Notification {
+                        method: "thread/realtime/sdp".into(),
+                        params: serde_json::json!({"threadId":"thread_1","sdp":answer}),
+                    },
+                };
+                observe_realtime_start_signal(&mut rpc, 10, &mut browser_answer, event).unwrap();
+            }
+            assert_eq!(rpc.phase(), Phase::AwaitMedia);
+            assert_eq!(browser_answer.as_deref(), Some(answer));
+        }
+    }
+
+    #[test]
+    fn realtime_start_signalling_rejects_wrong_id_and_unrelated_events() {
+        use super::super::realtime_rpc::{Phase, RealtimeRpc};
+        let offer = "v=0\r\no=local 1 2 IN IP4 127.0.0.1\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
+        let cancelled = AtomicBool::new(false);
+        for event in [
+            Inbound::Response { id: 11, result: serde_json::json!({}) },
+            Inbound::Notification {
+                method:"thread/realtime/error".into(),
+                params: serde_json::json!({"message":"private"}),
+            }
+        ] {
+            let mut rpc = RealtimeRpc::new("thread_1", "voice_1", 7, 2).unwrap();
+            rpc.start(10, offer, &cancelled).unwrap();
+            assert_eq!(
+                observe_realtime_start_signal(&mut rpc, 10, &mut None, event),
+                Err("codex_gateway:voice_signalling_event_unexpected")
+            );
+            assert_eq!(rpc.phase(), Phase::Revoked);
+        }
     }
 
     #[test]

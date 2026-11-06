@@ -322,6 +322,47 @@ realtime items with authoritative source windows and prove safe Stop,
 transport failures, media consent, and input speech privacy. Typed SDP
 or writer receipts do not prove a working translation.
 
+## P25: one-owner WebRTC SDP signalling handshake — SOURCE CANDIDATE ONLY
+
+The existing `AppServer` owner in
+`commands/codex_gateway/transport.rs` now has an offline-only
+`exchange_realtime_offer` method. It accepts a WebView-generated SDP
+offer using the existing `RealtimeRpc::start` encoder and exact owned
+writer, then consumes the matching Start RPC ACK,
+`thread/realtime/started`, and `thread/realtime/sdp` events on the
+**same** bounded reader. ACK, started and SDP may arrive in any order.
+Only after all three match does it return the bounded answer SDP;
+no media-ready, translator, TTS, or Meeting authority is created.
+Wrong IDs, unrecognized or premature events, cancellation, account
+revision change, or handshake timeout revoke the `RealtimeRpc` state.
+A failed in-flight Start still requires the existing AppServer child
+owner to perform definitive teardown before another session.
+
+The P24 browser peer now offers a `negotiate(lease, exchangeOffer)`
+method: prepare offer → invoke the caller-provided cancellable native
+exchange once → verify the same Meeting generation/source epoch →
+apply answer → check ICE/channel readiness. Late answers after Stop
+are rejected, and errors close the peer. The callable source seam is
+not a new Tauri command, persisted controller, third-party network
+client, microphone process, or active Codex model route.
+
+**Important integration limit:** these are two matching source seams,
+not a registered production WebView↔Rust command yet. Existing
+`codex_gateway.rs` still initializes `experimentalApi=false`
+and no production constructor exists for the sealed
+`VerifiedMediaAuthority`. No Voice Start RPC is sent, no input
+audio is uploaded, no source-to-translation result is authorized,
+and no Codex text is fed to GPT-SoVITS. It would be unsafe to
+register a publicly callable production bridge that bypasses
+these prerequisites. Additional native command admission must be
+scoped to the one Meeting generation and must establish Voice,
+tool-free handling, SDP transport and transcript authority first.
+
+The synthetic Rust and TypeScript handshake-order, identity,
+cancellation and close cases are **AUTHORED / NOT EXECUTED**.
+Actual build, WebView, ICE, account/Voice, microphone and latency
+proof remain UNKNOWN.
+
 The source-only integration now composes the **existing** queue and wire
 encoder: `AudioFrameQueue.pending_state` distinguishes empty from revoked;
 `RealtimeRpc.send_queued_audio` checks generation/source epoch, cancellation,

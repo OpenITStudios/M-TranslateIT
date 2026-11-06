@@ -210,6 +210,33 @@ export class CodexRealtimePeer {
   }
 
   /**
+   * One cancellable SDP handshake with the caller-supplied native signaler.
+   * The callback must own the existing Rust Codex AppServer and honor AbortSignal.
+   * No Tauri command, credential use or network request is made in WebView.
+   */
+  async negotiate(
+    lease: CodexRtcLease,
+    exchangeOffer: (
+      offerSdp: string, lease: CodexRtcLease, cancelled: AbortSignal,
+    ) => Promise<string>,
+  ): Promise<void> {
+    const offer = await this.prepareOffer(lease);
+    try {
+      const answer = await this.bounded(
+        Promise.resolve().then(() => exchangeOffer(
+          offer, { ...this.lease }, this.cancelled.signal,
+        )),
+        "codex_webrtc:signalling_failed",
+      );
+      this.requireLease(lease);
+      await this.applyAnswer(lease, answer);
+    } catch {
+      this.revoke();
+      throw new Error("codex_webrtc:signalling_unavailable");
+    }
+  }
+
+  /**
    * Apply only the answer for the SAME source generation and epoch.
    * A connected ICE peer plus open oai-events is signalling readiness,
    * NOT Voice authorization or proof that audio entered Codex.

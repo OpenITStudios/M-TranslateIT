@@ -382,6 +382,28 @@ test("Codex TTS-only hook does not route through Local ASR/MT", () => {
   assert.match(gateway, /meeting_route_enabled: false/);
 });
 
+test("P25 joins WebView SDP exchange to the sealed Rust AppServer source seam", () => {
+  const peer = readFileSync(
+    new URL("../../src/app/bridge/codexRealtimePeer.ts", import.meta.url), "utf8",
+  );
+  assert.match(peer, /async negotiate\(/);
+  assert.match(peer, /this\.bounded\(/);
+  assert.match(peer, /this\.cancelled\.signal/);
+  assert.match(transport, /fn exchange_realtime_offer\(/);
+  assert.match(transport, /fn observe_realtime_start_signal\(/);
+  assert.match(transport, /self\.next_realtime_request_id\(/);
+  assert.match(transport, /self\.queue_realtime_frame\(/);
+  assert.match(transport, /self\.next_realtime_event\(/);
+  assert.match(transport, /codex_gateway:voice_signalling_timeout/);
+  assert.match(transport, /fn realtime_start_signalling_accepts_ack_started_sdp_in_any_order/);
+  assert.match(transport, /fn realtime_start_signalling_rejects_wrong_id_and_unrelated_events/);
+  assert.match(transport, /admission: &super::realtime_rpc::VerifiedMediaAuthority/);
+  assert.match(gateway, /"experimentalApi": false/);
+  assert.match(gateway, /meeting_route_enabled: false/);
+  assert.doesNotMatch(gateway, /exchange_realtime_offer\(/);
+  assert.doesNotMatch(peer, /runCommand\(|getUserMedia\s*\(|\.send\(/);
+});
+
 test("Codex realtime control uses the SAME owned JSONL writer/reader, with typed frame budgets", () => {
   assert.match(transport, /enum WriteScope/);
   assert.match(transport, /Self::Diagnostic => protocol::MAX_REQUEST_BYTES \+ 1/);
