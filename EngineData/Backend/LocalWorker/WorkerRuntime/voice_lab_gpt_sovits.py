@@ -429,11 +429,15 @@ def english_sentence_cardinals(
     # Upstream uppercase splitting prevents its own hot-dictionary lookup.
     # Recover those native entries by token class, not by product names.
     # Keep ordinary acronyms spelled out unless upstream explicitly knows them.
+    def render_native_hot_word(match: re.Match[str]) -> str:
+        word = match.group("word")
+        if word.islower() or word.casefold() not in hot_words:
+            return word
+        return word.capitalize()
+
     text = re.sub(
         r"(?<![\w./:+#=@?&%-])(?P<word>[A-Za-z]{2,})(?![\w/+:=#@?&%-]|\.[A-Za-z0-9_])",
-        lambda match: match.group("word").capitalize()
-        if match.group("word").casefold() in hot_words
-        else match.group("word"),
+        render_native_hot_word,
         text,
     )
     # A version token such as "v1.2.3" is neither a decimal number nor

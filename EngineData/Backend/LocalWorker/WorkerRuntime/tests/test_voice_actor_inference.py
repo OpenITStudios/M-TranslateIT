@@ -93,7 +93,7 @@ def load_provider_module():
     ('Keep JSON2, JSONValue, and #JSON tags.',
      'Keep JSON2, JSONValue, and #JSON tags.'),
     ('Do not rewrite JSON.stringify or JSON.parse.more.',
-     'Do not rewrite JSON.stringify or JSON.parse.more.'),
+     'Do not rewrite Json dot stringify or JSON.parse.more.'),
     ('Do not rewrite JSON-encoded field names.',
      'Do not rewrite JSON-encoded field names.'),
     ('Keep the API, JSON, GPU, and URL names.',
@@ -221,6 +221,7 @@ def test_native_g2p_hot_words_generalize_without_inventing_brand_rules() -> None
         "Novelterm and Novelterm meet API. Read https://example.com/NOVELTERM."
     )
     assert provider.english_sentence_cardinals("NOVELTERM", hot_words=frozenset()) == "NOVELTERM"
+    assert provider.english_sentence_cardinals("novelterm", hot_words=words) == "novelterm"
 
 
 def write_reference_wav(path: Path, duration_ms: int = 4_000) -> None:
