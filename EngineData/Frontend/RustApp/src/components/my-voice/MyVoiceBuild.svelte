@@ -636,15 +636,15 @@
   });
 </script>
 
-<section class="ti-panel p-6" aria-busy={build.active || busy || quickPreviewBusy}>
+<section class="ti-panel min-w-0 p-5 sm:p-6" aria-busy={build.active || busy || quickPreviewBusy}>
   {#if statusCheckUnavailable}
     <div role="alert" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-warning-border)] p-3">
       <span class="text-sm">My Voice status is unavailable. The previous progress may be outdated.</span>
       <button type="button" class="ti-button ti-button-secondary" disabled={busy || quickPreviewBusy} onclick={() => void refresh()}>Retry status</button>
     </div>
   {/if}
-  <div class="flex items-start justify-between gap-5">
-    <div>
+  <div class="flex flex-wrap items-start justify-between gap-4">
+    <div class="min-w-0 flex-1">
       <h4 class="mb-0 text-lg font-semibold">{build.evaluation_ready ? "Review your voice" : build.active ? activeTitle() : "Create your voice"}</h4>
       <p class="mb-0 mt-2 max-w-[680px] text-sm leading-6 text-[var(--ti-text-muted)]">{build.evaluation_ready ? "Listen to the new voice before selecting it for meetings." : "Use your accepted recordings to create a personal English voice."}</p>
     </div>
@@ -657,14 +657,14 @@
     {/if}
   </div>
 
-  <div class="mt-5 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] px-4 py-3" aria-label="My Voice training hardware">
+  <div class="mt-5 rounded-[var(--ti-radius-md)] bg-[var(--ti-surface-soft)] px-4 py-3" aria-label="My Voice training hardware">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <strong class="text-sm font-semibold">Training hardware</strong>
       <button type="button" class="ti-button ti-button-secondary" disabled={computeChecking || build.active || quickPreviewBusy} onclick={() => void checkCompute()}>
         {computeChecking ? "Checking..." : "Recheck hardware"}
       </button>
     </div>
-    <p class="mb-0 mt-2 text-sm font-semibold" role="status">
+    <p class="mb-0 mt-2 text-[13px] font-medium leading-5" role="status">
       {computeChecking ? "Checking GPU identity and memory..." : computeStatus?.admission_state === "admitted"
         ? "Device-aware CUDA safety — preliminary memory check passed" : computeStatus?.state === "cpu_only"
         ? "CPU-only training blocked — not verified" : computeStatus?.admission_state === "blocked_unsupported_precision"
@@ -672,7 +672,7 @@
         ? "Insufficient free GPU memory" : "Training hardware unavailable"}
     </p>
     <details class="mt-3 border-t border-[var(--ti-border)] pt-3">
-      <summary class="cursor-pointer text-xs font-medium text-[var(--ti-text-muted)]">Technical device details</summary>
+      <summary class="min-h-9 cursor-pointer py-2 text-[13px] font-medium text-[var(--ti-text-muted)] hover:text-[var(--ti-text)]">Technical device details</summary>
     {#if computeStatus}
       <p class="mb-0 mt-1 text-xs text-[var(--ti-text-muted)]">CPU: {computeStatus.cpu_name}</p>
       <p class="mb-0 mt-1 text-xs text-[var(--ti-text-muted)]">
@@ -693,10 +693,10 @@
 
   <div class="mt-5 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-4 py-3.5">
     <div class="flex items-center justify-between gap-4">
-      <strong class="text-sm font-semibold">Ready recordings</strong>
+      <strong class="text-sm font-semibold">Accepted recordings</strong>
       <span class="text-xs font-semibold text-[var(--ti-text-muted)]">{formatDuration(build.accepted_duration_ms)} / {formatDuration(build.minimum_duration_ms)}</span>
     </div>
-    <p class="mb-0 mt-1 text-xs text-[var(--ti-text-muted)]">{build.accepted_take_count} accepted recordings · clear, varied recordings help the result</p>
+    <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">{build.accepted_take_count} accepted recordings · the minimum duration is only one requirement</p>
     <div
       class="mt-3 h-1.5 overflow-hidden rounded-full bg-[var(--ti-border)]"
       role="progressbar"
@@ -728,7 +728,7 @@
     </button>
   {:else if build.evaluation_ready}
     <div class="mt-5">
-      <strong class="text-sm font-semibold">Listen before using My Voice</strong>
+      <strong class="text-[15px] font-semibold">Listen before using My Voice</strong>
       <p class="mb-0 mt-1 text-sm leading-5 text-[var(--ti-text-muted)]">Listen to these new sentences. Use My Voice only if it sounds like you.</p>
       <details class="mt-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-3" aria-label="Training reference selection explanation">
         <summary class="cursor-pointer text-sm font-medium">Why was this voice reference chosen?</summary>
@@ -811,7 +811,7 @@
             <button type="button" class="ti-button ti-button-secondary shrink-0" aria-busy={evaluationLoadingLineId === sample.line_id} disabled={statusCheckUnavailable || playingLineId !== null || evaluationLoadingLineId !== null} onclick={() => void playEvaluation(sample.line_id)}>
               <Play size={14} /><span aria-live="polite">{evaluationLoadingLineId === sample.line_id ? "Loading audio..." : playingLineId === sample.line_id ? "Playing..." : "Preview"}</span>
             </button>
-            <span class="min-w-0 flex-1 text-sm leading-5 text-[var(--ti-text-muted)]">{sample.exact_text}</span>
+            <span class="min-w-0 flex-1 text-[14px] leading-6 text-[var(--ti-text)]">{sample.exact_text}</span>
             {#if reviewedLineIds.includes(sample.line_id)}
               <span class="flex shrink-0 items-center gap-1 text-xs font-semibold text-[var(--ti-success)]"><Check size={13} />Listened</span>
             {/if}
@@ -831,7 +831,7 @@
           </div>
         {/each}
       </div>
-      <p class="mb-0 mt-3 text-xs text-[var(--ti-text-muted)]">{reviewedLineIds.length} of {build.evaluation_samples.length} previews listened</p>
+      <p class="mb-0 mt-3 text-[13px] leading-5 text-[var(--ti-text-muted)]">{reviewedLineIds.length} of {build.evaluation_samples.length} previews listened</p>
       <label class="mt-4 flex items-start gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-4">
         <input class="mt-0.5 size-4 accent-[var(--ti-accent)]" type="checkbox" bind:checked={qualityConfirmed} disabled={!evaluationReviewComplete || busy || statusCheckUnavailable} />
         <span class="text-sm leading-5 text-[var(--ti-text-muted)]">I listened to every preview. The voice is clear, sounds natural, resembles the authorized speaker, and I want to use it for meetings.</span>
@@ -875,7 +875,7 @@
   {/if}
 
   <details class="mt-5 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)]">
-    <summary class="cursor-pointer px-4 py-3 text-sm font-medium">Advanced: temporary voice sample</summary>
+    <summary class="min-h-11 cursor-pointer px-4 py-3 text-sm font-medium hover:bg-[var(--ti-surface-soft)]">Advanced: temporary voice sample</summary>
     <div class="border-t border-[var(--ti-border)] p-4">
       <p class="mb-0 text-xs leading-5 text-[var(--ti-text-muted)]">Optional experiment. This sample cannot be selected as a Meeting voice; it does not replace training or final voice review.</p>
       <QuickVoicePreview
@@ -892,5 +892,5 @@
       />
     </div>
   </details>
-  <p class="mb-0 mt-5 text-xs leading-5 text-[var(--ti-text-soft)]">Only a trained, evaluated and explicitly approved My Voice can be selected for Meeting. Quick Preview is not an output voice.</p>
+  <p class="mb-0 mt-5 text-[13px] leading-5 text-[var(--ti-text-muted)]">Only a trained, evaluated and explicitly approved My Voice can be selected for Meeting. Quick Preview is not an output voice.</p>
 </section>

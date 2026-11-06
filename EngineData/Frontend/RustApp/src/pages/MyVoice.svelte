@@ -992,7 +992,7 @@
   <header class="ti-page-header">
     <div>
       <h2 class="ti-page-title">My Voice</h2>
-      <p class="ti-page-copy">Choose a voice for meetings or create your own.</p>
+      <p class="ti-page-copy">Choose a voice for your meetings, or create one from your own recordings.</p>
     </div>
   </header>
 
@@ -1021,7 +1021,7 @@
 
   <div class="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--ti-border)] pt-5">
     <div class="min-w-0">
-      <h3 class="mb-0 text-base font-semibold">Create your own voice</h3>
+      <h3 class="mb-0 text-base font-semibold">Personal voice</h3>
       <p class="mb-0 mt-1 text-sm leading-5 text-[var(--ti-text-muted)]">Optional. Built-in voices work without recording or training.</p>
     </div>
     <button type="button" class="ti-button ti-button-secondary"
@@ -1040,25 +1040,25 @@
         <p class="mb-0 mt-1 text-sm leading-6 text-[var(--ti-text-muted)]">Record natural English samples, create your voice, then listen before using it.</p>
       </div>
     </div>
-    <nav class="mt-4 flex flex-wrap items-center gap-2 text-xs font-semibold" aria-label="My Voice creation stages">
+    <nav class="mt-5 flex flex-wrap items-center gap-2" aria-label="My Voice creation stages">
       <button type="button" aria-current={activeStage === "record" ? "step" : undefined}
-        class={activeStage === "record" ? "rounded-full border border-[var(--ti-border-strong)] bg-[var(--ti-surface-raised)] px-3 py-2 text-[var(--ti-text)]" : "rounded-full px-3 py-2 text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)]"}
+        class={activeStage === "record" ? "inline-flex min-h-10 items-center rounded-[var(--ti-radius-md)] border border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 text-[13px] font-semibold text-[var(--ti-text)]" : "inline-flex min-h-10 items-center rounded-[var(--ti-radius-md)] border border-transparent px-4 text-[13px] font-medium text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)] hover:text-[var(--ti-text)]"}
         disabled={busy || recordingStatusUnknown || isRecording || pendingLineId !== null}
         onclick={() => openCreationStage("record")}>1. Record</button>
       <ChevronRight size={14} class="text-[var(--ti-text-soft)]" aria-hidden="true" />
       <button type="button" aria-current={activeStage === "create" ? "step" : undefined}
-        class={activeStage === "create" ? "rounded-full border border-[var(--ti-border-strong)] bg-[var(--ti-surface-raised)] px-3 py-2 text-[var(--ti-text)]" : "rounded-full px-3 py-2 text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)]"}
+        class={activeStage === "create" ? "inline-flex min-h-10 items-center rounded-[var(--ti-radius-md)] border border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 text-[13px] font-semibold text-[var(--ti-text)]" : "inline-flex min-h-10 items-center rounded-[var(--ti-radius-md)] border border-transparent px-4 text-[13px] font-medium text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)] hover:text-[var(--ti-text)]"}
         disabled={busy || recordingStatusUnknown || buildStatusUnavailable || isRecording || pendingLineId !== null || buildSnapshot?.active === true || buildSnapshot?.preview_active === true || buildSnapshot?.evaluation_ready === true}
         onclick={() => openCreationStage("create")}>2. Create</button>
       <ChevronRight size={14} class="text-[var(--ti-text-soft)]" aria-hidden="true" />
       <button type="button" aria-current={activeStage === "review" ? "step" : undefined}
-        class={activeStage === "review" ? "rounded-full border border-[var(--ti-border-strong)] bg-[var(--ti-surface-raised)] px-3 py-2 text-[var(--ti-text)]" : "rounded-full px-3 py-2 text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)]"}
+        class={activeStage === "review" ? "inline-flex min-h-10 items-center rounded-[var(--ti-radius-md)] border border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 text-[13px] font-semibold text-[var(--ti-text)]" : "inline-flex min-h-10 items-center rounded-[var(--ti-radius-md)] border border-transparent px-4 text-[13px] font-medium text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)] hover:text-[var(--ti-text)]"}
         disabled={busy || recordingStatusUnknown || buildStatusUnavailable || isRecording || pendingLineId !== null || buildSnapshot?.active === true || !buildSnapshot?.evaluation_ready}
         onclick={() => openCreationStage("review")}>3. Review</button>
     </nav>
 
     {#if showRecordPanel && showBuildPanel}
-      <p role="status" class="mb-0 mt-4 text-xs leading-5 text-[var(--ti-warning)]">A status check needs attention. Use Stop or Retry status where available before continuing.</p>
+      <p role="status" class="mb-0 mt-4 text-sm leading-6 text-[var(--ti-warning)]">A status check needs attention. Use Stop or Retry status where available before continuing.</p>
     {/if}
     <div class="mt-4" hidden={!showRecordPanel}>
       <div class="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
@@ -1069,7 +1069,7 @@
           <div class="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-[var(--ti-radius-md)] bg-[var(--ti-surface-soft)] p-4">
             <div class="min-w-0 flex-1">
               <strong class="text-sm font-semibold">Microphone</strong>
-              <p class="mb-0 mt-1 text-xs leading-5 text-[var(--ti-text-muted)]">Check the connection before recording. Sound quality is checked after each take.</p>
+              <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">Check the connection before recording. Sound quality is checked after each take.</p>
             </div>
             <button type="button" class="ti-button ti-button-secondary" disabled={busy || voiceChangesLocked || buildStatusUnavailable || buildSnapshot?.active === true || buildSnapshot?.preview_active === true || recordingStatusUnknown || isRecording || pendingLineId !== null} onclick={() => void checkMicrophone()}>
               <Mic size={15} /><span>{microphoneCheck === "checking" ? "Checking..." : "Check microphone"}</span>
@@ -1097,7 +1097,10 @@
                 {/if}
               </div>
               <p class="mb-0 mt-4 text-[20px] font-medium leading-8 tracking-[-0.015em]">{currentLine.text}</p>
-              <button type="button" class="ti-button ti-button-secondary mt-4 text-xs"
+              <details class="mt-5 border-t border-[var(--ti-border)] pt-3">
+                <summary class="min-h-9 cursor-pointer py-2 text-[13px] font-medium text-[var(--ti-text-muted)] hover:text-[var(--ti-text)]">Advanced recording file check</summary>
+                <div class="pt-1">
+                  <button type="button" class="ti-button ti-button-secondary text-[13px]"
                 disabled={busy || inspectingAcceptedFiles || recordingStatusUnknown || isRecording
                   || voiceChangesLocked || buildSnapshot?.active === true || buildSnapshot?.preview_active === true}
                 onclick={() => void inspectAcceptedFiles()}>
@@ -1106,6 +1109,9 @@
               <p class="mt-2 text-xs text-[var(--ti-text-muted)]">
                 Read-only check of accepted WAVs, previous backups, Draft files and immutable archives.
               </p>
+
+                </div>
+              </details>
             </div>
             {#if selectedAcceptedEvidence}
               <section class="mt-4 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-4"
@@ -1232,12 +1238,12 @@
           {:else}
             <div class="mt-5 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-5 text-sm text-[var(--ti-text-muted)]">Recording lines are unavailable. Retry status.</div>
           {/if}
-          <p class="mb-0 mt-6 text-xs leading-5 text-[var(--ti-text-soft)]">Your accepted recordings stay on this computer.</p>
+          <p class="mb-0 mt-6 text-[13px] leading-5 text-[var(--ti-text-muted)]">Your accepted recordings stay on this computer.</p>
         </article>
 
         <aside class="ti-panel min-w-0 overflow-hidden" aria-label="Recording progress and lines">
           <div class="p-4">
-            <h4 class="mb-0 text-sm font-semibold">Recording progress</h4>
+            <h4 class="mb-0 text-[15px] font-semibold">Recording progress</h4>
             {#if buildSnapshot && !buildStatusUnavailable}
               <p class="mb-0 mt-3 text-2xl font-semibold tabular-nums">{formatRecordingDuration(buildSnapshot.accepted_duration_ms)}</p>
               <p class="mb-0 mt-1 text-xs text-[var(--ti-text-muted)]">of {formatRecordingDuration(buildSnapshot.minimum_duration_ms)} minimum</p>
@@ -1251,9 +1257,15 @@
               {:else if !buildSnapshot.can_build}
                 <p class="mb-0 mt-3 text-xs leading-5 text-[var(--ti-text-muted)]">{buildSnapshot.message}</p>
               {/if}
+              {#if buildSnapshot.evaluation_ready && !isRecording && pendingLineId === null}
+                <button type="button" class="ti-button mt-4 w-full" disabled={buildStatusUnavailable || recordingStatusUnknown || busy} onclick={() => openCreationStage("review")}>Return to Review</button>
+              {:else if buildSnapshot.can_build && !buildSnapshot.active && !isRecording && pendingLineId === null}
+                <button type="button" class="ti-button mt-4 w-full" disabled={voiceChangesLocked || buildStatusUnavailable || recordingStatusUnknown} onclick={() => openCreationStage("create")}>Continue to Create</button>
+              {/if}
               {#if buildSnapshot.recording_suggestions?.length > 0 && !buildSnapshot.active && !isRecording && pendingLineId === null}
-                <div class="mt-4" aria-label="Optional recording suggestions">
-                  <p class="mb-1 text-xs font-semibold">Suggested next lines</p>
+                <details class="mt-4 overflow-hidden rounded-[var(--ti-radius-md)] border border-[var(--ti-border)]" aria-label="Optional recording suggestions">
+                  <summary class="min-h-10 cursor-pointer px-3 py-3 text-[13px] font-semibold hover:bg-[var(--ti-surface-soft)]">Suggested next lines</summary>
+                   <div class="border-t border-[var(--ti-border)] px-3 py-3">
                   <p class="mb-2 text-xs leading-5 text-[var(--ti-text-muted)]">
                     Optional examples of different English sound patterns. These are text-based estimates, not ratings of your pronunciation or voice quality.
                   </p>
@@ -1272,11 +1284,7 @@
                     {/each}
                   </div>
                 </div>
-              {/if}
-              {#if buildSnapshot.evaluation_ready && !isRecording && pendingLineId === null}
-                <button type="button" class="ti-button mt-4 w-full" disabled={buildStatusUnavailable || recordingStatusUnknown || busy} onclick={() => openCreationStage("review")}>Return to Review</button>
-              {:else if buildSnapshot.can_build && !buildSnapshot.active && !isRecording && pendingLineId === null}
-                <button type="button" class="ti-button mt-4 w-full" disabled={voiceChangesLocked || buildStatusUnavailable || recordingStatusUnknown} onclick={() => openCreationStage("create")}>Continue to Create</button>
+              </details>
               {/if}
             {:else}
               <p role="status" class="mb-0 mt-3 text-sm text-[var(--ti-text-muted)]">Checking recording progress…</p>
@@ -1287,7 +1295,7 @@
           </div>
           <div class="border-t border-[var(--ti-border)] px-4 py-3">
             <details bind:open={browseLinesOpen}>
-              <summary class="cursor-pointer text-sm font-medium">Browse lines <span class="ml-1 text-xs font-normal text-[var(--ti-text-muted)]">({acceptedCount} saved)</span></summary>
+              <summary class="min-h-10 cursor-pointer py-2 text-[13px] font-semibold">Browse lines <span class="ml-1 text-xs font-normal text-[var(--ti-text-muted)]">({acceptedCount} saved)</span></summary>
               <p class="mb-2 mt-2 text-xs leading-5 text-[var(--ti-text-muted)]">Choose what feels natural. You don't have to record all {recordingState.lines.length} sentences.</p>
               <div class="space-y-2">
                 <label class="block text-xs text-[var(--ti-text-muted)]">
@@ -1370,7 +1378,7 @@
     </div>
   </section>
   <details class="mt-6 overflow-hidden rounded-[var(--ti-radius-md)] border border-[var(--ti-border)]" aria-label="Saved voice management">
-    <summary class="cursor-pointer px-5 py-4 text-sm font-semibold">
+    <summary class="min-h-11 cursor-pointer px-5 py-4 text-sm font-semibold hover:bg-[var(--ti-surface-soft)]">
       Saved voices &amp; backups
       {#if legacyProtectionUnknown || (legacyProtection?.attention_sources ?? 0) > 0}
         <span class="ml-2 text-xs font-medium text-[var(--ti-warning)]">Recording storage needs attention</span>

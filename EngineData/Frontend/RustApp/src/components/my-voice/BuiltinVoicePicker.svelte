@@ -34,9 +34,9 @@
 <section class="ti-panel p-3 sm:p-4" aria-labelledby="my-voice-selected-heading">
   <div class="flex flex-wrap items-center justify-between gap-3">
     <div class="min-w-0">
-      <h3 id="my-voice-selected-heading" class="mb-0 text-xs font-semibold uppercase tracking-wide text-[var(--ti-text-muted)]">Current Meeting voice</h3>
-      <p class="mb-0 mt-0.5 text-base font-semibold">{currentLabel}</p>
-      <p class="mb-0 mt-0.5 text-xs text-[var(--ti-text-muted)]">
+      <h3 id="my-voice-selected-heading" class="mb-0 text-[13px] font-semibold text-[var(--ti-text-muted)]">Current Meeting voice</h3>
+      <p class="mb-0 mt-1 text-[18px] font-semibold tracking-[-0.015em]">{currentLabel}</p>
+      <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">
         {selectedVoiceVerified
           ? (selectedVoiceKind === "none" || selectedVoiceKind === "unknown" ? "Select a voice to use for meetings." : "Selected for meetings")
           : "Couldn't verify the current selection."}
@@ -54,16 +54,16 @@
   </div>
 
   <div id="my-voice-voice-choices" hidden={!choicesOpen && !builtinPendingId} class="mt-4 border-t border-[var(--ti-border)] pt-4">
-    <p class="mb-0 text-xs leading-5 text-[var(--ti-text-muted)]">Preview a voice before selecting it.</p>
+    <p class="mb-0 text-[13px] leading-5 text-[var(--ti-text-muted)]">Preview a voice before selecting it.</p>
     <div class="mt-3 space-y-2">
       {#each [
         { id: "MaleVoice" as BuiltinVoiceId, label: "Built-in Male" },
         { id: "FemaleVoice" as BuiltinVoiceId, label: "Built-in Female" },
       ] as voice (voice.id)}
         {@const selected = selectedVoiceVerified && selectedVoiceKind === "built_in" && selectedBuiltinVoiceId === voice.id}
-        <div class="flex flex-wrap items-center gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] px-3 py-3">
+        <div class={`flex flex-wrap items-center gap-3 rounded-[var(--ti-radius-md)] border px-4 py-3 ${selected ? "border-[var(--ti-border-strong)] bg-[var(--ti-surface-raised)]" : "border-[var(--ti-border)] hover:bg-[var(--ti-surface-soft)]"}`}>
           <div class="min-w-0 flex-1">
-            <strong class="block text-sm font-semibold">{voice.label}</strong>
+            <strong class="block text-[14px] font-semibold">{voice.label}</strong>
             {#if selected}<span class="flex items-center gap-1 text-xs text-[var(--ti-success)]"><Check size={13} /> Selected</span>{/if}
           </div>
           <button type="button" class="ti-button ti-button-secondary" disabled={busy || builtinPreviewing !== null} onclick={() => void onPreview(voice.id)}>
@@ -73,10 +73,10 @@
         </div>
       {/each}
       {#if savedPersonalVoiceAvailable && selectedVoiceVerified}
-        <div class="flex flex-wrap items-center gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] px-3 py-3">
+        <div class={`flex flex-wrap items-center gap-3 rounded-[var(--ti-radius-md)] border px-4 py-3 ${selectedVoiceKind === "personal" ? "border-[var(--ti-border-strong)] bg-[var(--ti-surface-raised)]" : "border-[var(--ti-border)] hover:bg-[var(--ti-surface-soft)]"}`}>
           <div class="min-w-0 flex-1">
-            <strong class="block text-sm font-semibold">My Voice</strong>
-            <p class="mb-0 mt-1 text-xs text-[var(--ti-text-muted)]">Saved personal voice</p>
+            <strong class="block text-[14px] font-semibold">My Voice</strong>
+            <p class="mb-0 mt-1 text-[13px] text-[var(--ti-text-muted)]">Saved personal voice</p>
           </div>
           <button type="button" class="ti-button ti-button-secondary" disabled={busy || voiceChangesLocked || builtinPreviewing !== null || selectedVoiceKind === "personal"} onclick={() => void onSelectPersonal()}>
             {selectedVoiceKind === "personal" ? "Selected" : "Use My Voice"}
@@ -85,7 +85,7 @@
       {/if}
     </div>
     {#if voiceChangesLocked}
-      <p class="mb-0 mt-3 text-xs text-[var(--ti-text-muted)]">Finish the current Meeting or recording before switching voices.</p>
+      <p class="mb-0 mt-3 text-[13px] leading-5 text-[var(--ti-text-muted)]">Finish the current Meeting or recording before switching voices.</p>
     {/if}
     {#if builtinPendingId}
       <div class="mt-4 rounded-[var(--ti-radius-md)] border border-[var(--ti-warning-border)] p-4" role="group" aria-label="Confirm voice replacement">

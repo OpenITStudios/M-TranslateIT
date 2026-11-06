@@ -20,15 +20,15 @@
   } = $props();
 </script>
 
-<div class="mt-5 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-4">
-    <div class="flex flex-wrap items-center justify-between gap-3">
+<div class="mt-4">
+    <div class="flex flex-wrap items-center justify-between gap-4">
       <div>
         <strong class="text-sm font-semibold">Quick Preview (optional) · Not for meetings</strong>
-        <p class="mb-0 mt-1 text-xs leading-5 text-[var(--ti-text-muted)]">Hear a temporary sample before full training.</p>
+        <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">Hear a temporary sample before full training.</p>
       </div>
       <button
         type="button"
-        class="ti-button ti-button-secondary min-h-9"
+        class="ti-button ti-button-secondary min-h-10"
         aria-controls="my-voice-quick-preview-options"
         aria-expanded={quickPreviewOptionsOpen || quickPreviewBusy || build.preview_active}
         disabled={quickPreviewBusy || build.preview_active}
@@ -36,7 +36,7 @@
       >{quickPreviewOptionsOpen || quickPreviewBusy || build.preview_active ? "Hide options" : "Show options"}</button>
     </div>
     <div id="my-voice-quick-preview-options" hidden={!quickPreviewOptionsOpen && !quickPreviewBusy && !build.preview_active}>
-        <label class="mt-3 flex items-start gap-2 text-xs text-[var(--ti-text-muted)]">
+        <label class="mt-3 flex items-start gap-2 text-[13px] leading-5 text-[var(--ti-text-muted)]">
           <input class="mt-0.5 size-4 accent-[var(--ti-accent)]" type="checkbox" bind:checked={previewAuthorized} />
           I own this voice or have permission to create a preview.
         </label>
