@@ -35,6 +35,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     RuntimeSettings,
   } from "./app/shared/types";
   import Sidebar from "./components/layout/Sidebar.svelte";
+  import TranslateITMark from "./components/brand/TranslateITMark.svelte";
   import NativeCloseDialog from "./components/runtime/NativeCloseDialog.svelte";
   import AppHeader from "./components/layout/AppHeader.svelte";
   import FirstSetup from "./pages/FirstSetup.svelte";
@@ -499,7 +500,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
 {#if booting}
   <main class="grid min-h-screen place-items-center bg-[var(--ti-bg)] p-8">
     <section class="w-full max-w-[560px] text-center">
-      <div class="mx-auto grid size-12 place-items-center rounded-[14px] border border-[var(--ti-border-strong)] bg-[var(--ti-surface-raised)] text-lg font-bold">T</div>
+      <div class="mx-auto w-fit"><TranslateITMark size={48} /></div>
       <h1 class="mb-0 mt-5 text-2xl font-semibold tracking-[-0.03em]">Getting TranslateIT ready</h1>
       <p class="mb-0 mt-2 text-sm leading-6 text-[var(--ti-text-muted)]">Checking your saved setup.</p>
     </section>
@@ -558,7 +559,8 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
 {:else}
   <main class="grid min-h-screen place-items-center bg-[var(--ti-bg)] p-8">
     <section class="ti-panel w-full max-w-[560px] p-7">
-      <span class="ti-kicker">TranslateIT</span>
+      <TranslateITMark size={40} />
+      <span class="ti-kicker mt-4 block">TranslateIT</span>
       <h1 class="mb-0 mt-3 text-2xl font-semibold">TranslateIT isn't ready yet</h1>
       <p class="mb-0 mt-3 text-sm leading-6 text-[var(--ti-text-muted)]">{notice}</p>
       <button type="button" class="ti-button mt-5" onclick={() => { setNotice("Checking again..."); void refreshSnapshot(); }}>Try Again</button>

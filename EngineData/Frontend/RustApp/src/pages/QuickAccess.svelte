@@ -1,7 +1,7 @@
 <script lang="ts">
   import "../styles/quick-access.css";
   import { onMount } from "svelte";
-  import { AudioLines, Captions, ExternalLink, Languages, Mic, Play, Square, X } from "@lucide/svelte";
+  import { Captions, ExternalLink, Languages, Mic, Play, Square, X } from "@lucide/svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { applicationRuntimeApi, type ApplicationSnapshot } from "../app/bridge/applicationRuntimeApi";
   import { runtimeApi } from "../app/bridge/runtimeApi";
@@ -10,6 +10,7 @@
   } from "../app/runtime/quickAccessRuntime";
   import { APPLICATION_MEETING_OWNER_ID } from "../app/shared/types";
   import { MEETING_SOURCE_LABELS } from "../components/ui/meetingSourceLabels";
+  import TranslateITMark from "../components/brand/TranslateITMark.svelte";
 
   type Source = "original" | "translateit";
   let snapshot = $state<ApplicationSnapshot | null>(null);
@@ -295,7 +296,7 @@
   <section class="qa-panel" aria-label="TranslateIT Quick Access">
     <header class="flex shrink-0 items-center justify-between gap-3 px-4 py-3" data-tauri-drag-region>
       <div class="flex items-center gap-2" data-tauri-drag-region>
-        <AudioLines size={18} aria-hidden="true" />
+        <TranslateITMark size={20} />
         <strong class="text-[13px] font-semibold">Quick Access</strong>
       </div>
       <button type="button" class="grid size-8 place-items-center rounded-lg text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)]"

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { AudioLines, Mic, Settings } from "@lucide/svelte";
   import type { AppRoute } from "../../app/shared/types";
+  import TranslateITMark from "../brand/TranslateITMark.svelte";
 
   let {
     active,
@@ -42,7 +43,7 @@
 
 <aside class="ti-sidebar flex min-h-screen w-[var(--ti-sidebar-width)] shrink-0 flex-col border-r border-[var(--ti-border)] bg-[var(--ti-sidebar)] px-3 py-4">
   <header class="ti-sidebar-brand flex items-center gap-2.5 px-2 py-1">
-    <div class="grid size-9 shrink-0 place-items-center rounded-[var(--ti-radius-md)] border border-[var(--ti-border-strong)] bg-[var(--ti-surface-raised)] text-sm font-bold">T</div>
+    <TranslateITMark size={36} />
     <div class="ti-sidebar-brand-copy min-w-0">
       <h1 class="m-0 truncate text-[14px] font-bold tracking-[-0.02em]">TranslateIT</h1>
       <p class="mt-0.5 truncate text-[11px] text-[var(--ti-text-soft)]">Indonesian ↔ English</p>

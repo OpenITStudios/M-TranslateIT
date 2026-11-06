@@ -19,6 +19,7 @@
   import MeetingTranslationEngine from "../components/settings/MeetingTranslationEngine.svelte";
   import SetupVoiceChoice from "../components/setup/SetupVoiceChoice.svelte";
   import StatusRow from "../components/ui/StatusRow.svelte";
+  import TranslateITMark from "../components/brand/TranslateITMark.svelte";
 
   type SetupState = "new" | "deferred" | "completed";
   type BuiltinVoiceId = "MaleVoice" | "FemaleVoice";
@@ -339,7 +340,7 @@
 <main class="flex h-screen min-h-0 items-start justify-center overflow-y-auto bg-[var(--ti-bg)] px-4 py-6 sm:px-8 sm:py-10" aria-label="TranslateIT Setup">
   <section class="ti-panel w-full max-w-[900px] shrink-0 overflow-hidden">
     <header class="flex flex-wrap items-center gap-3 border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-4 sm:px-7">
-      <div class="grid size-10 place-items-center rounded-[12px] border border-[var(--ti-border-strong)] bg-[var(--ti-surface-raised)] text-base font-bold">T</div>
+      <TranslateITMark size={40} />
       <div>
         <strong class="block text-sm font-semibold">TranslateIT</strong>
         <span class="mt-0.5 block text-xs text-[var(--ti-text-muted)]">{step === 1 ? "Get started" : "Meeting setup"}</span>
