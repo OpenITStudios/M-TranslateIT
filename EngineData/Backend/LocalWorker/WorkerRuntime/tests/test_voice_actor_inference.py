@@ -100,6 +100,12 @@ def load_provider_module():
      'Keep the API, Json, GPU, and URL names.'),
     ('Use the JSON.parse API with HTTP/2.',
      'Use the Json dot parse API with HTTP version two.'),
+    ('API.fetch is a method, not an URL.',
+     'API dot fetch is a method, not an URL.'),
+    ('GPU.compute and HTTP.connect are methods.',
+     'GPU dot compute and HTTP dot connect are methods.'),
+    ('Keep example.com, module.API.fetch, and API.fetch.more intact.',
+     'Keep example.com, module.API.fetch, and API.fetch.more intact.'),
     ('Call JSON.parse() before continuing.',
      'Call Json dot parse() before continuing.'),
     ('First. Second. Third. Fourth. Fifth. Call JSON.parse now.',
@@ -129,17 +135,17 @@ def load_provider_module():
     ('C# is different from C.',
      'C sharp is different from C.'),
     ('Use PyTorch for the next benchmark.',
-     'Use pie torch for the next benchmark.'),
+     'Use PyTorch for the next benchmark.'),
     ('PyTorch is ready. Please confirm.',
-     'pie torch is ready. Please confirm.'),
+     'PyTorch is ready. Please confirm.'),
     ('We need PyTorch 2.4 before release.',
-     'We need pie torch 2.4 before release.'),
+     'We need PyTorch 2.4 before release.'),
     ('The voice engine uses GPT-SoVITS and PyTorch.',
-     'The voice engine uses GPT-SoVITS and pie torch.'),
+     'The voice engine uses GPT-SoVITS and PyTorch.'),
     ('Keep SoVITS and GPT-SoVITS unchanged.',
      'Keep SoVITS and GPT-SoVITS unchanged.'),
     ('The URL is https://pytorch.org/ and the docs mention PyTorch.',
-     'The URL is https://pytorch.org/ and the docs mention pie torch.'),
+     'The URL is https://pytorch.org/ and the docs mention PyTorch.'),
     ('Read https://example.com/PyTorch before merging.',
      'Read https://example.com/PyTorch before merging.'),
     ('Keep torch.PyTorch and PyTorch.module.',
@@ -186,9 +192,35 @@ def load_provider_module():
      'Do not rewrite v1.2.3.4.5.'),
 ])
 def test_english_tts_preserves_sentence_cardinals(text: str, spoken: str) -> None:
-    inputs = load_provider_module().english_tts_inputs(text, Path('reference.wav'), text)
+    inputs = load_provider_module().english_tts_inputs(
+        text, Path('reference.wav'), text,
+        hot_words=frozenset({"chatgpt", "json", "conda"}),
+    )
     assert inputs['text'] == spoken
     assert inputs['prompt_text'] == spoken
+
+
+def test_g2p_hot_dictionary_reads_upstream_entries_instead_of_product_rules(tmp_path: Path) -> None:
+    provider = load_provider_module()
+    hot = tmp_path / "GPT_SoVITS" / "text" / "engdict-hot.rep"
+    hot.parent.mkdir(parents=True)
+    hot.write_text(
+        "CHATGPT CH AE1 T\nJSON JH EY1\nCONDA K AA1\nNOVELTERM N OW1\n",
+        encoding="utf-8",
+    )
+    assert provider.g2p_hot_dictionary_words(tmp_path) == frozenset(
+        {"chatgpt", "json", "conda", "novelterm"}
+    )
+
+
+def test_native_g2p_hot_words_generalize_without_inventing_brand_rules() -> None:
+    provider = load_provider_module()
+    text = "NOVELTERM and NovelTerm meet API. Read https://example.com/NOVELTERM."
+    words = frozenset({"novelterm"})
+    assert provider.english_sentence_cardinals(text, hot_words=words) == (
+        "Novelterm and Novelterm meet API. Read https://example.com/NOVELTERM."
+    )
+    assert provider.english_sentence_cardinals("NOVELTERM", hot_words=frozenset()) == "NOVELTERM"
 
 
 def write_reference_wav(path: Path, duration_ms: int = 4_000) -> None:

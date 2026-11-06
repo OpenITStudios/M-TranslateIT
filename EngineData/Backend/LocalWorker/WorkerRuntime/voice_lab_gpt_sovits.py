@@ -315,6 +315,19 @@ def reuse_reference_speaker_embeddings(runtime: dict[str, Any]) -> Iterator[None
         tts.sv_model = original
 
 
+def g2p_hot_dictionary_words(source_root: Path) -> frozenset[str]:
+    """Use the pinned upstream G2P lexicon instead of a second word list."""
+    path = source_root / "GPT_SoVITS" / "text" / "engdict-hot.rep"
+    require_regular_file(path, "g2p_hot_dictionary")
+    return frozenset(
+        fields[0].casefold()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if (fields := line.split())
+        and len(fields) > 1
+        and re.fullmatch(r"[A-Za-z]{2,}", fields[0])
+    )
+
+
 def create_tts_runtime(
     source_root: Path,
     assets: dict[str, Path],
@@ -325,6 +338,7 @@ def create_tts_runtime(
     require_regular_file(gpt_weight, "gpt_weight")
     require_regular_file(sovits_weight, "sovits_weight")
     require_regular_file(reference_wav, "reference_wav")
+    hot_words = g2p_hot_dictionary_words(source_root)
     try:
         import torch
 
@@ -376,25 +390,19 @@ def create_tts_runtime(
         "reference_wav": reference_wav,
         "reference_cached": True,
         "reference_speaker_embeddings": cached_embeddings,
+        "g2p_hot_words": hot_words,
     }
 
 
-def english_sentence_cardinals(text: str) -> str:
-    # The pinned hot G2P dictionary covers "chatgpt" and "conda". Upstream
-    # uppercase splitting otherwise turns ChatGPT/CHATGPT/CONDA into fragments
-    # before dictionary lookup. Title case reaches the existing pronunciations.
-    # Do not alter URLs, code identifiers, accounts, tags, or version suffixes.
+def english_sentence_cardinals(
+    text: str, *, hot_words: frozenset[str] = frozenset()
+) -> str:
+    # Structural names such as API.fetch should retain the pronounced "dot".
+    # Do not treat URLs, domain names, or multi-level opaque IDs as methods.
     text = re.sub(
-        r"(?<![\w./:+#=@?&%-])(?:ChatGPT|CHATGPT|CONDA)(?![\w/+:=#@?&%-]|\.[A-Za-z0-9_])",
-        lambda match: "Conda" if match.group() == "CONDA" else "Chatgpt",
-        text,
-    )
-    # Pinned upstream CamelCase normalization splits PyTorch into "Py Torch".
-    # "Py" then relies on dictionary/OOV fallback instead of the established
-    # spoken name. Limit the correction to this standalone framework name.
-    text = re.sub(
-        r"(?<![\w./:+#=@?&%-])PyTorch(?![\w/+:=#@?&%-]|\.[A-Za-z0-9_])",
-        "pie torch",
+        r"(?<![\w./:+#=@?&%-])(?P<owner>[A-Z][A-Z0-9_]*)\."
+        r"(?P<member>[a-z][a-z0-9_]*)(?![\w/+:=#@?&%-]|\.[A-Za-z0-9_])",
+        lambda match: match.group("owner") + " dot " + match.group("member"),
         text,
     )
     # Pinned upstream English normalization removes '+' and '#', collapsing
@@ -410,15 +418,7 @@ def english_sentence_cardinals(text: str) -> str:
         "C sharp",
         text,
     )
-    # The pinned upstream cut1 can split dotted code names; its English
-    # normalizer removes '/', which can fuse "HTTP/2" after number expansion.
-    # Expand only unambiguous protocol/method tokens for speech, not
-    # arbitrary identifiers or URIs. The displayed translation stays intact.
-    text = re.sub(
-        r"(?<![\w./:-])JSON\.parse(?![\w/:-]|\.\w)",
-        "JSON dot parse",
-        text,
-    )
+    # Existing HTTP protocol-version spelling is structural, not a brand rule.
     http_versions = {"1.0": "one point zero", "1.1": "one point one", "2": "two", "3": "three"}
     text = re.sub(
         r"(?<![\w./:-])HTTP/(?P<version>1\.0|1\.1|2|3)(?![\w/:-]|\.\w)",
@@ -426,13 +426,14 @@ def english_sentence_cardinals(text: str) -> str:
         text,
         flags=re.IGNORECASE,
     )
-    # The pinned G2P hot dictionary already supplies "json" pronunciation,
-    # but upstream CamelCase normalization splits uppercase JSON into J S O N.
-    # Preserve the existing dictionary pronunciation by using title case only
-    # for a standalone TTS token (including JSON.parse expanded above).
+    # Upstream uppercase splitting prevents its own hot-dictionary lookup.
+    # Recover those native entries by token class, not by product names.
+    # Keep ordinary acronyms spelled out unless upstream explicitly knows them.
     text = re.sub(
-        r"(?<![\w./:+#=@?&%-])JSON(?![\w/+:=#@?&%-]|\.[A-Za-z0-9_])",
-        "Json",
+        r"(?<![\w./:+#=@?&%-])(?P<word>[A-Za-z]{2,})(?![\w/+:=#@?&%-]|\.[A-Za-z0-9_])",
+        lambda match: match.group("word").capitalize()
+        if match.group("word").casefold() in hot_words
+        else match.group("word"),
         text,
     )
     # A version token such as "v1.2.3" is neither a decimal number nor
@@ -535,12 +536,14 @@ def english_tts_inputs(
     reference_wav: Path,
     reference_text: str,
     speed_factor: float = 1.0,
+    *,
+    hot_words: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     return {
-        "text": english_sentence_cardinals(text),
+        "text": english_sentence_cardinals(text, hot_words=hot_words),
         "text_lang": "en",
         "ref_audio_path": str(reference_wav),
-        "prompt_text": english_sentence_cardinals(reference_text),
+        "prompt_text": english_sentence_cardinals(reference_text, hot_words=hot_words),
         "prompt_lang": "en",
         "batch_size": 1,
         "parallel_infer": False,
@@ -688,6 +691,7 @@ def synthesize_voice_actor(
                     reference_wav,
                     reference_text,
                     speed_factor=speed_factor,
+                    hot_words=runtime.get("g2p_hot_words", frozenset()),
                 )
             )
         )
