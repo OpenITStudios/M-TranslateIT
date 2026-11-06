@@ -308,6 +308,38 @@ mod tests {
     }
 
     #[test]
+    fn coding_agent_promotion_retires_provisional_pairing() {
+        let mut observer = RealtimeObserver::new("thr_1").unwrap();
+        let mut gate = CorrelationGate::default();
+        gate.begin(lease()).unwrap();
+        gate.observe_event(&mut observer, "thread/realtime/started",
+            &json!({"threadId":"thr_1","realtimeSessionId":"sess_1","version":"v3"})).unwrap();
+        gate.observe_event(&mut observer, "thread/realtime/item/completed",
+            &json!({"threadId":"thr_1","item":{
+                "id":"user_1","realtimeSessionId":"sess_1",
+                "type":"transcriptSegment","role":"user","text":"Terjemahkan ini."
+            }})).unwrap();
+        let promoted = json!({"threadId":"thr_1","item":{
+            "id":"promoted_1","realtimeSessionId":"sess_1",
+            "type":"bemItemPromoted","turnId":"coding_turn",
+            "itemId":"coding_item","presentation":{"type":"wholeItem"}
+        }});
+        assert_eq!(
+            gate.observe_event(&mut observer, "thread/realtime/item/completed", &promoted),
+            Err("codex_realtime:agent_item_promoted")
+        );
+        assert!(gate.is_retired());
+        assert_eq!(
+            observer.observe("thread/realtime/item/completed",
+                &json!({"threadId":"thr_1","item":{
+                    "id":"assistant_1","realtimeSessionId":"sess_1",
+                    "type":"transcriptSegment","role":"assistant","text":"Late."
+                }})),
+            Err("codex_realtime:session_revoked")
+        );
+    }
+
+    #[test]
     fn assistant_before_source_cannot_be_guessed_into_pairing() {
         let mut gate = CorrelationGate::default();
         gate.begin(lease()).unwrap();

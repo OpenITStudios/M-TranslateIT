@@ -267,13 +267,46 @@ Real media auth has **no production constructor**, and
 diagnostic App Server advertises `experimentalApi=false`, so this
 source-only control path cannot start Voice today.
 
-The candidate V3 Start also selects `clientManagedHandoffs=true`
-(the option used by Codex's upstream TUI) to avoid implicit delegation
-of spoken meeting content to the coding agent. This does **not**
-produce an admitted translation: safe client-managed translation,
-pre-execution tool restriction and final-text source binding are still
-missing, and the provider must not receive private speech until those
-permissions exist.
+The V3 Start candidate sets `clientManagedHandoffs=true`, as does
+the upstream TUI. **This flag does not prevent a coding-agent turn**:
+in upstream `realtime_conversation.rs` it stops automatic forwarding
+of agent *output*, but `RealtimeEvent::HandoffRequested` can still
+invoke `route_handoffs.route`, which calls
+`session.route_realtime_text_input` and can start/steer a Codex turn.
+Neither this flag, prompt instructions nor an observation made after
+a handoff provides pre-execution no-tools protection. Do not send
+private meeting speech or admit Voice until upstream provides such a
+supported restriction.
+
+## P28: reject agent promotion and misleading transport-closed Stop
+
+A source audit pinned to
+`openai/codex@faeb379646bdbad016e11f7c9ca91113cad4bc9d`
+confirmed two safety-critical gaps in the previously staged candidate:
+
+1. `clientManagedHandoffs=true` does **not** disable the core
+   `RealtimeEvent::HandoffRequested` → `route_handoffs.route` →
+   `route_realtime_text_input` path. This route can initiate coding-agent
+   turns before TranslateIT sees a promoted item. The existing
+   `RealtimeObserver` now revokes on `bemItemPromoted` in both
+   `item/started` and `item/completed`, and retires the one-flight
+   correlation gate. **Post-event revocation cannot undo agent execution**.
+   Consequently the production Codex Voice route must stay disabled
+   pending a proven upstream pre-execution no-agent/no-tools control.
+2. `thread/realtime/closed` is not always a clean Stop: upstream emits
+   `reason=requested`, `transport_closed` or `error`.
+   `RealtimeObserver` and `RealtimeRpc.observe_closed` now accept
+   only explicit `requested` as a clean closure. Error/transport loss,
+   unknown or missing reason revokes and can never satisfy the existing
+   two-sided Stop proof.
+
+Existing Rust synthetic fixtures cover matching requested close,
+lost/error/missing close, late assistant output and promoted coding
+items; TypeScript source guards track these invariants. Cases are
+**AUTHORED / NOT EXECUTED**. No Tauri command was registered, and no
+provider, local model, network, CI, microphone, media or TTS execution
+occurred. These corrections prevent false safety claims but **do
+not** themselves make Codex Voice a safe translator.
 
 ## P24: WebView2 WebRTC SDP/ICE peer — SOURCE CANDIDATE ONLY
 
@@ -396,16 +429,20 @@ An `UnverifiedPair` can query this evidence without promoting
 it to verified translation. Missing/out-of-order ACK, a source window
 beginning before the first submitted sample, wrong identity and Stop
 all deny the check. This is constant-time and requires no extra
-worker, decoding or audio replay. A successful JSON-RPC ACK means
-the App Server accepted the audio request; it does **not** prove
-model ingestion, transcription fidelity, or the causal relationship
-of the assistant text. The TTS route remains blocked.
+worker, decoding or audio replay. A JSON-RPC ACK proves only that
+the App Server handled the request. In upstream
+`RealtimeConversationManager::audio_in`, a full internal audio queue
+can drop a frame and still return `Ok(())`. Therefore even a
+contiguous series of successful ACKs does **not** prove that all
+source audio reached the model, much less transcription fidelity or
+the causal relationship of assistant text. The TTS route remains blocked.
 
 Upstream `ThreadRealtimeItemContent::TranscriptSegment` still contains
 only `role` and `text`, with no causal link to a specific user item or
-source sample window. Client-managed handoffs prevent automatic
-Codex-agent output relays but are not a proof of tool-free translated
-speech. Do not promote `UnverifiedPair` to GPT-SoVITS.
+source sample window. The client-managed setting only suppresses
+automatic agent-output forwarding; it is not a guarantee that
+an agent turn was never launched. Do not promote `UnverifiedPair`
+to GPT-SoVITS.
 
 The source-only integration now composes the **existing** queue and wire
 encoder: `AudioFrameQueue.pending_state` distinguishes empty from revoked;

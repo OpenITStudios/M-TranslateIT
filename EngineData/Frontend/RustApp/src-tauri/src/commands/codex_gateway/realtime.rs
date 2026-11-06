@@ -189,15 +189,26 @@ impl RealtimeObserver {
                             _ => Err("codex_realtime:session_outcome_invalid"),
                         }
                     }
-                    Some("realtimeSessionStarted" | "bemItemPromoted") => Ok(Observation::Ignored),
+                    Some("realtimeSessionStarted") => Ok(Observation::Ignored),
+                    // Agent item promotion is incompatible with a tool-free
+                    // translation-only session. This detects it after the
+                    // fact, not before the Codex agent may have run.
+                    Some("bemItemPromoted") => Err("codex_realtime:agent_item_promoted"),
                     _ => Err("codex_realtime:item_type_unrecognized"),
                 }
             }
             // Flat transcript/done has no item ID or verified source pairing.
             // Item/delta is likewise provisional and MUST NOT feed TTS.
+            "thread/realtime/item/started" => {
+                let item = params.get("item").and_then(Value::as_object)
+                    .ok_or("codex_realtime:started_item_invalid")?;
+                if item.get("type").and_then(Value::as_str) == Some("bemItemPromoted") {
+                    return Err("codex_realtime:agent_item_promoted");
+                }
+                Ok(Observation::Ignored)
+            }
             "thread/realtime/transcript/delta"
             | "thread/realtime/item/transcript/delta"
-            | "thread/realtime/item/started"
             | "thread/realtime/itemAdded"
             | "thread/realtime/sdp" => Ok(Observation::Ignored),
             "thread/realtime/transcript/done" => {
@@ -207,10 +218,16 @@ impl RealtimeObserver {
                 }
             }
             "thread/realtime/outputAudio/delta" => Ok(Observation::CloudAudioIgnored),
-            "thread/realtime/closed" => {
-                self.revoke();
-                Ok(Observation::Closed)
-            }
+            "thread/realtime/closed" => match params.get("reason").and_then(Value::as_str) {
+                // Upstream reports "requested" only for an intentional Stop.
+                Some("requested") => {
+                    self.revoke();
+                    Ok(Observation::Closed)
+                }
+                Some("error" | "transport_closed") =>
+                    Err("codex_realtime:transport_closed_unverified"),
+                _ => Err("codex_realtime:close_reason_invalid"),
+            },
             "thread/realtime/error" => Err("codex_realtime:remote_error"),
             _ => Err("codex_realtime:unrecognized_event"),
         }
@@ -571,6 +588,63 @@ mod tests {
         assert_eq!(o.observe("thread/realtime/error", &json!({"threadId":"thr_a","message":"private"})),
             Err("codex_realtime:remote_error"));
         assert!(refuse_unadmitted_event("thread/realtime/started").is_err());
+    }
+
+    #[test]
+    fn coding_agent_item_promoted_revokes_realtime_observer() {
+        let promoted = json!({"threadId":"thr_a","item":{
+            "id":"promoted_1", "realtimeSessionId":"sess_a",
+            "type":"bemItemPromoted","turnId":"turn_1",
+            "itemId":"coding_item_1","presentation":{"type":"wholeItem"}
+        }});
+        let mut completed = observer();
+        assert_eq!(
+            completed.observe("thread/realtime/item/completed", &promoted),
+            Err("codex_realtime:agent_item_promoted")
+        );
+        assert_eq!(
+            completed.observe("thread/realtime/item/completed",
+                &item("late","sess_a","assistant","Unsafe late text")),
+            Err("codex_realtime:session_revoked")
+        );
+        let mut started = observer();
+        assert_eq!(
+            started.observe("thread/realtime/item/started", &promoted),
+            Err("codex_realtime:agent_item_promoted")
+        );
+    }
+
+    #[test]
+    fn unrequested_transport_closure_never_claims_clean_stop() {
+        let mut good = observer();
+        assert_eq!(
+            good.observe("thread/realtime/closed",
+                &json!({"threadId":"thr_a","reason":"requested"})),
+            Ok(Observation::Closed)
+        );
+        assert_eq!(
+            good.observe("thread/realtime/closed",
+                &json!({"threadId":"thr_a","reason":"requested"})),
+            Err("codex_realtime:session_revoked")
+        );
+        for reason in ["error", "transport_closed"] {
+            let mut bad = observer();
+            assert_eq!(
+                bad.observe("thread/realtime/closed",
+                    &json!({"threadId":"thr_a","reason":reason})),
+                Err("codex_realtime:transport_closed_unverified")
+            );
+            assert_eq!(
+                bad.observe("thread/realtime/item/completed",
+                    &item("late","sess_a","assistant","Late")),
+                Err("codex_realtime:session_revoked")
+            );
+        }
+        let mut absent = observer();
+        assert_eq!(
+            absent.observe("thread/realtime/closed", &json!({"threadId":"thr_a"})),
+            Err("codex_realtime:close_reason_invalid")
+        );
     }
 
     #[test]

@@ -320,9 +320,10 @@ impl RealtimeRpc {
                 "threadId": self.thread_id,
                 "voiceSessionId": self.voice_session_id,
                 "outputModality": "audio",
-                // Disable automatic Codex coding-agent delegation from speech.
-                // Future translation requires a separately admitted client
-                // action and a supported pre-execution tool restriction.
+                // This suppresses forwarding of Codex agent output, NOT
+                // admission of coding-agent turns: upstream HandoffRequested
+                // still enters route_realtime_text_input. Do not interpret
+                // this flag or the text prompt as a tool-free guarantee.
                 "clientManagedHandoffs": true,
                 "includeStartupContext": false,
                 "initialItems": [],
@@ -428,8 +429,10 @@ impl RealtimeRpc {
 
     /// Necessary, NOT sufficient, evidence that the existing AppServer
     /// acknowledged a contiguous PCM16 range belonging to this exact Meeting
-    /// generation/source epoch. It proves neither model ingestion nor that
-    /// an assistant item is a translation of these samples.
+    /// generation/source epoch. Upstream audio_in() may return Ok even
+    /// when its full bounded queue silently drops a frame; ACKs prove
+    /// request handling only, not media delivery, model ingestion, or
+    /// that an assistant item translates these samples.
     ///
     /// No allocation, decoding or network call: safe to poll after the
     /// provisional pair arrives while later audio ACKs are in flight.
@@ -729,6 +732,12 @@ impl RealtimeRpc {
             self.revoke();
             return Err("codex_wire:duplicate_close");
         }
+        // "transport_closed" and "error" are not successful Stops.
+        // Reject missing/unknown reasons too, even after a valid Stop ACK.
+        if params.get("reason").and_then(Value::as_str) != Some("requested") {
+            self.revoke();
+            return Err("codex_wire:remote_close_not_requested");
+        }
         self.remote_closed = true;
         self.try_finish();
         Ok(())
@@ -884,7 +893,7 @@ mod tests {
             Err("codex_wire:audio_not_live")
         );
         stopped.ack_stop(15, &json!({})).unwrap();
-        stopped.observe_closed(&json!({"threadId":"thread_1"})).unwrap();
+        stopped.observe_closed(&json!({"threadId":"thread_1","reason":"requested"})).unwrap();
         assert!(stopped.close_verified());
     }
 
@@ -1152,6 +1161,29 @@ mod tests {
     }
 
     #[test]
+    fn remote_error_or_missing_reason_cannot_complete_clean_stop() {
+        for reason in ["error", "transport_closed", "unexpected"] {
+            let mut session = live();
+            session.prepare_stop(15).unwrap();
+            session.ack_stop(15, &json!({})).unwrap();
+            assert_eq!(
+                session.observe_closed(&json!({"threadId":"thread_1","reason":reason})),
+                Err("codex_wire:remote_close_not_requested")
+            );
+            assert!(!session.close_verified());
+            assert_eq!(session.phase(), Phase::Revoked);
+        }
+        let mut missing = live();
+        missing.prepare_stop(15).unwrap();
+        missing.ack_stop(15, &json!({})).unwrap();
+        assert_eq!(
+            missing.observe_closed(&json!({"threadId":"thread_1"})),
+            Err("codex_wire:remote_close_not_requested")
+        );
+        assert!(!missing.close_verified());
+    }
+
+    #[test]
     fn stop_requires_both_rpc_ack_and_remote_close() {
         let mut session = live();
         let stop = session.prepare_stop(15).unwrap();
@@ -1162,7 +1194,7 @@ mod tests {
             session.prepare_stop(16),
             Err("codex_wire:stop_already_sent")
         );
-        session.observe_closed(&json!({"threadId":"thread_1"})).unwrap();
+        session.observe_closed(&json!({"threadId":"thread_1","reason":"requested"})).unwrap();
         assert!(!session.close_verified());
         session.ack_stop(15, &json!({})).unwrap();
         assert!(session.close_verified());
@@ -1184,7 +1216,7 @@ mod tests {
         assert_eq!(session.phase(), Phase::StopPending);
         assert!(!session.can_enqueue_audio(&stop));
         session.ack_stop(15, &json!({})).unwrap();
-        session.observe_closed(&json!({"threadId":"thread_1"})).unwrap();
+        session.observe_closed(&json!({"threadId":"thread_1","reason":"requested"})).unwrap();
         assert!(session.close_verified());
     }
 }
