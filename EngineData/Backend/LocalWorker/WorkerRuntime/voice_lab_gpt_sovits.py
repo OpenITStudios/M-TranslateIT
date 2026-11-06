@@ -380,6 +380,14 @@ def create_tts_runtime(
 
 
 def english_sentence_cardinals(text: str) -> str:
+    # Pinned upstream CamelCase normalization splits PyTorch into "Py Torch".
+    # "Py" then relies on dictionary/OOV fallback instead of the established
+    # spoken name. Limit the correction to this standalone framework name.
+    text = re.sub(
+        r"(?<![\w./:+#=@?&%-])PyTorch(?![\w/+:=#@?&%-]|\.[A-Za-z0-9_])",
+        "pie torch",
+        text,
+    )
     # Pinned upstream English normalization removes '+' and '#', collapsing
     # the standalone programming-language names C++/C# to a plain C.
     # Do not rewrite URI/code/identifier components or adjacent version tokens.
