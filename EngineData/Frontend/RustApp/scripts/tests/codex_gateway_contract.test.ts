@@ -389,6 +389,11 @@ test("Codex TTS-only hook does not route through Local ASR/MT", () => {
   assert.doesNotMatch(only, /"asr_preload"|"transcribe"|"translate"|"translation_preload"/);
   assert.doesNotMatch(only, /\.provider_ready\s*(?:==|&&|\|\|)/);
   assert.match(helperProbe, /fn codex_voice_only_receipt_rejects_foreign_actor_path_or_stage/);
+  assert.match(helperProbe, /fn voice_only_probe_path_matches\(/);
+  assert.match(helperProbe, /fs::canonicalize\(requested\)/);
+  assert.match(helperProbe, /fs::canonicalize\(candidate\)/);
+  assert.match(helperProbe, /fn codex_voice_only_windows_reported_separators_match_same_wav/);
+  assert.doesNotMatch(helperProbe, /Path::new\(path\) == expected_path/);
   assert.match(realtime, /assert_eq!\(combined\.len\(\), 5\)/);
   assert.match(gateway, /meeting_route_enabled: false/);
 });

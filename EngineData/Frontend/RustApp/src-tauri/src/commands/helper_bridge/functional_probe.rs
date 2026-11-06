@@ -221,6 +221,25 @@ pub(super) fn run_codex_voice_only_probe(
     Ok((helper_generation, token))
 }
 
+/// Compare file identity rather than Rust/Python path spelling. On Windows
+/// ProjectPaths emits forward slashes while Python Path.resolve() reports
+/// native separators. Reject missing, relative or symlinked files.
+fn voice_only_probe_path_matches(reported: &str, requested: &Path) -> bool {
+    let candidate = Path::new(reported);
+    if !candidate.is_absolute() || !requested.is_absolute()
+        || !fs::symlink_metadata(requested)
+            .is_ok_and(|meta| meta.file_type().is_file())
+        || !fs::symlink_metadata(candidate)
+            .is_ok_and(|meta| meta.file_type().is_file())
+    {
+        return false;
+    }
+    match (fs::canonicalize(requested), fs::canonicalize(candidate)) {
+        (Ok(expected), Ok(actual)) => expected == actual,
+        _ => false,
+    }
+}
+
 /// A receipt alone cannot establish sound quality or semantic correctness.
 fn voice_only_receipt_matches(
     response: &super::HelperBridgeWorkerResponse, token: &str, expected_path: &Path
@@ -230,7 +249,7 @@ fn voice_only_receipt_matches(
         && body.get("stage").and_then(Value::as_str) == Some("voice_actor_synthesize")
         && body.get("actor_token").and_then(Value::as_str) == Some(token)
         && body.get("output_path").and_then(Value::as_str)
-            .is_some_and(|path| Path::new(path) == expected_path)
+            .is_some_and(|path| voice_only_probe_path_matches(path, expected_path))
 }
 
 /// Minimum WAV signature only, never a claim of audible/verified output.
@@ -259,7 +278,10 @@ mod tests {
 
     #[test]
     fn codex_voice_only_receipt_rejects_foreign_actor_path_or_stage() {
-        let path = super::Path::new("C:/user/cache/codex_voice_only.wav");
+        let path = temp_path("codex-requested");
+        let foreign_path = temp_path("codex-foreign");
+        fs::write(&path, b"owned fixture").expect("write requested fixture");
+        fs::write(&foreign_path, b"foreign fixture").expect("write foreign fixture");
         let response = |actor: &str, reported: &str, stage: &str| super::super::HelperBridgeWorkerResponse {
             ok: true, state: "ready".into(), task: "voice_actor_synthesize".into(),
             request_id: "test".into(), scheduler_priority: "meeting_outbound".into(),
@@ -268,11 +290,42 @@ mod tests {
                 "actor_token":actor, "output_path":reported, "stage":stage
             }).to_string(),
         };
-        let expected = "C:/user/cache/codex_voice_only.wav";
-        assert!(super::voice_only_receipt_matches(&response("actor",expected,"voice_actor_synthesize"),"actor",path));
-        assert!(!super::voice_only_receipt_matches(&response("other",expected,"voice_actor_synthesize"),"actor",path));
-        assert!(!super::voice_only_receipt_matches(&response("actor","C:/foreign.wav","voice_actor_synthesize"),"actor",path));
-        assert!(!super::voice_only_receipt_matches(&response("actor",expected,"transcribe"),"actor",path));
+        let requested = path.to_string_lossy().into_owned();
+        let foreign = foreign_path.to_string_lossy().into_owned();
+        assert!(super::voice_only_receipt_matches(
+            &response("actor", &requested, "voice_actor_synthesize"), "actor", &path
+        ));
+        assert!(!super::voice_only_receipt_matches(
+            &response("other", &requested, "voice_actor_synthesize"), "actor", &path
+        ));
+        assert!(!super::voice_only_receipt_matches(
+            &response("actor", &foreign, "voice_actor_synthesize"), "actor", &path
+        ));
+        assert!(!super::voice_only_receipt_matches(
+            &response("actor", "relative_voice.wav", "voice_actor_synthesize"), "actor", &path
+        ));
+        assert!(!super::voice_only_receipt_matches(
+            &response("actor", &requested, "transcribe"), "actor", &path
+        ));
+        fs::remove_file(&path).expect("remove requested fixture");
+        fs::remove_file(&foreign_path).expect("remove foreign fixture");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn codex_voice_only_windows_reported_separators_match_same_wav() {
+        let path = temp_path("codex-windows-path");
+        fs::write(&path, b"owned fixture").expect("write fixture");
+        let native = path.to_string_lossy().into_owned();
+        let slash = native.replace('\\', "/");
+        let canonical = fs::canonicalize(&path).expect("canonical WAV");
+        assert!(super::voice_only_probe_path_matches(&native, &path));
+        assert!(super::voice_only_probe_path_matches(&slash, &path));
+        assert!(super::voice_only_probe_path_matches(
+            canonical.to_string_lossy().as_ref(), &path
+        ));
+        fs::remove_file(&path).expect("remove requested fixture");
+        assert!(!super::voice_only_probe_path_matches(&native, &path));
     }
 
     #[test]

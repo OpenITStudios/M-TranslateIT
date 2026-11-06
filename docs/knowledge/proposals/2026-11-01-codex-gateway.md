@@ -239,6 +239,14 @@ and requested output path, checks a minimal RIFF/WAVE header and removes
 only that owned fixture file. It explicitly does **not** call
 `asr_preload`, `transcribe`, `translation_preload` or `translate`;
 the full Local ASR/MiLMMT/TTS readiness cache is not overwritten.
+The pre-test Windows interoperability repair now verifies the reported
+WAV by canonical filesystem identity rather than raw path spelling:
+Rust ProjectPaths publishes forward slashes while Python Path.resolve()
+may report backslashes. Both must point at the same existing, regular,
+non-symlinked file. Missing/relative/foreign paths fail; cleanup only
+targets the fixed request path, never the worker-reported path.
+A Windows separator regression is AUTHORED / NOT EXECUTED; no voice
+quality or target runtime claim is made.
 The helper entrypoint checks that Codex is the selected engine.
 This is not wired to a production Codex Meeting Start; synthesized
 voice quality and native runtime behavior remain unverified.
