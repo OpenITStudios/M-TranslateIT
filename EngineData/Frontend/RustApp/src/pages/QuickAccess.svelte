@@ -9,6 +9,7 @@
     hideQuickAccess, openTranslateIt, captionWindowIsVisible, changeCaptionVisibility,
   } from "../app/runtime/quickAccessRuntime";
   import { APPLICATION_MEETING_OWNER_ID } from "../app/shared/types";
+  import { MEETING_SOURCE_LABELS } from "../components/ui/meetingSourceLabels";
 
   type Source = "original" | "translateit";
   let snapshot = $state<ApplicationSnapshot | null>(null);
@@ -41,18 +42,33 @@
     && meeting.lifecycle !== "unavailable"
     && meeting.runtime_claim !== "frontend_bridge_unavailable"
     && ((meeting.has_session && owned) || needsStop)));
-  const sourceLabel = $derived(live
-    ? meeting?.audio_source === "original" ? "Original Voice" : "TranslateIT Voice"
-    : "No active source");
-  const statusLabel = $derived(
-    !snapshot || snapshot.revision <= 0 ? "Checking microphone..."
-    : live && meeting?.muted ? "Microphone Muted"
-    : needsStop ? "Recovery required"
-    : stopping ? "Meeting is changing state"
-    : foreignOwner ? "Microphone in use"
-    : meeting?.lifecycle === "unavailable" ? "Status unavailable"
-    : live ? "Microphone Live"
-    : "Microphone stopped"
+  const sourceLabel = $derived(
+    !snapshot || snapshot.revision <= 0 || !meeting ? "Source unavailable"
+      : meeting.audio_source === "original" ? MEETING_SOURCE_LABELS.original
+      : meeting.audio_source === "translateit" ? MEETING_SOURCE_LABELS.translateit
+      : "Source unavailable"
+  );
+  const sourceSummary = $derived(
+    live || canSelectSource ? `${live ? "Active" : "Selected"}: ${sourceLabel}` : "Audio source status unavailable"
+  );
+  // Presentation only: the native snapshot remains the source of Meeting truth.
+  const statusPresentation = $derived.by((): { label: string; tone: "good" | "warning" | "danger" | "neutral" } => {
+    if (!snapshot || snapshot.revision <= 0 || !meeting) return { label: "Checking", tone: "neutral" };
+    if (needsStop) return { label: "Stop Needed", tone: "warning" };
+    if (meeting.lifecycle === "unavailable" || meeting.runtime_claim === "frontend_bridge_unavailable") return { label: "Unavailable", tone: "danger" };
+    if (stopping) return { label: meeting.lifecycle === "starting" ? "Starting" : "Stopping", tone: "neutral" };
+    if (foreignOwner) return { label: "In Use", tone: "neutral" };
+    if (live) return { label: meeting.muted ? "Muted" : "Live", tone: meeting.muted ? "neutral" : "good" };
+    if (canStart) return { label: "Ready", tone: "good" };
+    if (meeting.lifecycle === "idle" && !meeting.has_session) return { label: "Setup Needed", tone: "warning" };
+    return { label: "Check Status", tone: "warning" };
+  });
+  const statusLabel = $derived(statusPresentation.label);
+  const statusDotClass = $derived(
+    statusPresentation.tone === "good" ? "bg-[var(--ti-success)]"
+      : statusPresentation.tone === "warning" ? "bg-[var(--ti-warning)]"
+      : statusPresentation.tone === "danger" ? "bg-[var(--ti-danger)]"
+      : "bg-[var(--ti-text-soft)]"
   );
 
   function syncFromNative(next: ApplicationSnapshot): void {
@@ -120,14 +136,14 @@
       const actual = snapshot?.meeting ?? native.meeting;
       if (!result?.ok || actual.audio_source !== requested
         || (live ? actual.lifecycle !== "live" : actual.lifecycle !== "idle")) {
-        errorMessage = result?.message ?? "Could not confirm the selected voice source.";
+        errorMessage = result?.message ?? "Could not confirm the selected audio source.";
         resultMessage = "";
       } else {
-        resultMessage = requested === "original" ? "Original Voice selected." : "TranslateIT Voice selected.";
+        resultMessage = `${MEETING_SOURCE_LABELS[requested]} selected.`;
         closeAfterSuccess();
       }
     } catch {
-      errorMessage = "Voice source could not be verified. Check the current Meeting status.";
+      errorMessage = "Audio source could not be verified. Check the current Meeting status.";
       resultMessage = "";
     } finally { busy = false; }
   }
@@ -288,31 +304,31 @@
 
     <div class="qa-section">
       <div class="flex items-center gap-2">
-        <span class={"size-2 rounded-full " + (needsStop ? "bg-[var(--ti-warning)]" : live && !busy ? "bg-[var(--ti-success)]" : "bg-[var(--ti-text-soft)]")} aria-hidden="true"></span>
+        <span class={`size-2 shrink-0 rounded-full ${statusDotClass}`} aria-hidden="true"></span>
         <div class="min-w-0 flex-1">
           <p class="m-0 text-[13px] font-semibold" role="status" aria-live="polite">{statusLabel}</p>
-          <p class="m-0 mt-1 text-[11px] text-[var(--ti-text-muted)]">{sourceLabel} · Virtual Meeting Microphone</p>
+          <p class="m-0 mt-1 text-[12px] leading-5 text-[var(--ti-text-muted)]">{sourceSummary}</p>
         </div>
       </div>
     </div>
 
     <div class="qa-section">
-      <p class="m-0 mb-3 text-[10px] font-semibold tracking-wide text-[var(--ti-text-muted)]">VOICE SOURCE</p>
+      <p class="m-0 mb-3 text-[12px] font-semibold text-[var(--ti-text-muted)]">Audio sent to meeting</p>
       <div class="grid grid-cols-2 gap-2">
         <button type="button" class="qa-choice" aria-pressed={choice === "original"}
           disabled={busy || !canSelectSource || !snapshot || snapshot.revision <= 0}
           onclick={() => void selectSource("original")}>
           <Mic size={18} aria-hidden="true" />
-          <span>Original Voice</span>
+          <span>{MEETING_SOURCE_LABELS.original}</span>
         </button>
         <button type="button" class="qa-choice" aria-pressed={choice === "translateit"}
           disabled={busy || !canSelectSource || !snapshot || snapshot.revision <= 0}
           onclick={() => void selectSource("translateit")}>
           <Languages size={18} aria-hidden="true" />
-          <span>TranslateIT Voice</span>
+          <span>{MEETING_SOURCE_LABELS.translateit}</span>
         </button>
       </div>
-      <p class="qa-feedback mt-2">{choice === "original" ? "Direct microphone · No AI" : "English translation · AI required"}</p>
+      <p class="qa-feedback mt-2">{choice === "original" ? "Direct microphone · No translation" : "Indonesian → English · Translation required"}</p>
     </div>
 
     <div class="qa-section flex items-center justify-between gap-3">
@@ -373,6 +389,7 @@
         </div>
       {:else}
         <button type="button" class={"ti-button min-h-9 px-3 text-xs " + (canStop ? "ti-button-danger" : "")}
+          aria-label={canStop ? needsStop ? "Retry Stop" : "Stop microphone" : choice === "original" ? "Start Original Microphone" : "Start Translation"}
           disabled={busy || (!canStart && !canStop)}
           onclick={() => void meetingAction()}>
           {#if canStop}<Square size={13} aria-hidden="true" /> {needsStop ? "Retry Stop" : "Stop"}

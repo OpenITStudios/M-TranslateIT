@@ -14,28 +14,28 @@ html.ti-quick-access-document body { user-select: none; }
 .qa-panel {
   display: flex; flex-direction: column; min-height: 0; height: 100%;
   overflow: hidden; border: 1px solid var(--ti-border-strong);
-  border-radius: 16px; background: var(--ti-surface-raised);
+  border-radius: var(--ti-radius-lg); background: var(--ti-surface-raised);
   color: var(--ti-text); box-shadow: 0 16px 44px rgb(0 0 0 / 0.3);
 }
 .qa-section { padding: 12px 17px; border-top: 1px solid var(--ti-border); }
 .qa-choice {
   display: grid; align-content: center; justify-items: center;
-  gap: 6px; min-height: 77px; padding: 10px 6px; border-radius: 11px;
+  gap: 6px; min-height: 72px; padding: 10px 6px; border-radius: var(--ti-radius-md);
   border: 1px solid var(--ti-border-strong); background: var(--ti-surface);
-  color: var(--ti-text); font-size: 12px; font-weight: 600;
+  color: var(--ti-text); font-size: 13px; font-weight: 600;
 }
-.qa-choice:hover:not(:disabled) { border-color: var(--ti-accent); }
+.qa-choice:hover:not(:disabled) { border-color: var(--ti-border-strong); background: var(--ti-surface-hover); }
 .qa-choice[aria-pressed="true"] {
-  background: var(--ti-accent-soft, var(--ti-surface-soft));
-  border-color: var(--ti-accent); color: var(--ti-text);
+  background: var(--ti-surface-hover);
+  border-color: var(--ti-brand); color: var(--ti-text);
 }
 .qa-choice:disabled { opacity: 0.48; }
 .qa-caption-toggle {
-  min-height: 34px; min-width: 62px; border: 1px solid var(--ti-border-strong);
+  min-height: 40px; min-width: 62px; border: 1px solid var(--ti-border-strong);
   border-radius: 8px; background: var(--ti-surface-soft); font-size: 12px;
   font-weight: 650; padding: 6px 10px;
 }
-.qa-caption-toggle[aria-checked="true"] { border-color: var(--ti-accent); }
+.qa-caption-toggle[aria-checked="true"] { border-color: var(--ti-brand); }
 .qa-panel button:focus-visible { outline: 2px solid var(--ti-accent); outline-offset: 2px; }
-.qa-feedback { margin: 0; font-size: 11px; line-height: 1.4; color: var(--ti-text-muted); }
+.qa-feedback { margin: 0; font-size: 12px; line-height: 1.5; color: var(--ti-text-muted); }
 .qa-error { color: var(--ti-danger, #c04444); }

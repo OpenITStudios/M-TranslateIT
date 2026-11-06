@@ -10,6 +10,8 @@ const main = source("src/main.ts");
 const popup = source("src/pages/QuickAccess.svelte");
 const app = source("src/App.svelte");
 const header = source("src/components/layout/AppHeader.svelte");
+const meetingPage = source("src/pages/Meeting.svelte");
+const sourceLabels = source("src/components/ui/meetingSourceLabels.ts");
 
 test("Quick Access is one on-demand popup reached by header, keyboard and native tray", () => {
   assert.equal(config.app.windows.filter((window: { label: string }) => window.label === "quick-access").length, 1);
@@ -33,13 +35,31 @@ test("Quick Access is meeting-first and old command palette is gone", () => {
   ]) {
     assert.equal(existsSync(new URL(file, root)), false, file);
   }
-  assert.match(popup, /Original Voice/);
-  assert.match(popup, /TranslateIT Voice/);
+  assert.match(sourceLabels, /original: "Original Microphone"/);
+  assert.match(sourceLabels, /translateit: "TranslateIT Audio"/);
+  assert.match(popup, /MEETING_SOURCE_LABELS\.original/);
+  assert.match(popup, /MEETING_SOURCE_LABELS\.translateit/);
+  assert.match(meetingPage, /MEETING_SOURCE_LABELS\.original/);
+  assert.match(meetingPage, /MEETING_SOURCE_LABELS\.translateit/);
   assert.match(popup, /Floating Captions/);
   assert.match(popup, /Confirm Stop/);
   assert.doesNotMatch(popup, /Search tools and settings|Favorites|My Voice|Text Translation/);
   assert.match(popup, /runtimeApi\.selectMeetingAudioSource/);
   assert.match(popup, /applicationRuntimeApi\.dispatchIntent/);
+});
+
+test("Meeting and Quick Access present native-derived ready, live, mute and recovery truth", () => {
+  assert.match(popup, /statusPresentation = \$derived\.by/);
+  for (const state of ['label: "Ready"', 'label: "Live"', 'label: "Muted"', 'label: "Setup Needed"', 'label: "Stop Needed"', 'label: "Unavailable"']) {
+    assert.ok(popup.includes(state), state);
+  }
+  assert.match(popup, /meeting\.muted \? "Muted" : "Live"/);
+  assert.match(popup, /canStart\) return \{ label: "Ready"/);
+  assert.match(popup, /Audio sent to meeting/);
+  assert.match(popup, /\{sourceSummary\}/);
+  assert.match(meetingPage, /readyForSelectedSource/);
+  assert.match(meetingPage, /meeting\.live && meetingStatus\?\.muted \? "Muted"/);
+  assert.match(meetingPage, /for="meeting-audio-source" class="ti-field-label">Audio sent to meeting/);
 });
 
 test("Dismissing Quick Access does not end Meeting; app exit destroys its window", () => {

@@ -7,6 +7,7 @@
   import MeetingSessionReview from "../components/meeting/MeetingSessionReview.svelte";
   import MeetingTranscriptExport from "../components/meeting/MeetingTranscriptExport.svelte";
   import StatusBadge from "../components/ui/StatusBadge.svelte";
+  import { MEETING_SOURCE_LABELS } from "../components/ui/meetingSourceLabels";
 
   let { snapshot, meetingStatus, meetingTurns, actionBusy = false, onMeetingAction, onRefresh, onNavigate }: {
     snapshot: ProductRuntimeSnapshot;
@@ -97,6 +98,8 @@
     && snapshot.readiness.microphoneReady === true
     && snapshot.readiness.meetingRouteReady === true
   );
+  const readyForSelectedSource = $derived(!meeting.hasSession && meeting.lifecycle === "idle"
+    && (currentSource === "original" ? originalAvailable : meeting.canStart && !needsSetup && !needsVoice));
   const actionEnabled = $derived(!resumeBusy && !sourceChanging && !meeting.busy && !actionBusy
     && (primaryControl.enabled || originalAvailable || needsSetup || needsVoice || needsSettings));
   const activityVisible = $derived(Boolean(meetingStatus && meeting.applicationOwned && meeting.live));
@@ -120,7 +123,9 @@
           ? "Original microphone is live. Audio bypasses translation and AI."
           : meeting.message
     : currentSource === "original"
-      ? "Original microphone sends your own voice directly to the meeting."
+      ? originalAvailable
+        ? "Original Microphone is ready. Select the virtual microphone in your calling app."
+        : "Original Microphone needs a working microphone and virtual route. Check Voice & Audio in Settings."
     : snapshot.settings.meeting_setup_state === "deferred" || snapshot.settings.meeting_setup_state === "new"
       ? "Finish initial setup before starting."
     : snapshot.readiness.level === "unavailable"
@@ -135,10 +140,16 @@
       ? "Ready to translate. Start when your call is open."
       : "Checking translation readiness. If this persists, open Help in Settings."
   );
+  const statusLabel = $derived(
+    meeting.live && meetingStatus?.muted ? "Muted"
+      : readyForSelectedSource ? "Ready" : meeting.label
+  );
   const statusTone = $derived<"good" | "warning" | "danger" | "neutral">(
     meeting.lifecycle === "cleanup_incomplete" ? "warning"
-      : meeting.live || snapshot.readiness.meetingReady && !meeting.hasSession && !needsSetup ? "good"
-      : snapshot.readiness.level === "unavailable" ? "danger" : "neutral"
+      : meeting.live && meetingStatus?.muted ? "neutral"
+      : meeting.live || readyForSelectedSource ? "good"
+      : meeting.lifecycle === "unavailable" || snapshot.readiness.level === "unavailable" ? "danger"
+      : needsSetup || needsVoice || needsSettings ? "warning" : "neutral"
   );
 </script>
 
@@ -153,10 +164,10 @@
   <article class="ti-panel overflow-hidden">
     <div class="flex items-start justify-between gap-4 px-6 py-5">
       <div class="min-w-0">
-        <strong class="text-[15px] font-semibold">{meeting.live && meetingStatus?.audio_source === "original" ? "Original microphone is on" : meeting.live ? "Translation session active" : "Meeting audio"}</strong>
+        <strong class="text-[15px] font-semibold">{meeting.live && meetingStatus?.audio_source === "original" ? MEETING_SOURCE_LABELS.original : meeting.live && meetingStatus?.audio_source === "translateit" ? MEETING_SOURCE_LABELS.translateit : "Meeting audio"}</strong>
         <p class="mb-0 mt-2 text-[13px] leading-6 text-[var(--ti-text-muted)]" aria-live="polite">{statusMessage}</p>
       </div>
-      <StatusBadge label={meeting.live ? "Live" : meeting.label} tone={statusTone} />
+      <StatusBadge label={statusLabel} tone={statusTone} />
     </div>
     <footer class="flex justify-end border-t border-[var(--ti-border)] px-6 py-4" aria-label="Meeting main action">
       <button type="button" class={"ti-button min-w-44 " + (primaryControl.action === "stop" ? "ti-button-danger" : "")}
@@ -164,13 +175,13 @@
     </footer>
     {#if sourceChangeAllowed && meetingStatus}
       <div class="border-t border-[var(--ti-border)] px-6 py-4">
-        <label for="meeting-audio-source" class="ti-field-label">Microphone output</label>
+        <label for="meeting-audio-source" class="ti-field-label">Audio sent to meeting</label>
         <select id="meeting-audio-source" class="ti-field mt-2 min-h-11 px-3"
           value={currentSource} disabled={sourceChanging || actionBusy || !sourceChangeAllowed}
           onchange={(event) => void selectSource(event.currentTarget.value === "original" ? "original" : "translateit")}
         >
-          <option value="translateit">TranslateIT Audio</option>
-          <option value="original">Original Microphone</option>
+          <option value="translateit">{MEETING_SOURCE_LABELS.translateit}</option>
+          <option value="original">{MEETING_SOURCE_LABELS.original}</option>
         </select>
         <p class="mb-0 mt-2 text-xs text-[var(--ti-text-muted)]">
           Both options use the same virtual microphone selected in your calling app.
