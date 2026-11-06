@@ -415,6 +415,9 @@ test("Codex realtime control uses the SAME owned JSONL writer/reader, with typed
   assert.match(transport, /fn separate_writer_limits_preserve_diagnostics_and_realtime_pcm/);
   assert.match(transport, /fn owned_realtime_dispatch_rejects_unowned_response_and_unrelated_events/);
   assert.match(realtimeRpc, /fn validate_for_transport\(/);
+  assert.match(realtimeRpc, /fn pcm16_base64_is_canonical\(/);
+  assert.match(realtimeRpc, /fn pcm16_base64_rejects_noncanonical_bits_wrong_count_and_bad_alphabet/);
+  assert.match(realtimeRpc, /fn typed_audio_frame_rechecks_pcm16_base64_after_encoding/);
   assert.match(realtimeRpc, /fn wire_transport_budget_accepts_pcm_frame_but_rejects_forged_rpc/);
   assert.match(realtimeRpc, /codex_wire:transport_frame_mismatch/);
   assert.doesNotMatch(protocol, /"thread\/realtime\/start" \|/);

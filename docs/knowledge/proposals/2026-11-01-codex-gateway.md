@@ -363,6 +363,28 @@ cancellation and close cases are **AUTHORED / NOT EXECUTED**.
 Actual build, WebView, ICE, account/Voice, microphone and latency
 proof remain UNKNOWN.
 
+A follow-up source audit of the upstream `thread/realtime/appendAudio`
+contract confirms that the Codex AppServer accepts a typed
+`ThreadRealtimeAudioChunk` and forwards its PCM input to the realtime
+sideband. This establishes a supported **control-plane audio submission**
+shape, not compatibility of the current WebView `recvonly` SDP, successful
+network/ICE negotiation or actual transcribed output.
+
+The source audio admission also now uses one canonical,
+allocation-free PCM16 Base64 validator in
+`codex_gateway/realtime_rpc.rs`. Both `send_audio` and
+`RpcFrame.validate_for_transport` check the exact 2-byte sample
+count, Base64 alphabet, padding and unused trailing bits. A forged
+frame cannot exploit the larger 24-KiB writer budget with malformed
+PCM. This replaces inconsistent length-only verification. Synthetic
+Rust/TS cases are AUTHORED / NOT EXECUTED, and no data was uploaded.
+
+Upstream `ThreadRealtimeItemContent::TranscriptSegment` still contains
+only `role` and `text`, with no causal link to a specific user item or
+source sample window. Client-managed handoffs prevent automatic
+Codex-agent output relays but are not a proof of tool-free translated
+speech. Do not promote `UnverifiedPair` to GPT-SoVITS.
+
 The source-only integration now composes the **existing** queue and wire
 encoder: `AudioFrameQueue.pending_state` distinguishes empty from revoked;
 `RealtimeRpc.send_queued_audio` checks generation/source epoch, cancellation,

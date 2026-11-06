@@ -54,6 +54,46 @@ impl std::fmt::Debug for RpcFrame {
     }
 }
 
+/// Single PCM16/mono/24-kHz Base64 contract for both the audio encoder
+/// and the larger typed AppServer writer boundary. Exact byte count,
+/// padding and unused trailing bits are checked without decoding or copying
+/// private microphone data. Noncanonical Base64 must never reach Codex.
+fn pcm16_base64_is_canonical(data: &str, count: u64) -> bool {
+    if !(1..=AUDIO_MAX_SAMPLES).contains(&count) {
+        return false;
+    }
+    let decoded_len = count * 2; // checked count bound: <= 9,600
+    let expected_len = ((decoded_len + 2) / 3) * 4;
+    if data.len() as u64 != expected_len {
+        return false;
+    }
+    let padding = match decoded_len % 3 {
+        0 => 0usize,
+        1 => 2usize,
+        _ => 1usize,
+    };
+    let payload_end = data.len() - padding;
+    let bytes = data.as_bytes();
+    let mut last_sextet = 0u8;
+    for &byte in &bytes[..payload_end] {
+        last_sextet = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return false,
+        };
+    }
+    bytes[payload_end..].iter().all(|byte| *byte == b'=')
+        && match padding {
+            0 => true,
+            1 => last_sextet & 0b11 == 0,
+            2 => last_sextet & 0b1111 == 0,
+            _ => false,
+        }
+}
+
 impl RpcFrame {
     /// Reject forged or mismatched typed envelopes before the larger JSONL
     /// writer budget can be used. Account RPCs retain the 8-KiB gate.
@@ -109,9 +149,10 @@ impl RpcFrame {
                             && audio.get("numChannels").and_then(Value::as_u64) == Some(1)
                             && audio.get("itemId").is_some_and(Value::is_null)
                             && audio.get("samplesPerChannel").and_then(Value::as_u64)
-                                .is_some_and(|n| (1..=AUDIO_MAX_SAMPLES).contains(&n))
-                            && audio.get("data").and_then(Value::as_str)
-                                .is_some_and(|data| !data.is_empty() && data.len() <= 12_800)
+                                .is_some_and(|count| {
+                                    audio.get("data").and_then(Value::as_str)
+                                        .is_some_and(|data| pcm16_base64_is_canonical(data, count))
+                                })
                     })
             }
             "thread/realtime/stop" => params.len() == 1,
@@ -492,21 +533,10 @@ impl RealtimeRpc {
             self.revoke();
             return Err("codex_wire:audio_data_missing");
         };
-        let expected_len = ((count * 2 + 2) / 3) * 4;
-        let expected_padding = match (count * 2) % 3 {
-            0 => 0,
-            1 => 2,
-            _ => 1,
-        };
-        let unpadded_len = data.len().saturating_sub(expected_padding);
         let valid_payload = audio.get("sampleRate").and_then(Value::as_u64) == Some(AUDIO_RATE)
             && audio.get("numChannels").and_then(Value::as_u64) == Some(1)
             && audio.get("itemId").is_some_and(Value::is_null)
-            && data.len() as u64 == expected_len
-            && data.as_bytes()[..unpadded_len].iter().all(|b| {
-                b.is_ascii_alphanumeric() || matches!(*b, b'+' | b'/')
-            })
-            && data.as_bytes()[unpadded_len..].iter().all(|b| *b == b'=');
+            && pcm16_base64_is_canonical(data, count);
         if !valid_payload {
             self.revoke();
             return Err("codex_wire:audio_format_invalid");
@@ -825,6 +855,56 @@ mod tests {
         stopped.ack_stop(15, &json!({})).unwrap();
         stopped.observe_closed(&json!({"threadId":"thread_1"})).unwrap();
         assert!(stopped.close_verified());
+    }
+
+    #[test]
+    fn pcm16_base64_rejects_noncanonical_bits_wrong_count_and_bad_alphabet() {
+        assert!(pcm16_base64_is_canonical("AAA=", 1));
+        assert!(pcm16_base64_is_canonical("AAAAAA==", 2));
+        assert!(pcm16_base64_is_canonical("AAAAAAAA", 3));
+        assert!(!pcm16_base64_is_canonical("AAB=", 1)); // hidden nonzero padding bits
+        assert!(!pcm16_base64_is_canonical("AAAAAB==", 2));
+        assert!(!pcm16_base64_is_canonical("AA=A", 1));
+        assert!(!pcm16_base64_is_canonical("AA==", 1));
+        assert!(!pcm16_base64_is_canonical("!!!!", 1));
+        assert!(!pcm16_base64_is_canonical("AAA=", 2));
+        assert!(!pcm16_base64_is_canonical("AAA=", 0));
+        assert!(!pcm16_base64_is_canonical("AAA=", AUDIO_MAX_SAMPLES + 1));
+    }
+
+    #[test]
+    fn typed_audio_frame_rechecks_pcm16_base64_after_encoding() {
+        let stopped = AtomicBool::new(false);
+        let mut rpc = live();
+        let mut queue = AudioFrameQueue::default();
+        queue.push(0, &[0]).unwrap();
+        let frame = rpc.send_queued_audio(11, 7, 2, &mut queue, &stopped)
+            .unwrap().expect("one queued frame");
+        assert_eq!(frame.validate_for_transport(), Ok(AUDIO_MAX_BYTES));
+
+        let mut altered: Value =
+            serde_json::from_slice(&frame.bytes[..frame.bytes.len() - 1]).unwrap();
+        altered["params"]["audio"]["data"] = json!("AAB=");
+        let mut corrupted = serde_json::to_vec(&altered).unwrap();
+        corrupted.push(b'\n');
+        let forged = RpcFrame {
+            id: frame.id, method: frame.method, bytes: corrupted,
+        };
+        assert_eq!(
+            forged.validate_for_transport(),
+            Err("codex_wire:transport_params_invalid")
+        );
+        altered["params"]["audio"]["data"] = json!("AAA=");
+        altered["params"]["audio"]["samplesPerChannel"] = json!(2);
+        let mut corrupted = serde_json::to_vec(&altered).unwrap();
+        corrupted.push(b'\n');
+        let forged = RpcFrame {
+            id: frame.id, method: frame.method, bytes: corrupted,
+        };
+        assert_eq!(
+            forged.validate_for_transport(),
+            Err("codex_wire:transport_params_invalid")
+        );
     }
 
     #[test]
