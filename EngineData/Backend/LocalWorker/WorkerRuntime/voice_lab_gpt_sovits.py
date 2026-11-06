@@ -380,6 +380,22 @@ def create_tts_runtime(
 
 
 def english_sentence_cardinals(text: str) -> str:
+    # The pinned upstream cut1 can split dotted code names; its English
+    # normalizer removes '/', which can fuse "HTTP/2" after number expansion.
+    # Expand only unambiguous protocol/method tokens for speech, not
+    # arbitrary identifiers or URIs. The displayed translation stays intact.
+    text = re.sub(
+        r"(?<![\w./:-])JSON\.parse(?![\w/:-]|\.\w)",
+        "JSON dot parse",
+        text,
+    )
+    http_versions = {"1.0": "one point zero", "1.1": "one point one", "2": "two", "3": "three"}
+    text = re.sub(
+        r"(?<![\w./:-])HTTP/(?P<version>1\.0|1\.1|2|3)(?![\w/:-]|\.\w)",
+        lambda match: "HTTP version " + http_versions[match.group("version")],
+        text,
+        flags=re.IGNORECASE,
+    )
     # A version token such as "v1.2.3" is neither a decimal number nor
     # several sentences. Expand only explicit dotted versions so pinned
     # GPT-SoVITS cut1/English normalization cannot split or fuse components.
