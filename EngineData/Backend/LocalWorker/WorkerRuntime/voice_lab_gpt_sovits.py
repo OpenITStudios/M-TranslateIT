@@ -381,15 +381,43 @@ def create_tts_runtime(
 
 def english_sentence_cardinals(text: str) -> str:
     # Upstream treats any "125. " as a list ordinal, even at a sentence end.
-    pattern = r"(?<![\w.,:/+\-])([+-]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?)(?=\.\s)"
+    # Protect currency units before replacing the number: "$125." must not
+    # become "$one hundred..." and lose "dollars" in upstream normalization.
+    pattern = (
+        r"(?<![\w.,:/+\-$£])(?P<currency>[$£]?)(?P<number>[+-]?"
+        r"(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?)(?=\.\s)"
+    )
 
     def render(match: re.Match[str]) -> str:
         import inflect
 
-        number = match[0]
+        engine = inflect.engine()
+        number = match.group("number")
+        currency = match.group("currency")
+        if currency:
+            sign = ""
+            if number.startswith(("-", "+")):
+                sign = "minus " if number[0] == "-" else "plus "
+                number = number[1:]
+            whole, point, fraction = number.replace(",", "").partition(".")
+            major = int(whole)
+            unit = "dollar" if currency == "$" else "pound"
+            if point and len(fraction) <= 2:
+                minor = int(fraction.ljust(2, "0"))
+                minor_unit = (
+                    "cent" if minor == 1 else "cents"
+                ) if currency == "$" else ("penny" if minor == 1 else "pence")
+                parts = []
+                if major:
+                    parts.append(f"{engine.number_to_words(major)} {unit if major == 1 else unit + 's'}")
+                if minor:
+                    parts.append(f"{engine.number_to_words(minor)} {minor_unit}")
+                return sign + (" and ".join(parts) if parts else f"zero {unit}s")
+            written = engine.number_to_words(major if not point else number.replace(",", ""))
+            return f"{sign}{written} {unit if not point and major == 1 else unit + 's'}"
         if re.fullmatch(r"0[0-9]+", number):
-            return ' '.join(inflect.engine().number_to_words(digit) for digit in number)
-        return inflect.engine().number_to_words(number)
+            return " ".join(engine.number_to_words(digit) for digit in number)
+        return engine.number_to_words(number)
 
     return re.sub(pattern, render, text)
 

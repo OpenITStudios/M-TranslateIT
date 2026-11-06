@@ -22,6 +22,17 @@ def load_provider_module():
     ('Use the 125th item. Not 150th.', 'Use the 125th item. Not 150th.'),
     ('Use 125, not 150.', 'Use 125, not 150.'),
     ('Version 1.2.3. Not ID125.', 'Version 1.2.3. Not ID125.'),
+    ('The payment is $125. Please confirm.',
+     'The payment is one hundred and twenty-five dollars. Please confirm.'),
+    ('Charge $1.50. Then stop.', 'Charge one dollar and fifty cents. Then stop.'),
+    ('The balance is £1.01. Please check.',
+     'The balance is one pound and one penny. Please check.'),
+    ('The invoice is £1,125. Please pay.',
+     'The invoice is one thousand, one hundred and twenty-five pounds. Please pay.'),
+    ('It costs $0.05. Confirm.', 'It costs five cents. Confirm.'),
+    ('The budget is $0.00. Next step.', 'The budget is zero dollars. Next step.'),
+    ('We owe $-125. Please check.', 'We owe minus one hundred and twenty-five dollars. Please check.'),
+    ('Keep amount $125, not $150.', 'Keep amount $125, not $150.'),
 ])
 def test_english_tts_preserves_sentence_cardinals(text: str, spoken: str) -> None:
     inputs = load_provider_module().english_tts_inputs(text, Path('reference.wav'), text)
