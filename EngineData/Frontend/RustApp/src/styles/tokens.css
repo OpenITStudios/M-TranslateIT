@@ -21,6 +21,9 @@
   --ti-accent-hover: #ffffff;
   --ti-accent-contrast: #11151b;
 
+  /* Brand highlight is separate from action and readiness colors. */
+  --ti-brand: #38bdf8;
+
   /* Product states */
   --ti-success: #63d59b;
   --ti-success-surface: #10241a;
@@ -43,8 +46,7 @@
 
   /* Desktop composition */
   --ti-sidebar-width: 184px;
-  --ti-content-width: 1120px;
-  --ti-content-wide: 1200px;
-  --ti-page-padding-x: clamp(24px, 3vw, 42px);
+  --ti-content-width: 1200px;
+  --ti-page-padding-x: clamp(20px, 2.2vw, 32px);
   --ti-page-padding-y: 28px;
 }

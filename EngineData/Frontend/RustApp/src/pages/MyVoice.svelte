@@ -988,7 +988,7 @@
   });
 </script>
 
-<section class="ti-page ti-page-wide">
+<section class="ti-page">
   <header class="ti-page-header">
     <div>
       <h2 class="ti-page-title">My Voice</h2>
@@ -1292,7 +1292,7 @@
               <div class="space-y-2">
                 <label class="block text-xs text-[var(--ti-text-muted)]">
                   Category
-                  <select class="ti-input mt-1 w-full" bind:value={browseLevel}
+                  <select class="ti-field mt-1 min-h-10 px-3 text-sm" bind:value={browseLevel}
                     onchange={() => { browsePage = 0; browseFocus = "all"; }}>
                     {#each levelOptions as option}
                       <option value={option.value}>{option.label}</option>
@@ -1301,7 +1301,7 @@
                 </label>
                 <label class="block text-xs text-[var(--ti-text-muted)]">
                   Focus
-                  <select class="ti-input mt-1 w-full" bind:value={browseFocus}
+                  <select class="ti-field mt-1 min-h-10 px-3 text-sm" bind:value={browseFocus}
                     onchange={() => { browsePage = 0; }}>
                     <option value="all">All topics</option>
                     {#each browseFocusOptions as focus}
@@ -1311,7 +1311,7 @@
                 </label>
                 <label class="block text-xs text-[var(--ti-text-muted)]">
                   Search line number or words
-                  <input class="ti-input mt-1 w-full" type="search" bind:value={browseQuery}
+                  <input class="ti-field mt-1 min-h-10 px-3 text-sm" type="search" bind:value={browseQuery}
                     oninput={() => { browsePage = 0; }} placeholder="Search sentences" />
                 </label>
               </div>

@@ -36,16 +36,16 @@
 <header class="ti-appbar flex min-h-16 shrink-0 items-center gap-5 border-b border-[var(--ti-border)] bg-[var(--ti-bg)] px-6">
   <div class="min-w-0 shrink-0">
     <div class="flex items-baseline gap-2.5">
-      <strong class="text-[13.5px] font-semibold tracking-[-0.01em]">{routeTitle}</strong>
+      <strong class="text-[14px] font-semibold tracking-[-0.01em]">{routeTitle}</strong>
     </div>
   </div>
 
-  <p class="m-0 min-w-0 max-h-16 flex-1 overflow-y-auto break-words text-right text-[11.5px] leading-4 text-[var(--ti-text-muted)]"
+  <p class="m-0 min-w-0 max-h-16 flex-1 overflow-y-auto break-words text-right text-[12.5px] leading-[1.45] text-[var(--ti-text-muted)]"
     role="status" aria-live="polite" title={notice}>{notice}</p>
 
   <button
     type="button"
-    class="ti-button ti-button-secondary min-h-9 shrink-0 px-3 text-[12px]"
+    class="ti-button ti-button-secondary min-h-9 shrink-0 px-3 text-[13px]"
     aria-label="Open Quick Access"
     title="Quick Access (Ctrl+K)"
     onclick={() => void toggleQuickAccess().catch(() => onNotice("Quick Access couldn't be opened."))}

@@ -142,7 +142,7 @@
   );
 </script>
 
-<section class="ti-page ti-page-wide" style="margin-inline: 0; max-width: 1080px;">
+<section class="ti-page">
   <header class="ti-page-header">
     <div>
       <h2 class="ti-page-title">Meeting</h2>

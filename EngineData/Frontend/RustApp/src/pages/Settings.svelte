@@ -183,8 +183,8 @@
   });
 </script>
 
-<section class="min-h-0 overflow-y-auto">
-  <div class="ti-page" style="max-width: 1220px;">
+<section class="min-h-0">
+  <div class="ti-page">
     <header class="ti-page-header">
       <div>
         <h2 class="ti-page-title">Settings</h2>

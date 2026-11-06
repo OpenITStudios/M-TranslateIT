@@ -19,7 +19,7 @@
     overflow: hidden;
     background: var(--ti-bg);
     color: var(--ti-text);
-    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-family: "Segoe UI Variable", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
@@ -95,10 +95,6 @@
     padding: var(--ti-page-padding-y) var(--ti-page-padding-x) 36px;
   }
 
-  .ti-page-wide {
-    max-width: var(--ti-content-wide);
-  }
-
   .ti-page-header {
     display: flex;
     align-items: flex-start;
@@ -109,10 +105,10 @@
   .ti-page-title {
     margin: 0;
     max-width: 820px;
-    font-size: clamp(1.6rem, 2vw, 1.85rem);
-    line-height: 1.16;
+    font-size: 1.5rem;
+    line-height: 1.333;
     font-weight: 700;
-    letter-spacing: -0.032em;
+    letter-spacing: -0.025em;
   }
 
   .ti-page-copy {
@@ -127,7 +123,6 @@
     border: 1px solid var(--ti-border);
     border-radius: var(--ti-radius-lg);
     background: var(--ti-surface);
-    box-shadow: var(--ti-shadow-card);
   }
 
   .ti-subtle-card {
@@ -156,7 +151,7 @@
     color: var(--ti-accent-contrast);
     font-size: 0.875rem;
     font-weight: 650;
-    line-height: 1;
+    line-height: 1.25;
     transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
   }
 
@@ -199,6 +194,9 @@
 
   .ti-field {
     width: 100%;
+    min-height: 40px;
+    font-size: 0.875rem;
+    line-height: 1.4;
     border: 1px solid var(--ti-border);
     border-radius: var(--ti-radius-md);
     background: var(--ti-surface-soft);
@@ -293,7 +291,7 @@
 
   .ti-field-label {
     color: var(--ti-text-muted);
-    font-size: 0.77rem;
+    font-size: 0.8125rem;
     font-weight: 600;
   }
 
@@ -309,7 +307,7 @@
     bottom: 11px;
     width: 2px;
     border-radius: 999px;
-    background: var(--ti-accent);
+    background: var(--ti-brand);
   }
 }
 
