@@ -417,6 +417,15 @@ def english_sentence_cardinals(text: str) -> str:
         text,
         flags=re.IGNORECASE,
     )
+    # The pinned G2P hot dictionary already supplies "json" pronunciation,
+    # but upstream CamelCase normalization splits uppercase JSON into J S O N.
+    # Preserve the existing dictionary pronunciation by using title case only
+    # for a standalone TTS token (including JSON.parse expanded above).
+    text = re.sub(
+        r"(?<![\w./:+#=@?&%-])JSON(?![\w/+:=#@?&%-]|\.[A-Za-z0-9_])",
+        "Json",
+        text,
+    )
     # A version token such as "v1.2.3" is neither a decimal number nor
     # several sentences. Expand only explicit dotted versions so pinned
     # GPT-SoVITS cut1/English normalization cannot split or fuse components.
