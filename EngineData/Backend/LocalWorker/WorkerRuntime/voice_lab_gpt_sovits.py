@@ -259,6 +259,10 @@ def write_wav(path: Path, sample_rate: int, audio: Any) -> None:
     # ndarray through memoryview avoids making a second full-size PCM16 bytes
     # copy for every TTS utterance. Only strided inputs need a contiguous copy.
     values = np.ascontiguousarray(values)
+    # A syntactically valid WAV containing only PCM zeroes is not generated speech.
+    # Check after float quantization so sub-LSB output cannot be admitted as success.
+    if not np.any(values):
+        raise VoiceLabProviderError("inference_audio_silent")
     with wave.open(str(path), "wb") as writer:
         writer.setnchannels(1)
         writer.setsampwidth(2)

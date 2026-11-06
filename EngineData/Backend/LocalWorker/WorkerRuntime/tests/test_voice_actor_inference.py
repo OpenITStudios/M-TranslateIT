@@ -177,6 +177,44 @@ def test_voice_wav_writer_preserves_float_quantization(tmp_path: Path) -> None:
         assert reader.readframes(reader.getnframes()) == expected.tobytes()
 
 
+@pytest.mark.parametrize("kind", ["pcm16", "sub_lsb_float"])
+def test_voice_wav_writer_refuses_silent_generated_pcm_before_creating_file(
+    tmp_path: Path, kind: str
+) -> None:
+    import numpy as np
+
+    provider = load_provider_module()
+    samples = (
+        np.zeros(64, dtype=np.int16)
+        if kind == "pcm16"
+        else np.full(64, 1e-7, dtype=np.float32)
+    )
+    output = tmp_path / f"silent-{kind}.wav"
+    with pytest.raises(provider.VoiceLabProviderError, match="inference_audio_silent"):
+        provider.write_wav(output, 32_000, samples)
+    assert not output.exists()
+
+
+def test_voice_actor_synthesis_does_not_admit_silent_tts_audio(tmp_path: Path) -> None:
+    import numpy as np
+
+    provider = load_provider_module()
+
+    class SilentTTS:
+        def run(self, _inputs):
+            yield 32_000, np.zeros(64, dtype=np.int16)
+
+    runtime = {
+        "tts": SilentTTS(),
+        "reference_wav": tmp_path / "reference.wav",
+        "reference_text": "The scheduled meeting will start tomorrow.",
+    }
+    output = tmp_path / "silent-synthesis.wav"
+    with pytest.raises(provider.VoiceLabProviderError, match="inference_audio_silent"):
+        provider.synthesize_voice_actor(runtime, "The meeting starts now.", output)
+    assert not output.exists()
+
+
 def test_voice_wav_writer_still_refuses_empty_audio(tmp_path: Path) -> None:
     import numpy as np
 
