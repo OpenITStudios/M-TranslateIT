@@ -109,6 +109,18 @@ const expectedResources = {
   "../../../Backend/RuntimeAssets/ThirdPartyNotices/THIRD_PARTY_NOTICES.txt": "EngineData/Backend/RuntimeAssets/ThirdPartyNotices/THIRD_PARTY_NOTICES.txt",
   "../../../Backend/RuntimeAssets/AudioProvider/VBCABLE/NOTICE.txt": "EngineData/Backend/RuntimeAssets/AudioProvider/VBCABLE/NOTICE.txt",
 };
+// Tauri's release bundle must consume the explicit, complete icon family.
+// File existence alone does not prove that raster/ICO assets match the approved SVG.
+const expectedIcons = [
+  "icons/32x32.png",
+  "icons/128x128.png",
+  "icons/128x128@2x.png",
+  "icons/icon.icns",
+  "icons/icon.ico",
+];
+compareExact(config.bundle?.icon, expectedIcons, "R3 Tauri bundle icon set");
+for (const icon of expectedIcons) requireFile(join(tauriRoot, icon));
+
 const resources = config.bundle?.resources;
 if (!resources || Array.isArray(resources)) fail("R3 release must use the canonical source-to-target resource map.");
 else {
