@@ -380,6 +380,15 @@ def create_tts_runtime(
 
 
 def english_sentence_cardinals(text: str) -> str:
+    # The pinned hot G2P dictionary covers "chatgpt" and "conda". Upstream
+    # uppercase splitting otherwise turns ChatGPT/CHATGPT/CONDA into fragments
+    # before dictionary lookup. Title case reaches the existing pronunciations.
+    # Do not alter URLs, code identifiers, accounts, tags, or version suffixes.
+    text = re.sub(
+        r"(?<![\w./:+#=@?&%-])(?:ChatGPT|CHATGPT|CONDA)(?![\w/+:=#@?&%-]|\.[A-Za-z0-9_])",
+        lambda match: "Conda" if match.group() == "CONDA" else "Chatgpt",
+        text,
+    )
     # Pinned upstream CamelCase normalization splits PyTorch into "Py Torch".
     # "Py" then relies on dictionary/OOV fallback instead of the established
     # spoken name. Limit the correction to this standalone framework name.
