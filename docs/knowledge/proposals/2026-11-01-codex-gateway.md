@@ -379,6 +379,28 @@ frame cannot exploit the larger 24-KiB writer budget with malformed
 PCM. This replaces inconsistent length-only verification. Synthetic
 Rust/TS cases are AUTHORED / NOT EXECUTED, and no data was uploaded.
 
+The upstream `ThreadRealtimeAudioChunk.itemId` field does **not**
+provide a per-utterance correlation key for our V3 case. In the
+upstream `RealtimeWebsocketWriter::send_audio_frame` implementation,
+the V3 `InputAudioAppend` message forwards only `frame.data`:
+`itemId`, sample-rate and client sample count are not forwarded
+as response identity. Therefore no protocol-supported source/reply
+binding can be derived from an itemId supplied by TranslateIT.
+
+The source-only `RealtimeRpc` ACK owner now additionally tracks
+the first submitted source sample. Its
+`audio_rpc_ack_covers_source` check requires the same Meeting
+generation/epoch, Live authority, a fully contiguous RPC-ACK range
+covering the entire candidate utterance, and no cancellation.
+An `UnverifiedPair` can query this evidence without promoting
+it to verified translation. Missing/out-of-order ACK, a source window
+beginning before the first submitted sample, wrong identity and Stop
+all deny the check. This is constant-time and requires no extra
+worker, decoding or audio replay. A successful JSON-RPC ACK means
+the App Server accepted the audio request; it does **not** prove
+model ingestion, transcription fidelity, or the causal relationship
+of the assistant text. The TTS route remains blocked.
+
 Upstream `ThreadRealtimeItemContent::TranscriptSegment` still contains
 only `role` and `text`, with no causal link to a specific user item or
 source sample window. Client-managed handoffs prevent automatic

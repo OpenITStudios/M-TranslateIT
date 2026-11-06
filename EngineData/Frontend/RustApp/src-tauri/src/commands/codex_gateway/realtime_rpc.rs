@@ -193,6 +193,7 @@ pub(super) struct RealtimeRpc {
     sdp_seen: bool,
     remote_session_id: Option<String>,
     pending_audio: VecDeque<PendingAudio>,
+    first_audio_sample: Option<u64>,
     next_audio_sample: Option<u64>,
     acked_through_sample: Option<u64>,
     stop_rpc_id: Option<u64>,
@@ -263,6 +264,7 @@ impl RealtimeRpc {
             sdp_seen: false,
             remote_session_id: None,
             pending_audio: VecDeque::new(),
+            first_audio_sample: None,
             next_audio_sample: None,
             acked_through_sample: None,
             stop_rpc_id: None,
@@ -424,6 +426,31 @@ impl RealtimeRpc {
         Ok(())
     }
 
+    /// Necessary, NOT sufficient, evidence that the existing AppServer
+    /// acknowledged a contiguous PCM16 range belonging to this exact Meeting
+    /// generation/source epoch. It proves neither model ingestion nor that
+    /// an assistant item is a translation of these samples.
+    ///
+    /// No allocation, decoding or network call: safe to poll after the
+    /// provisional pair arrives while later audio ACKs are in flight.
+    pub(super) fn audio_rpc_ack_covers_source(
+        &self,
+        generation: u64,
+        source_epoch: u64,
+        start_sample: u64,
+        end_sample: u64,
+        cancelled: &AtomicBool,
+    ) -> bool {
+        !cancelled.load(Ordering::Acquire)
+            && self.phase == Phase::Live
+            && generation == self.generation
+            && source_epoch == self.source_epoch
+            && start_sample < end_sample
+            && self.first_audio_sample.is_some_and(|first| first <= start_sample)
+            && self.next_audio_sample.is_some_and(|submitted| submitted >= end_sample)
+            && self.acked_through_sample.is_some_and(|acked| acked >= end_sample)
+    }
+
     pub(super) fn acked_through_sample(&self) -> Option<u64> {
         self.acked_through_sample
     }
@@ -576,6 +603,9 @@ impl RealtimeRpc {
             acked: false,
             submitted_at: Instant::now(),
         });
+        // Define the origin of the only contiguous acknowledged range.
+        // An initial nonzero sample clock must not prove earlier audio.
+        self.first_audio_sample.get_or_insert(start_sample);
         self.next_audio_sample = Some(end_sample);
         Ok(frame)
     }
@@ -629,6 +659,7 @@ impl RealtimeRpc {
     pub(super) fn revoke(&mut self) {
         self.phase = Phase::Revoked;
         self.pending_audio.clear();
+        self.first_audio_sample = None;
         self.next_audio_sample = None;
         self.acked_through_sample = None;
     }
@@ -924,6 +955,51 @@ mod tests {
         forged.method = "thread/realtime/appendAudio";
         forged.id = 12;
         assert_eq!(forged.validate_for_transport(), Err("codex_wire:transport_frame_mismatch"));
+    }
+
+    #[test]
+    fn audio_ack_evidence_requires_contiguous_full_window_same_lease_and_live() {
+        use super::super::correlation::{SourceWindow, UnverifiedPair};
+        let stop = AtomicBool::new(false);
+        let mut session = live();
+        let mut queue = AudioFrameQueue::default();
+        queue.push(240, &[0, 1]).unwrap();
+        queue.push(242, &[2]).unwrap();
+        assert!(session.send_queued_audio(11, 7, 2, &mut queue, &stop).unwrap().is_some());
+        assert!(session.send_queued_audio(12, 7, 2, &mut queue, &stop).unwrap().is_some());
+        let pair = UnverifiedPair {
+            source: SourceWindow {
+                generation: 7, source_epoch: 2, sequence: 1,
+                start_sample: 240, end_sample: 243,
+            },
+            source_item_id: "user_item".into(),
+            source_text: "Buka sekarang.".into(),
+            assistant_item_id: "assistant_item".into(),
+            assistant_text: "Open now.".into(),
+        };
+        assert!(!pair.has_acknowledged_source_audio(&session, &stop));
+        session.ack_audio(12, &json!({})).unwrap();
+        assert!(!pair.has_acknowledged_source_audio(&session, &stop));
+        session.ack_audio(11, &json!({})).unwrap();
+        assert!(pair.has_acknowledged_source_audio(&session, &stop));
+
+        let before_first = SourceWindow {
+            start_sample: 239, ..pair.source
+        };
+        assert!(!session.audio_rpc_ack_covers_source(
+            before_first.generation, before_first.source_epoch,
+            before_first.start_sample, before_first.end_sample, &stop,
+        ));
+        assert!(!session.audio_rpc_ack_covers_source(7, 2, 240, 244, &stop));
+        assert!(!session.audio_rpc_ack_covers_source(7, 3, 240, 243, &stop));
+        assert!(!session.audio_rpc_ack_covers_source(8, 2, 240, 243, &stop));
+        assert!(!session.audio_rpc_ack_covers_source(7, 2, 240, 240, &stop));
+        let cancelled = AtomicBool::new(true);
+        assert!(!pair.has_acknowledged_source_audio(&session, &cancelled));
+
+        // Stop immediately withdraws even previously acknowledged proof.
+        session.prepare_stop(13).unwrap();
+        assert!(!pair.has_acknowledged_source_audio(&session, &stop));
     }
 
     #[test]

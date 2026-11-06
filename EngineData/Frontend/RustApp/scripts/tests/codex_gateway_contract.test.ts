@@ -131,6 +131,9 @@ test("P3 source/assistant correlation is one-flight and always unverified", () =
   assert.match(correlation, /struct SourceWindow/);
   assert.match(correlation, /struct UnverifiedPair/);
   assert.match(correlation, /struct CorrelationGate/);
+  assert.match(correlation, /fn has_acknowledged_source_audio\(/);
+  assert.match(realtimeRpc, /fn audio_rpc_ack_covers_source\(/);
+  assert.match(realtimeRpc, /fn audio_ack_evidence_requires_contiguous_full_window_same_lease_and_live/);
   assert.match(correlation, /fn observe_event\(/);
   assert.match(correlation, /fn completed_realtime_items_form_only_one_unverified_pair/);
   assert.match(correlation, /fn invalid_realtime_item_revokes_the_pairing_boundary/);

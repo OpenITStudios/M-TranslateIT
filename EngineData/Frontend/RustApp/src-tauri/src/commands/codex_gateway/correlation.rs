@@ -4,7 +4,9 @@
 //! This state is local to the existing Codex gateway, not a second Meeting owner.
 
 use super::realtime::{Observation, RealtimeObserver};
+use super::realtime_rpc::RealtimeRpc;
 use serde_json::Value;
+use std::sync::atomic::AtomicBool;
 
 const MAX_CANDIDATE_BYTES: usize = 8 * 1024;
 const MAX_UTTERANCE_SAMPLES: u64 = 24_000 * 60;
@@ -38,6 +40,22 @@ impl std::fmt::Debug for UnverifiedPair {
             .field("source_text", &"<redacted>")
             .field("assistant_text", &"<redacted>")
             .finish()
+    }
+}
+
+impl UnverifiedPair {
+    /// Additional transport evidence only. Even true MUST NOT authorize
+    /// synthesis: Codex does not expose a causal source->assistant link.
+    pub(super) fn has_acknowledged_source_audio(
+        &self, rpc: &RealtimeRpc, cancelled: &AtomicBool,
+    ) -> bool {
+        rpc.audio_rpc_ack_covers_source(
+            self.source.generation,
+            self.source.source_epoch,
+            self.source.start_sample,
+            self.source.end_sample,
+            cancelled,
+        )
     }
 }
 
