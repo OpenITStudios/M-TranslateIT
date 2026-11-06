@@ -56,6 +56,13 @@ def load_provider_module():
      'This endpoint is https://example.com:18:00. Next.'),
     ('The invalid time is 24:00. Next.', 'The invalid time is 24:00. Next.'),
     ('The invalid time is 18:60. Next.', 'The invalid time is 18:60. Next.'),
+    ('The opening hours are 18:00-19:00. Next.',
+     'The opening hours are 18:00-19:00. Next.'),
+    ('The opening hours are 18:00–19:00. Next.',
+     'The opening hours are 18:00–19:00. Next.'),
+    ('Time span 18:00~19:00. Next.', 'Time span 18:00~19:00. Next.'),
+    ('Time with offset 18:00+07:00. Next.',
+     'Time with offset 18:00+07:00. Next.'),
 ])
 def test_english_tts_preserves_sentence_cardinals(text: str, spoken: str) -> None:
     inputs = load_provider_module().english_tts_inputs(text, Path('reference.wav'), text)

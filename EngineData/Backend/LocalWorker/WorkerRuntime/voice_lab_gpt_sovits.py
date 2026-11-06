@@ -384,8 +384,8 @@ def english_sentence_cardinals(text: str) -> str:
     # sentence delimiter. Preserve ports, timestamps, offsets and time ranges
     # which are not unambiguously standalone HH:MM clock values.
     time_pattern = re.compile(
-        r"(?<![\w:/.\-+$£])(?P<hour>[01]?[0-9]|2[0-3]):"
-        r"(?P<minute>[0-5][0-9])(?![\w:/]|\.[0-9])"
+        r"(?<![\w:/.\-+$£~–—])(?P<hour>[01]?[0-9]|2[0-3]):"
+        r"(?P<minute>[0-5][0-9])(?![\w:/+\-~–—]|\.[0-9])"
     )
 
     def render_time(match: re.Match[str]) -> str:
