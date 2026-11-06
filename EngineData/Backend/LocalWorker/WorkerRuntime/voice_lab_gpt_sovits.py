@@ -380,6 +380,32 @@ def create_tts_runtime(
 
 
 def english_sentence_cardinals(text: str) -> str:
+    # Resolve standalone clock times before upstream cut1 treats ':' as a
+    # sentence delimiter. Preserve ports, timestamps, offsets and time ranges
+    # which are not unambiguously standalone HH:MM clock values.
+    time_pattern = re.compile(
+        r"(?<![\w:/.\-+$£])(?P<hour>[01]?[0-9]|2[0-3]):"
+        r"(?P<minute>[0-5][0-9])(?![\w:/]|\.[0-9])"
+    )
+
+    def render_time(match: re.Match[str]) -> str:
+        import inflect
+
+        hour = int(match.group("hour"))
+        minute = int(match.group("minute"))
+        engine = inflect.engine()
+        clock_hour = engine.number_to_words(hour % 12 or 12)
+        if minute == 0:
+            clock_minute = "o'clock"
+        elif minute < 10:
+            clock_minute = "oh " + engine.number_to_words(minute)
+        else:
+            clock_minute = engine.number_to_words(minute)
+        # Avoid adding new '.' split points inside the A.M./P.M. suffix.
+        period = "A M" if hour < 12 else "P M"
+        return f"{clock_hour} {clock_minute} {period}"
+
+    text = time_pattern.sub(render_time, text)
     # Upstream treats any "125. " as a list ordinal, even at a sentence end.
     # Protect currency units before replacing the number: "$125." must not
     # become "$one hundred..." and lose "dollars" in upstream normalization.
