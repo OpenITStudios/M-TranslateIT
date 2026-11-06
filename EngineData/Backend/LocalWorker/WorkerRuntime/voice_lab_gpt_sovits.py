@@ -380,6 +380,19 @@ def create_tts_runtime(
 
 
 def english_sentence_cardinals(text: str) -> str:
+    # Pinned upstream English normalization removes '+' and '#', collapsing
+    # the standalone programming-language names C++/C# to a plain C.
+    # Do not rewrite URI/code/identifier components or adjacent version tokens.
+    text = re.sub(
+        r"(?<![\w./:+#=-])C\+\+(?![\w/+:=#-]|\.[A-Za-z0-9_])",
+        "C plus plus",
+        text,
+    )
+    text = re.sub(
+        r"(?<![\w./:+#=-])C#(?![\w/+:=#-]|\.[A-Za-z0-9_])",
+        "C sharp",
+        text,
+    )
     # The pinned upstream cut1 can split dotted code names; its English
     # normalizer removes '/', which can fuse "HTTP/2" after number expansion.
     # Expand only unambiguous protocol/method tokens for speech, not
