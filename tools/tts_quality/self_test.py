@@ -64,6 +64,56 @@ def main() -> int:
     assert report["mean_intelligibility_wer"] == 0.0
     assert report["mean_speaker_similarity"] == 0.9
 
+    # Complete rows and source identity cannot substitute for the corpus identity.
+    missing_fingerprint = evaluator.evaluate(
+        corpus,
+        perfect,
+        source_identity="baseline-sha",
+    )
+    assert missing_fingerprint["provenance_matches_corpus"] is False
+    assert missing_fingerprint["complete_result_set"] is False
+    incorrect_fingerprint = evaluator.evaluate(
+        corpus,
+        perfect,
+        result_corpus_fingerprint="0" * 64,
+        source_identity="baseline-sha",
+    )
+    assert incorrect_fingerprint["provenance_matches_corpus"] is False
+    assert incorrect_fingerprint["complete_result_set"] is False
+
+    healthy_candidate = evidence(corpus, 0.92)
+    valid_comparison = evaluator.compare_reports(
+        corpus,
+        perfect,
+        healthy_candidate,
+        baseline_corpus_fingerprint=fingerprint,
+        candidate_corpus_fingerprint=fingerprint,
+        baseline_source_identity="baseline-sha",
+        candidate_source_identity="candidate-sha",
+    )
+    assert valid_comparison["complete_result_sets"] is True
+    assert valid_comparison["promotion_provenance_complete"] is True
+    assert valid_comparison["promotion_safe_on_declared_critical_invariants"] is True
+
+    # Even a perfect candidate may not be promoted without an exact fingerprint.
+    for baseline_fingerprint, candidate_fingerprint in (
+        ("", fingerprint),
+        (fingerprint, ""),
+        (fingerprint, "0" * 64),
+    ):
+        unproven_comparison = evaluator.compare_reports(
+            corpus,
+            perfect,
+            healthy_candidate,
+            baseline_corpus_fingerprint=baseline_fingerprint,
+            candidate_corpus_fingerprint=candidate_fingerprint,
+            baseline_source_identity="baseline-sha",
+            candidate_source_identity="candidate-sha",
+        )
+        assert unproven_comparison["complete_result_sets"] is False
+        assert unproven_comparison["promotion_provenance_complete"] is False
+        assert unproven_comparison["promotion_safe_on_declared_critical_invariants"] is False
+
     candidate = evidence(corpus, 0.92)
     candidate["tts-negation-001"]["intelligibility_text"] = (
         "I approved the payment, so please send it."

@@ -174,9 +174,11 @@ def evaluate(
     missing = sorted(expected - results.keys())
     unknown = sorted(results.keys() - expected)
     expected_fingerprint = corpus_fingerprint(corpus)
+    # A missing fingerprint is not evidence that the captured WAVs used this corpus.
+    # Keep evaluation possible for diagnostics, but never mark the set complete.
     provenance_matches = (
-        not result_corpus_fingerprint
-        or result_corpus_fingerprint == expected_fingerprint
+        bool(result_corpus_fingerprint)
+        and result_corpus_fingerprint == expected_fingerprint
     )
     rows = []
     group_similarity = defaultdict(list)
