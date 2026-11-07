@@ -209,7 +209,7 @@
     <p class="mx-5 mb-3 break-words text-[13px] leading-5 text-[var(--ti-warning)]" role="alert">{notice}</p>
   {/if}
   {#if history && history.active_write_errors > 0}
-    <p class="mx-5 mb-3 text-xs text-[var(--ti-warning)]" role="alert">
+    <p class="mx-5 mb-3 text-[13px] text-[var(--ti-warning)]" role="alert">
       Some transcript entries could not be saved; storage completeness is unverified.
     </p>
   {/if}
@@ -230,32 +230,39 @@
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div class="min-w-0">
               <strong class="block text-[13px] font-semibold">{sessionLabel(session.session_id)}</strong>
-              <p class="m-0 mt-1 text-xs text-[var(--ti-text-muted)]">
+              <p class="m-0 mt-1 text-[13px] text-[var(--ti-text-muted)]">
                 {session.entry_count === 0 ? "No recognized entries" : `${session.entry_count} saved entries`} · {session.complete ? "Finalized (entry count checked)" : "Storage finalization unverified"}
               </p>
               {#if session.storage_warning || !session.complete}
-                <p class="m-0 mt-1 text-xs text-[var(--ti-warning)]">Check this transcript for missing entries.</p>
+                <p class="m-0 mt-1 text-[13px] text-[var(--ti-warning)]">Check this transcript for missing entries.</p>
               {/if}
             </div>
-            <div class="flex flex-wrap gap-2">
-              <button type="button" class="ti-button ti-button-secondary min-h-10 text-[13px]"
+            <div class="flex min-w-0 flex-wrap items-start gap-2">
+              <button type="button" class="ti-button ti-button-secondary min-h-10 text-[13px] font-semibold"
                 aria-expanded={expanded === session.session_id} aria-label={`${expanded === session.session_id ? "Hide" : "Read"} saved transcript ${sessionLabel(session.session_id)}`}
                 disabled={busy || session.entry_count === 0}
                 onclick={() => void togglePreview(session.session_id)}>
                 {expanded === session.session_id ? "Hide" : "Read"}
               </button>
-              <button type="button" class="ti-button ti-button-secondary min-h-10 text-[13px]"
-                disabled={busy || previewBusy || session.entry_count === 0} aria-expanded={htmlSample?.sessionId === session.session_id}
-                aria-label={`${htmlSample?.sessionId === session.session_id ? "Hide HTML preview" : "Preview HTML"} for saved transcript ${sessionLabel(session.session_id)}`}
-                onclick={() => void toggleHtmlPreview(session.session_id)}>
-                {htmlSample?.sessionId === session.session_id ? "Hide HTML Preview" : "Preview HTML"}
-              </button>
-              <button type="button" class="ti-button ti-button-secondary min-h-10 text-[13px]" disabled={busy || session.entry_count === 0}
-                aria-label={`Export HTML for saved transcript ${sessionLabel(session.session_id)}`}
-                onclick={() => void exportHtml(session.session_id)}><Download size={14}/>Export HTML</button>
-              <button type="button" class="ti-button ti-button-secondary min-h-10 text-[13px]" disabled={busy}
-                aria-label={`Delete saved transcript ${sessionLabel(session.session_id)}`}
-                onclick={() => { confirming = session.session_id; notice = ""; }}><Trash2 size={14}/>Delete</button>
+              <details class="min-w-[155px] max-w-full rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)]">
+                <summary class="min-h-10 cursor-pointer px-3 py-2.5 text-[13px] font-medium text-[var(--ti-text)] hover:bg-[var(--ti-surface-hover)]"
+                  aria-label={`More actions for saved transcript ${sessionLabel(session.session_id)}`}>More options</summary>
+                <div class="grid gap-2 border-t border-[var(--ti-border)] p-2" role="group"
+                  aria-label={`Transcript file actions for ${sessionLabel(session.session_id)}`}>
+                  <button type="button" class="ti-button ti-button-secondary min-h-10 w-full justify-start px-3 text-[13px]"
+                    disabled={busy || previewBusy || session.entry_count === 0} aria-expanded={htmlSample?.sessionId === session.session_id}
+                    aria-label={`${htmlSample?.sessionId === session.session_id ? "Hide HTML preview" : "Preview HTML"} for saved transcript ${sessionLabel(session.session_id)}`}
+                    onclick={() => void toggleHtmlPreview(session.session_id)}>
+                    {htmlSample?.sessionId === session.session_id ? "Hide HTML Preview" : "Preview HTML"}
+                  </button>
+                  <button type="button" class="ti-button ti-button-secondary min-h-10 w-full justify-start px-3 text-[13px]" disabled={busy || session.entry_count === 0}
+                    aria-label={`Export HTML for saved transcript ${sessionLabel(session.session_id)}`}
+                    onclick={() => void exportHtml(session.session_id)}><Download size={14} aria-hidden="true"/>Export HTML</button>
+                  <button type="button" class="ti-button ti-button-secondary min-h-10 w-full justify-start px-3 text-[13px]" disabled={busy}
+                    aria-label={`Delete saved transcript ${sessionLabel(session.session_id)}`}
+                    onclick={() => { confirming = session.session_id; notice = ""; }}><Trash2 size={14} aria-hidden="true"/>Delete</button>
+                </div>
+              </details>
             </div>
           </div>
           {#if confirming === session.session_id}
@@ -274,7 +281,7 @@
           {#if htmlSample?.sessionId === session.session_id}
             <div class="grid gap-2 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-3">
               <strong class="text-sm">HTML document preview</strong>
-              <p class="m-0 text-xs text-[var(--ti-text-muted)]">
+              <p class="m-0 text-[13px] text-[var(--ti-text-muted)]">
                 Sample of the latest {htmlSample.entryCount} saved entries, rendered with the HTML export template.
                 The final file includes all archived entries. Switch reading language inside the preview.
               </p>
@@ -288,7 +295,7 @@
               <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <strong class="text-sm">Conversation</strong>
-                  <p class="m-0 text-xs text-[var(--ti-text-muted)]">
+                  <p class="m-0 text-[13px] text-[var(--ti-text-muted)]">
                     Latest {preview?.turns.length ?? 0} entries · HTML includes all archived entries.
                   </p>
                 </div>
@@ -329,9 +336,9 @@
                           >
                             <header class="mb-2 flex flex-wrap items-center justify-between gap-2">
                               <strong class="text-[13px] font-semibold">{meetingSpeakerLabel(turn.lane)}</strong>
-                              <span class="text-[12px] text-[var(--ti-text-muted)]">{meetingTime(turn.created_unix_ms)}</span>
+                              <span class="text-[13px] text-[var(--ti-text-muted)]">{meetingTime(turn.created_unix_ms)}</span>
                             </header>
-                            <span class="text-[12px] text-[var(--ti-text-muted)]">{selected.label} · {languageName(selected.fallback ? turn.source_language : language)}</span>
+                            <span class="text-[13px] text-[var(--ti-text-muted)]">{selected.label} · {languageName(selected.fallback ? turn.source_language : language)}</span>
                             <p class={"m-0 mt-1 whitespace-pre-wrap break-words text-[14px] leading-6 " +
                               (selected.fallback ? "text-[var(--ti-warning)]" : "")}
                               lang={selected.fallback ? turn.source_language : language}>{selected.text}</p>
@@ -355,9 +362,9 @@
         <Check size={16} class="text-[var(--ti-success)]"/>
         <strong class="text-sm">HTML transcript saved</strong>
       </div>
-      <p class="m-0 break-words text-xs text-[var(--ti-text-muted)]">{receipt.count} entries · {receipt.path}</p>
+      <p class="m-0 break-words text-[13px] text-[var(--ti-text-muted)]">{receipt.count} entries · {receipt.path}</p>
       {#if receipt.incomplete}
-        <p class="m-0 text-xs text-[var(--ti-warning)]">Storage completeness could not be verified. The HTML includes a warning.</p>
+        <p class="m-0 text-[13px] text-[var(--ti-warning)]">Storage completeness could not be verified. The HTML includes a warning.</p>
       {/if}
       <div class="flex flex-wrap gap-2">
         <button type="button" class="ti-button ti-button-secondary min-h-10 text-[13px]"
@@ -367,7 +374,7 @@
         <button type="button" class="ti-button ti-button-secondary min-h-10 text-[13px]"
           onclick={() => void copyPath()}><Copy size={14}/>Copy Location</button>
       </div>
-      <p class="m-0 text-xs text-[var(--ti-text-muted)]">
+      <p class="m-0 text-[13px] text-[var(--ti-text-muted)]">
         The source transcript remains saved until you choose Delete.
       </p>
     </div>

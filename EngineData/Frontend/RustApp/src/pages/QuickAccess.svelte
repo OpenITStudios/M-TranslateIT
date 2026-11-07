@@ -330,13 +330,13 @@
         <span class={`size-2 shrink-0 rounded-full ${statusDotClass}`} aria-hidden="true"></span>
         <div class="min-w-0 flex-1">
           <p class="m-0 text-[13px] font-semibold" role="status" aria-live="polite">{statusLabel}</p>
-          <p class="m-0 mt-1 text-[12px] leading-5 text-[var(--ti-text-muted)]">{sourceSummary}</p>
+          <p class="m-0 mt-1 break-words text-[13px] leading-5 text-[var(--ti-text-muted)]">{sourceSummary}</p>
         </div>
       </div>
     </div>
 
     <div class="qa-section">
-      <p class="m-0 mb-3 text-[12px] font-semibold text-[var(--ti-text-muted)]">Audio sent to meeting</p>
+      <p class="m-0 mb-3 text-[13px] font-semibold text-[var(--ti-text-muted)]">Audio sent to meeting</p>
       <div class="grid grid-cols-2 gap-2">
         <button type="button" class="qa-choice" aria-pressed={choice === "original"}
           disabled={busy || !canSelectSource || !snapshot || snapshot.revision <= 0}
@@ -358,7 +358,7 @@
       <div class="flex items-center gap-2">
         <Mic size={17} aria-hidden="true" />
         <div>
-          <p class="m-0 text-[12px] font-semibold">Microphone Mute</p>
+          <p class="m-0 text-[13px] font-semibold">Microphone Mute</p>
           <p class="qa-feedback">{meeting?.muted ? "Virtual output muted" : live ? "Virtual output unmuted" : "Available during Meeting"}</p>
         </div>
       </div>
@@ -375,7 +375,7 @@
       <div class="flex items-center gap-2">
         <Captions size={17} aria-hidden="true" />
         <div>
-          <p class="m-0 text-[12px] font-semibold">Floating Captions</p>
+          <p class="m-0 text-[13px] font-semibold">Floating Captions</p>
           <p class="qa-feedback">{captionsVisible === null ? "Status unavailable" : captionsVisible ? "Visible" : "Hidden"}</p>
         </div>
       </div>
@@ -406,18 +406,18 @@
       {/if}
     </div>
 
-    <footer class="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--ti-border)] px-4 py-3">
-      <button type="button" class="inline-flex items-center gap-1 text-[11px] text-[var(--ti-text-muted)] hover:text-[var(--ti-text)]"
+    <footer class="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-[var(--ti-border)] px-4 py-3">
+      <button type="button" class="inline-flex min-h-10 items-center gap-1.5 rounded-[var(--ti-radius-sm)] px-1 text-[13px] font-medium text-[var(--ti-text-muted)] hover:text-[var(--ti-text)]"
         onclick={() => void openMain()}><ExternalLink size={13} aria-hidden="true" /> Open TranslateIT</button>
       {#if confirmingStop}
-        <div class="flex items-center gap-2">
-          <button type="button" class="ti-button ti-button-secondary min-h-9 px-2 text-xs"
+        <div class="flex flex-wrap items-center gap-2">
+          <button type="button" class="ti-button ti-button-secondary min-h-10 px-2 text-[13px]"
             onclick={() => void cancelStopConfirmation()}>Cancel</button>
-          <button type="button" class="ti-button ti-button-danger min-h-9 px-2 text-xs"
+          <button type="button" class="ti-button ti-button-danger min-h-10 px-2 text-[13px]"
             bind:this={confirmStopButton} disabled={busy} onclick={() => void meetingAction()}>{needsStop ? "Confirm Retry Stop" : "Confirm Stop"}</button>
         </div>
       {:else}
-        <button type="button" class={"ti-button min-h-9 px-3 text-xs " + (canStop ? "ti-button-danger" : "")}
+        <button type="button" class={"ti-button min-h-10 px-3 text-[13px] " + (canStop ? "ti-button-danger" : "")}
           bind:this={primaryActionButton}
           aria-label={canStop ? needsStop ? "Retry Stop" : "Stop microphone" : choice === "original" ? "Start Original Microphone" : "Start Translation"}
           disabled={busy || (!canStart && !canStop)}
