@@ -13,12 +13,14 @@
   import TranslateITMark from "../components/brand/TranslateITMark.svelte";
 
   type Source = "original" | "translateit";
+  type ErrorArea = "source" | "meeting" | "mute" | "captions" | "window";
   let snapshot = $state<ApplicationSnapshot | null>(null);
   let choice = $state<Source>("original");
   let captionsVisible = $state<boolean | null>(null);
   let busy = $state(false);
   let confirmingStop = $state(false);
   let errorMessage = $state("");
+  let errorArea = $state<ErrorArea>("meeting");
   let resultMessage = $state("");
   let confirmStopButton: HTMLButtonElement | undefined;
   let primaryActionButton: HTMLButtonElement | undefined;
@@ -65,9 +67,18 @@
     if (live) return { label: meeting.muted ? "Muted" : "Live", tone: meeting.muted ? "neutral" : "good" };
     if (canStart) return { label: "Ready", tone: "good" };
     if (meeting.lifecycle === "idle" && !meeting.has_session) return { label: "Setup Needed", tone: "warning" };
-    return { label: "Check Status", tone: "warning" };
+    return { label: "Check Status", tone: "neutral" };
   });
   const statusLabel = $derived(statusPresentation.label);
+  // Guide a failed action toward its owning UI, without guessing whether
+  // the native operation actually changed state.
+  const recoveryInstruction = $derived(
+    errorArea === "source" ? "Open TranslateIT → Meeting to check the selected audio source before retrying."
+      : errorArea === "mute" ? "Open TranslateIT → Meeting to check the microphone mute state before retrying."
+      : errorArea === "captions" ? "Open TranslateIT → Settings → Meeting Captions to check caption visibility before retrying."
+      : errorArea === "window" ? "Try opening TranslateIT again. Your Meeting action was not changed by this attempt."
+      : "Open TranslateIT → Meeting to check whether the microphone is live or stopping before retrying.",
+  );
   const statusDotClass = $derived(
     statusPresentation.tone === "good" ? "bg-[var(--ti-success)]"
       : statusPresentation.tone === "warning" ? "bg-[var(--ti-warning)]"
@@ -125,6 +136,7 @@
 
   async function selectSource(requested: Source): Promise<void> {
     if (busy || !canSelectSource || !meeting || choice === requested) return;
+    errorArea = "source";
     cancelAutoClose();
     busy = true;
     errorMessage = "";
@@ -167,6 +179,7 @@
 
   async function meetingAction(): Promise<void> {
     if (busy || stopping || foreignOwner || (!canStart && !canStop) || !meeting) return;
+    errorArea = "meeting";
     const stop = canStop;
     if (stop && !confirmingStop) {
       confirmingStop = true;
@@ -204,6 +217,7 @@
 
   async function toggleMute(): Promise<void> {
     if (busy || !live || !meeting) return;
+    errorArea = "mute";
     cancelAutoClose();
     busy = true;
     errorMessage = "";
@@ -230,6 +244,7 @@
 
   async function toggleCaptions(): Promise<void> {
     if (busy) return;
+    errorArea = "captions";
     cancelAutoClose();
     busy = true;
     errorMessage = "";
@@ -253,7 +268,10 @@
 
   async function openMain(): Promise<void> {
     try { await openTranslateIt(); }
-    catch { errorMessage = "TranslateIT window could not be opened."; }
+    catch {
+      errorArea = "window";
+      errorMessage = "TranslateIT window could not be opened.";
+    }
   }
 
   onMount(() => {
@@ -388,17 +406,21 @@
 
     <div bind:this={feedbackRegion} class="min-h-0 flex-1 overflow-y-auto px-4 py-2" role="region" aria-label="Quick Access status and recovery" tabindex="0">
       {#if errorMessage}
-        <p class="qa-feedback qa-error" role="alert">{errorMessage}</p>
+        <div class="grid min-w-0 gap-1.5" role="alert">
+          <strong class="text-[13px] font-semibold text-[var(--ti-danger)]">Action not confirmed</strong>
+          <p class="qa-feedback qa-error break-words">{errorMessage}</p>
+          <p class="qa-feedback break-words">{recoveryInstruction}</p>
+        </div>
       {:else if resultMessage}
         <p class="qa-feedback" role="status" aria-live="polite" aria-atomic="true">{resultMessage}</p>
       {:else if needsStop}
         <p class="qa-feedback qa-error" role="alert">Audio needs cleanup. Use Retry Stop to recover.</p>
       {:else if foreignOwner}
-        <p class="qa-feedback">Another feature currently owns Meeting audio. Return to TranslateIT to finish that action before changing the source here.</p>
+        <p class="qa-feedback">Another feature is using audio. Finish that action in TranslateIT before changing the source here.</p>
       {:else if stopping}
         <p class="qa-feedback">Meeting is {meeting?.lifecycle === "starting" ? "starting" : "stopping"}. Audio controls remain unavailable until its status is confirmed.</p>
       {:else if !snapshot || snapshot.revision <= 0}
-        <p class="qa-feedback">Meeting status has not been verified yet. Open TranslateIT to check setup if this persists.</p>
+        <p class="qa-feedback">Meeting status is not confirmed yet. Open TranslateIT → Meeting to check the current state if this continues.</p>
       {:else if !live && !canStart}
         <p class="qa-feedback">{choice === "original"
           ? "Connect a physical microphone and the virtual audio route."

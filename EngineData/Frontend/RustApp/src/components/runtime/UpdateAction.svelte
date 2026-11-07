@@ -18,6 +18,18 @@
 
   let update = $state<AppUpdateCheck | null>(null);
   let busy = $state(false);
+  // Keep the reason for a disabled update visible; a title tooltip alone
+  // cannot be reliably discovered by touch, keyboard or screen readers.
+  const blockerHint = $derived(
+    audioLocked
+      ? audioOwnerKind === "meeting" ? "Stop Translation to update."
+        : audioOwnerKind === "mic_test" ? "Stop Mic Test to update."
+        : audioOwnerKind === "voice_recording" ? "Stop recording to update."
+        : "Finish the current audio action to update."
+      : myVoiceRecording ? "Stop recording to update."
+      : voiceBuildActive ? "Wait for My Voice creation to finish."
+      : "",
+  );
 
   onMount(() => {
     void (async () => {
@@ -74,10 +86,12 @@
 </script>
 
 {#if update?.available}
+  <div class="flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-1">
   <button
     type="button"
     class="ti-button ti-button-secondary min-h-10 shrink-0 px-3 text-[13px]"
     disabled={busy || audioLocked || myVoiceRecording || voiceBuildActive}
+    aria-describedby={blockerHint ? "translateit-update-blocker" : undefined}
     title={audioLocked
       ? audioOwnerKind === "meeting"
         ? "Stop Translation before updating."
@@ -93,4 +107,10 @@
           : update.notes ?? "A TranslateIT update is ready."}
     onclick={() => void install()}
   >{busy ? "Updating..." : `Update ${update.version ?? ""}`}</button>
+    {#if blockerHint}
+      <p id="translateit-update-blocker" class="m-0 max-w-[240px] break-words text-[13px] leading-5 text-[var(--ti-text-muted)]" role="status">
+        {blockerHint}
+      </p>
+    {/if}
+  </div>
 {/if}
