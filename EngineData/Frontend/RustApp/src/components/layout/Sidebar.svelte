@@ -22,7 +22,7 @@
   function presenceDot(): string {
     if (presence === "Live" || presence === "Ready") return "bg-[var(--ti-success)]";
     if (presence === "Unavailable") return "bg-[var(--ti-danger)]";
-    if (presence === "Setup Needed" || presence === "Stop Needed" || presence === "Check Status") return "bg-[var(--ti-warning)]";
+    if (presence === "Setup Needed" || presence === "Stop Needed") return "bg-[var(--ti-warning)]";
     return "bg-[var(--ti-text-soft)]";
   }
 
@@ -46,7 +46,7 @@
     <TranslateITMark size={36} />
     <div class="ti-sidebar-brand-copy min-w-0">
       <h1 class="m-0 truncate text-[14px] font-bold tracking-[-0.02em]">TranslateIT</h1>
-      <p class="mt-0.5 truncate text-[11px] text-[var(--ti-text-soft)]">Indonesian ↔ English</p>
+      <p class="mt-0.5 truncate text-[12px] text-[var(--ti-text-soft)]">Indonesian ↔ English</p>
     </div>
   </header>
 
@@ -70,7 +70,7 @@
   <div class="ti-sidebar-presence mt-auto border-t border-[var(--ti-border)] px-2 pt-3">
     <div class="flex items-center gap-2" role="status" aria-live="polite" aria-atomic="true">
       <span class={`size-1.5 rounded-full ${presenceDot()}`} aria-hidden="true"></span>
-      <strong class="ti-presence-label truncate text-[11px] font-semibold text-[var(--ti-text-muted)]">{presenceLabel()}</strong>
+      <strong class="ti-presence-label truncate text-[12px] font-semibold text-[var(--ti-text-muted)]">{presenceLabel()}</strong>
     </div>
   </div>
 </aside>

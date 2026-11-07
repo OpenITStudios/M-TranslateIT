@@ -215,17 +215,17 @@
         <p class="ti-page-copy">Manage your microphone, captions, and meeting setup.</p>
       </div>
     </header>
-    <div class="grid grid-cols-1 gap-5 lg:grid-cols-[190px_minmax(0,1fr)]">
-      <div class="flex flex-col gap-1 self-start rounded-[var(--ti-radius-md)] bg-[var(--ti-surface-soft)] p-2.5" role="group" aria-label="Settings categories">
-        <p class="px-3 pb-1 pt-2 text-[12px] font-semibold text-[var(--ti-text-muted)]">Settings</p>
-        <button type="button" class={"flex min-h-10 items-center rounded-[var(--ti-radius-sm)] border-l-2 px-3 text-left text-[13px] transition-colors " + (tab === "meeting" ? "border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] font-semibold text-[var(--ti-text)]" : "border-transparent text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)] hover:text-[var(--ti-text)]")}
+    <div class="grid min-w-0 grid-cols-1 gap-3 lg:grid-cols-[190px_minmax(0,1fr)] lg:gap-5">
+      <div class="flex w-full min-w-0 flex-nowrap gap-1 self-start overflow-x-auto rounded-[var(--ti-radius-md)] bg-[var(--ti-surface-soft)] p-2 lg:w-auto lg:flex-col lg:overflow-visible lg:p-2.5" role="group" aria-label="Settings categories">
+        <p class="hidden px-3 pb-1 pt-2 text-[12px] font-semibold text-[var(--ti-text-muted)] lg:block">Settings</p>
+        <button type="button" class={"flex min-h-11 shrink-0 items-center whitespace-nowrap rounded-[var(--ti-radius-sm)] border-b-2 px-3 text-left text-[13px] transition-colors lg:min-h-10 lg:whitespace-normal lg:border-b-0 lg:border-l-2 " + (tab === "meeting" ? "border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] font-semibold text-[var(--ti-text)]" : "border-transparent text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)] hover:text-[var(--ti-text)]")}
           aria-pressed={tab === "meeting"} aria-controls="settings-category-panel"
           onclick={() => { tab = "meeting"; diagnosticsOpen = false; }}>Voice &amp; Audio</button>
-        <button type="button" class={"flex min-h-10 items-center rounded-[var(--ti-radius-sm)] border-l-2 px-3 text-left text-[13px] transition-colors " + (tab === "translation" ? "border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] font-semibold text-[var(--ti-text)]" : "border-transparent text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)] hover:text-[var(--ti-text)]")}
+        <button type="button" class={"flex min-h-11 shrink-0 items-center whitespace-nowrap rounded-[var(--ti-radius-sm)] border-b-2 px-3 text-left text-[13px] transition-colors lg:min-h-10 lg:whitespace-normal lg:border-b-0 lg:border-l-2 " + (tab === "translation" ? "border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] font-semibold text-[var(--ti-text)]" : "border-transparent text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)] hover:text-[var(--ti-text)]")}
           aria-pressed={tab === "translation"} aria-controls="settings-category-panel"
           onclick={() => { tab = "translation"; diagnosticsOpen = false; }}>Meeting Captions</button>
-        <p class="mt-3 px-3 pb-1 text-[12px] font-semibold text-[var(--ti-text-muted)]">Support</p>
-        <button type="button" class={"flex min-h-10 items-center rounded-[var(--ti-radius-sm)] border-l-2 px-3 text-left text-[13px] transition-colors " + (tab === "advanced" ? "border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] font-semibold text-[var(--ti-text)]" : "border-transparent text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)] hover:text-[var(--ti-text)]")}
+        <p class="mt-3 hidden px-3 pb-1 text-[12px] font-semibold text-[var(--ti-text-muted)] lg:block">Support</p>
+        <button type="button" class={"flex min-h-11 shrink-0 items-center whitespace-nowrap rounded-[var(--ti-radius-sm)] border-b-2 px-3 text-left text-[13px] transition-colors lg:min-h-10 lg:whitespace-normal lg:border-b-0 lg:border-l-2 " + (tab === "advanced" ? "border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] font-semibold text-[var(--ti-text)]" : "border-transparent text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)] hover:text-[var(--ti-text)]")}
           aria-pressed={tab === "advanced"} aria-controls="settings-category-panel"
           onclick={() => { tab = "advanced"; diagnosticsOpen = false; }}>Help</button>
       </div>
@@ -233,10 +233,10 @@
         aria-label={tab === "meeting" ? "Voice & Audio settings" : tab === "translation" ? "Meeting Captions settings" : "Help and diagnostics"}>
     {#if tab === "meeting"}
       <article class="ti-panel overflow-hidden">
-        <header class="flex items-start justify-between gap-5 border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-4">
-          <div>
+        <header class="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-4">
+          <div class="min-w-0 flex-1">
             <h3 class="m-0 text-[16px] font-semibold tracking-[-0.015em]">Voice &amp; Audio</h3>
-            <p class="mb-0 mt-1 text-[12px] text-[var(--ti-text-muted)]">Choose your audio devices here. Changes are saved only after Windows confirms them.</p>
+            <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">Choose your audio devices here. Changes are saved only after Windows confirms them.</p>
           </div>
           {#if meetingResourcesLocked}
             <StatusBadge label="In Use" tone="neutral" />
@@ -257,7 +257,7 @@
                 <option value={currentDevice("microphone")}>{currentDevice("microphone")} · unavailable</option>
               {/if}
             </select>
-            <small class="text-[12.5px] leading-5 text-[var(--ti-text-muted)]">Choose the microphone you speak into, not the virtual audio device used in your calling app.</small>
+            <small class="text-[13px] leading-5 text-[var(--ti-text-muted)]">Choose the microphone you speak into, not the virtual audio device used in your calling app.</small>
           </label>
 
           <label class="grid min-w-0 gap-2">
@@ -271,7 +271,7 @@
                 <option value={currentDevice("meeting-sound")}>{currentDevice("meeting-sound")} · unavailable</option>
               {/if}
             </select>
-            <small class="text-[12.5px] leading-5 text-[var(--ti-text-muted)]">Optional for incoming captions. Select the headphones or speakers used by your call. This does not change the calling app’s audio settings.</small>
+            <small class="text-[13px] leading-5 text-[var(--ti-text-muted)]">Optional for incoming captions. Select the headphones or speakers used by your call. This does not change the calling app’s audio settings.</small>
           </label>
         </div>
 

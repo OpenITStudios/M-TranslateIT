@@ -162,19 +162,19 @@
   </header>
 
   <article class="ti-panel overflow-hidden">
-    <div class="flex items-start justify-between gap-4 px-6 py-5">
-      <div class="min-w-0">
+    <div class="flex flex-wrap items-start justify-between gap-3 px-4 py-4 sm:px-6 sm:py-5">
+      <div class="min-w-0 flex-1">
         <strong class="text-[15px] font-semibold">{meeting.live && meetingStatus?.audio_source === "original" ? MEETING_SOURCE_LABELS.original : meeting.live && meetingStatus?.audio_source === "translateit" ? MEETING_SOURCE_LABELS.translateit : "Meeting audio"}</strong>
         <p class="mb-0 mt-2 text-[13px] leading-6 text-[var(--ti-text-muted)]" aria-live="polite">{statusMessage}</p>
       </div>
       <StatusBadge label={statusLabel} tone={statusTone} />
     </div>
-    <footer class="flex justify-end border-t border-[var(--ti-border)] px-6 py-4" aria-label="Meeting main action">
-      <button type="button" class={"ti-button min-w-44 " + (primaryControl.action === "stop" ? "ti-button-danger" : "")}
+    <footer class="flex justify-end border-t border-[var(--ti-border)] px-4 py-4 sm:px-6" aria-label="Meeting main action">
+      <button type="button" class={"ti-button w-full min-w-0 sm:w-auto sm:min-w-44 " + (primaryControl.action === "stop" ? "ti-button-danger" : "")}
         disabled={!actionEnabled} onclick={handlePrimary}>{primaryLabel}</button>
     </footer>
     {#if sourceChangeAllowed && meetingStatus}
-      <div class="border-t border-[var(--ti-border)] px-6 py-4">
+      <div class="border-t border-[var(--ti-border)] px-4 py-4 sm:px-6">
         <label for="meeting-audio-source" class="ti-field-label">Audio sent to meeting</label>
         <select id="meeting-audio-source" class="ti-field mt-2 min-h-11 px-3"
           value={currentSource} disabled={sourceChanging || actionBusy || !sourceChangeAllowed}
@@ -183,13 +183,13 @@
           <option value="translateit">{MEETING_SOURCE_LABELS.translateit}</option>
           <option value="original">{MEETING_SOURCE_LABELS.original}</option>
         </select>
-        <p class="mb-0 mt-2 text-xs text-[var(--ti-text-muted)]">
+        <p class="mb-0 mt-2 text-[13px] leading-5 text-[var(--ti-text-muted)]">
           Both options use the same virtual microphone selected in your calling app.
         </p>
       </div>
     {/if}
     {#if activityVisible && meetingStatus && meetingStatus.audio_source !== "original"}
-      <div class="border-t border-[var(--ti-border)] px-6 py-5">
+      <div class="border-t border-[var(--ti-border)] px-4 py-4 sm:px-6 sm:py-5">
         <MeetingActivity status={meetingStatus} turns={meetingTurns} />
       </div>
     {/if}

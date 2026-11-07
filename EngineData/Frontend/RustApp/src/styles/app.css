@@ -14,7 +14,8 @@
 
   body {
     margin: 0;
-    min-width: 760px;
+    /* Window minimums belong to Tauri; CSS must not crop compact/high-DPI views. */
+    min-width: 0;
     min-height: 100vh;
     overflow: hidden;
     background: var(--ti-bg);

@@ -33,7 +33,7 @@
   );
 </script>
 
-<header class="ti-appbar flex min-h-16 shrink-0 items-center gap-4 border-b border-[var(--ti-border)] bg-[var(--ti-bg)] px-6">
+<header class="ti-appbar flex min-h-16 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-[var(--ti-border)] bg-[var(--ti-bg)] px-4 py-2 sm:px-6">
   <div class="min-w-0 shrink-0">
     <div class="flex items-baseline gap-2.5">
       <strong class="text-[14px] font-semibold tracking-[-0.01em]">{routeTitle}</strong>
@@ -49,7 +49,7 @@
   >
     <Zap size={15} />
     Quick Access
-    <span class="ml-1 rounded bg-[var(--ti-surface-soft)] px-1.5 py-0.5 text-[12px] text-[var(--ti-text-muted)]" aria-hidden="true">Ctrl+K</span>
+    <span class="ml-1 hidden rounded bg-[var(--ti-surface-soft)] px-1.5 py-0.5 text-[12px] text-[var(--ti-text-muted)] lg:inline" aria-hidden="true">Ctrl+K</span>
   </button>
   <UpdateAction
     audioLocked={snapshot.resources.audio_locked}
@@ -75,7 +75,7 @@
 </header>
 
 <!-- A dedicated status strip keeps long, fully readable notices away from the action toolbar. -->
-<div class="ti-notice-bar flex min-h-9 shrink-0 items-center border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-6 py-2">
+<div class="ti-notice-bar flex min-h-9 shrink-0 items-center border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-4 py-2 sm:px-6">
   <p class="m-0 min-w-0 max-h-16 flex-1 overflow-y-auto break-words text-left text-[13px] leading-[1.5] text-[var(--ti-text-muted)]"
     role="status" aria-live="polite" title={notice}>{notice}</p>
 </div>
