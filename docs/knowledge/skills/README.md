@@ -13,3 +13,5 @@ The existing six skills retain their current semantic owners. Their procedures l
 
 - [Skill roles and frozen baseline](./skill-map.md)
 - [Specialist activation matrix](./activation-matrix.md)
+
+- [Optional pinned Matt Pocock engineering method overlays](../../../.agents/methods/README.md), sourced from an attributed MIT snapshot; the six project Skill owners are unchanged.

@@ -59,6 +59,10 @@ Svelte 5 is current frontend architecture
 
 Every domain specialist remains governed by its own `## Procedure` and `## Proof` section. The existing `.agents/evals/skill-procedure.json` tests safe ownership, no-skill, cross-owner handoff and proof-claim boundaries without adding a seventh specialist. `development-brief` remains the complex-development meta procedure. Static admission and externally scored receipts never authorize a lane/scope switch.
 
+## Optional method overlay
+
+Use [the Matt Pocock method overlay](../../../.agents/methods/README.md) as **one selectively consulted technique** only after identifying the current canonical owner. Diagnosis may consult `diagnosing-bugs` for a red-capable feedback loop; reviews may consult the separate Standards/Spec axes; source repair may use test-first vertical slices where actual execution is available. None is a registered seventh specialist. External beta, PR, setup, install, hook, CI, and autonomous orchestration procedures stay inactive. The upstream source cannot grant permission or real runtime proof.
+
 ## Selection test
 
 Before loading a specialist ask:

@@ -48,6 +48,15 @@ REQUIRED_PATHS = (
     "tools/tests/test_repository_information_architecture.py",
     "planning/README.md",
     ".agents/README.md",
+    ".agents/vendor/mattpocock/LICENSE",
+    ".agents/vendor/mattpocock/snapshot.json",
+    ".agents/vendor/README.md",
+    ".agents/methods/README.md",
+    ".agents/methods/WORKFLOWS.md",
+    ".agents/methods/catalog.json",
+    ".agents/evals/method-overlay-cases.json",
+    "tools/repository_upstream_skills.py",
+    "tools/tests/test_repository_upstream_skills.py",
     "tools/README.md",
     "tooling/README.md",
     "docs/system/README.md",
@@ -777,6 +786,12 @@ def check_agent_skill_evaluations(errors: list[str]) -> None:
         errors.extend(f"skill package admission: {issue}" for issue in admit_skills())
     except (OSError, ValueError, KeyError, TypeError, ImportError) as exc:
         fail(errors, f"invalid skill package admission: {exc}")
+
+    try:
+        from repository_upstream_skills import verify_upstream
+        errors.extend(f"upstream method snapshot: {issue}" for issue in verify_upstream())
+    except (OSError, ValueError, KeyError, TypeError, ImportError) as exc:
+        fail(errors, f"invalid upstream method snapshot: {exc}")
 
 
 def check_repository_information_architecture(errors: list[str]) -> None:

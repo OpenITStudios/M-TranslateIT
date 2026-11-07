@@ -13,6 +13,10 @@ This is a navigation entry, not an agent, work-state registry or second set of i
 
 The canonical identities/classes are in [skill-registry.json](./skill-registry.json); detailed procedures live only in their matching `skills/*/SKILL.md`. Before a write, apply the existing [permission policy](./permissions/permission-policy.json) through `tools/repository_permissions.py`. The existing evaluation corpora in [evals](./evals/manifest.json) measure declared routing/procedure/permission expectations; synthetic receipts never demonstrate real model accuracy.
 
+## External methodology library (not registered Skills)
+
+The complete MIT-licensed upstream catalog (39 Matt Pocock skill definitions and all accompanying skill files) is pinned in [vendor/mattpocock](./vendor/mattpocock/snapshot.json), with attribution in [LICENSE](./vendor/mattpocock/LICENSE). It is inert source data. [The adapted method overlay](./methods/README.md), [method catalog](./methods/catalog.json) and [workflow runbook](./methods/WORKFLOWS.md) map only compatible techniques onto the six canonical TranslateIT owners. Upstream `ask-matt`, setup, PR/hook automation and beta skills never become a competing router or authorization. Static verification: `python tools/repository_upstream_skills.py --check`.
+
 ## Activation budget
 
 Context Recovery and Plan load no specialist by default. Bounded and Standard Development use at most one specialist. Complex Development uses the existing brief plus at most one domain specialist, only when needed. Semantic ownership selects the skill; language, framework or library do not. Cross-domain symptoms produce a bounded proposed handoff, **not** automatic specialist switching.

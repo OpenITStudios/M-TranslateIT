@@ -64,6 +64,10 @@ Continuous Session Listening capture, finalized utterances, VAD/segmentation, Wi
 
 Offline Setup/payload, private Python runtime, controlled models/voice assets, provider delivery, notices/provenance, installed layout and clean-machine proof.
 
+## Engineering methods, separate from project skills
+
+See [the source-pinned method overlay](../../../.agents/methods/README.md) for Matt Pocock's 39 upstream SKILL.md definitions and their 114 support/skill files. These remain inert, read-on-demand patterns; no upstream method is a new agent, registered specialist, hosted executor, issue tracker or branch authority. The existing six identities, routing evals and zero/one specialist budget remain unchanged. `tools/repository_upstream_skills.py --check` validates the vendor integrity/catalog; it does **not** measure live model compliance.
+
 ## Frozen baseline rule
 
 Do not add/rename/split/duplicate a project skill because a new framework/library/model/tool appears. A new skill requires evidence of a genuinely distinct reusable semantic capability that existing owners cannot represent without overlap.

@@ -1,0 +1,280 @@
+{
+  "schemaVersion": 1,
+  "source": "../vendor/mattpocock/snapshot.json",
+  "authority": "Read-only optional techniques; root AGENTS and canonical six project skills retain all execution, ownership, permission and proof authority.",
+  "methods": [
+    {
+      "id": "ask-matt",
+      "bucket": "engineering",
+      "sourcePath": "skills/engineering/ask-matt/SKILL.md",
+      "sourceSha": "4bfeeb61dae548b8b7754c4fba7bd40ab3926099",
+      "activation": "reference-only"
+    },
+    {
+      "id": "code-review",
+      "bucket": "engineering",
+      "sourcePath": "skills/engineering/code-review/SKILL.md",
+      "sourceSha": "83183e0ad36fd0eef25d37c7e483284b7e34c1f0",
+      "activation": "conditional"
+    },
+    {
+      "id": "codebase-design",
+      "bucket": "engineering",
+      "sourcePath": "skills/engineering/codebase-design/SKILL.md",
+      "sourceSha": "3f63c8146dd2604b419c929e9876b90c30d410e9",
+      "activation": "conditional"
+    },
+    {
+      "id": "diagnosing-bugs",
+      "bucket": "engineering",
+      "sourcePath": "skills/engineering/diagnosing-bugs/SKILL.md",
+      "sourceSha": "d039541ddd1c46e6ddbd662fe99d49b686fc5e12",
+      "activation": "conditional"
+    },
+    {
+      "id": "domain-modeling",
+      "bucket": "engineering",
+      "sourcePath": "skills/engineering/domain-modeling/SKILL.md",
+      "sourceSha": "a4438c6879c517d1a08e2b5fbca049b632688dfe",
+      "activation": "conditional"
+    },
+    {
+      "id": "grill-with-docs",
+      "bucket": "engineering",
+      "sourcePath": "skills/engineering/grill-with-docs/SKILL.md",
+      "sourceSha": "62b9efb6f991d1b229adee7506962f13ced0c499",
+      "activation": "explicit-only"
+    },
+    {
+      "id": "implement-spec",
+      "bucket": "engineering",
+      "sourcePath": "skills/engineering/implement-spec/SKILL.md",
+      "sourceSha": "73d36c23958bd04423ba3ded1c90ff0d0b858b72",
+      "activation": "explicit-only"
+    },
+    {
+      "id": "implement",
+      "bucket": "engineering",
+      "sourcePath": "skills/engineering/implement/SKILL.md",
+      "sourceSha": "bd49e472984c7b99aac40286fdae749bb955a842",
+      "activation": "explicit-only"
+    },
+    {
+      "id": "improve-codebase-architecture",
+      "bucket": "engineering",
+      "sourcePath": "skills/engineering/improve-codebase-architecture/SKILL.md",
+      "sourceSha": "f1eabb568464f03ae79a3346fc1918fdde6d8285",
+      "activation": "explicit-only"
+    },
+    {
+      "id": "pr",
+      "bucket": "engineering",
+      "sourcePath": "skills/engineering/pr/SKILL.md",
+      "sourceSha": "84dd4fb2f068e9f6282690235d20dd505b418119",
+      "activation": "reference-only"
+    },
+    {
+      "id": "prototype",
+      "bucket": "engineering",
+      "sourcePath": "skills/engineering/prototype/SKILL.md",
+      "sourceSha": "a0044501fe0d385b4d8575b610188ede9b236ccf",
+      "activation": "explicit-only"
+    },
+    {
+      "id": "research",
+      "bucket": "engineering",
+      "sourcePath": "skills/engineering/research/SKILL.md",
+      "sourceSha": "ffc9eb89849cc4cf74962ce93d786ffd17c6a5dc",
+      "activation": "conditional"
+    },
+    {
+      "id": "retro",
+      "bucket": "engineering",
+      "sourcePath": "skills/engineering/retro/SKILL.md",
+      "sourceSha": "12149acf2dd23b4514dec57b04a6293eaa1352fa",
+      "activation": "explicit-only"
+    },
+    {
+      "id": "setup-matt-pocock-skills",
+      "bucket": "engineering",
+      "sourcePath": "skills/engineering/setup-matt-pocock-skills/SKILL.md",
+      "sourceSha": "2df0b07981718fa5d9a51526dfbcaee87e3a543d",
+      "activation": "reference-only"
+    },
+    {
+      "id": "tdd",
+      "bucket": "engineering",
+      "sourcePath": "skills/engineering/tdd/SKILL.md",
+      "sourceSha": "01eadaa34e7c9a63a67d6dc3cce1cc81b0e49985",
+      "activation": "conditional"
+    },
+    {
+      "id": "to-spec",
+      "bucket": "engineering",
+      "sourcePath": "skills/engineering/to-spec/SKILL.md",
+      "sourceSha": "3f52599ae2a4347aee5a07432c2707518e691a7f",
+      "activation": "explicit-only"
+    },
+    {
+      "id": "to-tickets",
+      "bucket": "engineering",
+      "sourcePath": "skills/engineering/to-tickets/SKILL.md",
+      "sourceSha": "9b77a01db9460c99c22d03c910c349f890f12c0e",
+      "activation": "explicit-only"
+    },
+    {
+      "id": "triage",
+      "bucket": "engineering",
+      "sourcePath": "skills/engineering/triage/SKILL.md",
+      "sourceSha": "3fd5617e906cf9b71a6b17424791adb905fc248b",
+      "activation": "explicit-only"
+    },
+    {
+      "id": "wayfinder",
+      "bucket": "engineering",
+      "sourcePath": "skills/engineering/wayfinder/SKILL.md",
+      "sourceSha": "975d6bf9c0a49d18a651f3335e0b4dcf8650fe31",
+      "activation": "explicit-only"
+    },
+    {
+      "id": "wizard",
+      "bucket": "engineering",
+      "sourcePath": "skills/engineering/wizard/SKILL.md",
+      "sourceSha": "c4294ad8298b9b95fc727496b1b802b1f7363fba",
+      "activation": "explicit-only"
+    },
+    {
+      "id": "chief-of-staff",
+      "bucket": "in-progress",
+      "sourcePath": "skills/in-progress/chief-of-staff/SKILL.md",
+      "sourceSha": "22f0b6626f07bfdfa78b70d006742dfa2260e9c4",
+      "activation": "reference-only"
+    },
+    {
+      "id": "claude-handoff",
+      "bucket": "in-progress",
+      "sourcePath": "skills/in-progress/claude-handoff/SKILL.md",
+      "sourceSha": "77f82fc59c89c3a83ed5a92521dc2869f0533724",
+      "activation": "reference-only"
+    },
+    {
+      "id": "loop-me",
+      "bucket": "in-progress",
+      "sourcePath": "skills/in-progress/loop-me/SKILL.md",
+      "sourceSha": "e58a474ca80feffdeb28842bc3bdee37da6510e7",
+      "activation": "reference-only"
+    },
+    {
+      "id": "setup-ts-deep-modules",
+      "bucket": "in-progress",
+      "sourcePath": "skills/in-progress/setup-ts-deep-modules/SKILL.md",
+      "sourceSha": "7e30047eaeda175de5d93886596a37baf365bb90",
+      "activation": "reference-only"
+    },
+    {
+      "id": "software-factory",
+      "bucket": "in-progress",
+      "sourcePath": "skills/in-progress/software-factory/SKILL.md",
+      "sourceSha": "c60583aa2030d3eea42a3bbb85126c79c8a6eaea",
+      "activation": "reference-only"
+    },
+    {
+      "id": "writing-beats",
+      "bucket": "in-progress",
+      "sourcePath": "skills/in-progress/writing-beats/SKILL.md",
+      "sourceSha": "3d3b25b605491adc5c62ae5423127717a94b9632",
+      "activation": "reference-only"
+    },
+    {
+      "id": "writing-fragments",
+      "bucket": "in-progress",
+      "sourcePath": "skills/in-progress/writing-fragments/SKILL.md",
+      "sourceSha": "c7c889b880cf9c8d289119dea5ff240641b615ca",
+      "activation": "reference-only"
+    },
+    {
+      "id": "writing-shape",
+      "bucket": "in-progress",
+      "sourcePath": "skills/in-progress/writing-shape/SKILL.md",
+      "sourceSha": "02f2866d13e72504e010f2ad3458eb9b36b876db",
+      "activation": "reference-only"
+    },
+    {
+      "id": "git-guardrails-claude-code",
+      "bucket": "misc",
+      "sourcePath": "skills/misc/git-guardrails-claude-code/SKILL.md",
+      "sourceSha": "58bcdd875b164093b95f436fa32a65c6cb5eb572",
+      "activation": "reference-only"
+    },
+    {
+      "id": "migrate-to-shoehorn",
+      "bucket": "misc",
+      "sourcePath": "skills/misc/migrate-to-shoehorn/SKILL.md",
+      "sourceSha": "ae4f965e204fc93cedbc4e2c306e92829d93f800",
+      "activation": "reference-only"
+    },
+    {
+      "id": "scaffold-exercises",
+      "bucket": "misc",
+      "sourcePath": "skills/misc/scaffold-exercises/SKILL.md",
+      "sourceSha": "d87df28e7d8abb4e57ecc6e47d71c274d16054c7",
+      "activation": "explicit-only"
+    },
+    {
+      "id": "setup-pre-commit",
+      "bucket": "misc",
+      "sourcePath": "skills/misc/setup-pre-commit/SKILL.md",
+      "sourceSha": "1b9708168263067adb4684d06ebb8f4ccfe9682c",
+      "activation": "reference-only"
+    },
+    {
+      "id": "grill-me",
+      "bucket": "productivity",
+      "sourcePath": "skills/productivity/grill-me/SKILL.md",
+      "sourceSha": "3947ff9c4ad980d14fc07fccbf659d47c114e81d",
+      "activation": "explicit-only"
+    },
+    {
+      "id": "grilling",
+      "bucket": "productivity",
+      "sourcePath": "skills/productivity/grilling/SKILL.md",
+      "sourceSha": "d2f09a18e6a6c65c55f1271ba08dfeaf06f0bed3",
+      "activation": "explicit-only"
+    },
+    {
+      "id": "handoff",
+      "bucket": "productivity",
+      "sourcePath": "skills/productivity/handoff/SKILL.md",
+      "sourceSha": "a224edc643a20ddb989f9bca1547440169159810",
+      "activation": "explicit-only"
+    },
+    {
+      "id": "teach",
+      "bucket": "productivity",
+      "sourcePath": "skills/productivity/teach/SKILL.md",
+      "sourceSha": "493fa3bae0dada971c4dfb965790e56920b1dced",
+      "activation": "explicit-only"
+    },
+    {
+      "id": "to-questionnaire",
+      "bucket": "productivity",
+      "sourcePath": "skills/productivity/to-questionnaire/SKILL.md",
+      "sourceSha": "dadd0c00d6a350acaa15bb9ca1b96b20ead684ca",
+      "activation": "explicit-only"
+    },
+    {
+      "id": "wait-what",
+      "bucket": "productivity",
+      "sourcePath": "skills/productivity/wait-what/SKILL.md",
+      "sourceSha": "9b15cd1a7dda0854ca093e29e3e0de57e241b2ac",
+      "activation": "explicit-only"
+    },
+    {
+      "id": "writing-for-agents",
+      "bucket": "productivity",
+      "sourcePath": "skills/productivity/writing-for-agents/SKILL.md",
+      "sourceSha": "a37608daf6e835e767deecfb498facecaaba82ba",
+      "activation": "conditional"
+    }
+  ]
+}

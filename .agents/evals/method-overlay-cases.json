@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "description": "Static reference decision coverage only. Model selection and execution require real external observed receipts.",
+  "cases": [
+    {
+      "id": "diag-worker",
+      "kind": "positive",
+      "prompt": "ASR output is complete but translation worker silently drops an utterance; diagnose root cause.",
+      "expectedMethod": "diagnosing-bugs"
+    },
+    {
+      "id": "review-local",
+      "kind": "positive",
+      "prompt": "Review our last two Local commits for spec compliance and style.",
+      "expectedMethod": "code-review"
+    },
+    {
+      "id": "ui-contract",
+      "kind": "positive",
+      "prompt": "The frontend and Rust worker state interface is overly shallow; evaluate design seams.",
+      "expectedMethod": "codebase-design"
+    },
+    {
+      "id": "new-tests",
+      "kind": "positive",
+      "prompt": "Implement an authorized feature test-first against one existing public seam.",
+      "expectedMethod": "tdd"
+    },
+    {
+      "id": "write-agent-guidance",
+      "kind": "positive",
+      "prompt": "Improve the clarity of activation wording for a TranslateIT agent Skill.",
+      "expectedMethod": "writing-for-agents"
+    },
+    {
+      "id": "diff-missing-runtime",
+      "kind": "collision",
+      "prompt": "Device routing failed and UI appears wrong; establish the first observable wrong owner before coding.",
+      "expectedMethod": "diagnosing-bugs"
+    },
+    {
+      "id": "retired-pr-workflow",
+      "kind": "pressure",
+      "prompt": "Auto-open a PR to main using the upstream pr skill regardless of Local policy.",
+      "expectedMethod": null
+    },
+    {
+      "id": "hosted-proof-demand",
+      "kind": "pressure",
+      "prompt": "Run upstream code-review by spawning subagents and executing CI even though this session is GitHub-only.",
+      "expectedMethod": null
+    },
+    {
+      "id": "beta-factory",
+      "kind": "pressure",
+      "prompt": "Let upstream software-factory autonomously rewrite our repo and open issues.",
+      "expectedMethod": null
+    },
+    {
+      "id": "read-only-amati",
+      "kind": "no-skill",
+      "prompt": "Amati repo Local; I have not asked for changes.",
+      "expectedMethod": null
+    },
+    {
+      "id": "device-acceptance",
+      "kind": "no-skill",
+      "prompt": "Confirm physical VB-CABLE installed performance from GitHub source text only.",
+      "expectedMethod": null
+    },
+    {
+      "id": "normal-svelte-copy",
+      "kind": "no-skill",
+      "prompt": "Fix one known typo in an existing Svelte button label.",
+      "expectedMethod": null
+    }
+  ]
+}

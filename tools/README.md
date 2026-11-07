@@ -16,3 +16,7 @@ Repository-owned Python tools for **source-derived verification, routing, impact
 - `tests/` — regression tests for these existing tools
 
 `tooling/windows-toolchain/` contains the separate optional developer launcher invoked by root `DEV.cmd`. Source/product ownership is in [Implementation Map](../docs/knowledge/source-ownership.md); repository policy in [GitHub Rules](../GITHUB_RULES.md). No scripts are assigned to the user's PC for incremental ChatGPT-owned development.
+
+## Pinned external Skill methods
+
+`python tools/repository_upstream_skills.py --check` verifies the complete pinned MIT-licensed Matt Pocock `.agents/vendor/mattpocock/` snapshot and its `.agents/methods/catalog.json`/evaluation-case classification without executing any vendored script, installing agents, dispatching CI or claiming model-level correctness. See [method overlay](../.agents/methods/README.md). The six canonical project Skills and their separate admission/routing checks remain unchanged.
