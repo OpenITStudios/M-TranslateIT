@@ -113,7 +113,7 @@
       </p>
       <div>
         <label class="block text-sm font-medium" for="myvoice-backup-destination">Backup destination (existing folder)</label>
-        <input id="myvoice-backup-destination" class="ti-input mt-2 w-full" type="text"
+        <input id="myvoice-backup-destination" class="ti-field mt-2 min-h-11 px-3 text-sm" type="text"
           bind:value={destination} placeholder="D:\Voice Backups" disabled={busy} />
         <button type="button" class="ti-button ti-button-secondary mt-3"
           disabled={busy || voiceChangesLocked || !destination.trim()}
@@ -123,7 +123,7 @@
       </div>
       <div class="border-t border-[var(--ti-border)] pt-4">
         <label class="block text-sm font-medium" for="myvoice-backup-source">Existing My Voice backup folder</label>
-        <input id="myvoice-backup-source" class="ti-input mt-2 w-full" type="text"
+        <input id="myvoice-backup-source" class="ti-field mt-2 min-h-11 px-3 text-sm" type="text"
           bind:value={source} placeholder="D:\Voice Backups\TranslateIT-MyVoice-..." disabled={busy} />
         <div class="mt-3 flex flex-wrap gap-2">
           <button type="button" class="ti-button ti-button-secondary"

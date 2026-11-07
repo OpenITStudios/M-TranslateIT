@@ -2,7 +2,8 @@
   import { Check, Copy, Download, ExternalLink, FolderOpen, RefreshCw, Trash2 } from "@lucide/svelte";
   import { runtimeApi, type MeetingCommittedTurn, type MeetingCommittedTurnsSnapshot, type SavedMeetingSessions } from "../../app/bridge/runtimeApi";
   import { languageName } from "../../app/shared/state";
-  import { meetingTime } from "../../app/runtime/meetingTranscriptPresentation";
+  import { meetingSpeakerLabel, meetingTime } from "../../app/runtime/meetingTranscriptPresentation";
+  import MeetingTurnBubble from "./MeetingTurnBubble.svelte";
 
   let { hasSession = false, onNotice, onDeleted }: {
     hasSession?: boolean;
@@ -241,28 +242,30 @@
               {:else}
                 <div class="max-h-[360px] divide-y divide-[var(--ti-border)] overflow-y-auto" aria-label="Saved conversation">
                   {#each preview.turns as turn (turn.sequence)}
-                    <article class="py-3 first:pt-0 last:pb-0">
-                      <header class="mb-2 flex items-center justify-between gap-3">
-                        <strong class="text-xs">{turn.lane === "you" ? "You" : "Meeting audio"}</strong>
-                        <span class="text-[11px] text-[var(--ti-text-muted)]">{meetingTime(turn.created_unix_ms)}</span>
-                      </header>
+                    <div class="py-3 first:pt-0 last:pb-0">
                       {#if language === "bilingual"}
-                        <span class="text-[10px] text-[var(--ti-text-muted)]">ORIGINAL · {languageName(turn.source_language)}</span>
-                        <p class="m-0 whitespace-pre-wrap break-words text-[13px] leading-6" lang={turn.source_language}>{turn.source_text}</p>
-                        <div class="mt-2 rounded-[var(--ti-radius-sm)] bg-[var(--ti-surface-raised)] p-2.5">
-                          <span class="text-[10px] text-[var(--ti-text-muted)]">TRANSLATION · {languageName(turn.target_language)}</span>
-                          <p class={"m-0 whitespace-pre-wrap break-words text-[13px] leading-6 " +
-                            (turn.translation_state === "translated" ? "" : "text-[var(--ti-warning)]")}>
-                            {turn.translation_state === "translated" ? turn.translated_text : "Translation unavailable"}
-                          </p>
-                        </div>
+                        <MeetingTurnBubble {turn} />
                       {:else}
                         {@const selected = textFor(turn, language)}
-                        <span class="text-[10px] text-[var(--ti-text-muted)]">{selected.label} · {languageName(selected.fallback ? turn.source_language : language)}</span>
-                        <p class={"m-0 whitespace-pre-wrap break-words text-[13px] leading-6 " +
-                          (selected.fallback ? "text-[var(--ti-warning)]" : "")}>{selected.text}</p>
+                        <div class={"flex w-full " + (turn.lane === "you" ? "justify-end" : "justify-start")}>
+                          <article
+                            class={"w-[min(88%,690px)] min-w-0 rounded-[var(--ti-radius-lg)] border px-4 py-3 " +
+                              (turn.lane === "you" ? "border-[var(--ti-border-strong)] bg-[var(--ti-surface-raised)]" :
+                                "border-[var(--ti-border)] bg-[var(--ti-surface-soft)]")}
+                            aria-label={meetingSpeakerLabel(turn.lane)}
+                          >
+                            <header class="mb-2 flex flex-wrap items-center justify-between gap-2">
+                              <strong class="text-[13px] font-semibold">{meetingSpeakerLabel(turn.lane)}</strong>
+                              <span class="text-[12px] text-[var(--ti-text-muted)]">{meetingTime(turn.created_unix_ms)}</span>
+                            </header>
+                            <span class="text-[12px] text-[var(--ti-text-muted)]">{selected.label} · {languageName(selected.fallback ? turn.source_language : language)}</span>
+                            <p class={"m-0 mt-1 whitespace-pre-wrap break-words text-[14px] leading-6 " +
+                              (selected.fallback ? "text-[var(--ti-warning)]" : "")}
+                              lang={selected.fallback ? turn.source_language : language}>{selected.text}</p>
+                          </article>
+                        </div>
                       {/if}
-                    </article>
+                    </div>
                   {/each}
                 </div>
               {/if}
