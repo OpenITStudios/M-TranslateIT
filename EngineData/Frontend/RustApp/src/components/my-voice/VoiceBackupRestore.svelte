@@ -76,45 +76,45 @@
   }
 </script>
 
-<section class="mt-4" aria-label="My Voice storage and backup">
+<section class="mt-4 min-w-0" aria-label="My Voice storage and backup">
   <button type="button"
-    class="flex items-center gap-2 text-left text-sm font-medium text-[var(--ti-text-muted)] underline underline-offset-4"
+    class="inline-flex min-h-10 items-center gap-2 rounded-[var(--ti-radius-sm)] px-2 text-left text-sm font-semibold text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)] hover:text-[var(--ti-text)]"
     aria-expanded={open} onclick={() => { open = !open; if (open) void loadRecoveryStatus(); }}>
-    <ShieldCheck size={15} /> Storage &amp; backup <ChevronDown size={14} />
+    <ShieldCheck size={15} aria-hidden="true" /> Storage &amp; backup <ChevronDown size={14} aria-hidden="true" class={open ? "rotate-180" : ""} />
   </button>
   {#if open}
-    <div class="ti-panel mt-3 space-y-4 p-4 sm:p-5">
+    <div class="ti-panel mt-3 min-w-0 space-y-4 p-4 sm:p-5">
       <p class="mb-0 text-sm leading-5 text-[var(--ti-text-muted)]">
         Your accepted recordings and voice versions are saved on this computer.
         Create a verified copy in another folder, preferably on an external drive.
         The application will not delete or replace earlier backups.
       </p>
       {#if recoveryUnknown}
-        <p role="status" class="mb-0 text-xs text-[var(--ti-warning)]">
+        <p role="status" class="mb-0 text-[13px] text-[var(--ti-warning)]">
           Couldn't verify saved training checkpoint status.
         </p>
       {:else if trainingRecovery && (trainingRecovery.preserved_checkpoint_candidates > 0 || trainingRecovery.attention_entries > 0)}
         <div class="rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-3">
           <p class="mb-1 text-sm font-medium">Interrupted training files</p>
-          <p class="mb-0 text-xs leading-5 text-[var(--ti-text-muted)]">
+          <p class="mb-0 text-[13px] leading-5 text-[var(--ti-text-muted)]">
             {trainingRecovery.preserved_checkpoint_candidates} checkpoint candidate records found.
             File integrity must be checked through backup verification. These files are retained for recovery analysis, but automatic Resume is not yet available.
           </p>
           {#if trainingRecovery.attention_entries > 0}
-            <p role="alert" class="mt-2 text-xs text-[var(--ti-warning)]">
+            <p role="alert" class="mt-2 text-[13px] text-[var(--ti-warning)]">
               {trainingRecovery.attention_entries} recovery entries require attention.
             </p>
           {/if}
         </div>
       {/if}
-      <p class="mb-0 text-xs leading-5 text-[var(--ti-text-muted)]">
+      <p id="myvoice-backup-path-guidance" class="mb-0 text-[13px] leading-5 text-[var(--ti-text-muted)]">
         Folder selection currently uses a full path. Open File Explorer, navigate to an existing destination folder, and copy its path.
         The app creates a new backup folder inside that destination.
       </p>
       <div>
         <label class="block text-sm font-medium" for="myvoice-backup-destination">Backup destination (existing folder)</label>
         <input id="myvoice-backup-destination" class="ti-field mt-2 min-h-11 px-3 text-sm" type="text"
-          bind:value={destination} placeholder="D:\Voice Backups" disabled={busy} />
+          bind:value={destination} aria-describedby="myvoice-backup-path-guidance" placeholder="D:\Voice Backups" spellcheck="false" autocomplete="off" disabled={busy} />
         <button type="button" class="ti-button ti-button-secondary mt-3"
           disabled={busy || voiceChangesLocked || !destination.trim()}
           onclick={() => void run("export")}>
@@ -124,7 +124,7 @@
       <div class="border-t border-[var(--ti-border)] pt-4">
         <label class="block text-sm font-medium" for="myvoice-backup-source">Existing My Voice backup folder</label>
         <input id="myvoice-backup-source" class="ti-field mt-2 min-h-11 px-3 text-sm" type="text"
-          bind:value={source} placeholder="D:\Voice Backups\TranslateIT-MyVoice-..." disabled={busy} />
+          bind:value={source} aria-describedby="myvoice-backup-path-guidance" placeholder="D:\Voice Backups\TranslateIT-MyVoice-..." spellcheck="false" autocomplete="off" disabled={busy} />
         <div class="mt-3 flex flex-wrap gap-2">
           <button type="button" class="ti-button ti-button-secondary"
             disabled={busy || voiceChangesLocked || !source.trim()}
@@ -133,7 +133,7 @@
           </button>
         </div>
         <label class="mt-4 flex items-start gap-3 text-sm leading-5 text-[var(--ti-text-muted)]">
-          <input class="mt-0.5 size-4 accent-[var(--ti-accent)]" type="checkbox"
+          <input class="mt-0.5 size-5 shrink-0 accent-[var(--ti-accent)]" type="checkbox"
             bind:checked={authorized} disabled={busy}/>
           This backup contains my own or an authorized voice. I understand that restoring imports saved versions without changing my currently selected Meeting voice.
         </label>
@@ -150,18 +150,18 @@
       {:else if lastReport?.ok}
         <div role="status" class="rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-3">
           <p class="mb-1 text-sm font-medium">{lastReport.message}</p>
-          <p class="mb-0 break-all text-xs text-[var(--ti-text-muted)]">
+          <p class="mb-0 break-all text-[13px] text-[var(--ti-text-muted)]">
             {lastReport.file_count} verified files · {Math.round(lastReport.total_bytes / 1048576)} MB
             {#if lastAction === "restore"} · {lastReport.newly_imported} added, {lastReport.already_present} already present{/if}
           </p>
           {#if lastReport.backup_folder}
-            <p class="mb-0 mt-2 break-all text-xs text-[var(--ti-text-muted)]">
+            <p class="mb-0 mt-2 break-all text-[13px] text-[var(--ti-text-muted)]">
               Folder: {lastReport.backup_folder}
             </p>
           {/if}
         </div>
       {/if}
-      <p class="mb-0 text-xs leading-5 text-[var(--ti-text-soft)]">
+      <p class="mb-0 text-[13px] leading-5 text-[var(--ti-text-soft)]">
         Backup folders are not encrypted. Store them on a drive you control.
         File checks verify integrity, not the authenticity of an unknown source.
         Only restore backups you trust. A backup on the same drive does not protect against drive failure.

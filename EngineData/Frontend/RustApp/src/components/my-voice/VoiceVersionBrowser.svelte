@@ -148,13 +148,13 @@
 
 <section class="mt-4" aria-label="Saved voice versions">
   <button type="button"
-    class="flex items-center gap-2 text-left text-sm font-medium text-[var(--ti-text-muted)] underline underline-offset-4"
+    class="inline-flex min-h-10 items-center gap-2 rounded-[var(--ti-radius-sm)] px-2 text-left text-sm font-semibold text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)] hover:text-[var(--ti-text)]"
     aria-expanded={opened} disabled={busy} onclick={toggle}>
-    <History size={15} /><span>Voice versions</span><ChevronDown size={14} />
+    <History size={15} aria-hidden="true" /><span>Voice versions</span><ChevronDown size={14} aria-hidden="true" class={opened ? "rotate-180" : ""} />
   </button>
 
   {#if opened}
-    <div class="ti-panel mt-3 p-4 sm:p-5">
+    <div class="ti-panel mt-3 min-w-0 p-4 sm:p-5">
       <p class="mb-3 text-sm leading-5 text-[var(--ti-text-muted)]">
         Previous voice versions are stored on this computer. Full model verification happens before selection. Your existing voice is preserved.
       </p>
@@ -191,18 +191,19 @@
         {:else}
           <div class="space-y-2">
             {#each versions.items as voice (voice.version_id)}
-              <div class="flex flex-wrap items-center gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-3">
+              <div class="flex min-w-0 flex-wrap items-start gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-4 sm:items-center">
                 <div class="min-w-0 flex-1">
-                  <p class="m-0 text-sm font-semibold">Saved version · {voice.version_id.slice(0, 10)}</p>
-                  <p class="mb-0 mt-1 text-xs text-[var(--ti-text-muted)]">
+                  <p class="m-0 break-words text-[14px] font-semibold">Saved version · {voice.version_id.slice(0, 10)}</p>
+                  <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">
                     Full model integrity will be verified before use.
                   </p>
                   <details class="mt-2 text-xs text-[var(--ti-text-muted)]">
-                    <summary class="cursor-pointer">View version ID</summary>
-                    <code class="mt-1 block break-all" title={voice.version_id}>{voice.version_id}</code>
+                    <summary class="min-h-9 cursor-pointer py-2 text-[13px] font-medium hover:text-[var(--ti-text)]">View version ID</summary>
+                    <code class="mt-1 block break-all text-[13px] leading-5" title={voice.version_id}>{voice.version_id}</code>
                   </details>
                 </div>
-                <button type="button" class="ti-button ti-button-secondary"
+                <button type="button" class="ti-button ti-button-secondary w-full sm:w-auto"
+                  aria-label={`Review saved voice version ${voice.version_id.slice(0, 10)} for Meeting`}
                   disabled={busy || error || voiceChangesLocked || selectionUnknown}
                   onclick={() => void selectVersion(voice.version_id, false)}>
                   <RotateCcw size={14} /> Use version
@@ -223,6 +224,7 @@
         <div class="mt-4 rounded-[var(--ti-radius-md)] border border-[var(--ti-warning-border)] p-4"
           role="group" aria-label="Confirm saved voice version selection">
           <strong class="text-sm font-semibold">Use this saved voice for meetings?</strong>
+          <p class="mb-0 mt-1 break-words text-[13px] leading-5 text-[var(--ti-text-muted)]">Version: <code>{pendingId?.slice(0, 10)}</code></p>
           <p class="mb-0 mt-1 text-sm leading-5 text-[var(--ti-text-muted)]">
             The current Meeting voice will change only after this version passes integrity checks. Your saved versions will remain available.
           </p>
