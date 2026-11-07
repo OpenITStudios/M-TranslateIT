@@ -13,6 +13,7 @@ This domain owns durable **repository and application system architecture**, not
 
 - [Canonical naming](./canonical-naming.md) — folder/file semantics, one name per responsibility, versioning and safe migrations
 - [Authority model](./authority-model.md) — document/source/evidence classes and how ownership moves
+- [Knowledge navigation architecture](./knowledge-architecture.md) — routed catalog, typed link witnesses, derived sections, trace and Obsidian/Pele projection
 - [Application runtime architecture](./application-runtime.md) — current cross-feature lifecycle, snapshot, facade and controller boundaries
 - [Zero-waste execution](./zero-waste-execution.md) — affected review, bounded context and evidence-backed efficiency
 - [Windows workspace boundaries](./windows-workspace-boundaries.md) — source, development outputs, persistent runtime assets and protected UserData

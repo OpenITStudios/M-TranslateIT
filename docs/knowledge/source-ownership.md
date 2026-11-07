@@ -32,7 +32,7 @@ This file maps semantic responsibility to the current owner. It does not carry p
 | Active continuation | `planning/development.md` |
 | Proof interpretation | `docs/knowledge/current-validation.md` |
 | Repository static governance | `tools/verify_repository.py` |
-| Document identity/graph/section lookup | `docs/**/*.md` metadata + links → `tools/repository_knowledge.py` (derived) |
+| Document identity/typed graph/path witnesses/section lookup and Obsidian/Pele source export | `docs/**/*.md` metadata + links → `tools/repository_knowledge.py` (derived; navigation architecture in `docs/system/knowledge-architecture.md`) |
 | Cross-language contract/test binding | `tools/interop-contracts.json` + `tools/repository_contracts.py` |
 | Changed-path impact/test planning | `tools/repository_impact.py` |
 | Opt-in affected verification execution | `tools/repository_verification.py` (fixed existing test/validator commands only; execution never automatic) |

@@ -3,7 +3,7 @@
 Repository-owned Python tools for **source-derived verification, routing, impact and model-quality contracts**. They are not a second application/runtime owner and do not create an automatic agent or CI loop.
 
 - `verify_repository.py` — aggregate structural and governance source checks
-- `repository_knowledge.py` — document catalog, graph, scoped retrieval (read-only)
+- `repository_knowledge.py` — source-linked document Catalog/typed Graph/derived sections, scoped retrieval, path tracing and read-only Obsidian/Pele-compatible Markdown/Mermaid exports; no Graphify/Pele/Obsidian installation or runtime proof
 - `repository_context.py` — bounded read-only context/permission projection; `--external-audit-target source|artifact|runtime|capture` routes scoped REA audit evidence without executing REA or claiming external runtime proof
 - `repository_rea.py` — opt-in REA CLI doctor, actual MCP stdio initialize/tools-list probe, and authorized JavaScript/ASAR inspection with bounded stdout bytes, approved version and private Evidence digest. No install or automatic target execution; other providers remain upstream-owned.
 - `repository_dependencies.py`, `repository_impact.py` — partial source dependency impact and affected proof planning

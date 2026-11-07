@@ -146,6 +146,12 @@ Select one document domain through `docs/README.md`, then follow stable document
 
 For an ambiguous change across Rust, TypeScript, Python or release boundaries, `python tools/repository_impact.py --changed <exact-repository-path> [...]` derives bounded source-import consumers, registered interop contracts, and candidate affected proof. `tools/repository_dependencies.py` constructs the partial graph **on demand** from source; no graph or second ownership store is persisted. This does not execute tests, dispatch CI, prove complete dependency closure, or replace `source-ownership.md`. When an actual `Local` checkout is available, `tools/repository_verification.py` can select existing affected checks; it is plan-only by default and executes only via explicit `--execute --expected-sha <Local-SHA>` with an authorized development mode/scope. It never installs dependencies, invokes CI, publishes releases, or upgrades partial import evidence to full proof.
 
+## Architecture navigation — Obsidian / Pele / Graphify patterns
+
+For a documentation or architecture question, start at `docs/README.md`, select one domain router, resolve a canonical document ID and follow authored link witnesses. `tools/repository_knowledge.py --id <resource-id>` shows derived sections and typed backlinks; `--trace <from-id> <to-id> [--both-directions] [--history] [--max-hops 1..6] --format json|markdown|mermaid` explains a bounded path. `--query` remains scoped by domain. Metadata and heading-derived section IDs are navigation, not new owners. Missing paths remain NO_PATH/UNKNOWN_RESOURCE, not guessed relationships. Consult [knowledge navigation architecture](docs/system/knowledge-architecture.md) for the source-backed procedure and Obsidian/Pele/Graphify limits. No renderer, graph daemon, plugin, vector store, Skill or remote runtime is installed by this rule.
+
+For a source-module impact question, keep the distinct `tools/repository_impact.py` and `tools/repository_dependencies.py` partial import graph; do not use Markdown links to claim code dependencies, verified tests or native product behavior. Current GitHub `Local` source, semantic owners, permission preflight and proof gates still control actions.
+
 ## Skill registry and permission preflight
 
 - `.agents/skill-registry.json` owns the machine-readable inventory of the six existing project skills; `docs/knowledge/skills/skill-map.md` explains roles without becoming a second inventory authority.
