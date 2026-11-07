@@ -61,3 +61,20 @@ test("new Meeting performance metrics distinguish estimated onset from post-fina
   assert.match(performance, /already include scheduler wait/);
   assert.match(performance, /not precise microphone or remote-participant timestamps/);
 });
+
+test("incident history count is nullable, so an unavailable log cannot become a false zero", () => {
+  const health = rust("long_session_health.rs");
+  const incident = rust("incident_log.rs");
+  const support = rust("diagnostic_support.rs");
+  const api = readFileSync(new URL("../../src/app/bridge/reliabilityApi.ts", import.meta.url), "utf8");
+  assert.match(health, /pub incident_count: Option<usize>/);
+  assert.match(health, /let incident_history = get_recent_runtime_incidents\(\)/);
+  assert.match(health, /observed_incident_count\(incident_history\.coverage, incident_history\.count\)/);
+  assert.match(health, /fn unreadable_incident_history_is_not_reported_as_zero/);
+  assert.match(health, /pub incident_history_coverage: String/);
+  assert.match(api, /incident_count: number \| null/);
+  assert.match(api, /incident_history_coverage: "NO_DATA"/);
+  assert.match(api, /incident_count: null,/);
+  assert.match(support, /"incident_history_coverage": long_session\.incident_history_coverage/);
+  assert.match(incident, /"UNAVAILABLE"/);
+});

@@ -156,13 +156,6 @@ pub fn record_runtime_incident(
     }).is_ok()
 }
 
-pub fn runtime_incident_count() -> usize {
-    let Ok(_io_guard) = incident_io_lock().lock() else {
-        return 0;
-    };
-    read_incidents(&incident_path()).map_or(0, |items| items.len())
-}
-
 // Analytics is a bounded, read-only projection of the existing incident log.
 // Missing history, malformed history and the 20-record retention ceiling must not
 // be conflated with a verified healthy runtime or complete failure frequency.

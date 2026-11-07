@@ -242,6 +242,7 @@ pub fn export_diagnostic_support_bundle() -> DiagnosticSupportBundleResult {
             "transcript_truncated": long_session.transcript_truncated,
             "meeting_temp_file_count": long_session.meeting_temp_file_count,
             "incident_count": long_session.incident_count,
+            "incident_history_coverage": long_session.incident_history_coverage,
             "warning_count": long_session.warning_count,
             "note": sanitized(&long_session.note),
         },

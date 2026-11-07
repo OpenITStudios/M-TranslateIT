@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::engine::paths::ProjectPaths;
 use crate::engine::runtime_state::APPLICATION_MEETING_OWNER_ID;
 
-use super::incident_log::{record_runtime_incident, runtime_incident_count};
+use super::incident_log::{get_recent_runtime_incidents, record_runtime_incident};
 use super::meeting_session::{
     committed_turn_health_counts, deferred_incoming_health_counts, get_meeting_session_status,
 };
@@ -26,7 +26,9 @@ pub struct LongSessionHealthStatus {
     pub transcript_dropped_turns: u64,
     pub transcript_truncated: bool,
     pub meeting_temp_file_count: usize,
-    pub incident_count: usize,
+    // None means the log is unavailable, not that zero incidents occurred.
+    pub incident_count: Option<usize>,
+    pub incident_history_coverage: String,
     pub warning_count: usize,
     pub note: String,
     pub updated_unix_ms: u128,
@@ -50,6 +52,10 @@ fn matching_file_count(directory: &Path, predicate: impl Fn(&str) -> bool) -> us
         .count()
 }
 
+fn observed_incident_count(coverage: &str, count: usize) -> Option<usize> {
+    if coverage == "UNAVAILABLE" { None } else { Some(count) }
+}
+
 fn meeting_temp_file_count(paths: &ProjectPaths) -> usize {
     let cache = PathBuf::from(&paths.user_cache_dir);
     matching_file_count(&cache.join("audio_segments"), |name| {
@@ -68,7 +74,8 @@ pub fn get_long_session_health_status() -> LongSessionHealthStatus {
     let (deferred_depth, deferred_overflow, deferred_stale) =
         deferred_incoming_health_counts();
     let temp_count = meeting_temp_file_count(&ProjectPaths::discover());
-    let incident_count = runtime_incident_count();
+    let incident_history = get_recent_runtime_incidents();
+    let incident_count = observed_incident_count(incident_history.coverage, incident_history.count);
 
     let meeting_owned =
         meeting.has_session && meeting.owner_id.as_deref() == Some(APPLICATION_MEETING_OWNER_ID);
@@ -123,6 +130,7 @@ pub fn get_long_session_health_status() -> LongSessionHealthStatus {
         transcript_truncated: transcript_truncated,
         meeting_temp_file_count: temp_count,
         incident_count,
+        incident_history_coverage: incident_history.coverage.to_string(),
         warning_count: warnings,
         note: note.to_string(),
         updated_unix_ms: unix_ms(),
@@ -141,7 +149,15 @@ pub fn get_long_session_health_status() -> LongSessionHealthStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::TEMP_FILE_WARNING_THRESHOLD;
+    use super::{observed_incident_count, TEMP_FILE_WARNING_THRESHOLD};
+
+    #[test]
+    fn unreadable_incident_history_is_not_reported_as_zero() {
+        assert_eq!(observed_incident_count("UNAVAILABLE", 0), None);
+        assert_eq!(observed_incident_count("NO_DATA", 0), Some(0));
+        assert_eq!(observed_incident_count("RECENT_ONLY", 3), Some(3));
+        assert_eq!(observed_incident_count("AT_CAPACITY", 20), Some(20));
+    }
 
     #[test]
     fn temp_file_warning_threshold_is_bounded_but_not_single_file_sensitive() {

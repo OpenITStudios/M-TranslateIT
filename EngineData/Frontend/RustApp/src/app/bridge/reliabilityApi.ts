@@ -12,7 +12,8 @@ export type LongSessionHealthStatus = {
   transcript_dropped_turns: number;
   transcript_truncated: boolean;
   meeting_temp_file_count: number;
-  incident_count: number;
+  incident_count: number | null;
+  incident_history_coverage: "NO_DATA" | "RECENT_ONLY" | "AT_CAPACITY" | "UNAVAILABLE";
   warning_count: number;
   note: string;
   updated_unix_ms: number;
@@ -101,7 +102,8 @@ export async function getLongSessionHealthStatus(): Promise<LongSessionHealthSta
     transcript_dropped_turns: 0,
     transcript_truncated: false,
     meeting_temp_file_count: 0,
-    incident_count: 0,
+    incident_count: null,
+    incident_history_coverage: "UNAVAILABLE",
     warning_count: 0,
     note: "Long-session health is unavailable right now.",
     updated_unix_ms: Date.now(),
