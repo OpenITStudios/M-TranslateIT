@@ -59,27 +59,27 @@
     <div class="max-h-[260px] divide-y divide-[var(--ti-border)] overflow-y-auto">
       {#each entries as entry (entry.id)}
         <div class="grid gap-1.5 px-5 py-3.5">
-          <div class="flex items-center justify-between gap-3">
-            <strong class="text-[11.5px] font-semibold">{categoryLabel(entry.category)}</strong>
-            <time class="text-[10.5px] text-[var(--ti-text-soft)]" datetime={new Date(entry.createdAt).toISOString()}>
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <strong class="text-[13px] font-semibold">{categoryLabel(entry.category)}</strong>
+            <time class="text-[12px] text-[var(--ti-text-muted)]" datetime={new Date(entry.createdAt).toISOString()}>
               {new Date(entry.createdAt).toLocaleString()}
             </time>
           </div>
-          <p class="m-0 line-clamp-2 text-[11.5px] leading-5 text-[var(--ti-text-muted)]">{entry.source}</p>
-          <p class="m-0 line-clamp-2 text-[11.5px] leading-5 text-[var(--ti-text-soft)]">{entry.translation}</p>
+          <p class="m-0 line-clamp-2 text-[13px] leading-5 text-[var(--ti-text-muted)]">{entry.source}</p>
+          <p class="m-0 line-clamp-2 text-[13px] leading-5 text-[var(--ti-text-muted)]">{entry.translation}</p>
         </div>
       {/each}
     </div>
-    <footer class="flex justify-end gap-2 border-t border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-3.5">
-      <button type="button" class="ti-button ti-button-secondary min-h-9" onclick={() => void copyForReview()}><ClipboardCopy size={14} /> Copy review data</button>
-      <button type="button" class="ti-button ti-button-secondary min-h-9" onclick={() => { confirmClear = true; }}><Trash2 size={14} /> Clear</button>
+    <footer class="flex flex-wrap justify-end gap-2 border-t border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-3.5">
+      <button type="button" class="ti-button ti-button-secondary min-h-10" onclick={() => void copyForReview()}><ClipboardCopy size={14} /> Copy review data</button>
+      <button type="button" class="ti-button ti-button-secondary min-h-10" onclick={() => { confirmClear = true; }}><Trash2 size={14} /> Clear</button>
     </footer>
     {#if confirmClear}
       <div class="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--ti-border)] px-5 py-4" role="group" aria-label="Confirm clearing translation feedback">
-        <p class="m-0 text-xs">Permanently clear all {entries.length} local translation issue reports?</p>
-        <div class="flex gap-2">
-          <button type="button" class="ti-button ti-button-secondary min-h-9" onclick={() => { confirmClear = false; }}>Cancel</button>
-          <button type="button" class="ti-button ti-button-danger min-h-9" onclick={clearAll}>Clear reports</button>
+        <p class="m-0 text-[13px] leading-5">Permanently clear all {entries.length} local translation issue reports?</p>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" class="ti-button ti-button-secondary min-h-10" onclick={() => { confirmClear = false; }}>Cancel</button>
+          <button type="button" class="ti-button ti-button-danger min-h-10" onclick={clearAll}>Clear reports</button>
         </div>
       </div>
     {/if}

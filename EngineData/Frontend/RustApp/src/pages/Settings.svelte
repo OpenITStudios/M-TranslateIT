@@ -192,20 +192,21 @@
       </div>
     </header>
     <div class="grid grid-cols-1 gap-5 lg:grid-cols-[190px_minmax(0,1fr)]">
-      <nav class="flex flex-col gap-1 self-start rounded-[var(--ti-radius-md)] bg-[var(--ti-surface-soft)] p-2.5" aria-label="Settings categories">
+      <div class="flex flex-col gap-1 self-start rounded-[var(--ti-radius-md)] bg-[var(--ti-surface-soft)] p-2.5" role="group" aria-label="Settings categories">
         <p class="px-3 pb-1 pt-2 text-[12px] font-semibold text-[var(--ti-text-muted)]">Settings</p>
         <button type="button" class={"flex min-h-10 items-center rounded-[var(--ti-radius-sm)] border-l-2 px-3 text-left text-[13px] transition-colors " + (tab === "meeting" ? "border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] font-semibold text-[var(--ti-text)]" : "border-transparent text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)] hover:text-[var(--ti-text)]")}
-          aria-current={tab === "meeting" ? "page" : undefined}
+          aria-pressed={tab === "meeting"} aria-controls="settings-category-panel"
           onclick={() => { tab = "meeting"; diagnosticsOpen = false; }}>Voice &amp; Audio</button>
         <button type="button" class={"flex min-h-10 items-center rounded-[var(--ti-radius-sm)] border-l-2 px-3 text-left text-[13px] transition-colors " + (tab === "translation" ? "border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] font-semibold text-[var(--ti-text)]" : "border-transparent text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)] hover:text-[var(--ti-text)]")}
-          aria-current={tab === "translation" ? "page" : undefined}
+          aria-pressed={tab === "translation"} aria-controls="settings-category-panel"
           onclick={() => { tab = "translation"; diagnosticsOpen = false; }}>Meeting Captions</button>
         <p class="mt-3 px-3 pb-1 text-[12px] font-semibold text-[var(--ti-text-muted)]">Support</p>
         <button type="button" class={"flex min-h-10 items-center rounded-[var(--ti-radius-sm)] border-l-2 px-3 text-left text-[13px] transition-colors " + (tab === "advanced" ? "border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] font-semibold text-[var(--ti-text)]" : "border-transparent text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)] hover:text-[var(--ti-text)]")}
-          aria-current={tab === "advanced" ? "page" : undefined}
+          aria-pressed={tab === "advanced"} aria-controls="settings-category-panel"
           onclick={() => { tab = "advanced"; diagnosticsOpen = false; }}>Help</button>
-      </nav>
-      <div class="min-w-0">
+      </div>
+      <div id="settings-category-panel" class="min-w-0" role="region"
+        aria-label={tab === "meeting" ? "Voice & Audio settings" : tab === "translation" ? "Meeting Captions settings" : "Help and diagnostics"}>
     {#if tab === "meeting"}
       <article class="ti-panel overflow-hidden">
         <header class="flex items-start justify-between gap-5 border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-4">

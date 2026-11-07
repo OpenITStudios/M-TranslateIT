@@ -175,8 +175,8 @@
             <div class="border-b border-[var(--ti-border)] py-3 last:border-b-0">
               <MeetingTurnBubble {turn} statusLabel={turn.lane === "you" ? deliveryLabel(turn) : ""} />
               <div class={"mt-1 flex items-center gap-1 " + (turn.lane === "you" ? "justify-end" : "justify-start")}>
-                <button type="button" class="grid size-8 place-items-center rounded-[7px] text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)]"
-                  aria-label="Copy bilingual phrase" title="Copy source and translation"
+                <button type="button" class="grid size-10 place-items-center rounded-[var(--ti-radius-sm)] text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)]"
+                  aria-label={`Copy bilingual phrase ${turn.sequence}`} title="Copy source and translation"
                   onclick={() => void copyTurn(turn)}>
                   {#if copiedSequence === turn.sequence}<Check size={15} />{:else}<Copy size={15} />{/if}
                 </button>
@@ -189,7 +189,7 @@
         </div>
         {#if !followingLatest && orderedTurns.length > 0}
           <div class="flex justify-end pt-3">
-            <button type="button" class="ti-button ti-button-secondary min-h-9"
+            <button type="button" class="ti-button ti-button-secondary min-h-10"
               onclick={jumpToLatest}>Jump to latest</button>
           </div>
         {/if}

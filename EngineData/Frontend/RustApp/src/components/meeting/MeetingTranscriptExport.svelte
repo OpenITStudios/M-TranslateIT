@@ -140,11 +140,11 @@
   <header class="flex flex-wrap items-start justify-between gap-3 px-5 py-4">
     <div class="grid gap-1">
       <h3 class="m-0 text-[15px] font-semibold">Saved Transcripts</h3>
-      <p class="m-0 max-w-xl text-xs leading-5 text-[var(--ti-text-muted)]">
+      <p class="m-0 max-w-xl text-[13px] leading-5 text-[var(--ti-text-muted)]">
         Conversations stay on this device until you delete them. Exporting HTML does not delete saved entries.
       </p>
     </div>
-    <button type="button" class="ti-button ti-button-secondary min-h-9 text-xs" disabled={loading || busy}
+    <button type="button" class="ti-button ti-button-secondary min-h-10 text-[13px]" disabled={loading || busy}
       onclick={() => void refresh()}><RefreshCw size={14}/>{loading ? "Checking..." : "Refresh"}</button>
   </header>
   {#if notice}
@@ -178,19 +178,23 @@
               {/if}
             </div>
             <div class="flex flex-wrap gap-2">
-              <button type="button" class="ti-button ti-button-secondary min-h-9 text-xs"
-                aria-expanded={expanded === session.session_id} disabled={busy || session.entry_count === 0}
+              <button type="button" class="ti-button ti-button-secondary min-h-10 text-[13px]"
+                aria-expanded={expanded === session.session_id} aria-label={`${expanded === session.session_id ? "Hide" : "Read"} saved transcript ${sessionLabel(session.session_id)}`}
+                disabled={busy || session.entry_count === 0}
                 onclick={() => void togglePreview(session.session_id)}>
                 {expanded === session.session_id ? "Hide" : "Read"}
               </button>
-              <button type="button" class="ti-button ti-button-secondary min-h-9 text-xs"
+              <button type="button" class="ti-button ti-button-secondary min-h-10 text-[13px]"
                 disabled={busy || previewBusy || session.entry_count === 0} aria-expanded={htmlSample?.sessionId === session.session_id}
+                aria-label={`${htmlSample?.sessionId === session.session_id ? "Hide HTML preview" : "Preview HTML"} for saved transcript ${sessionLabel(session.session_id)}`}
                 onclick={() => void toggleHtmlPreview(session.session_id)}>
                 {htmlSample?.sessionId === session.session_id ? "Hide HTML Preview" : "Preview HTML"}
               </button>
-              <button type="button" class="ti-button ti-button-secondary min-h-9 text-xs" disabled={busy || session.entry_count === 0}
+              <button type="button" class="ti-button ti-button-secondary min-h-10 text-[13px]" disabled={busy || session.entry_count === 0}
+                aria-label={`Export HTML for saved transcript ${sessionLabel(session.session_id)}`}
                 onclick={() => void exportHtml(session.session_id)}><Download size={14}/>Export HTML</button>
-              <button type="button" class="ti-button ti-button-secondary min-h-9 text-xs" disabled={busy}
+              <button type="button" class="ti-button ti-button-secondary min-h-10 text-[13px]" disabled={busy}
+                aria-label={`Delete saved transcript ${sessionLabel(session.session_id)}`}
                 onclick={() => { confirming = session.session_id; notice = ""; }}><Trash2 size={14}/>Delete</button>
             </div>
           </div>
@@ -200,9 +204,9 @@
                 Delete this saved conversation permanently? Existing exported HTML files will remain.
               </p>
               <div class="mt-3 flex flex-wrap gap-2">
-                <button type="button" class="ti-button ti-button-danger min-h-9"
+                <button type="button" class="ti-button ti-button-danger min-h-10"
                   onclick={() => void deleteArchive(session.session_id)} disabled={busy}>Delete saved transcript</button>
-                <button type="button" class="ti-button ti-button-secondary min-h-9"
+                <button type="button" class="ti-button ti-button-secondary min-h-10"
                   onclick={() => confirming = null}>Cancel</button>
               </div>
             </div>
@@ -228,9 +232,9 @@
                   </p>
                 </div>
                 <div class="flex flex-wrap gap-1 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-1"
-                  aria-label="Read transcript in">
+                  role="group" aria-label="Read transcript in">
                   {#each [{ code: "bilingual", name: "Bilingual" }, { code: "id", name: "Bahasa Indonesia" }, { code: "en", name: "English" }] as option (option.code)}
-                    <button type="button" class={"rounded-[6px] px-2 py-1.5 text-xs " +
+                    <button type="button" class={"inline-flex min-h-10 items-center rounded-[var(--ti-radius-sm)] px-3 text-[13px] " +
                       (language === option.code ? "bg-[var(--ti-surface-raised)]" : "text-[var(--ti-text-muted)]")}
                       aria-pressed={language === option.code}
                       onclick={() => language = option.code as "bilingual" | "id" | "en"}>{option.name}</button>
@@ -287,11 +291,11 @@
         <p class="m-0 text-xs text-[var(--ti-warning)]">Storage completeness could not be verified. The HTML includes a warning.</p>
       {/if}
       <div class="flex flex-wrap gap-2">
-        <button type="button" class="ti-button ti-button-secondary min-h-9 text-xs"
+        <button type="button" class="ti-button ti-button-secondary min-h-10 text-[13px]"
           onclick={() => void openExport(false)}><ExternalLink size={14}/>Open File</button>
-        <button type="button" class="ti-button ti-button-secondary min-h-9 text-xs"
+        <button type="button" class="ti-button ti-button-secondary min-h-10 text-[13px]"
           onclick={() => void openExport(true)}><FolderOpen size={14}/>Open Folder</button>
-        <button type="button" class="ti-button ti-button-secondary min-h-9 text-xs"
+        <button type="button" class="ti-button ti-button-secondary min-h-10 text-[13px]"
           onclick={() => void copyPath()}><Copy size={14}/>Copy Location</button>
       </div>
       <p class="m-0 text-xs text-[var(--ti-text-muted)]">
