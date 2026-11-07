@@ -2,8 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,6 +16,7 @@ const MAX_INCIDENTS: usize = 20;
 const MAX_REVIEW_BYTES: u64 = 64 * 1024;
 const INCIDENT_REPEAT_SUPPRESSION_MS: u128 = 60_000;
 static INCIDENT_IO_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static INCIDENT_STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
     static INCIDENT_RECORDING_SUPPRESSED: Cell<bool> = const { Cell::new(false) };
@@ -92,22 +94,45 @@ fn read_incidents(path: &Path) -> io::Result<Vec<RuntimeIncident>> {
     Ok(inspect_incidents(path)?.unwrap_or_default())
 }
 
+// Publish one fully written, newly-created staging file. No open/truncate of
+// an existing *.tmp file: interrupted prior attempts and unrelated files stay
+// intact. The existing incident IO mutex serializes writers in this process.
+fn publish_incident_stage(path: &Path, temp: &Path, body: &[u8]) -> io::Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(temp)?;
+    let written = file.write_all(body).and_then(|_| file.sync_all());
+    drop(file);
+    if let Err(error) = written {
+        let _ = fs::remove_file(temp); // This writer's newly-created file only.
+        return Err(error);
+    }
+    match fs::rename(temp, path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = fs::remove_file(temp); // The old published history is untouched.
+            Err(error)
+        }
+    }
+}
+
 fn write_incidents(path: &Path, incidents: &[RuntimeIncident]) -> io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "incident path has no parent")
     })?;
     fs::create_dir_all(parent)?;
-    let temp = path.with_extension("json.tmp");
     let body = serde_json::to_vec_pretty(incidents)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     if body.len() as u64 > MAX_REVIEW_BYTES {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "incident history too large"));
     }
-    fs::write(&temp, body)?;
-    // Rename over the destination; never delete the only retained history
-    // before a replacement has been successfully published. Windows rename
-    // supports replacement of an existing regular destination file.
-    fs::rename(temp, path)
+    let nonce = INCIDENT_STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temp = path.with_extension(format!(
+        "json.tmp.{}.{}.{}",
+        std::process::id(), unix_ms(), nonce
+    ));
+    publish_incident_stage(path, &temp, &body)
 }
 
 // Fail closed: corrupt/oversized previous evidence must never be overwritten.
@@ -246,7 +271,7 @@ pub fn get_recent_runtime_incidents() -> RuntimeIncidentSnapshot {
 mod tests {
     use super::{
         group_issue_areas, incident_recording_suppressed, inspect_incidents, persist_incident,
-        write_incidents,
+        publish_incident_stage, write_incidents,
         without_runtime_incident_recording, RuntimeIncident, INCIDENT_REPEAT_SUPPRESSION_MS,
         MAX_INCIDENTS, MAX_REVIEW_BYTES,
     };
@@ -358,12 +383,29 @@ mod tests {
         let original = same_incident_at(1);
         write_incidents(&path, &[original.clone()]).unwrap();
         let before = fs::read(&path).unwrap();
-        let temp = path.with_extension("json.tmp");
+        let temp = path.with_extension("json.tmp.blocked");
         fs::create_dir(&temp).unwrap();
-        assert!(write_incidents(&path, &[same_incident_at(2)]).is_err());
+        let next = serde_json::to_vec_pretty(&vec![same_incident_at(2)]).unwrap();
+        assert!(publish_incident_stage(&path, &temp, &next).is_err());
         assert_eq!(fs::read(&path).unwrap(), before);
         assert_eq!(inspect_incidents(&path).unwrap().unwrap(), vec![original]);
         fs::remove_dir(temp).unwrap();
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn preexisting_stage_file_is_not_truncated_or_followed() {
+        let path = test_path();
+        write_incidents(&path, &[same_incident_at(1)]).unwrap();
+        let prior = fs::read(&path).unwrap();
+        let temp = path.with_extension("json.tmp.occupied");
+        fs::write(&temp, b"unrelated preexisting evidence").unwrap();
+        let next = serde_json::to_vec_pretty(&vec![same_incident_at(2)]).unwrap();
+        let error = publish_incident_stage(&path, &temp, &next).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&temp).unwrap(), b"unrelated preexisting evidence");
+        assert_eq!(fs::read(&path).unwrap(), prior);
+        fs::remove_file(temp).unwrap();
         fs::remove_file(path).unwrap();
     }
 

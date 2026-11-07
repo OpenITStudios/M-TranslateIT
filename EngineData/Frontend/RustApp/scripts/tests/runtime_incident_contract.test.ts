@@ -44,12 +44,18 @@ test("incident writes fail closed on corrupted history and separate clean build 
   assert.doesNotMatch(incident, /fs::read\(path\)/);
 });
 
-test("incident publication preserves the existing report on replacement or staging failure", () => {
-  // Inspect only the production writer; test teardown legitimately deletes its fixtures.
+test("incident publication stages new files without overwriting previous evidence", () => {
+  const stage = incident.split("fn publish_incident_stage(path: &Path, temp: &Path, body: &[u8]) -> io::Result<()> {")[1]?.split("\n}\n")[0];
   const writer = incident.split("fn write_incidents(path: &Path, incidents: &[RuntimeIncident]) -> io::Result<()> {")[1]?.split("\n}\n")[0];
-  assert.ok(writer, "canonical incident writer must exist");
-  assert.match(writer, /fs::rename\(temp, path\)/);
-  assert.doesNotMatch(writer, /fs::remove_file\(path\)/);
+  assert.ok(stage && writer, "canonical incident publication functions must exist");
+  assert.match(stage, /\.create_new\(true\)/);
+  assert.match(stage, /file\.write_all\(body\)\.and_then\(\|_\| file\.sync_all\(\)\)/);
+  assert.match(stage, /fs::rename\(temp, path\)/);
+  assert.doesNotMatch(stage, /fs::remove_file\(path\)/);
+  assert.match(writer, /INCIDENT_STAGE_SEQUENCE\.fetch_add/);
+  assert.match(writer, /publish_incident_stage\(path, &temp, &body\)/);
+  assert.doesNotMatch(writer, /fs::write\(&temp/);
   assert.match(incident, /fn existing_history_is_replaced_without_deleting_before_publication/);
   assert.match(incident, /fn failed_staging_preserves_previous_incident_history/);
+  assert.match(incident, /fn preexisting_stage_file_is_not_truncated_or_followed/);
 });
