@@ -24,6 +24,7 @@
   let longSession = $state<LongSessionHealthStatus | null>(null);
   let exporting = $state(false);
   let exportMessage = $state("");
+  let exportSucceeded = $state(false);
   let loading = $state(true);
 
   const watchdogLabel = $derived(
@@ -57,8 +58,10 @@
     if (exporting) return;
     exporting = true;
     exportMessage = "";
+    exportSucceeded = false;
     try {
       const result = await exportDiagnosticSupportBundle();
+      exportSucceeded = result.ok && Boolean(result.file_path);
       exportMessage = result.ok && result.file_path
         ? `${result.message} Saved to ${result.file_path}`
         : result.message;
@@ -92,25 +95,26 @@
     </div>
     <StatusBadge
       label={watchdogLabel}
-      tone={watchdog?.action_required ? "danger" : watchdog?.healthy ? "good" : "warning"}
+      tone={loading || !watchdog || watchdog.state === "unavailable" || watchdog.state === "idle"
+        ? "neutral" : watchdog.action_required ? "danger" : watchdog.healthy ? "good" : "warning"}
     />
   </div>
 
   <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-3">
     <div class="ti-state-card min-w-0">
       <span class="ti-field-label">Watchdog</span>
-      <strong class="mt-2 block text-[13px]">{watchdog?.state ?? "Not checked"}</strong>
-      <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-soft)]">{sanitizeDiagnosticText(watchdog?.note, "Watchdog status has not been loaded.")}</p>
+      <strong class="mt-2 block text-[13px]">{loading ? "Checking..." : watchdog?.state ?? "Not checked"}</strong>
+      <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-soft)]">{loading ? "Reading watchdog status..." : sanitizeDiagnosticText(watchdog?.note, "Watchdog status has not been verified.")}</p>
     </div>
     <div class="ti-state-card min-w-0">
       <span class="ti-field-label">Devices</span>
-      <strong class="mt-2 block text-[13px]">{devices?.state ?? "Not checked"}</strong>
-      <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-soft)]">{sanitizeDiagnosticText(devices?.note, "Device-loss status has not been loaded.")}</p>
+      <strong class="mt-2 block text-[13px]">{loading ? "Checking..." : devices?.state ?? "Not checked"}</strong>
+      <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-soft)]">{loading ? "Reading device-loss status..." : sanitizeDiagnosticText(devices?.note, "Device-loss status has not been verified.")}</p>
     </div>
     <div class="ti-state-card min-w-0">
       <span class="ti-field-label">Previous shutdown</span>
-      <strong class="mt-2 block text-[13px]">{recoveryLabel}</strong>
-      <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-soft)]">{sanitizeDiagnosticText(recovery?.note, "Startup recovery status has not been loaded.")}</p>
+      <strong class="mt-2 block text-[13px]">{loading ? "Checking..." : recoveryLabel}</strong>
+      <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-soft)]">{loading ? "Reading startup recovery status..." : sanitizeDiagnosticText(recovery?.note, "Startup recovery status has not been verified.")}</p>
     </div>
   </div>
 
@@ -135,11 +139,14 @@
     <p class="m-0 text-[13px] leading-5 text-[var(--ti-text-soft)]">
       Support export contains redacted runtime metadata only—never transcript, audio, or voice reference.
     </p>
-    <button type="button" class="ti-button ti-button-secondary shrink-0" disabled={exporting} onclick={() => void exportSupport()}>
+    <button type="button" class="ti-button ti-button-secondary shrink-0" aria-busy={exporting} disabled={exporting} onclick={() => void exportSupport()}>
       {exporting ? "Exporting..." : "Export Diagnostics"}
     </button>
   </div>
   {#if exportMessage}
-    <p class="mb-0 mt-3 break-words text-[13px] leading-5 text-[var(--ti-text-muted)]">{exportMessage}</p>
+    <p class={exportSucceeded
+        ? "mb-0 mt-3 break-words text-[13px] leading-5 text-[var(--ti-text-muted)]"
+        : "mb-0 mt-3 break-words text-[13px] leading-5 text-[var(--ti-warning)]"}
+      role={exportSucceeded ? "status" : "alert"}>{exportMessage}</p>
   {/if}
 </article>

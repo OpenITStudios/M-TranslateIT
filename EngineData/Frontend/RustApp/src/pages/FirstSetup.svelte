@@ -37,6 +37,11 @@
   let settings = $state<RuntimeSettings>((() => cloneSettings(initialSettings))());
   let snapshot = $state<ProductRuntimeSnapshot | null>(null);
   let routeStatus = $state<VirtualMicRouteContractStatus | null>(null);
+  // Presentation state is distinct from the native readiness snapshot.
+  let setupReadState = $state<"checking" | "verified" | "unavailable">("checking");
+  let setupReadRevision = 0;
+  let microphonesLoading = $state(false);
+  let microphonesChecked = $state(false);
   let devices = $state<AudioDeviceListReport | null>(null);
   let step = $state<SetupStep>((() => setupCheckpoint(settings.meeting_setup_checkpoint))());
   let busy = $state(false);
@@ -49,7 +54,7 @@
   const engineSettingsUnverified = $derived(
     snapshot?.meetingSession?.preflight?.blockers?.includes("meeting_session:settings_unverified") === true,
   );
-  const routeCheck = $derived(classifyVirtualMicRoute(routeStatus));
+  const routeCheck = $derived(setupReadState === "unavailable" ? "unavailable" : classifyVirtualMicRoute(routeStatus));
   // An unsaved device choice is not the verified microphone in the runtime snapshot.
   const microphoneSelectionPending = $derived(
     selectedMicrophone.trim() !== String(settings.audio.input_device_id ?? "").trim(),
@@ -73,13 +78,10 @@
   }
 
   function currentMeetingMicrophone(): string {
-    return compact(
-      routeStatus?.selected_input_device,
-      routeCheck === "unavailable" ? "Unable to check in Windows"
-        : routeCheck === "checking" ? "Checking..."
-        : routeCheck === "ready" ? "Device name unavailable — check Settings"
-        : "Not available in Windows",
-    );
+    if (routeCheck === "unavailable") return "Unable to check in Windows";
+    if (routeCheck === "checking") return "Checking...";
+    return compact(routeStatus?.selected_input_device,
+      routeCheck === "ready" ? "Device name unavailable — check Settings" : "Not available in Windows");
   }
 
   function currentMeetingSound(): string {
@@ -91,28 +93,43 @@
   }
 
   async function refreshSnapshot(): Promise<void> {
+    const revision = ++setupReadRevision;
+    setupReadState = "checking";
+    // Never display a previous route name as if the current read verified it.
+    routeStatus = null;
     try {
       const [nextSnapshot, nextRouteStatus] = await Promise.all([
         runtimeProductFacade.loadProductRuntimeSnapshot(),
         runtimeApi.getVirtualMicRouteStatus(),
       ]);
+      if (revision !== setupReadRevision) return;
       snapshot = nextSnapshot;
       routeStatus = nextRouteStatus;
       settings = cloneSettings(nextSnapshot.settings);
       selectedMicrophone = String(settings.audio.input_device_id ?? "");
+      setupReadState = "verified";
+      if (message === "Couldn't check setup. Try again.") message = "";
     } catch {
+      if (revision !== setupReadRevision) return;
       routeStatus = null;
+      setupReadState = "unavailable";
       message = "Couldn't check setup. Try again.";
     }
   }
 
   async function refreshDevices(): Promise<void> {
+    if (microphonesLoading) return;
+    microphonesLoading = true;
     try {
       devices = await runtimeProductFacade.loadProductAudioDevices();
-      if (!devices.ok && !message) message = "Microphones are unavailable right now. Try again.";
+      if (devices.ok && message === "Microphones could not be checked. Select Refresh microphones.") message = "";
+      if (!devices.ok && !message) message = "Microphones could not be checked. Select Refresh microphones.";
     } catch {
       devices = null;
-      if (!message) message = "Microphones are unavailable right now. Try again.";
+      if (!message) message = "Microphones could not be checked. Select Refresh microphones.";
+    } finally {
+      microphonesChecked = true;
+      microphonesLoading = false;
     }
   }
 
@@ -122,6 +139,7 @@
     try {
       // Even Step 1 must discover a corrupt saved engine before Continue/Defer.
       await refreshSnapshot();
+      if (setupReadState !== "verified") return;
       if (step > 1) {
         step = safeSetupResumeStep(step, {
           microphoneReady: snapshot?.readiness.microphoneReady === true,
@@ -139,7 +157,7 @@
     // Recovery can restore the previous setup checkpoint/state as well as its
     // engine. Refresh native truth before leaving the recovery-only UI.
     await refreshSnapshot();
-    if (!snapshot?.meetingSession?.preflight
+    if (setupReadState !== "verified" || !snapshot?.meetingSession?.preflight
         || snapshot.meetingSession.preflight.blockers.includes("meeting_session:settings_unverified")) {
       message = "Engine confirmation was saved, but setup status could not be verified. Check setup status.";
       return;
@@ -250,7 +268,9 @@
     try {
       const result = await runtimeProductFacade.runProductRecoveryAction("fix-setup");
       await refreshSnapshot();
-      message = compact(result, "Setup check finished.");
+      message = setupReadState === "verified"
+        ? compact(result, "Setup check finished.")
+        : "Repair was requested, but setup status could not be verified. Select Check Again.";
     } catch {
       message = "Couldn't fix setup. Try again.";
     } finally {
@@ -267,6 +287,7 @@
         ? await runtimeProductFacade.runProductSetupAction("check-readiness")
         : null;
       await refreshSnapshot();
+      if (setupReadState !== "verified") return;
       message = meetingVoiceReady && snapshot?.readiness.meetingReady
         ? "Everything needed for Meeting translation is ready."
         : readinessMessage && readinessMessage !== "TranslateIT is ready."
@@ -357,14 +378,16 @@
 
     <section class="mx-auto grid max-w-[720px] gap-5 px-5 py-7 sm:px-8 sm:py-9">
       {#if snapshot === null}
-        <p class="m-0 text-sm leading-6 text-[var(--ti-text-muted)]" role="status">
-          Checking saved engine settings before setup can continue.
+        <p class="m-0 text-sm leading-6 text-[var(--ti-text-muted)]"
+          role={setupReadState === "unavailable" ? "alert" : "status"}>
+          {setupReadState === "unavailable"
+            ? "Saved setup status could not be verified. Select Check setup status to retry. No settings were replaced."
+            : "Checking saved engine settings before setup can continue."}
         </p>
-        {#if message}
-          <p class="m-0 text-sm leading-6 text-[var(--ti-text-muted)]" role="alert">{message}</p>
-        {/if}
-        <button type="button" class="ti-button ti-button-secondary"
-          disabled={busy || checkingSetup} onclick={() => void initialize()}>Check setup status</button>
+        <button type="button" class="ti-button ti-button-secondary" aria-busy={checkingSetup}
+          disabled={busy || checkingSetup} onclick={() => void initialize()}>
+          {checkingSetup ? "Checking..." : "Check setup status"}
+        </button>
       {:else if engineSettingsUnverified}
         <div>
           <span class="ti-kicker">Settings recovery</span>
@@ -397,10 +420,10 @@
           <h1 class="ti-page-title">Choose your microphone</h1>
           <p class="ti-page-copy">Select the microphone you speak into. If unsure, keep Windows Default. Save your choice before continuing.</p>
         </div>
-        <div class="grid grid-cols-1 items-end gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+        <div class="grid grid-cols-1 items-end gap-3 sm:grid-cols-[minmax(0,1fr)_auto]" aria-busy={microphonesLoading}>
           <label class="grid min-w-0 gap-2">
             <span class="ti-field-label">Microphone you speak into</span>
-            <select class="ti-field min-h-11 px-3" disabled={busy} value={selectedMicrophone} onchange={(event) => { selectedMicrophone = selectValue(event); }}>
+            <select class="ti-field min-h-11 px-3" disabled={busy || microphonesLoading || !devices?.ok} value={selectedMicrophone} onchange={(event) => { selectedMicrophone = selectValue(event); }}>
               <option value="">Windows Default</option>
               {#each microphoneDevices() as device (deviceId(device))}
                 <option value={deviceId(device)}>{device.name}{device.is_default ? " · Windows default" : ""}</option>
@@ -410,7 +433,16 @@
               {/if}
             </select>
           </label>
-          <button type="button" class="ti-button ti-button-secondary" disabled={busy} onclick={() => void saveSelectedMicrophone()}>Use this microphone</button>
+          <button type="button" class="ti-button ti-button-secondary" disabled={busy || microphonesLoading || !devices?.ok} onclick={() => void saveSelectedMicrophone()}>Use this microphone</button>
+        </div>
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          {#if microphonesLoading}
+            <p class="m-0 text-[13px] leading-5 text-[var(--ti-text-muted)]" role="status">Checking available microphones...</p>
+          {:else if microphonesChecked && !devices?.ok}
+            <p class="m-0 text-[13px] leading-5 text-[var(--ti-warning)]" role="alert">Microphone list could not be verified. The saved selection was not replaced.</p>
+          {/if}
+          <button type="button" class="ti-button ti-button-secondary" disabled={busy || microphonesLoading}
+            onclick={() => void refreshDevices()}>{microphonesLoading ? "Checking..." : "Refresh microphones"}</button>
         </div>
         <div class="ti-subtle-card overflow-hidden">
           <StatusRow
@@ -446,7 +478,7 @@
               : routeCheck === "checking" ? "Checking the audio route in Windows..."
               : "The virtual audio route needs setup before you can continue."}
             status={routeCheck === "ready" ? "Available" : routeCheck === "unavailable" ? "Unable to check" : routeCheck === "checking" ? "Checking" : "Setup Needed"}
-            tone={routeCheck === "ready" ? "good" : routeCheck === "setup_needed" ? "warning" : "neutral"}
+            tone={routeCheck === "ready" ? "good" : routeCheck === "setup_needed" ? "warning" : routeCheck === "unavailable" ? "danger" : "neutral"}
           />
         </div>
       {:else}
@@ -473,11 +505,11 @@
       <SetupNavigation
         {step}
         {busy}
-        microphoneReady={snapshot?.readiness.microphoneReady === true}
+        microphoneReady={setupReadState === "verified" && snapshot?.readiness.microphoneReady === true}
         {microphoneSelectionPending}
-        meetingRouteReady={snapshot?.readiness.meetingRouteReady === true && routeCheck === "ready"}
+        meetingRouteReady={setupReadState === "verified" && snapshot?.readiness.meetingRouteReady === true && routeCheck === "ready"}
         {meetingVoiceReady}
-        meetingReady={snapshot?.readiness.meetingReady === true && routeCheck === "ready"}
+        meetingReady={setupReadState === "verified" && snapshot?.readiness.meetingReady === true && routeCheck === "ready"}
         onBack={goBack}
         onDefer={deferSetup}
         onAdvance={advance}

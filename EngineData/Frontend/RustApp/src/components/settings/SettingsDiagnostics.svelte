@@ -65,14 +65,14 @@
   <article class="ti-panel p-5">
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-3">
       <div class="ti-state-card min-w-0"><span class="ti-field-label">Worker</span><strong class="mt-2 block text-[13px]">{snapshot.helper?.state ?? "Not checked"}</strong></div>
-      <div class="ti-state-card min-w-0"><span class="ti-field-label">Outbound provider</span><strong class="mt-2 block text-[13px]">{snapshot.helper?.provider_ready ? "Available" : "Setup Needed"}</strong></div>
+      <div class="ti-state-card min-w-0"><span class="ti-field-label">Outbound provider</span><strong class="mt-2 block text-[13px]">{!snapshot.helper || snapshot.helper.state === "unavailable" ? "Not verified" : snapshot.helper.provider_ready ? "Available" : "Setup Needed"}</strong></div>
       <div class="ti-state-card min-w-0"><span class="ti-field-label">Execution device</span><strong class="mt-2 block text-[13px]">{snapshot.helper?.cuda_ready ? "CUDA" : snapshot.helper?.degraded_mode ? "CPU / degraded" : "Not verified"}</strong></div>
     </div>
 
     <p class="mb-0 mt-4 text-[13px] leading-5 text-[var(--ti-text-muted)]">{helperDiagnosticMessage}</p>
 
     <div class="ti-action-row mt-4">
-      <button type="button" class="ti-button ti-button-secondary" disabled={setupBusy || diagnosticsLoading} onclick={() => void onRefreshDiagnostics()}><RefreshCw size={15} /> {diagnosticsLoading || setupBusy ? "Refreshing..." : "Check Again"}</button>
+      <button type="button" class="ti-button ti-button-secondary" aria-busy={setupBusy || diagnosticsLoading} disabled={setupBusy || diagnosticsLoading} onclick={() => void onRefreshDiagnostics()}><RefreshCw size={15} /> {diagnosticsLoading || setupBusy ? "Refreshing..." : "Check Again"}</button>
       <button type="button" class="ti-button ti-button-secondary" disabled={setupBusy || diagnosticsLoading} onclick={() => void onSetupAction("verify-models")}><Bug size={15} /> Check AI Files</button>
       {#if snapshot.helper?.state === "blocked"}
         <button type="button" class="ti-button ti-button-secondary" disabled={setupBusy || diagnosticsLoading || snapshot.meetingSession?.has_session || snapshot.voiceBuildActive} onclick={() => void onSetupAction("retry-worker")}><RefreshCw size={15} /> Retry Worker</button>
@@ -119,10 +119,11 @@
   <CodexGatewayDiagnostics />
   <MeetingPerformanceDiagnostics status={snapshot.meetingSession} />
 
-  <article class="ti-panel p-5">
+  <article class="ti-panel p-5" aria-busy={audioQualityLoading}>
     <span class="ti-field-label">Microphone quality</span>
     <strong class="mt-2 block text-[13px]">{audioQualityLoading ? "Checking..." : audioQuality?.label ?? "Not verified"}</strong>
-    <p class="mb-0 mt-2 text-[13px] leading-5 text-[var(--ti-text-muted)]">{audioQualityLoading ? "Reading the current microphone buffer." : sanitizeDiagnosticText(audioQuality?.note, "Audio quality is unavailable. Use Check Again to retry.")}</p>
+    <p class="mb-0 mt-2 break-words text-[13px] leading-5 text-[var(--ti-text-muted)]"
+      role="status">{audioQualityLoading ? "Reading the current microphone buffer." : sanitizeDiagnosticText(audioQuality?.note, "Microphone quality has not been verified. Select Check Again above to retry.")}</p>
     <p class="mb-0 mt-2 text-[13px] leading-5 text-[var(--ti-text-soft)]">Uses existing Mic Test or Meeting capture. Checking quality does not start the microphone.</p>
   </article>
 
