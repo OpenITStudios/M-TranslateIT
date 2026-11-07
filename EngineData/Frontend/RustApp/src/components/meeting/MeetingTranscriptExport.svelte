@@ -13,10 +13,15 @@
   let history = $state<SavedMeetingSessions | null>(null);
   let expanded = $state<string | null>(null);
   let preview = $state<MeetingCommittedTurnsSnapshot | null>(null);
+  let previewLoading = $state(false);
+  let previewError = $state("");
+  // Ignore older reads after the reader closes or changes sessions.
+  let previewRevision = 0;
   let language = $state<"bilingual" | "id" | "en">("bilingual");
   let confirming = $state<string | null>(null);
   let busy = $state(false);
   let loading = $state(false);
+  let historyChecked = $state(false);
   let notice = $state("");
   let htmlSample = $state<{ sessionId: string; html: string; entryCount: number } | null>(null);
   let previewBusy = $state(false);
@@ -44,20 +49,63 @@
     try {
       history = await runtimeApi.listSavedMeetingTranscripts();
       notice = history.ok ? "" : history.message;
+      if (!history.ok) {
+        expanded = null;
+        preview = null;
+        previewLoading = false;
+        previewError = "";
+        previewRevision += 1;
+      }
     } catch {
+      history = null;
+      expanded = null;
+      preview = null;
+      previewLoading = false;
+      previewError = "";
+      previewRevision += 1;
       notice = "Saved transcripts are unavailable.";
-    } finally { loading = false; }
+    } finally {
+      historyChecked = true;
+      loading = false;
+    }
   }
   async function togglePreview(sessionId: string): Promise<void> {
     confirming = null;
     notice = "";
-    if (expanded === sessionId) { expanded = null; preview = null; return; }
+    if (expanded === sessionId) {
+      expanded = null;
+      preview = null;
+      previewLoading = false;
+      previewError = "";
+      previewRevision += 1;
+      return;
+    }
     expanded = sessionId;
     preview = null;
-    const result = await runtimeApi.getSavedMeetingTranscriptPreview(sessionId);
-    if (expanded !== sessionId) return;
-    if (!result.ok) notice = result.note || "Saved transcript could not be loaded.";
-    else preview = result;
+    previewError = "";
+    previewLoading = true;
+    const revision = ++previewRevision;
+    try {
+      const result = await runtimeApi.getSavedMeetingTranscriptPreview(sessionId);
+      if (revision !== previewRevision || expanded !== sessionId) return;
+      if (!result.ok) {
+        previewError = result.note || "Saved transcript could not be loaded.";
+        return;
+      }
+      preview = result;
+    } catch {
+      if (revision === previewRevision && expanded === sessionId) {
+        previewError = "Saved transcript could not be loaded.";
+      }
+    } finally {
+      if (revision === previewRevision && expanded === sessionId) previewLoading = false;
+    }
+  }
+
+  async function retryPreview(sessionId: string): Promise<void> {
+    if (expanded !== sessionId || previewLoading) return;
+    expanded = null;
+    await togglePreview(sessionId);
   }
   async function toggleHtmlPreview(sessionId: string): Promise<void> {
     if (previewBusy) return;
@@ -103,7 +151,13 @@
     try {
       const result = await runtimeApi.deleteSavedMeetingTranscript(sessionId);
       if (!result.ok) { notice = result.message; return; }
-      if (expanded === sessionId) { expanded = null; preview = null; }
+      if (expanded === sessionId) {
+        expanded = null;
+        preview = null;
+        previewLoading = false;
+        previewError = "";
+        previewRevision += 1;
+      }
       if (htmlSample?.sessionId === sessionId) htmlSample = null;
       htmlPreviewRevision += 1;
       if (receipt?.sessionId === sessionId) receipt = null;
@@ -155,13 +209,15 @@
       Some transcript entries could not be saved; storage completeness is unverified.
     </p>
   {/if}
-  {#if history?.ok && history.sessions.length === 0}
+  {#if !history && (!historyChecked || loading)}
+    <p class="m-0 border-t border-[var(--ti-border)] px-5 py-5 text-[13px] text-[var(--ti-text-muted)]"
+      role="status" aria-live="polite">Checking saved transcripts...</p>
+  {:else if !history || !history.ok}
+    <p class="m-0 border-t border-[var(--ti-border)] px-5 py-5 text-[13px] leading-5 text-[var(--ti-warning)]"
+      role="status">Saved transcript list could not be verified. Select Refresh to check again; existing files were not changed by this check.</p>
+  {:else if history.sessions.length === 0}
     <p class="m-0 border-t border-[var(--ti-border)] px-5 py-6 text-sm text-[var(--ti-text-muted)]">
       No conversation entries have been saved yet.
-    </p>
-  {:else if !history}
-    <p class="m-0 border-t border-[var(--ti-border)] px-5 py-5 text-xs text-[var(--ti-text-muted)]">
-      Saved transcript list is not available.
     </p>
   {:else}
     <div class="divide-y divide-[var(--ti-border)] border-t border-[var(--ti-border)]">
@@ -241,8 +297,16 @@
                   {/each}
                 </div>
               </div>
-              {#if !preview}
-                <p class="m-0 text-xs text-[var(--ti-text-muted)]">Loading saved conversation...</p>
+              {#if previewLoading}
+                <p class="m-0 text-[13px] text-[var(--ti-text-muted)]" role="status" aria-live="polite">Loading saved conversation...</p>
+              {:else if previewError}
+                <div class="grid gap-3" role="alert">
+                  <p class="m-0 break-words text-[13px] leading-5 text-[var(--ti-warning)]">{previewError} The saved session was not modified.</p>
+                  <button type="button" class="ti-button ti-button-secondary justify-self-start"
+                    onclick={() => void retryPreview(session.session_id)}>Retry preview</button>
+                </div>
+              {:else if !preview}
+                <p class="m-0 text-[13px] text-[var(--ti-text-muted)]">Preview is unavailable. Select Read to close and try again.</p>
               {:else}
                 <div class="max-h-[360px] divide-y divide-[var(--ti-border)] overflow-y-auto" role="region" aria-label="Saved conversation" tabindex="0">
                   {#each preview.turns as turn (turn.sequence)}

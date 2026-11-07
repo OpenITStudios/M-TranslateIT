@@ -364,14 +364,20 @@
       </button>
     </div>
 
-    <div class="min-h-0 flex-1 overflow-y-auto px-4 py-2" aria-live="polite">
+    <div class="min-h-0 flex-1 overflow-y-auto px-4 py-2" role="region" aria-label="Quick Access status and recovery" aria-live="polite" tabindex="0">
       {#if errorMessage}
         <p class="qa-feedback qa-error" role="alert">{errorMessage}</p>
       {:else if resultMessage}
         <p class="qa-feedback">{resultMessage}</p>
       {:else if needsStop}
-        <p class="qa-feedback qa-error">Audio needs cleanup. Use Retry Stop to recover.</p>
-      {:else if !live && !canStart && !foreignOwner && snapshot?.revision}
+        <p class="qa-feedback qa-error" role="alert">Audio needs cleanup. Use Retry Stop to recover.</p>
+      {:else if foreignOwner}
+        <p class="qa-feedback">Another feature currently owns Meeting audio. Return to TranslateIT to finish that action before changing the source here.</p>
+      {:else if stopping}
+        <p class="qa-feedback">Meeting is {meeting?.lifecycle === "starting" ? "starting" : "stopping"}. Audio controls remain unavailable until its status is confirmed.</p>
+      {:else if !snapshot || snapshot.revision <= 0}
+        <p class="qa-feedback">Meeting status has not been verified yet. Open TranslateIT to check setup if this persists.</p>
+      {:else if !live && !canStart}
         <p class="qa-feedback">{choice === "original"
           ? "Connect a physical microphone and the virtual audio route."
           : "Check the microphone, virtual route, and selected translation voice."}</p>
