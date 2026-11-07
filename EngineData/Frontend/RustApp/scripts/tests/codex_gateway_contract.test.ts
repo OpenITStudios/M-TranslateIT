@@ -475,3 +475,18 @@ test("Codex text candidate cannot send inference, execute tools or commit to Mee
   assert.doesNotMatch(protocol, /"turn\/start" \|/);
   assert.match(gateway, /meeting_route_enabled: false/);
 });
+
+test("current Codex handoff telemetry is denied before candidate delivery, never promoted to TTS", () => {
+  assert.match(realtime, /fn reject_unsafe_realtime_item\(/);
+  assert.match(realtime, /Some\("handoff_request" \| "function_call"\)/);
+  assert.match(realtime, /codex_realtime:agent_handoff_observed/);
+  assert.match(realtime, /fn upstream_handoff_item_added_retires_unverified_translation_before_next_item/);
+  assert.match(realtime, /fn raw_item_added_never_grants_final_translation_or_tts_authority/);
+  assert.match(transport, /realtime::reject_unsafe_realtime_item\(method, params\)/);
+  assert.match(transport, /fn owned_voice_reader_refuses_handoff_before_delivering_a_candidate/);
+  assert.match(transport, /codex_gateway:voice_agent_turn_observed/);
+  assert.match(transport, /codex_gateway:agent_activity_in_diagnostics/);
+  assert.match(gateway, /realtime_audio_verified: false/);
+  assert.match(gateway, /meeting_route_enabled: false/);
+  assert.doesNotMatch(realtime, /voice_actor_synthesize|deliver_meeting_output|commit_meeting_turn/);
+});

@@ -58,6 +58,37 @@ fn safe_text(value: &str) -> bool {
         })
 }
 
+/// Codex publishes RealtimeEvent::HandoffRequested as itemAdded with
+/// item.type=handoff_request. Upstream can start an agent turn before
+/// forwarding the event. This detects an unsafe session but cannot prevent
+/// upstream agent execution; do NOT treat it as media/Voice authorization.
+/// No private item text may enter logs or error strings.
+pub(super) fn reject_unsafe_realtime_item(
+    method: &str, params: &Value,
+) -> Result<(), &'static str> {
+    match method {
+        "thread/realtime/itemAdded" => {
+            let item = params.get("item").and_then(Value::as_object)
+                .ok_or("codex_realtime:item_added_invalid")?;
+            match item.get("type").and_then(Value::as_str) {
+                Some("handoff_request" | "function_call") =>
+                    Err("codex_realtime:agent_handoff_observed"),
+                Some("bemItemPromoted") =>
+                    Err("codex_realtime:agent_item_promoted"),
+                // Only non-authoritative capture metadata or user input.
+                Some("input_audio_buffer.speech_started" | "response.cancelled") => Ok(()),
+                Some("message") if item.get("role").and_then(Value::as_str) == Some("user") =>
+                    Ok(()),
+                _ => Err("codex_realtime:item_added_unadmitted"),
+            }
+        }
+        "thread/realtime/item/started" | "thread/realtime/item/completed"
+            if params.pointer("/item/type").and_then(Value::as_str) == Some("bemItemPromoted") =>
+                Err("codex_realtime:agent_item_promoted"),
+        _ => Ok(()),
+    }
+}
+
 /// An observer for *one* Codex realtime thread/session, not a new Meeting owner.
 /// No transcript/source text is stored after the observation is returned.
 pub(super) struct RealtimeObserver {
@@ -114,6 +145,7 @@ impl RealtimeObserver {
         if thread_id != self.thread_id {
             return Err("codex_realtime:foreign_thread");
         }
+        reject_unsafe_realtime_item(method, params)?;
 
         if method == "thread/realtime/started" {
             if self.session_id.is_some() {
@@ -611,6 +643,68 @@ mod tests {
         assert_eq!(
             started.observe("thread/realtime/item/started", &promoted),
             Err("codex_realtime:agent_item_promoted")
+        );
+    }
+
+    #[test]
+    fn upstream_handoff_item_added_retires_unverified_translation_before_next_item() {
+        let handoff = json!({"threadId":"thr_a","item":{
+            "type":"handoff_request","handoff_id":"h1",
+            "item_id":"agent_1","input_transcript":"private spoken command",
+            "active_transcript":[]
+        }});
+        let mut o = observer();
+        assert_eq!(
+            o.observe("thread/realtime/itemAdded", &handoff),
+            Err("codex_realtime:agent_handoff_observed")
+        );
+        assert_eq!(
+            o.observe("thread/realtime/item/completed",
+                &item("late","sess_a","assistant","Unsafe late text")),
+            Err("codex_realtime:session_revoked")
+        );
+        for raw_type in ["function_call", "bemItemPromoted", "commandExecution"] {
+            let mut o = observer();
+            let payload = json!({"threadId":"thr_a","item":{"type":raw_type}});
+            assert!(o.observe("thread/realtime/itemAdded", &payload).is_err());
+            assert_eq!(
+                o.observe("thread/realtime/transcript/done",
+                    &json!({"threadId":"thr_a","role":"assistant"})),
+                Err("codex_realtime:session_revoked")
+            );
+        }
+    }
+
+    #[test]
+    fn raw_item_added_never_grants_final_translation_or_tts_authority() {
+        for raw_item in [
+            json!({"type":"input_audio_buffer.speech_started","item_id":"voice"}),
+            json!({"type":"response.cancelled","response_id":"r1"}),
+            json!({"type":"message","role":"user","content":"spoken data"}),
+        ] {
+            let mut o = observer();
+            assert_eq!(
+                o.observe("thread/realtime/itemAdded",
+                    &json!({"threadId":"thr_a","item":raw_item})),
+                Ok(Observation::Ignored)
+            );
+        }
+        for raw_item in [
+            json!({"type":"message","role":"assistant","content":"unverified"}),
+            json!({"type":"message","role":"system"}),
+            json!({}),
+        ] {
+            let mut o = observer();
+            assert_eq!(
+                o.observe("thread/realtime/itemAdded",
+                    &json!({"threadId":"thr_a","item":raw_item})),
+                Err("codex_realtime:item_added_unadmitted")
+            );
+        }
+        let mut o = observer();
+        assert_eq!(
+            o.observe("thread/realtime/itemAdded", &json!({"threadId":"thr_a"})),
+            Err("codex_realtime:item_added_invalid")
         );
     }
 

@@ -171,6 +171,14 @@ fn affects_account_authority(method: &str) -> bool {
 /// The actual read thread advances a revision before queueing a notification.
 fn account_notification(method: &str) -> Result<bool, &'static str> {
     realtime::refuse_unadmitted_event(method)?;
+    // An account-only child does not own agent turns. Never silently ignore
+    // unexpected work on the diagnostic process, even if it is unrelated
+    // to the current read-only account RPC.
+    if method.starts_with("thread/") || method.starts_with("turn/")
+        || method.starts_with("item/")
+    {
+        return Err("codex_gateway:agent_activity_in_diagnostics");
+    }
     Ok(affects_account_authority(method))
 }
 
@@ -184,7 +192,11 @@ fn owned_realtime_inbound_allowed(
         Inbound::Notification { method, .. } if affects_account_authority(method) => {
             Err("codex_gateway:voice_account_revision_changed")
         }
-        Inbound::Notification { method, .. } if method.starts_with("thread/realtime/") => Ok(()),
+        Inbound::Notification { method, params } if method.starts_with("thread/realtime/") =>
+            realtime::reject_unsafe_realtime_item(method, params),
+        Inbound::Notification { method, .. } if method.starts_with("turn/")
+            || method.starts_with("item/") =>
+            Err("codex_gateway:voice_agent_turn_observed"),
         Inbound::Notification { .. } => Err("codex_gateway:voice_notification_unexpected"),
     }
 }
@@ -968,13 +980,62 @@ mod tests {
     }
 
     #[test]
+    fn owned_voice_reader_refuses_handoff_before_delivering_a_candidate() {
+        // Codex App Server turns HandoffRequested into itemAdded, after
+        // upstream may already have launched a coding-agent turn.
+        let handoff = Inbound::Notification {
+            method: "thread/realtime/itemAdded".into(),
+            params: serde_json::json!({"threadId":"thread_1","item":{
+                "type":"handoff_request","handoff_id":"h1","item_id":"i1",
+                "input_transcript":"private spoken command","active_transcript":[]
+            }}),
+        };
+        assert_eq!(
+            owned_realtime_inbound_allowed(&handoff, 10),
+            Err("codex_realtime:agent_handoff_observed")
+        );
+        let agent = Inbound::Notification {
+            method: "turn/started".into(),
+            params: serde_json::json!({"threadId":"thread_1"}),
+        };
+        assert_eq!(
+            owned_realtime_inbound_allowed(&agent, 10),
+            Err("codex_gateway:voice_agent_turn_observed")
+        );
+        let benign = Inbound::Notification {
+            method: "thread/realtime/itemAdded".into(),
+            params: serde_json::json!({"threadId":"thread_1","item":{
+                "type":"input_audio_buffer.speech_started","item_id":"i2"
+            }}),
+        };
+        assert_eq!(owned_realtime_inbound_allowed(&benign, 10), Ok(()));
+        let promoted = Inbound::Notification {
+            method: "thread/realtime/item/started".into(),
+            params: serde_json::json!({"threadId":"thread_1","item":{
+                "type":"bemItemPromoted","id":"i3"
+            }}),
+        };
+        assert_eq!(
+            owned_realtime_inbound_allowed(&promoted, 10),
+            Err("codex_realtime:agent_item_promoted")
+        );
+    }
+
+    #[test]
     fn notification_dispatch_retains_only_account_changes_and_denies_voice() {
         assert_eq!(account_notification("account/updated"), Ok(true));
         assert_eq!(account_notification("account/rateLimits/updated"), Ok(true));
-        assert_eq!(account_notification("thread/started"), Ok(false));
+        assert_eq!(
+            account_notification("thread/started"),
+            Err("codex_gateway:agent_activity_in_diagnostics")
+        );
         assert_eq!(
             account_notification("thread/realtime/transcript/done"),
             Err("codex_realtime:unsolicited_without_voice_authority")
+        );
+        assert_eq!(
+            account_notification("turn/started"),
+            Err("codex_gateway:agent_activity_in_diagnostics")
         );
     }
 
@@ -999,7 +1060,10 @@ mod tests {
         }
         assert_eq!(account_notification("modelProvider/authRecoveryCompleted"), Ok(true));
         assert_eq!(account_notification("config/changed"), Ok(true));
-        assert_eq!(account_notification("thread/started"), Ok(false));
+        assert_eq!(
+            account_notification("thread/started"),
+            Err("codex_gateway:agent_activity_in_diagnostics")
+        );
         assert_eq!(
             account_notification("thread/realtime/started"),
             Err("codex_realtime:unsolicited_without_voice_authority")
