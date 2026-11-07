@@ -84,6 +84,13 @@ pub fn export_diagnostic_support_bundle() -> DiagnosticSupportBundleResult {
         "created_unix_ms": unix_ms(),
         "app": {
             "version": env!("CARGO_PKG_VERSION"),
+            "source_sha": option_env!("TRANSLATEIT_BUILD_SOURCE_SHA"),
+            "source_identity_scope": if option_env!("TRANSLATEIT_BUILD_SOURCE_SHA").is_some() {
+                "CLEAN_PINNED_BUILD_INPUT"
+            } else {
+                "UNVERIFIED"
+            },
+            "source_sha_is_signed_attestation": false,
             "path_mode": paths.path_mode,
             "packaged_context_initialized": paths.packaged_context_initialized,
             "development_root_verified": paths.development_root_verified,
@@ -222,6 +229,8 @@ pub fn export_diagnostic_support_bundle() -> DiagnosticSupportBundleResult {
             "areas": &incidents.issue_areas,
             "total_failure_frequency_measured": false,
             "native_root_cause_verified": false,
+            "legacy_issue_build_attribution": "UNKNOWN",
+            "record_build_identity_scope": "CLEAN_PINNED_BUILD_INPUT_OR_UNKNOWN",
         },
         "incident_summary": {
             "count": incidents.count,

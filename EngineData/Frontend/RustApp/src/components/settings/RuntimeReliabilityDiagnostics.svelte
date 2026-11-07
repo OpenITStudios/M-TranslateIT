@@ -144,11 +144,13 @@
         <p class="m-0 text-[13px] text-[var(--ti-text-muted)]">No incident records in the retained local window; runtime health is checked separately.</p>
       {:else}
         <div class="grid gap-3">
-          {#each incidents.issue_areas as area (`${area.category}:${area.component}`)}
+          {#each incidents.issue_areas as area (`${area.category}:${area.component}:${area.build_source_sha ?? "unknown"}`)}
             <section class="ti-subtle-card min-w-0 p-3">
               <div class="flex flex-wrap items-center justify-between gap-2">
                 <strong class="break-words text-[13px]">{sanitizeDiagnosticText(area.category)} · {sanitizeDiagnosticText(area.component)}</strong>
-                <span class="text-[12px] text-[var(--ti-text-muted)]">{area.retained_records} retained</span>
+                <span class="text-[12px] text-[var(--ti-text-muted)]">
+                  {area.retained_records} retained · {area.build_source_sha ? `Build ${area.build_source_sha.slice(0, 12)}` : "Build unknown"}
+                </span>
               </div>
               <ul class="mb-0 mt-2 grid gap-1 pl-4 text-[12px] leading-5">
                 {#each area.blockers as blocker (blocker)}

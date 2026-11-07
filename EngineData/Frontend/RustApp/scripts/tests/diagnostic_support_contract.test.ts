@@ -67,3 +67,14 @@ test("support export projects a bounded incident issue map without claiming nati
   assert.match(support, /"total_failure_frequency_measured": false/);
   assert.match(support, /"native_root_cause_verified": false/);
 });
+
+test("support bundle includes optional build attribution without claiming release acceptance", () => {
+  const builder = readFileSync(new URL("../../src-tauri/build.rs", import.meta.url), "utf8");
+  assert.match(builder, /TRANSLATEIT_EXPECTED_SHA/);
+  assert.match(builder, /TRANSLATEIT_BUILD_SOURCE_SHA/);
+  assert.match(builder, /--porcelain/);
+  assert.match(support, /"source_sha": option_env!\("TRANSLATEIT_BUILD_SOURCE_SHA"\)/);
+  assert.match(support, /"source_identity_scope": if option_env!/);
+  assert.match(support, /"source_sha_is_signed_attestation": false/);
+  assert.match(support, /"legacy_issue_build_attribution": "UNKNOWN"/);
+});

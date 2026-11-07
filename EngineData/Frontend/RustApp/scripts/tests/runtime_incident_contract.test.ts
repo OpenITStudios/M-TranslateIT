@@ -33,3 +33,13 @@ test("incident issue projection is bounded, source-owned and distinguishes absen
   }
   assert.match(incident, /fn issue_map_groups_only_retained_records_without_inventing_failure_frequency/);
 });
+
+test("incident writes fail closed on corrupted history and separate clean build identities", () => {
+  assert.match(incident, /fn persist_incident\(path: &Path, next: RuntimeIncident\)/);
+  assert.match(incident, /let mut incidents = read_incidents\(path\)\?/);
+  assert.match(incident, /current\.build_source_sha == next\.build_source_sha/);
+  assert.match(incident, /fn invalid_incident_history_cannot_be_erased_by_new_events/);
+  assert.match(incident, /fn issue_map_separates_recorded_builds_from_legacy_unknowns/);
+  assert.match(incident, /fn legacy_incidents_survive_bounded_append_without_build_forgery/);
+  assert.doesNotMatch(incident, /fs::read\(path\)/);
+});

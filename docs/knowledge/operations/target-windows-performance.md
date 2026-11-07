@@ -157,6 +157,21 @@ optional My Voice, extended fault/display checks and E2–E6 remain outside the
 baseline claim until separately exercised. These flows describe required host
 observations, not implemented automated receiver/UI coverage.
 
+**Local diagnostic attribution (D4, within the same five flows):** After a real,
+non-private reproducible error, use the existing Settings → Diagnostics →
+Runtime health → Recent issue map and explicitly export the existing support
+bundle. Compare the known pinned SHA to exported `app.source_sha` only when
+`source_identity_scope` is `CLEAN_PINNED_BUILD_INPUT`. A matching SHA identifies
+clean build inputs, not a signed installer or verified meeting receiver. Inspect
+incident groups by their own optional source SHA; older/unknown-build records
+must not be attributed to the current candidate. Repeated reports are
+suppressed, only 20 recent records are retained, and unreadable history must
+appear `UNAVAILABLE`, never as empty/healthy. Verify no transcript, audio,
+speaker reference, private device name, credential, raw session ID or user
+filesystem path enters exported diagnostic JSON. Do not inject faults into
+real microphones, destroy user data or add a competing collector to produce
+the report. This source-backed report is evidence, not an acceptance verdict.
+
 Judge translation by clear retained meaning, not exact reference wording or
 preferred grammar. Keep the six owner-accepted development limitations and two
 REVIEW diagnostics visible under [Current Validation](../current-validation.md);

@@ -24,11 +24,13 @@ export type RuntimeIncident = {
   blocker: string;
   note: string;
   occurred_unix_ms: number;
+  build_source_sha?: string | null;
 };
 
 export type RuntimeIssueArea = {
   category: string;
   component: string;
+  build_source_sha: string | null;
   retained_records: number;
   blockers: string[];
   latest_unix_ms: number;
