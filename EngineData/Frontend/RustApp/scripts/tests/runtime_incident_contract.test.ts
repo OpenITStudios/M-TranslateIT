@@ -45,8 +45,11 @@ test("incident writes fail closed on corrupted history and separate clean build 
 });
 
 test("incident publication preserves the existing report on replacement or staging failure", () => {
-  assert.match(incident, /fs::rename\(temp, path\)/);
-  assert.doesNotMatch(incident, /fs::remove_file\(path\)/);
+  // Inspect only the production writer; test teardown legitimately deletes its fixtures.
+  const writer = incident.split("fn write_incidents(path: &Path, incidents: &[RuntimeIncident]) -> io::Result<()> {")[1]?.split("\n}\n")[0];
+  assert.ok(writer, "canonical incident writer must exist");
+  assert.match(writer, /fs::rename\(temp, path\)/);
+  assert.doesNotMatch(writer, /fs::remove_file\(path\)/);
   assert.match(incident, /fn existing_history_is_replaced_without_deleting_before_publication/);
   assert.match(incident, /fn failed_staging_preserves_previous_incident_history/);
 });
