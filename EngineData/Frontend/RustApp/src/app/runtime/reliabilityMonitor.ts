@@ -13,7 +13,10 @@ const MEETING_RUNTIME_EVENT = "translateit://meeting-runtime";
 export type ReliabilityNotice = {
   key: string;
   message: string;
+  kind: "attention" | "unverified";
 };
+export type ReliabilityChannel = "live" | "session";
+type ReliabilityNoticeCallback = (channel: ReliabilityChannel, notice: ReliabilityNotice | null) => void;
 
 export type MeetingRuntimeEvent = {
   revision: number;
@@ -26,19 +29,19 @@ async function readLiveReliabilityNotice(): Promise<ReliabilityNotice | null> {
   const { watchdog, devices } = await getMeetingReliabilitySnapshot();
 
   if (devices.action_required && devices.blocker) {
-    return { key: devices.blocker, message: devices.note };
+    return { key: devices.blocker, message: devices.note, kind: "attention" };
   }
   if (watchdog.action_required && watchdog.blocker) {
-    return { key: watchdog.blocker, message: watchdog.note };
+    return { key: watchdog.blocker, message: watchdog.note, kind: "attention" };
   }
   if (!devices.healthy && devices.blocker) {
-    return { key: devices.blocker, message: devices.note };
+    return { key: devices.blocker, message: devices.note, kind: "attention" };
   }
   return null;
 }
 
 function startMeetingReliabilityMonitor(
-  onNotice: (message: string) => void,
+  onNotice: ReliabilityNoticeCallback,
 ): () => void {
   let disposed = false;
   let inFlight = false;
@@ -52,17 +55,22 @@ function startMeetingReliabilityMonitor(
       // Stop may have disposed this monitor while the IPC read was pending.
       if (disposed) return;
       if (!notice) {
+        if (lastKey) onNotice("live", null);
         lastKey = "";
         return;
       }
       if (notice.key !== lastKey) {
         lastKey = notice.key;
-        onNotice(notice.message);
+        onNotice("live", notice);
       }
     } catch {
       if (!disposed && lastKey !== "reliability_unavailable") {
         lastKey = "reliability_unavailable";
-        onNotice("Meeting health could not be checked. Open Help if this continues.");
+        onNotice("live", {
+          key: "reliability_unavailable",
+          message: "Meeting health could not be checked. Open Help if this continues.",
+          kind: "unverified",
+        });
       }
     } finally {
       inFlight = false;
@@ -92,15 +100,20 @@ function startMeetingReliabilityMonitor(
         ].join(":");
         if (key !== lastLongSessionState) {
           lastLongSessionState = key;
-          onNotice(health.note);
+          onNotice("session", { key, message: health.note, kind: "attention" });
         }
       } else {
+        if (lastLongSessionState) onNotice("session", null);
         lastLongSessionState = "";
       }
     } catch {
       if (!disposed && lastLongSessionState !== "long_session_unavailable") {
         lastLongSessionState = "long_session_unavailable";
-        onNotice("Session health could not be checked. Open Help if this continues.");
+        onNotice("session", {
+          key: "long_session_unavailable",
+          message: "Session health could not be checked. Open Help if this continues.",
+          kind: "unverified",
+        });
       }
     } finally {
       longSessionInFlight = false;
@@ -155,7 +168,7 @@ function startMeetingChangeEvents(
 
 export function startMeetingRuntimeMonitors(
   pollMeeting: (forceTurns?: boolean) => void | Promise<void>,
-  onNotice: (message: string) => void,
+  onNotice: ReliabilityNoticeCallback,
   reliabilityEnabled: boolean,
 ): () => void {
   void pollMeeting(false);

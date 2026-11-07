@@ -11,7 +11,8 @@
     runtimeProductFacade,
     type ProductSetupAction,
   } from "./app/bridge/runtimeProductFacade";
-  import { startMeetingRuntimeMonitors } from "./app/runtime/reliabilityMonitor";
+  import { startMeetingRuntimeMonitors, type ReliabilityChannel, type ReliabilityNotice } from "./app/runtime/reliabilityMonitor";
+import { appNotice, visibleAppNotice, type AppNotice, type AppNoticeKind } from "./app/runtime/applicationNotice";
   import { subscribeOverlayReady, subscribeQuickAccessCaptionRequests } from "./app/runtime/translationOverlayRuntime";
 import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlayState";
   import { startVoiceBuildRuntimeSync } from "./app/runtime/voiceBuildRuntimeSync";
@@ -20,7 +21,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     createCloseController,
     type CloseControllerState,
   } from "./app/runtime/closeController";
-  import { compact, defaultSettings } from "./app/shared/state";
+  import { defaultSettings } from "./app/shared/state";
   import { meetingControlState } from "./app/bridge/productMeetingState";
   import {
     createApplicationController,
@@ -52,7 +53,9 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
 
   let booting = $state(true);
   let route=$state<AppRoute>("meeting");
-  let notice=$state("Getting TranslateIT ready...");
+  let notice = $state<AppNotice>(appNotice("Getting TranslateIT ready...", "progress"));
+  let liveHealthNotice = $state<AppNotice | null>(null);
+  let longSessionNotice = $state<AppNotice | null>(null);
   let meetingActionBusy=$state(false);
   let setupActionBusy=$state(false);
   let micTestBusy=$state(false);
@@ -66,6 +69,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
   const setupRequired = $derived(applicationState.setupRequired);
   const setupSettings = $derived(applicationState.setupSettings);
   const meetingStatus = $derived(snapshot?.meetingSession ?? null);
+  const displayedNotice = $derived(visibleAppNotice(notice, snapshot, liveHealthNotice, longSessionNotice));
 
   const presence = $derived(
     snapshot?.meeting.lifecycle === "unavailable"
@@ -94,21 +98,32 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
   );
 
   function setNotice(message: string): void {
-    notice = compact(message, "Status unavailable.", 220);
+    // Existing feature callbacks provide text without verified severity.
+    notice = appNotice(message);
+  }
+
+  function setKnownNotice(message: string, kind: AppNoticeKind): void {
+    notice = appNotice(message, kind);
+  }
+
+  function updateHealthNotice(channel: ReliabilityChannel, entry: ReliabilityNotice | null): void {
+    const next = entry ? appNotice(entry.message, entry.kind) : null;
+    if (channel === "live") liveHealthNotice = next;
+    else longSessionNotice = next;
   }
 
   function navigate(next: AppRoute): void {
     if (voiceRecordingLock && next !== "my-voice") {
-      setNotice("Stop the current My Voice recording before leaving My Voice.");
+      setKnownNotice("Stop the current My Voice recording before leaving My Voice.", "attention");
       return;
     }
     route = next;
   }
 
-  function applyMeetingStatus(status: MeetingSessionStatus, preferredNotice?: string): void {
+  function applyMeetingStatus(status: MeetingSessionStatus, preferredNotice?: string, kind: AppNoticeKind = "info"): void {
     const ownershipChanged = applicationController.applyMeetingSession(status);
     applicationState = applicationController.read();
-    if (preferredNotice) setNotice(preferredNotice);
+    if (preferredNotice) setKnownNotice(preferredNotice, kind);
     if (ownershipChanged) void refreshSnapshot();
   }
 
@@ -124,7 +139,8 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
 
     if (result.setupRequired) {
       meetingViewState = meetingLiveController.reset();
-      setNotice(preferredNotice ?? "Continue Meeting setup to use voice translation.");
+      if (preferredNotice) setNotice(preferredNotice);
+      else setKnownNotice("Continue Meeting setup to use voice translation.", "attention");
       return;
     }
 
@@ -133,7 +149,14 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     if (!next.meeting.hasSession || result.previousSessionId !== result.nextSessionId) {
       meetingViewState = meetingLiveController.reset();
     }
-    setNotice(preferredNotice ?? (next.meeting.hasSession ? next.meeting.message : next.readiness.summary));
+    if (preferredNotice) {
+      setNotice(preferredNotice);
+    } else {
+      const kind: AppNoticeKind = next.meeting.lifecycle === "unavailable" || next.readiness.level === "unavailable"
+        ? "unverified" : next.readiness.level === "checking" ? "progress"
+        : next.meeting.live || next.readiness.level === "ready" ? "success" : "info";
+      setKnownNotice(next.meeting.hasSession ? next.meeting.message : next.readiness.summary, kind);
+    }
   }
 
   async function refreshSnapshot(preferredNotice?: string, knownSettings?: RuntimeSettings): Promise<void> {
@@ -143,7 +166,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
         preferredNotice,
       );
     } catch {
-      setNotice("TranslateIT couldn't refresh its status. Try again.");
+      setKnownNotice("TranslateIT couldn't confirm its current status. Check Meeting or Help before retrying.", "unverified");
     }
   }
 
@@ -156,7 +179,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
         await applicationController.refreshFromApplication(application, reason),
       );
     } catch {
-      setNotice("TranslateIT couldn't reconcile its runtime event. Try again.");
+      setKnownNotice("TranslateIT couldn't confirm its latest runtime status. Check Meeting or Help.", "unverified");
     }
   }
 
@@ -206,7 +229,8 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
       && snapshot.readiness.microphoneReady === true
       && snapshot.readiness.meetingRouteReady === true;
     if ((!control.enabled || !control.action) && !startOriginal) {
-      setNotice(snapshot.meeting.canStop ? snapshot.meeting.message : snapshot.readiness.nextAction ?? snapshot.meeting.message);
+      setKnownNotice(snapshot.meeting.canStop ? snapshot.meeting.message : snapshot.readiness.nextAction ?? snapshot.meeting.message,
+        snapshot.meeting.lifecycle === "unavailable" || snapshot.readiness.level === "unavailable" ? "unverified" : "attention");
       return;
     }
     const action = startOriginal ? "start" : control.action;
@@ -217,9 +241,9 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     const actionControllerRevision = applicationController.read().revision;
     meetingViewState = meetingLiveController.invalidate();
     meetingActionBusy = true;
-    setNotice(action === "start"
+    setKnownNotice(action === "start"
       ? source === "original" ? "Starting original microphone..." : "Starting translation..."
-      : "Stopping microphone...");
+      : "Stopping microphone...", "progress");
     try {
       const result = await runtimeProductFacade.runProductMeetingAction(action, source);
       const resultNotice = result.meeting.lifecycle === "cleanup_incomplete" || result.state === "cleanup_incomplete"
@@ -237,12 +261,19 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
         await refreshSnapshot();
         return;
       }
-      applyMeetingStatus(result.status, resultNotice);
+      const kind: AppNoticeKind = result.meeting.lifecycle === "cleanup_incomplete" || result.state === "cleanup_incomplete"
+        ? "attention"
+        : result.meeting.lifecycle === "unavailable" || result.state === "frontend_bridge_error"
+          ? "unverified"
+          : result.ok && ((action === "start" && result.meeting.live)
+            || (action === "stop" && !result.meeting.hasSession && result.meeting.lifecycle === "idle"))
+            ? "success" : result.ok ? "info" : "attention";
+      applyMeetingStatus(result.status, resultNotice, kind);
       if (!result.status.has_session || action === "start") {
         meetingViewState = meetingLiveController.reset();
       }
     } catch {
-      setNotice("That action couldn't be completed. Try again.");
+      setKnownNotice("The Meeting action couldn't be confirmed. Check its status before trying again.", "unverified");
       await refreshSnapshot();
     } finally {
       meetingActionBusy = false;
@@ -252,7 +283,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
   async function runSetupAction(action: ProductSetupAction): Promise<void> {
     if (setupActionBusy) return;
     setupActionBusy = true;
-    setNotice(action === "verify-models" ? "Checking translation files..." : "Checking setup...");
+    setKnownNotice(action === "verify-models" ? "Checking translation files..." : "Checking setup...", "progress");
     try {
       const message = await runtimeProductFacade.runProductSetupAction(action);
       await refreshSnapshot(message);
@@ -266,7 +297,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
   async function fixSetup(): Promise<void> {
     if (setupActionBusy) return;
     setupActionBusy = true;
-    setNotice("Checking setup...");
+    setKnownNotice("Checking setup...", "progress");
     try {
       const message = await runtimeProductFacade.runProductRecoveryAction("fix-setup");
       await refreshSnapshot(message);
@@ -288,12 +319,12 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
         : ownerKind === "voice_recording"
           ? "Stop My Voice recording before using Mic Test."
           : "Finish the current audio action before using Mic Test.";
-      setNotice(message);
+      setKnownNotice(message, "attention");
       return;
     }
 
     if (!snapshot.resources.microphone_available && !micTestOwnsRuntime) {
-      setNotice("Microphone setup isn't ready yet.");
+      setKnownNotice("Microphone setup isn't ready yet.", "attention");
       return;
     }
 
@@ -340,7 +371,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
         forceTurns,
       );
     } catch {
-      setNotice("Couldn't refresh the meeting display. Translation status is unknown; open Help if this continues.");
+      setKnownNotice("Couldn't refresh the meeting display. Translation status is unknown; open Help if this continues.", "unverified");
     }
   }
 
@@ -382,7 +413,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
       try {
         const loadedSettings = await runtimeApi.loadSettings();
         if (!loadedSettings) {
-          setNotice("TranslateIT can't reach the desktop runtime yet. Try again when it is available.");
+          setKnownNotice("TranslateIT can't reach the desktop runtime yet. Try again when it is available.", "unverified");
           return;
         }
         if (disposed) return;
@@ -401,7 +432,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
           );
         }
       } catch {
-        if (!disposed) setNotice("Could not load your settings or desktop status. Select Try Again to check the runtime.");
+        if (!disposed) setKnownNotice("Could not load your settings or desktop status. Select Try Again to check the runtime.", "unverified");
       } finally {
         if (disposed) return;
         booting = false;
@@ -413,7 +444,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
           && initialSnapshot.settings.translation_engine === "local"
           && applicationController.read().snapshot?.helper?.state === "not_started"
         ) {
-          setNotice("Preparing the local AI worker. Meeting and Settings remain accessible while it starts.");
+          setKnownNotice("Preparing the local AI worker. Meeting and Settings remain accessible while it starts.", "progress");
           void (async () => {
             const outcome = await applicationRuntimeApi.dispatchIntent("ensure_runtime_ready");
             if (disposed) return;
@@ -422,7 +453,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
             }
             if (disposed) return;
             if (!outcome.ok) {
-              setNotice(outcome.message);
+              setKnownNotice(outcome.message, "attention");
             } else {
               const current = applicationController.read().snapshot;
               if (current?.helper?.state === "ready" && !current.meeting.hasSession) {
@@ -430,7 +461,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
               }
             }
           })().catch(() => {
-            if (!disposed) setNotice("Could not confirm local AI startup. Check Help before retrying the worker.");
+            if (!disposed) setKnownNotice("Could not confirm local AI startup. Check Help before retrying the worker.", "unverified");
           });
         }
       }
@@ -486,15 +517,19 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     };
   });
 
-  $effect(() =>
-    meetingMonitorsActive
-      ? startMeetingRuntimeMonitors(
-          pollMeeting,
-          setNotice,
-          meetingReliabilityEnabled,
-        )
-      : undefined,
-  );
+  $effect(() => {
+    if (!meetingMonitorsActive) {
+      liveHealthNotice = null;
+      longSessionNotice = null;
+      return;
+    }
+    const stop = startMeetingRuntimeMonitors(pollMeeting, updateHealthNotice, meetingReliabilityEnabled);
+    return () => {
+      stop();
+      liveHealthNotice = null;
+      longSessionNotice = null;
+    };
+  });
 </script>
 
 {#if booting}
@@ -515,7 +550,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
       <AppHeader
         {snapshot}
         {route}
-        {notice}
+        notice={displayedNotice}
         myVoiceRecording={voiceRecordingLock}
         onNavigate={navigate}
         onNotice={setNotice}
@@ -562,8 +597,8 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
       <TranslateITMark size={40} />
       <span class="ti-kicker mt-4 block">TranslateIT</span>
       <h1 class="mb-0 mt-3 text-2xl font-semibold">TranslateIT isn't ready yet</h1>
-      <p class="mb-0 mt-3 text-sm leading-6 text-[var(--ti-text-muted)]">{notice}</p>
-      <button type="button" class="ti-button mt-5" onclick={() => { setNotice("Checking again..."); void refreshSnapshot(); }}>Try Again</button>
+      <p class="mb-0 mt-3 text-sm leading-6 text-[var(--ti-text-muted)]">{notice.message}</p>
+      <button type="button" class="ti-button mt-5" onclick={() => { setKnownNotice("Checking again...", "progress"); void refreshSnapshot(); }}>Try Again</button>
     </section>
   </main>
 {/if}

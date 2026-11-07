@@ -77,9 +77,19 @@ test("completed reliability reads cannot notify after Meeting monitor disposal",
 test("Meeting monitor lifetime is stable across status-only snapshot refreshes", () => {
   assert.ok(app.includes("const meetingMonitorsActive = $derived("));
   assert.ok(app.includes("const meetingReliabilityEnabled = $derived("));
-  assert.match(app, /\$effect\(\(\) =>\s*meetingMonitorsActive/);
-  assert.match(app, /startMeetingRuntimeMonitors\(\s*pollMeeting,\s*setNotice,\s*meetingReliabilityEnabled/);
+  assert.match(app, /\$effect\(\(\) => \{\s*if \(!meetingMonitorsActive\)/);
+  assert.match(app, /startMeetingRuntimeMonitors\(\s*pollMeeting,\s*updateHealthNotice,\s*meetingReliabilityEnabled/);
   assert.ok(monitor.includes('lastKey !== "reliability_unavailable"'));
   assert.ok(monitor.includes('lastLongSessionState !== "long_session_unavailable"'));
   assert.ok(app.includes("Couldn't refresh the meeting display"));
+});
+
+test("reliability warnings have typed severity and clear on their own healthy observation", () => {
+  assert.match(monitor, /type ReliabilityNoticeCallback = \(channel: ReliabilityChannel, notice: ReliabilityNotice \| null\)/);
+  assert.match(monitor, /if \(lastKey\) onNotice\("live", null\)/);
+  assert.match(monitor, /if \(lastLongSessionState\) onNotice\("session", null\)/);
+  assert.match(monitor, /kind: "unverified"/);
+  assert.match(monitor, /kind: "attention"/);
+  assert.match(app, /liveHealthNotice = null;/);
+  assert.match(app, /longSessionNotice = null;/);
 });

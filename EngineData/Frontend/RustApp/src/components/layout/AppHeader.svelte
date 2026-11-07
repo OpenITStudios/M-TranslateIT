@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { ProductRuntimeSnapshot } from "../../app/bridge/runtimeProductFacade";
   import type { AppRoute } from "../../app/shared/types";
-  import { Zap } from "@lucide/svelte";
+  import { Zap, Info, TriangleAlert, CircleAlert, Check } from "@lucide/svelte";
+  import type { AppNotice } from "../../app/runtime/applicationNotice";
   import UpdateAction from "../runtime/UpdateAction.svelte";
   import { toggleQuickAccess } from "../../app/runtime/quickAccessRuntime";
 
@@ -15,7 +16,7 @@
   }: {
     snapshot: ProductRuntimeSnapshot;
     route: AppRoute;
-    notice: string;
+    notice: AppNotice;
     myVoiceRecording: boolean;
     onNavigate: (route: AppRoute) => void;
     onNotice: (message: string) => void;
@@ -23,6 +24,16 @@
 
   const meetingNeedsAttention = $derived(snapshot.meeting.hasSession && !snapshot.meeting.live
     || snapshot.meeting.lifecycle === "cleanup_incomplete");
+
+  const noticeSurface = $derived(
+    notice.kind === "error"
+      ? "border-[var(--ti-danger-border)] bg-[var(--ti-danger-surface)]"
+      : notice.kind === "attention"
+        ? "border-[var(--ti-warning-border)] bg-[var(--ti-warning-surface)]"
+        : notice.kind === "success"
+          ? "border-[var(--ti-success-border)] bg-[var(--ti-success-surface)]"
+          : "border-[var(--ti-border)] bg-[var(--ti-surface-soft)]"
+  );
 
   const routeTitle = $derived(
     route === "meeting"
@@ -74,8 +85,24 @@
   {/if}
 </header>
 
-<!-- A dedicated status strip keeps long, fully readable notices away from the action toolbar. -->
-<div class="ti-notice-bar flex min-h-9 shrink-0 items-center border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-4 py-2 sm:px-6">
-  <p class="m-0 min-w-0 max-h-16 flex-1 overflow-y-auto break-words text-left text-[13px] leading-[1.5] text-[var(--ti-text-muted)]"
-    role="status" aria-live="polite" title={notice}>{notice}</p>
+<!-- A single, persistent notice surface; semantic severity comes from owned evidence, never message text. -->
+<div class={`ti-notice-bar flex min-h-9 shrink-0 items-start gap-2 border-b px-4 py-2 sm:px-6 ${noticeSurface}`}>
+  {#if notice.kind === "error"}
+    <CircleAlert size={15} class="mt-0.5 shrink-0 text-[var(--ti-danger)]" aria-hidden="true" />
+  {:else if notice.kind === "attention"}
+    <TriangleAlert size={15} class="mt-0.5 shrink-0 text-[var(--ti-warning)]" aria-hidden="true" />
+  {:else if notice.kind === "unverified"}
+    <Info size={15} class="mt-0.5 shrink-0 text-[var(--ti-text-muted)]" aria-hidden="true" />
+  {:else if notice.kind === "success"}
+    <Check size={15} class="mt-0.5 shrink-0 text-[var(--ti-success)]" aria-hidden="true" />
+  {/if}
+  {#if notice.kind === "error"}
+    <p class="m-0 min-w-0 flex-1 break-words text-[13px] leading-[1.5] text-[var(--ti-text)]"
+      role="alert" aria-atomic="true"><strong>Error. </strong>{notice.message}</p>
+  {:else}
+    <p class="m-0 min-w-0 flex-1 break-words text-[13px] leading-[1.5] text-[var(--ti-text)]"
+      role="status" aria-live="polite" aria-atomic="true">
+      {#if notice.kind === "attention"}<strong>Needs attention. </strong>{:else if notice.kind === "unverified"}<strong>Status not confirmed. </strong>{/if}{notice.message}
+    </p>
+  {/if}
 </div>
