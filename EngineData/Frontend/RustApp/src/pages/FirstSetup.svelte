@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { myVoiceBuildApi } from "../app/bridge/myVoiceBuildApi";
   import { classifyVirtualMicRoute } from "../app/bridge/virtualMicRoutePresentation";
   import { runtimeApi, type VirtualMicRouteContractStatus } from "../app/bridge/runtimeApi";
@@ -49,6 +49,7 @@
   let message = $state("");
   let selectedMicrophone = $state((() => String(settings.audio.input_device_id ?? ""))());
   let builtinPendingId = $state<BuiltinVoiceId | null>(null);
+  let checkMicrophoneSelectionButton: HTMLButtonElement | undefined;
 
   const meetingVoiceReady = $derived(snapshot?.readiness.approvedVoiceReady ?? null);
   const engineSettingsUnverified = $derived(
@@ -187,6 +188,7 @@
     }
     const expected = cloneSettings(settings);
     const candidate = cloneSettings(expected);
+    let savedByNative = false;
     candidate.meeting_setup_state = state;
     const currentCheckpoint = setupCheckpoint(candidate.meeting_setup_checkpoint);
     const effectiveStep = Math.max(currentCheckpoint, nextCheckpoint) as SetupStep;
@@ -197,11 +199,14 @@
         message = result.message || "Setup settings changed. Refresh setup before saving.";
         return false;
       }
+      savedByNative = true;
       const savedSettings = await runtimeApi.loadSettings();
       settings = cloneSettings(savedSettings ?? candidate);
       return true;
     } catch {
-      message = "Couldn't save setup progress. Try again.";
+      message = savedByNative
+        ? "Setup save was acknowledged, but its current settings could not be read back. Check setup status before another change."
+        : "Couldn't verify whether setup progress was saved. Check the current setup status before trying again.";
       return false;
     }
   }
@@ -242,6 +247,7 @@
   async function saveSelectedMicrophone(): Promise<void> {
     if (busy) return;
     const candidate = selectedMicrophone.trim() || null;
+    let savedByNative = false;
 
     busy = true;
     message = "Checking microphone...";
@@ -250,14 +256,42 @@
       settings = cloneSettings(result.settings);
       message = result.message;
       if (result.ok) {
+        savedByNative = true;
         selectedMicrophone = String(settings.audio.input_device_id ?? "");
         await refreshDevices();
         await refreshSnapshot();
+        message = setupReadState === "verified" ? result.message
+          : "Windows acknowledged the microphone selection, but setup status could not be verified. Select Check selection.";
       }
     } catch {
-      message = "The microphone wasn't changed. Try again.";
+      message = savedByNative
+        ? "The microphone selection was acknowledged, but the display could not refresh. Select Check selection."
+        : "Couldn't verify whether the microphone changed. Select Check selection before trying again.";
     } finally {
       busy = false;
+    }
+  }
+
+  async function checkSavedMicrophoneSelection(): Promise<void> {
+    if (busy || checkingSetup) return;
+    const hadFocus = document.activeElement === checkMicrophoneSelectionButton;
+    busy = true;
+    message = "Checking saved microphone selection...";
+    try {
+      await refreshSnapshot();
+      if (setupReadState === "verified") {
+        message = snapshot?.readiness.microphoneReady === true
+          ? "The saved microphone is reported ready. This does not test recording quality."
+          : "The saved microphone is not verified ready. Check the device connection before saving another choice.";
+      }
+    } finally {
+      busy = false;
+      if (hadFocus && document.hasFocus()) {
+        await tick();
+        if (document.activeElement === document.body && checkMicrophoneSelectionButton) {
+          checkMicrophoneSelectionButton.focus();
+        }
+      }
     }
   }
 
@@ -302,6 +336,7 @@
 
   async function selectBuiltin(voiceId: BuiltinVoiceId, confirmed = false): Promise<void> {
     if (busy) return;
+    let selectedByNative = false;
     busy = true;
     message = `Selecting ${builtinLabel(voiceId)}...`;
     try {
@@ -314,12 +349,17 @@
       builtinPendingId = null;
       message = result.message;
       if (result.ok) {
+        selectedByNative = true;
         await runtimeProductFacade.runProductSetupAction("check-readiness");
         await refreshSnapshot();
-        message = `${builtinLabel(voiceId)} is selected.`;
+        message = setupReadState === "verified"
+          ? `${builtinLabel(voiceId)} is selected.`
+          : "The voice selection was acknowledged, but setup status could not be verified. Select Check Again.";
       }
     } catch {
-      message = "Couldn't change the Voice others hear. Try again.";
+      message = selectedByNative
+        ? "The voice selection was acknowledged, but its current setup status could not be checked. Select Check Again."
+        : "Couldn't verify whether the Meeting voice changed. Select Check Again before selecting another voice.";
     } finally {
       busy = false;
     }
@@ -423,7 +463,7 @@
         <div class="grid grid-cols-1 items-end gap-3 sm:grid-cols-[minmax(0,1fr)_auto]" aria-busy={microphonesLoading}>
           <label class="grid min-w-0 gap-2">
             <span class="ti-field-label">Microphone you speak into</span>
-            <select class="ti-field min-h-11 px-3" disabled={busy || microphonesLoading || !devices?.ok} value={selectedMicrophone} onchange={(event) => { selectedMicrophone = selectValue(event); }}>
+            <select class="ti-field min-h-11 px-3" disabled={busy || microphonesLoading || !devices?.ok || setupReadState !== "verified"} value={selectedMicrophone} onchange={(event) => { selectedMicrophone = selectValue(event); }}>
               <option value="">Windows Default</option>
               {#each microphoneDevices() as device (deviceId(device))}
                 <option value={deviceId(device)}>{device.name}{device.is_default ? " · Windows default" : ""}</option>
@@ -433,7 +473,7 @@
               {/if}
             </select>
           </label>
-          <button type="button" class="ti-button ti-button-secondary" disabled={busy || microphonesLoading || !devices?.ok} onclick={() => void saveSelectedMicrophone()}>Use this microphone</button>
+          <button type="button" class="ti-button ti-button-secondary" disabled={busy || microphonesLoading || !devices?.ok || setupReadState !== "verified"} onclick={() => void saveSelectedMicrophone()}>Use this microphone</button>
         </div>
         <div class="flex flex-wrap items-center justify-between gap-3">
           {#if microphonesLoading}
@@ -441,16 +481,28 @@
           {:else if microphonesChecked && !devices?.ok}
             <p class="m-0 text-[13px] leading-5 text-[var(--ti-warning)]" role="alert">Microphone list could not be verified. The saved selection was not replaced.</p>
           {/if}
-          <button type="button" class="ti-button ti-button-secondary" disabled={busy || microphonesLoading}
-            onclick={() => void refreshDevices()}>{microphonesLoading ? "Checking..." : "Refresh microphones"}</button>
+          <div class="flex flex-wrap gap-2">
+            <button type="button" class="ti-button ti-button-secondary" disabled={busy || microphonesLoading}
+              onclick={() => void refreshDevices()}>{microphonesLoading ? "Checking..." : "Refresh microphones"}</button>
+            <button type="button" class="ti-button ti-button-secondary" bind:this={checkMicrophoneSelectionButton}
+              aria-busy={busy || checkingSetup} disabled={busy || checkingSetup}
+              onclick={() => void checkSavedMicrophoneSelection()}>Check selection</button>
+          </div>
         </div>
         <div class="ti-subtle-card overflow-hidden">
           <StatusRow
             label="Selected microphone"
-            value={currentMicrophone()}
-            detail={microphoneSelectionPending ? "The saved microphone is shown here. Save your new choice before continuing." : "The microphone currently saved for your calls."}
-            status={microphoneSelectionPending ? "Not saved" : snapshot?.readiness.microphoneReady ? "Ready" : snapshot?.readiness.level === "checking" ? "Checking" : "Setup Needed"}
-            tone={microphoneSelectionPending ? "warning" : snapshot?.readiness.microphoneReady ? "good" : snapshot?.readiness.level === "checking" ? "neutral" : "warning"}
+            value={setupReadState === "verified" ? currentMicrophone() : "Current microphone not verified"}
+            detail={setupReadState !== "verified"
+              ? "The previous selection is not current proof. Select Check selection to verify the saved microphone."
+              : microphoneSelectionPending ? "The saved microphone is shown here. Save your new choice before continuing."
+              : "The microphone currently saved for your calls."}
+            status={setupReadState !== "verified" ? setupReadState === "checking" ? "Checking" : "Not verified"
+              : microphoneSelectionPending ? "Not saved" : snapshot?.readiness.microphoneReady ? "Ready"
+                : snapshot?.readiness.level === "checking" ? "Checking" : "Setup Needed"}
+            tone={setupReadState !== "verified" ? "neutral"
+              : microphoneSelectionPending ? "warning" : snapshot?.readiness.microphoneReady ? "good"
+                : snapshot?.readiness.level === "checking" ? "neutral" : "warning"}
           />
         </div>
         {#if microphoneSelectionPending}
@@ -483,12 +535,12 @@
         </div>
       {:else}
         <SetupVoiceChoice
-          {snapshot}
-          {meetingVoiceReady}
+          snapshot={setupReadState === "verified" ? snapshot : null}
+          meetingVoiceReady={setupReadState === "verified" ? meetingVoiceReady : null}
           {routeCheck}
-          {busy}
+          busy={busy || setupReadState !== "verified"}
           {builtinPendingId}
-          microphone={currentMicrophone()}
+          microphone={setupReadState === "verified" ? currentMicrophone() : "Current microphone not verified"}
           meetingMicrophone={currentMeetingMicrophone()}
           meetingSound={currentMeetingSound()}
           onSelect={(voiceId) => selectBuiltin(voiceId)}

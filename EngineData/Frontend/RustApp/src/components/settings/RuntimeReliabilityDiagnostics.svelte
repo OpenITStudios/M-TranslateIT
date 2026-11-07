@@ -61,10 +61,12 @@
     exportSucceeded = false;
     try {
       const result = await exportDiagnosticSupportBundle();
-      exportSucceeded = result.ok && Boolean(result.file_path);
-      exportMessage = result.ok && result.file_path
+      exportSucceeded = result.ok && Boolean(result.file_path?.trim());
+      exportMessage = exportSucceeded && result.file_path
         ? `${result.message} Saved to ${result.file_path}`
-        : result.message;
+        : result.ok
+          ? "Diagnostic export was acknowledged, but no saved file location was verified. Check the local Diagnostics folder before trying again."
+          : `Diagnostic export could not be verified. ${result.message || "Check the local Diagnostics folder before trying again."}`;
     } catch {
       exportMessage = "Diagnostic export failed. Check the local Diagnostics folder and try again.";
     } finally {

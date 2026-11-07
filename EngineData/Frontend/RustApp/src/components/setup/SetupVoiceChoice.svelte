@@ -54,17 +54,26 @@
         {/if}
 
         <div class="ti-panel divide-y divide-[var(--ti-border)] overflow-hidden">
-          <StatusRow label="Microphone" value={microphone} status={snapshot?.readiness.microphoneReady ? "Ready" : "Setup Needed"} tone={snapshot?.readiness.microphoneReady ? "good" : "warning"} />
-          <StatusRow label="Meeting voice" value={meetingVoiceReady ? "A Meeting voice is ready" : meetingVoiceReady === null ? "Checking the Meeting voice" : "Choose a built-in voice or create My Voice"} status={meetingVoiceReady ? "Ready" : meetingVoiceReady === null ? "Checking" : "Setup Needed"} tone={meetingVoiceReady ? "good" : meetingVoiceReady === null ? "neutral" : "warning"} />
+          <StatusRow label="Microphone" value={microphone}
+            status={!snapshot ? "Not verified" : snapshot.readiness.microphoneReady ? "Ready" : "Setup Needed"}
+            tone={!snapshot ? "neutral" : snapshot.readiness.microphoneReady ? "good" : "warning"} />
+          <StatusRow label="Meeting voice"
+            value={meetingVoiceReady ? "A Meeting voice is ready" : meetingVoiceReady === null ? "Meeting voice status not verified" : "Choose a built-in voice or create My Voice"}
+            status={meetingVoiceReady ? "Ready" : meetingVoiceReady === null ? "Not verified" : "Setup Needed"}
+            tone={meetingVoiceReady ? "good" : meetingVoiceReady === null ? "neutral" : "warning"} />
           <StatusRow label="Windows audio route" value={meetingMicrophone}
             detail={routeCheck === "unavailable" ? "Couldn't check the Windows audio device. Select Check Again." : "Windows availability does not confirm selection inside your calling app."}
             status={routeCheck === "ready" ? "Available" : routeCheck === "unavailable" ? "Unable to check" : routeCheck === "checking" ? "Checking" : "Setup Needed"}
-            tone={routeCheck === "ready" ? "good" : routeCheck === "setup_needed" ? "warning" : "neutral"} />
+            tone={routeCheck === "ready" ? "good" : routeCheck === "setup_needed" ? "warning" : routeCheck === "unavailable" ? "danger" : "neutral"} />
           <StatusRow label="Incoming captions" value={`English → Indonesian text · ${meetingSound}`} detail="Optional. You can turn this on or change it later." status="Optional" tone="neutral" />
         </div>
 
         <button type="button" class="ti-button ti-button-secondary justify-self-start" disabled={busy} onclick={() => void onOpenMyVoice()}>Create My Voice instead</button>
-        {#if snapshot && (!snapshot.readiness.meetingReady || routeCheck !== "ready")}
+        {#if !snapshot}
+          <p class="m-0 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-soft)] p-4 text-[13px] leading-5 text-[var(--ti-text-muted)]" role="status">
+            The current setup could not be verified. Select Check Again before changing a Meeting voice or finishing setup.
+          </p>
+        {:else if !snapshot.readiness.meetingReady || routeCheck !== "ready"}
           <div class="rounded-[var(--ti-radius-md)] border border-[var(--ti-warning-border)] bg-[var(--ti-warning-surface)] p-4" role="status">
             <strong class="block text-sm font-semibold">What still needs attention</strong>
             <p class="mb-0 mt-1 text-sm leading-6 text-[var(--ti-text-muted)]">
