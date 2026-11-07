@@ -20,10 +20,21 @@ test("deferred incoming exposes counts without exposing queued transcript conten
 });
 
 
-test("long-session health uses count-only transcript and incident metadata", () => {
+test("long-session health uses only the bounded incident snapshot and does not expose speech", () => {
   assert.match(health, /committed_turn_health_counts/);
-  assert.match(health, /runtime_incident_count/);
-  assert.doesNotMatch(health, /get_meeting_committed_turns|get_recent_runtime_incidents/);
+  assert.match(health, /let incident_history = get_recent_runtime_incidents\(\)/);
+  assert.match(health, /observed_incident_count\(incident_history\.coverage, incident_history\.count\)/);
+  assert.match(health, /pub incident_count: Option<usize>/);
+  assert.match(health, /pub incident_history_coverage: String/);
+  assert.doesNotMatch(health, /get_meeting_committed_turns|source_text|translated_text/);
+});
+
+test("unavailable incident history stays unknown, not an inferred clean runtime", () => {
+  const incident = readFileSync(new URL("../../src-tauri/src/commands/incident_log.rs", import.meta.url), "utf8");
+  assert.match(health, /observed_incident_count\("UNAVAILABLE", 0\), None/);
+  assert.match(health, /observed_incident_count\("NO_DATA", 0\), Some\(0\)/);
+  assert.match(incident, /Err\(_\) => \(Vec::new\(\), "UNAVAILABLE"\)/);
+  assert.match(incident, /fn inspect_incidents\(path: &Path\)/);
 });
 
 test("meeting start resets pressure counters for the new session", () => {
