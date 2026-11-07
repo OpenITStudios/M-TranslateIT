@@ -123,5 +123,73 @@ class KnowledgeTests(unittest.TestCase):
         self.assertTrue(all(item["authority"] == "CANONICAL" for item in matches))
 
 
+    def test_draft_reference_is_indexed_but_not_promoted_or_retrieved(self):
+        draft = ("---\nid: document.knowledge.draft\nclass: DOCUMENT\n"
+                 "domain: knowledge\nrole: ARCHITECTURE\nauthority: REFERENCE\n"
+                 "lifecycle: DRAFT\n---\n# Candidate Provider\n## Pending Idea\n")
+        self.assertEqual(read_metadata(draft, "docs/knowledge/draft.md")["lifecycle"], "DRAFT")
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "docs/knowledge").mkdir(parents=True)
+            routing = ("---\nid: document.docs.router\nclass: DOCUMENT\ndomain: docs\n"
+                       "role: ROUTER\nauthority: CANONICAL\nlifecycle: ACTIVE\n---\n"
+                       "# Knowledge\n[Candidate](./knowledge/draft.md)\n")
+            (root / "docs/README.md").write_text(routing, encoding="utf-8")
+            (root / "docs/knowledge/draft.md").write_text(draft, encoding="utf-8")
+            docs, edges, issues = catalog(root)
+            self.assertEqual(issues, [])
+            self.assertEqual(len(docs), 2)
+            self.assertEqual(len(edges), 1)
+            self.assertEqual(retrieve("Candidate Provider", "knowledge", root=root), [])
+            view = resource_view("document.knowledge.draft", root=root)
+            self.assertEqual(view["resource"]["lifecycle"], "DRAFT")
+            for historic in (False, True):
+                result = explain_resource_path(
+                    "document.docs.router", "document.knowledge.draft", root=root,
+                    include_historical=historic)
+                self.assertEqual(result["status"], "NO_PATH")
+                self.assertEqual(result["reason"], "DRAFT_EXCLUDED")
+            self.assertEqual(explain_resource_path(
+                "document.docs.router", "document.knowledge.draft.section.pending-idea",
+                root=root)["reason"], "DRAFT_EXCLUDED")
+
+    def test_draft_cannot_be_canonical_or_router(self):
+        header = ("---\nid: document.knowledge.draft\nclass: DOCUMENT\n"
+                  "domain: knowledge\nrole: ARCHITECTURE\nauthority: CANONICAL\n"
+                  "lifecycle: DRAFT\n---\n# Candidate\n")
+        with self.assertRaisesRegex(ValueError, "DRAFT must remain REFERENCE"):
+            read_metadata(header, "docs/knowledge/draft.md")
+        with self.assertRaisesRegex(ValueError, "router must be active"):
+            read_metadata(header.replace("role: ARCHITECTURE", "role: ROUTER")
+                          .replace("authority: CANONICAL", "authority: REFERENCE"),
+                          "docs/knowledge/README.md")
+
+    def test_active_document_cannot_be_routed_only_through_draft(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "docs/knowledge").mkdir(parents=True)
+            def document(identity: str, role: str, authority: str,
+                         lifecycle: str, content: str) -> str:
+                return ("---\nid: " + identity + "\nclass: DOCUMENT\ndomain: knowledge\n"
+                        "role: " + role + "\nauthority: " + authority
+                        + "\nlifecycle: " + lifecycle + "\n---\n# Doc\n" + content)
+            root_router = (
+                "---\nid: document.docs.router\nclass: DOCUMENT\ndomain: docs\n"
+                "role: ROUTER\nauthority: CANONICAL\nlifecycle: ACTIVE\n---\n"
+                "# Root\n[Draft](./knowledge/draft.md)\n")
+            (root / "docs/README.md").write_text(root_router, encoding="utf-8")
+            (root / "docs/knowledge/draft.md").write_text(document(
+                "document.knowledge.draft", "ARCHITECTURE", "REFERENCE", "DRAFT",
+                "[Current](./current.md)\n"), encoding="utf-8")
+            (root / "docs/knowledge/current.md").write_text(document(
+                "document.knowledge.current", "GUIDE", "CANONICAL", "ACTIVE", ""),
+                encoding="utf-8")
+            issues = verify_knowledge(root)
+            self.assertTrue(any(
+                "document not reachable from canonical router: docs/knowledge/current.md" in issue
+                for issue in issues))
+
+
+
 if __name__ == "__main__":
     unittest.main()

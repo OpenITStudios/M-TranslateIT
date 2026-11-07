@@ -29,7 +29,9 @@ Document frontmatter owns stable document identity (a rename keeps the ID when m
 
 The existing [repository knowledge tool](../../tools/README.md) extracts links from Markdown prose with path and line witnesses; fenced code, inline code, HTML comments, images and indented examples are excluded. Obsidian-style links must use unambiguous repository-root paths such as [[docs/system/authority-model.md|authority owner]]; fuzzy note titles and aliases are not promoted into relationships. The trace follows only those registered edges, defaults to directed traversal within four hops, excludes HISTORICAL sources, and returns NO_PATH or UNKNOWN_RESOURCE when evidence is missing. Reverse paths and history require explicit opt-in.
 
-The source graph remains a distinct layer: [source dependency analysis](./zero-waste-execution.md) is implemented by tools/repository_dependencies.py and tools/repository_impact.py and covers only bounded explicit Rust/TypeScript/Python imports. A Markdown link cannot stand in for a module dependency, compiler result, Windows behavior or executed proof. Unknown dynamic paths remain unknown.
+Lifecycle admission and graph traversal follow the single [authority model](./authority-model.md): `DRAFT` is non-active, `RETIRED` requires explicit historical access, and neither can become a current decision through a graph link.
+
+The source graph remains a distinct layer: [source dependency analysis](./zero-waste-execution.md) is implemented by tools/repository_dependencies.py and tools/repository_impact.py and covers only bounded explicit Rust/TypeScript/Python imports. The source inventory retains paths, but the parser reads one file at a time and enforces the existing file/byte budgets **per language** rather than across the unrelated language partitions. Rebuilds remain ephemeral; partial imports, missing edges, capacity failures and actual runtime behavior still carry their distinct proof limits. A Markdown link cannot stand in for a module dependency, compiler result, Windows behavior or executed proof. Unknown dynamic paths remain unknown.
 
 ## Read-only query examples
 

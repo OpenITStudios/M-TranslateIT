@@ -54,8 +54,12 @@ def read_metadata(content: str, path: str) -> dict[str, str]:
         raise ValueError(f"{path}: invalid document classification")
     if fields["domain"] not in {"docs", "knowledge", "foundation", "system"}:
         raise ValueError(f"{path}: unsupported document domain")
-    if fields["authority"] not in AUTHORITIES or fields["lifecycle"] not in {"ACTIVE", "RETIRED"}:
+    if fields["authority"] not in AUTHORITIES or fields["lifecycle"] not in {"ACTIVE", "RETIRED", "DRAFT"}:
         raise ValueError(f"{path}: invalid authority/lifecycle")
+    if fields["lifecycle"] == "DRAFT" and fields["authority"] != "REFERENCE":
+        raise ValueError(f"{path}: DRAFT must remain REFERENCE, never current authority")
+    if fields["role"] == "ROUTER" and (fields["authority"] != "CANONICAL" or fields["lifecycle"] != "ACTIVE"):
+        raise ValueError(f"{path}: documentation router must be active and canonical")
     return fields
 
 
@@ -205,7 +209,14 @@ def verify_knowledge(root: Path = ROOT) -> list[str]:
     if "docs/README.md" not in by_path:
         return sorted(set(issues))
     adjacency: dict[str, list[str]] = {}
+    by_id = {doc["id"]: doc for doc in documents}
     for edge in edges:
+        # Neither a draft nor a retired/historical note can act as an active
+        # document-routing bridge. Graph discovery may still show those edges.
+        source, target = by_id[edge["from"]], by_id[edge["to"]]
+        if any(item["lifecycle"] != "ACTIVE" or item["authority"] == "HISTORICAL"
+               for item in (source, target)):
+            continue
         adjacency.setdefault(edge["from"], []).append(edge["to"])
     seen: set[str] = set()
     queue = deque([by_path["docs/README.md"]["id"]])
@@ -345,15 +356,23 @@ def explain_resource_path(start: str, target: str, root: Path = ROOT, *,
               "proofBoundary": PROOF_BOUNDARY}
     if start not in nodes or target not in nodes:
         return {**common, "status": "UNKNOWN_RESOURCE", "nodes": [], "steps": []}
-    def is_historical(node_id: str) -> bool:
+    def exclusion_reason(node_id: str) -> str | None:
         node = nodes[node_id]
         parent_id = node.get("parentId")
-        return (node["authority"] == "HISTORICAL"
-                or (parent_id is not None and nodes[parent_id]["authority"] == "HISTORICAL"))
+        owner = nodes[parent_id] if parent_id is not None else node
+        if owner["lifecycle"] == "DRAFT":
+            return "DRAFT_EXCLUDED"
+        if not include_historical and owner["lifecycle"] == "RETIRED":
+            return "RETIRED_EXCLUDED"
+        if not include_historical and owner["authority"] == "HISTORICAL":
+            return "HISTORICAL_EXCLUDED"
+        return None
 
-    if not include_historical and any(is_historical(x) for x in (start, target)):
-        return {**common, "status": "NO_PATH", "reason": "HISTORICAL_EXCLUDED",
-                "nodes": [], "steps": []}
+    for endpoint in (start, target):
+        reason = exclusion_reason(endpoint)
+        if reason:
+            return {**common, "status": "NO_PATH", "reason": reason,
+                    "nodes": [], "steps": []}
     adjacency: dict[str, list[tuple[str, dict]]] = {}
     for edge in edges:
         adjacency.setdefault(edge["from"], []).append((
@@ -377,7 +396,7 @@ def explain_resource_path(start: str, target: str, root: Path = ROOT, *,
                                     key=lambda item: (item[0], item[1]["type"])):
             if next_id in visited:
                 continue
-            if not include_historical and is_historical(next_id):
+            if exclusion_reason(next_id):
                 continue
             visited.add(next_id)
             queue.append((next_id, path + [edge]))

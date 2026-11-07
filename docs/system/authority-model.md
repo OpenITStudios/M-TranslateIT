@@ -30,6 +30,8 @@ Authority is **scoped by concern**, not by recency or document length. Do not us
 - Source code owns implementation. Matching tests/CI/logs are evidence **only** for the exact behavior, revision and execution environment they exercised.
 - `planning/` owns the next step; not `docs/`. Runtime `UserData/` is private user state, not a repository workspace.
 
+**Lifecycle is not authority.** A `DRAFT` document must be `REFERENCE` and is indexed for explicit ID inspection only; ordinary retrieval and graph traversal exclude it even when the caller requests historical records. A `RETIRED` document requires an explicitly historical graph traversal. Canonical documentation `ROUTER` entries must be `ACTIVE`; no draft/reference document may become current product authority through a link, and a draft must not be relabeled `ACTIVE` simply to satisfy a validator.
+
 ## Update, move, retire
 
 ```text

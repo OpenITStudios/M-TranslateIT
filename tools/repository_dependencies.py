@@ -22,6 +22,9 @@ SOURCE_DIRS = (
     (RUST, (".rs",)),
     (WORKER, (".py",)),
 )
+# Bounds apply independently to each language partition, not to the sum
+# across unrelated TS/Svelte, Rust and Python repositories. File contents
+# are loaded one at a time; only the path inventory and derived edges persist.
 MAX_FILES = 360
 MAX_BYTES = 4_000_000
 MAX_SOURCE_BYTES = 100_000
@@ -48,8 +51,11 @@ def _scope(path: str) -> str:
     return "outside"
 
 
-def _sources(root: Path) -> dict[str, str]:
-    files: list[tuple[str, Path]] = []
+def _sources(root: Path) -> dict[str, Path]:
+    """Index exact source paths using bounded per-language budgets, not source text."""
+    indexed: dict[str, Path] = {}
+    count_by_language: dict[str, int] = defaultdict(int)
+    bytes_by_language: dict[str, int] = defaultdict(int)
     for directory, endings in SOURCE_DIRS:
         base = root / directory
         if not base.is_dir() or base.is_symlink():
@@ -59,17 +65,24 @@ def _sources(root: Path) -> dict[str, str]:
                 continue
             if path.is_symlink():
                 raise ValueError("source graph contains a symlinked source")
-            files.append((path.relative_to(root).as_posix(), path))
-            if len(files) > MAX_FILES:
-                raise SourceGraphCapacityExceeded("source graph file scan capacity exceeded")
-    if sum(path.stat().st_size for _, path in files) > MAX_BYTES:
-        raise SourceGraphCapacityExceeded("source graph aggregate read capacity exceeded")
-    results = {}
-    for relative, path in files:
-        if path.stat().st_size > MAX_SOURCE_BYTES:
-            raise SourceGraphCapacityExceeded(f"source graph single-file read capacity exceeded: {relative}")
-        results[relative] = path.read_text(encoding="utf-8")
-    return results
+            relative = path.relative_to(root).as_posix()
+            language = _scope(relative)
+            if language not in {"typescript", "rust", "python"}:
+                raise ValueError(f"unsupported source graph language: {relative}")
+            size = path.stat().st_size
+            if size > MAX_SOURCE_BYTES:
+                raise SourceGraphCapacityExceeded(
+                    f"source graph single-file read capacity exceeded: {relative}")
+            count_by_language[language] += 1
+            bytes_by_language[language] += size
+            if count_by_language[language] > MAX_FILES:
+                raise SourceGraphCapacityExceeded(
+                    f"{language} source graph file scan capacity exceeded")
+            if bytes_by_language[language] > MAX_BYTES:
+                raise SourceGraphCapacityExceeded(
+                    f"{language} source graph read capacity exceeded")
+            indexed[relative] = path
+    return indexed
 
 
 def _js_edges(path: str, body: str, known: set[str]) -> tuple[set[str], list[str]]:
@@ -241,7 +254,13 @@ def build_source_graph(root: Path) -> dict:
     reverse: dict[str, set[str]] = defaultdict(set)
     edges: set[tuple[str, str, str]] = set()
     unresolved: list[dict[str, str]] = []
-    for path, body in sources.items():
+    for path, source in sources.items():
+        # Do not materialize the combined source corpus in memory. A mutated
+        # input crossing the indexed size bound still fails closed on read.
+        body = source.read_text(encoding="utf-8")
+        if len(body.encode("utf-8")) > MAX_SOURCE_BYTES:
+            raise SourceGraphCapacityExceeded(
+                f"source graph single-file read capacity exceeded: {path}")
         scope = _scope(path)
         if scope == "typescript":
             deps, missing = _js_edges(path, body, known)

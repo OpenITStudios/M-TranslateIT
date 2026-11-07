@@ -134,5 +134,40 @@ class DerivedDependenciesTests(unittest.TestCase):
         self.assertFalse(any(x.startswith("UserData/") for x in graph["indexed"]))
 
 
+    def test_total_repo_over_old_global_limits_still_indexes_all_languages(self):
+        # Each partition is below the cap, but the repository sum exceeds it.
+        with patch("repository_dependencies.MAX_FILES", 6):
+            graph = build_source_graph(self.root)
+        self.assertEqual(graph["indexedByLanguage"],
+                         {"typescript": 5, "rust": 6, "python": 4})
+        self.assertEqual(len(graph["indexed"]), 15)
+        self.assertIn(
+            FRONT + "src/app/runtime/controller.ts",
+            affected_consumers(graph, FRONT + "src/app/bridge/api.ts"))
+        self.assertIn(
+            RUST + "commands/meeting_session.rs",
+            affected_consumers(graph, RUST + "engine/runtime_state.rs"))
+        self.assertIn(
+            WORKER + "realtime_local_worker_base.py",
+            affected_consumers(graph, WORKER + "worker_io_runtime.py"))
+
+    def test_partition_byte_budget_and_streaming_file_inventory(self):
+        from repository_dependencies import _scope, _sources
+        paths = _sources(self.root)
+        self.assertEqual(len(paths), 15)
+        self.assertTrue(all(isinstance(item, Path) for item in paths.values()))
+        size_by_language: dict[str, int] = {}
+        for name, item in paths.items():
+            group = _scope(name)
+            size_by_language[group] = size_by_language.get(group, 0) + item.stat().st_size
+        limit = max(size_by_language.values())
+        self.assertGreater(sum(size_by_language.values()), limit)
+        with patch("repository_dependencies.MAX_BYTES", limit):
+            graph = build_source_graph(self.root)
+        self.assertEqual(len(graph["indexed"]), 15)
+        with patch("repository_dependencies.MAX_BYTES", limit - 1):
+            with self.assertRaises(SourceGraphCapacityExceeded):
+                build_source_graph(self.root)
+
 if __name__ == "__main__":
     unittest.main()
