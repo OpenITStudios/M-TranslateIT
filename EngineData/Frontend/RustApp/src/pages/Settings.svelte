@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { classifyVirtualMicRoute } from "../app/bridge/virtualMicRoutePresentation";
   import { runtimeApi, type VirtualMicRouteContractStatus } from "../app/bridge/runtimeApi";
   import {
@@ -50,6 +50,10 @@
   let diagnosticsRefreshRevision = $state(0);
   let devices = $state<AudioDeviceListReport | null>(null);
   let routeStatus = $state<VirtualMicRouteContractStatus | null>(null);
+  let routeLoading = $state(true);
+  let routeReadFailure = $state(false);
+  let routeReadRevision = 0;
+  let routeCheckButton = $state<HTMLButtonElement | undefined>(undefined);
   let devicesLoading = $state(false);
   let deviceSaving = $state(false);
   let deviceMessage = $state("Loading audio devices...");
@@ -66,13 +70,13 @@
           ? "Stop My Voice recording before changing meeting audio or running Repair Setup."
           : "Finish the current audio action before changing meeting audio or running Repair Setup.",
   );
-  const routeCheck = $derived(classifyVirtualMicRoute(routeStatus));
+  const routeCheck = $derived(routeLoading ? "checking" : routeReadFailure ? "unavailable" : classifyVirtualMicRoute(routeStatus));
   const virtualMicrophoneReady = $derived(routeCheck === "ready");
   const meetingMicrophoneDevice = $derived(
-    String(routeStatus?.selected_input_device ?? "").trim()
-      || (routeCheck === "unavailable" ? "Status unavailable"
-        : routeCheck === "checking" ? "Checking..."
-        : routeCheck === "ready" ? "Device name unavailable" : "Not available in Windows"),
+    routeCheck === "checking" ? "Checking..."
+      : routeCheck === "unavailable" ? "Status unavailable"
+      : routeCheck === "setup_needed" ? "Not available in Windows"
+      : String(routeStatus?.selected_input_device ?? "").trim() || "Device name unavailable",
   );
 
 
@@ -103,10 +107,30 @@
   }
 
   async function loadRouteStatus(): Promise<void> {
+    const revision = ++routeReadRevision;
+    routeLoading = true;
+    routeReadFailure = false;
     try {
-      routeStatus = await runtimeApi.getVirtualMicRouteStatus();
+      const result = await runtimeApi.getVirtualMicRouteStatus();
+      if (revision !== routeReadRevision) return;
+      routeStatus = result;
     } catch {
+      if (revision !== routeReadRevision) return;
       routeStatus = null;
+      // A thrown bridge read means Unavailable, not an endless Checking state.
+      routeReadFailure = true;
+    } finally {
+      if (revision === routeReadRevision) routeLoading = false;
+    }
+  }
+
+  async function recheckRouteFromButton(): Promise<void> {
+    const restoreFocus = document.activeElement === routeCheckButton;
+    await loadRouteStatus();
+    if (!restoreFocus || !document.hasFocus()) return;
+    await tick();
+    if (document.activeElement === document.body && routeCheckButton && !routeCheckButton.disabled) {
+      routeCheckButton.focus();
     }
   }
 
@@ -272,12 +296,12 @@
           onNotice={onNotice}
         />
 
-        <div class="flex items-start justify-between gap-5 border-t border-[var(--ti-border)] px-5 py-4">
+        <div class="flex flex-wrap items-start justify-between gap-4 border-t border-[var(--ti-border)] px-5 py-4" aria-busy={routeLoading}>
           <div class="min-w-0">
             <span class="ti-field-label">Microphone to select in your calling app</span>
             <strong class="mt-1.5 block break-words text-[13px] font-semibold leading-5">{meetingMicrophoneDevice}</strong>
-            <p class="mb-0 mt-1 text-[12.5px] leading-5 text-[var(--ti-text-muted)]">
-              {routeCheck === "unavailable" ? "Couldn't check this Windows audio device. Select Check Again."
+            <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]" role={routeCheck === "unavailable" ? "alert" : "status"}>
+              {routeCheck === "unavailable" ? "Couldn't check this Windows audio device. Select Check route."
                 : routeCheck === "checking" ? "Checking the audio device in Windows..."
                 : virtualMicrophoneReady
                   ? "Select the exact device name above as the microphone input in your calling app. Windows availability does not confirm the app's selection."
@@ -287,7 +311,7 @@
           {#if !virtualMicrophoneReady}
             <StatusBadge
               label={routeCheck === "unavailable" ? "Unable to check" : routeCheck === "checking" ? "Checking" : "Setup Needed"}
-              tone={routeCheck === "setup_needed" ? "warning" : "neutral"}
+              tone={routeCheck === "unavailable" ? "danger" : routeCheck === "setup_needed" ? "warning" : "neutral"}
             />
           {/if}
         </div>
@@ -300,9 +324,11 @@
               disabled={devicesLoading || deviceSaving} onclick={() => void loadDevices()}>
               {devicesLoading ? "Checking devices..." : "Refresh devices"}
             </button>
-            {#if routeCheck === "unavailable"}
-              <button type="button" class="ti-button ti-button-secondary" disabled={devicesLoading || deviceSaving} onclick={() => void loadRouteStatus()}>Check Again</button>
-            {/if}
+            <button type="button" class="ti-button ti-button-secondary"
+              bind:this={routeCheckButton} aria-busy={routeLoading}
+              disabled={routeLoading || deviceSaving || setupBusy} onclick={() => void recheckRouteFromButton()}>
+              {routeLoading ? "Checking route..." : "Check route"}
+            </button>
             <button type="button" class="ti-button ti-button-secondary" disabled={micTestBlockedByMeeting || micTestBusy || setupBusy || deviceSaving} onclick={() => void onMicTest()}>{micTestBusy ? "Working..." : snapshot.readiness.recording || micTestOwnsResources ? "Stop Mic Test" : "Mic Test"}</button>
             <button type="button" class="ti-button ti-button-secondary" disabled={meetingResourcesLocked || setupBusy || deviceSaving} onclick={() => void runSetupRepair()}>{setupBusy ? "Fixing..." : "Repair Setup"}</button>
           </div>

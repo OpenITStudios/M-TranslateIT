@@ -62,6 +62,7 @@
   let selectedVoiceReadVersion = 0;
   let recordingStatusUnknown = $state(false);
   let recordingRetrying = $state(false);
+  let recoveringDraft = $state(false);
   let microphoneCheck = $state<"idle" | "checking" | "ready" | "unavailable">("idle");
   let legacyProtection = $state<LegacyProtectionStatus | null>(null);
   let legacyProtectionUnknown = $state(false);
@@ -117,6 +118,7 @@
   let lineHeading = $state<HTMLHeadingElement | undefined>(undefined);
   let recordActionButton = $state<HTMLButtonElement | undefined>(undefined);
   let reviewReplayButton = $state<HTMLButtonElement | undefined>(undefined);
+  let draftRecoveryButton = $state<HTMLButtonElement | undefined>(undefined);
   let microphoneCheckButton = $state<HTMLButtonElement | undefined>(undefined);
   let personalVoiceHeading = $state<HTMLHeadingElement | undefined>(undefined);
 
@@ -823,6 +825,7 @@
       || voiceChangesLocked || !authorized) return;
     stopReplay();
     busy = true;
+    recoveringDraft = true;
     try {
       const recovered = await myVoiceApi.recoverTake(selectedLineId, authorized);
       await applyResult(recovered);
@@ -837,6 +840,22 @@
       );
     } finally {
       busy = false;
+      recoveringDraft = false;
+      // On failure the recovery button can disappear or become disabled.
+      // Do not steal focus if the user moved to another control.
+      if (!disposed && document.hasFocus()) {
+        await tick();
+        if (document.activeElement === document.body) {
+          if (recordingState.pending_review && reviewReplayButton && !reviewReplayButton.disabled) {
+            reviewReplayButton.focus();
+          } else if (!recordingStatusUnknown && selectedOrphanDraft?.pair_present
+            && draftRecoveryButton && !draftRecoveryButton.disabled) {
+            draftRecoveryButton.focus();
+          } else {
+            lineHeading?.focus();
+          }
+        }
+      }
     }
   }
 
@@ -1168,24 +1187,32 @@
               </section>
             {/if}
             {#if recordingState.draft_recovery_error}
-              <p role="alert" class="mt-4 text-sm text-[var(--ti-warning)]">
+              <p role="alert" class="mt-4 break-words text-[13px] leading-5 text-[var(--ti-warning)]">
                 Couldn't verify unfinished Draft files: {recordingState.draft_recovery_error}
               </p>
             {/if}
             {#if selectedOrphanDraft && !recordingState.pending_review}
-              <div class="mt-4 rounded-[var(--ti-radius-md)] border border-[var(--ti-warning)] p-4">
+              <div class="mt-4 rounded-[var(--ti-radius-md)] border border-[var(--ti-warning-border)] bg-[var(--ti-warning-surface)] p-4"
+                role="group" aria-label="Unfinished Draft recovery" aria-busy={recoveringDraft}>
                 <strong class="text-sm font-semibold">
                   {selectedOrphanDraft.pair_present ? "Unfinished recording found" : "Unfinished Draft needs attention"}
                 </strong>
-                <p class="mt-1 text-sm text-[var(--ti-text-muted)]">{selectedOrphanDraft.note}</p>
+                <p class="mt-1 break-words text-[13px] leading-5 text-[var(--ti-text-muted)]">{selectedOrphanDraft.note}</p>
                 {#if selectedOrphanDraft.pair_present}
+                  {#if !authorized}
+                    <p class="mt-2 text-[13px] leading-5 text-[var(--ti-warning)]">
+                      Confirm voice ownership above to enable recovery.
+                    </p>
+                  {/if}
                   <button type="button" class="ti-button ti-button-secondary mt-3"
+                    bind:this={draftRecoveryButton} aria-busy={recoveringDraft}
+                    aria-describedby="myvoice-draft-recovery-hint"
                     disabled={busy || recordingStatusUnknown || isRecording || voiceChangesLocked || !authorized
                       || buildStatusUnavailable || buildSnapshot?.active === true || buildSnapshot?.preview_active === true}
                     onclick={() => void recoverTake()}>
-                    <RotateCcw size={15} /><span>Recover for review</span>
+                    <RotateCcw size={15} /><span>{recoveringDraft ? "Checking Draft..." : "Recover for review"}</span>
                   </button>
-                  <p class="mt-2 text-xs text-[var(--ti-text-muted)]">
+                  <p id="myvoice-draft-recovery-hint" class="mt-2 text-[13px] leading-5 text-[var(--ti-text-muted)]">
                     Recovery verifies both WAVs. It does not save or train a voice automatically.
                   </p>
                 {/if}
