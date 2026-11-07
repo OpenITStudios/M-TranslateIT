@@ -657,6 +657,25 @@
     {/if}
   </div>
 
+  <div class="mt-5 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-4 py-3.5">
+    <div class="flex items-center justify-between gap-4">
+      <strong class="text-sm font-semibold">Accepted recordings</strong>
+      <span class="text-[13px] font-semibold text-[var(--ti-text-muted)]">{formatDuration(build.accepted_duration_ms)} / {formatDuration(build.minimum_duration_ms)}</span>
+    </div>
+    <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">{build.accepted_take_count} accepted recordings · the minimum duration is only one requirement</p>
+    <div
+      class="mt-3 h-1.5 overflow-hidden rounded-full bg-[var(--ti-border)]"
+      role="progressbar"
+      aria-label="Ready recordings progress"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      aria-valuenow={speechProgress}
+      aria-valuetext={`${formatDuration(build.accepted_duration_ms)} of ${formatDuration(build.minimum_duration_ms)} accepted speech`}
+    >
+      <div class="h-full rounded-full bg-[var(--ti-accent)]" style={`width:${speechProgress}%`}></div>
+    </div>
+  </div>
+
   <div class="mt-5 min-w-0 rounded-[var(--ti-radius-md)] bg-[var(--ti-surface-soft)] px-4 py-3" aria-label="My Voice training hardware">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <strong class="text-sm font-semibold">Training hardware</strong>
@@ -691,25 +710,6 @@
     </details>
   </div>
 
-  <div class="mt-5 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-4 py-3.5">
-    <div class="flex items-center justify-between gap-4">
-      <strong class="text-sm font-semibold">Accepted recordings</strong>
-      <span class="text-[13px] font-semibold text-[var(--ti-text-muted)]">{formatDuration(build.accepted_duration_ms)} / {formatDuration(build.minimum_duration_ms)}</span>
-    </div>
-    <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">{build.accepted_take_count} accepted recordings · the minimum duration is only one requirement</p>
-    <div
-      class="mt-3 h-1.5 overflow-hidden rounded-full bg-[var(--ti-border)]"
-      role="progressbar"
-      aria-label="Ready recordings progress"
-      aria-valuemin="0"
-      aria-valuemax="100"
-      aria-valuenow={speechProgress}
-      aria-valuetext={`${formatDuration(build.accepted_duration_ms)} of ${formatDuration(build.minimum_duration_ms)} accepted speech`}
-    >
-      <div class="h-full rounded-full bg-[var(--ti-accent)]" style={`width:${speechProgress}%`}></div>
-    </div>
-  </div>
-
   {#if quickPreviewBusy || build.preview_active}
     <div class="mt-5" role="status">
       <strong class="text-sm font-semibold">Creating Quick Preview</strong>
@@ -723,7 +723,7 @@
       <strong class="text-sm font-semibold">{activeTitle()}</strong>
       <p class="mb-0 mt-1 text-sm leading-5 text-[var(--ti-text-muted)]">{activeDetail()}</p>
     </div>
-    <button type="button" class="ti-button ti-button-secondary mt-5" disabled={busy || statusCheckUnavailable || build.phase === "cancelling" || build.phase === "finalizing"} onclick={() => void cancelBuild()}>
+    <button type="button" class="ti-button ti-button-secondary mt-5 w-full sm:w-auto" disabled={busy || statusCheckUnavailable || build.phase === "cancelling" || build.phase === "finalizing"} onclick={() => void cancelBuild()}>
       <Square size={14} /><span>{build.phase === "finalizing" ? "Finalizing..." : build.phase === "cancelling" ? "Stopping safely..." : busy ? "Stopping..." : "Stop Creating"}</span>
     </button>
   {:else if build.evaluation_ready}
@@ -807,11 +807,13 @@
       </details>
       <div class="mt-4 space-y-2">
         {#each build.evaluation_samples as sample}
-          <div class="flex flex-wrap items-center gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] px-4 py-3">
-            <button type="button" class="ti-button ti-button-secondary shrink-0" aria-busy={evaluationLoadingLineId === sample.line_id} disabled={statusCheckUnavailable || playingLineId !== null || evaluationLoadingLineId !== null} onclick={() => void playEvaluation(sample.line_id)}>
+          <div class="flex min-w-0 flex-wrap items-start gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] px-4 py-3">
+            <button type="button" class="ti-button ti-button-secondary shrink-0" aria-busy={evaluationLoadingLineId === sample.line_id}
+              aria-label={evaluationLoadingLineId === sample.line_id ? `Loading voice preview for line ${sample.line_id}` : playingLineId === sample.line_id ? `Playing voice preview for line ${sample.line_id}` : `Preview voice for line ${sample.line_id}`}
+              disabled={statusCheckUnavailable || playingLineId !== null || evaluationLoadingLineId !== null} onclick={() => void playEvaluation(sample.line_id)}>
               <Play size={14} /><span aria-live="polite">{evaluationLoadingLineId === sample.line_id ? "Loading audio..." : playingLineId === sample.line_id ? "Playing..." : "Preview"}</span>
             </button>
-            <span class="min-w-0 flex-1 text-[14px] leading-6 text-[var(--ti-text)]">{sample.exact_text}</span>
+            <span class="min-w-0 flex-1 whitespace-pre-wrap break-words text-[14px] leading-6 text-[var(--ti-text)]">{sample.exact_text}</span>
             {#if reviewedLineIds.includes(sample.line_id)}
               <span class="flex shrink-0 items-center gap-1 text-[13px] font-semibold text-[var(--ti-success)]"><Check size={13} />Listened</span>
             {/if}
@@ -831,21 +833,21 @@
           </div>
         {/each}
       </div>
-      <p class="mb-0 mt-3 text-[13px] leading-5 text-[var(--ti-text-muted)]">{reviewedLineIds.length} of {build.evaluation_samples.length} previews listened</p>
+      <p class="mb-0 mt-3 text-[13px] leading-5 text-[var(--ti-text-muted)]" role="status" aria-live="polite">{reviewedLineIds.length} of {build.evaluation_samples.length} previews listened</p>
       <label class="mt-4 flex items-start gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-4">
-        <input class="mt-0.5 size-4 accent-[var(--ti-accent)]" type="checkbox" bind:checked={qualityConfirmed} disabled={!evaluationReviewComplete || busy || statusCheckUnavailable} />
+        <input class="mt-0.5 size-5 shrink-0 accent-[var(--ti-accent)]" type="checkbox" bind:checked={qualityConfirmed} disabled={!evaluationReviewComplete || busy || statusCheckUnavailable} />
         <span class="text-sm leading-5 text-[var(--ti-text-muted)]">I listened to every preview. The voice is clear, sounds natural, resembles the authorized speaker, and I want to use it for meetings.</span>
       </label>
       {#if voiceChangesLocked}
         <p class="mb-0 mt-3 text-sm text-[var(--ti-text-muted)]" role="status">Finish the current Meeting or recording before selecting a new voice.</p>
       {/if}
-      <button type="button" class="ti-button mt-4" disabled={busy || statusCheckUnavailable || voiceChangesLocked || !evaluationReviewComplete || !qualityConfirmed} onclick={() => void approve()}>
+      <button type="button" class="ti-button mt-4 w-full sm:w-auto" disabled={busy || statusCheckUnavailable || voiceChangesLocked || !evaluationReviewComplete || !qualityConfirmed} onclick={() => void approve()}>
         <Check size={15} /><span>{busy ? "Saving..." : "Use My Voice"}</span>
       </button>
       <p class="mb-0 mt-4 text-[13px] leading-5 text-[var(--ti-text-muted)]">Not satisfied? Keep the current Meeting voice and record more samples before creating another candidate.</p>
       {#if build.can_build}
         <label class="mt-3 flex items-start gap-2 text-[13px] text-[var(--ti-text-muted)]">
-          <input class="mt-0.5 size-4 accent-[var(--ti-accent)]" type="checkbox" bind:checked={authorized} disabled={busy} />
+          <input class="mt-0.5 size-5 shrink-0 accent-[var(--ti-accent)]" type="checkbox" bind:checked={authorized} disabled={busy} />
           I own this voice or have permission to create another version.
         </label>
         <button type="button" class="ti-button ti-button-secondary mt-3" disabled={busy || statusCheckUnavailable || voiceChangesLocked || !authorized || !computeCanStart} onclick={() => void startBuild()}>Create Another Candidate</button>
@@ -855,7 +857,7 @@
     <p class="mb-0 mt-5 text-sm text-[var(--ti-text-muted)]">My Voice is selected for meetings. Your recordings remain available if you want to create another candidate.</p>
     {#if build.can_build}
       <label class="mt-4 flex items-start gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-4">
-        <input class="mt-0.5 size-4 accent-[var(--ti-accent)]" type="checkbox" bind:checked={authorized} />
+        <input class="mt-0.5 size-5 shrink-0 accent-[var(--ti-accent)]" type="checkbox" bind:checked={authorized} />
         <span class="text-sm leading-5 text-[var(--ti-text-muted)]">I confirm these recordings are my voice, or a voice I have permission to create.</span>
       </label>
       <button type="button" class="ti-button ti-button-secondary mt-4" disabled={busy || statusCheckUnavailable || voiceChangesLocked || !authorized || !computeCanStart} onclick={() => void startBuild()}>Create Another Candidate</button>
@@ -865,10 +867,10 @@
       <p class="mb-0 mt-5 text-sm leading-5 text-[var(--ti-text-muted)]">{idleGuidance()}</p>
     {:else}
       <label class="mt-5 flex items-start gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-4">
-        <input class="mt-0.5 size-4 accent-[var(--ti-accent)]" type="checkbox" bind:checked={authorized} />
+        <input class="mt-0.5 size-5 shrink-0 accent-[var(--ti-accent)]" type="checkbox" bind:checked={authorized} />
         <span class="text-sm leading-5 text-[var(--ti-text-muted)]">I confirm these recordings are my voice, or a voice I have permission to create.</span>
       </label>
-      <button type="button" class="ti-button mt-4" disabled={busy || statusCheckUnavailable || voiceChangesLocked || !authorized || !computeCanStart} onclick={() => void startBuild()}>
+      <button type="button" class="ti-button mt-4 w-full sm:w-auto" disabled={busy || statusCheckUnavailable || voiceChangesLocked || !authorized || !computeCanStart} onclick={() => void startBuild()}>
         <span>{busy ? "Starting..." : "Create My Voice"}</span>
       </button>
     {/if}
