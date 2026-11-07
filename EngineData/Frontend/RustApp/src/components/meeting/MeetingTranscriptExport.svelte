@@ -15,6 +15,7 @@
   let preview = $state<MeetingCommittedTurnsSnapshot | null>(null);
   let previewLoading = $state(false);
   let previewError = $state("");
+  let previewPanel: HTMLDivElement | undefined;
   // Ignore older reads after the reader closes or changes sessions.
   let previewRevision = 0;
   let language = $state<"bilingual" | "id" | "en">("bilingual");
@@ -104,6 +105,9 @@
 
   async function retryPreview(sessionId: string): Promise<void> {
     if (expanded !== sessionId || previewLoading) return;
+    // The Retry button will be removed by Loading. Keep keyboard focus on
+    // its persistent preview region instead of dropping it to the document.
+    previewPanel?.focus();
     expanded = null;
     await togglePreview(sessionId);
   }
@@ -201,8 +205,8 @@
     <button type="button" class="ti-button ti-button-secondary min-h-10 text-[13px]" disabled={loading || busy}
       onclick={() => void refresh()}><RefreshCw size={14}/>{loading ? "Checking..." : "Refresh"}</button>
   </header>
-  {#if notice}
-    <p class="mx-5 mb-3 text-xs text-[var(--ti-warning)]" role="status">{notice}</p>
+  {#if notice && history?.ok}
+    <p class="mx-5 mb-3 break-words text-[13px] leading-5 text-[var(--ti-warning)]" role="alert">{notice}</p>
   {/if}
   {#if history && history.active_write_errors > 0}
     <p class="mx-5 mb-3 text-xs text-[var(--ti-warning)]" role="alert">
@@ -279,7 +283,8 @@
             </div>
           {/if}
           {#if expanded === session.session_id}
-            <div class="rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-soft)] p-3">
+            <div bind:this={previewPanel} class="rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-soft)] p-3"
+              role="region" aria-label={`Preview saved transcript ${sessionLabel(session.session_id)}`} tabindex="-1">
               <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <strong class="text-sm">Conversation</strong>
@@ -300,8 +305,8 @@
               {#if previewLoading}
                 <p class="m-0 text-[13px] text-[var(--ti-text-muted)]" role="status" aria-live="polite">Loading saved conversation...</p>
               {:else if previewError}
-                <div class="grid gap-3" role="alert">
-                  <p class="m-0 break-words text-[13px] leading-5 text-[var(--ti-warning)]">{previewError} The saved session was not modified.</p>
+                <div class="grid gap-3">
+                  <p class="m-0 break-words text-[13px] leading-5 text-[var(--ti-warning)]" role="alert">{previewError} The saved session was not modified.</p>
                   <button type="button" class="ti-button ti-button-secondary justify-self-start"
                     onclick={() => void retryPreview(session.session_id)}>Retry preview</button>
                 </div>

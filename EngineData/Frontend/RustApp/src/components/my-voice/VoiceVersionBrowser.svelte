@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Check, ChevronDown, History, RotateCcw } from "@lucide/svelte";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { myVoiceBuildApi, type ActorVersionPage } from "../../app/bridge/myVoiceBuildApi";
 
   let {
@@ -23,6 +23,8 @@
   let versions = $state<ActorVersionPage | null>(null);
   let pendingId = $state<string | null>(null);
   let disposed = false;
+  let disclosureButton: HTMLButtonElement | undefined;
+  let confirmationPanel: HTMLDivElement | undefined;
 
   async function load(more = false): Promise<void> {
     if (busy || (more && !versions?.next_cursor)) return;
@@ -62,6 +64,21 @@
     else pendingId = null;
   }
 
+  async function retryVersions(): Promise<void> {
+    if (busy) return;
+    await load();
+    if (!disposed && !error && document.hasFocus()) {
+      await tick();
+      if (document.activeElement === document.body) disclosureButton?.focus();
+    }
+  }
+
+  async function cancelVersionSelection(): Promise<void> {
+    pendingId = null;
+    await tick();
+    if (!disposed && document.hasFocus()) disclosureButton?.focus();
+  }
+
   async function retrySelectionStatus(): Promise<void> {
     if (busy) return;
     const versionId = uncertainVersionId;
@@ -83,6 +100,11 @@
       if (!disposed) selectionUnknown = true;
     } finally {
       busy = false;
+      // On a verified outcome, Retry disappears. Restore focus only if it was lost.
+      if (!disposed && !selectionUnknown && document.hasFocus()) {
+        await tick();
+        if (document.activeElement === document.body) disclosureButton?.focus();
+      }
     }
   }
 
@@ -116,7 +138,16 @@
         return;
       }
       if (result.state === "approval_required") {
-        if (opened) pendingId = versionId;
+        if (opened) {
+          pendingId = versionId;
+          await tick();
+          if (!disposed && opened && document.hasFocus()) {
+            const active = document.activeElement;
+            if (active === document.body || active?.getAttribute("aria-label")?.startsWith("Review saved voice version ")) {
+              confirmationPanel?.focus();
+            }
+          }
+        }
         return;
       }
       if (!result.ok) {
@@ -149,7 +180,7 @@
 <section class="mt-4" aria-label="Saved voice versions">
   <button type="button"
     class="inline-flex min-h-10 items-center gap-2 rounded-[var(--ti-radius-sm)] px-2 text-left text-sm font-semibold text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)] hover:text-[var(--ti-text)]"
-    aria-expanded={opened} disabled={busy} onclick={toggle}>
+    bind:this={disclosureButton} aria-expanded={opened} disabled={busy} onclick={toggle}>
     <History size={15} aria-hidden="true" /><span>Voice versions</span><ChevronDown size={14} aria-hidden="true" class={opened ? "rotate-180" : ""} />
   </button>
 
@@ -177,7 +208,7 @@
           Couldn't read the version library. No voice files were changed.
         </p>
         <button type="button" class="ti-button ti-button-secondary"
-          disabled={busy} onclick={() => void load()}>Retry versions</button>
+          disabled={busy} onclick={() => void retryVersions()}>Retry versions</button>
       {:else if busy && !versions}
         <p role="status" class="text-sm text-[var(--ti-text-muted)]">Checking saved versions...</p>
       {:else if versions}
@@ -221,8 +252,8 @@
       {/if}
 
       {#if pendingId}
-        <div class="mt-4 rounded-[var(--ti-radius-md)] border border-[var(--ti-warning-border)] p-4"
-          role="group" aria-label="Confirm saved voice version selection">
+        <div bind:this={confirmationPanel} class="mt-4 rounded-[var(--ti-radius-md)] border border-[var(--ti-warning-border)] p-4"
+          role="group" aria-label="Confirm saved voice version selection" tabindex="-1">
           <strong class="text-sm font-semibold">Use this saved voice for meetings?</strong>
           <p class="mb-0 mt-1 break-words text-[13px] leading-5 text-[var(--ti-text-muted)]">Version: <code>{pendingId?.slice(0, 10)}</code></p>
           <p class="mb-0 mt-1 text-sm leading-5 text-[var(--ti-text-muted)]">
@@ -230,7 +261,7 @@
           </p>
           <div class="mt-3 flex flex-wrap gap-2">
             <button type="button" class="ti-button ti-button-secondary" disabled={busy}
-              onclick={() => { pendingId = null; }}>Cancel</button>
+              onclick={() => void cancelVersionSelection()}>Cancel</button>
             <button type="button" class="ti-button"
               disabled={busy || error || voiceChangesLocked || selectionUnknown}
               onclick={() => { if (pendingId) void selectVersion(pendingId, true); }}>
