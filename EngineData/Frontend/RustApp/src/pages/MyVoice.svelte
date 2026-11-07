@@ -61,6 +61,7 @@
   let selectedVoiceVerified = $state(false);
   let selectedVoiceReadVersion = 0;
   let recordingStatusUnknown = $state(false);
+  let recordingRetrying = $state(false);
   let microphoneCheck = $state<"idle" | "checking" | "ready" | "unavailable">("idle");
   let legacyProtection = $state<LegacyProtectionStatus | null>(null);
   let legacyProtectionUnknown = $state(false);
@@ -116,6 +117,8 @@
   let lineHeading = $state<HTMLHeadingElement | undefined>(undefined);
   let recordActionButton = $state<HTMLButtonElement | undefined>(undefined);
   let reviewReplayButton = $state<HTMLButtonElement | undefined>(undefined);
+  let microphoneCheckButton = $state<HTMLButtonElement | undefined>(undefined);
+  let personalVoiceHeading = $state<HTMLHeadingElement | undefined>(undefined);
 
   // Declare recording ownership before derivations that consume it.
   const isRecording = $derived(recordingState.recording_line_id !== null);
@@ -558,6 +561,14 @@
       }
     } finally {
       busy = false;
+      // The microphone check temporarily disables its button. Restore focus
+      // only if the user's original keyboard focus was lost.
+      if (!disposed && document.hasFocus()) {
+        await tick();
+        if (document.activeElement === document.body && microphoneCheckButton && !microphoneCheckButton.disabled) {
+          microphoneCheckButton.focus();
+        }
+      }
     }
   }
 
@@ -710,6 +721,21 @@
         onNotice("Couldn't check recording status. Select Retry status.");
       }
     }
+  }
+
+  async function retryRecordingStatus(): Promise<void> {
+    if (busy || recordingRetrying || !recordingStatusUnknown) return;
+    recordingRetrying = true;
+    try {
+      await refresh();
+    } finally {
+      recordingRetrying = false;
+    }
+    // The Retry banner disappears after a verified read. Keep the keyboard
+    // reader anchored near the voice workflow, not at document start.
+    if (disposed || recordingStatusUnknown || !document.hasFocus()) return;
+    await tick();
+    if (document.activeElement === document.body) personalVoiceHeading?.focus();
   }
 
   async function inspectAcceptedFiles(): Promise<void> {
@@ -1013,15 +1039,16 @@
     onRetry={() => { void refreshVoiceSelection(); }}
   />
   {#if recordingStatusUnknown}
-    <div class="flex flex-wrap items-center justify-between gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-warning-border)] p-4" role="alert">
-      <p class="m-0 text-sm text-[var(--ti-warning)]">Couldn't verify recording status. The last confirmed state was kept.</p>
-      <button type="button" class="ti-button ti-button-secondary" disabled={busy} onclick={() => void refresh()}>Retry status</button>
+    <div class="flex flex-wrap items-center justify-between gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-warning-border)] p-4">
+      <p class="m-0 text-sm text-[var(--ti-warning)]" role="alert">Couldn't verify recording status. The last confirmed state was kept.</p>
+      <button type="button" class="ti-button ti-button-secondary" aria-busy={recordingRetrying}
+        disabled={busy || recordingRetrying} onclick={() => void retryRecordingStatus()}>{recordingRetrying ? "Checking..." : "Retry status"}</button>
     </div>
   {/if}
 
   <div class="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--ti-border)] pt-5">
     <div class="min-w-0">
-      <h3 class="mb-0 text-base font-semibold">Personal voice</h3>
+      <h3 class="mb-0 text-base font-semibold" tabindex="-1" bind:this={personalVoiceHeading}>Personal voice</h3>
       <p class="mb-0 mt-1 text-sm leading-5 text-[var(--ti-text-muted)]">Optional. Built-in voices work without recording or training.</p>
     </div>
     <button type="button" class="ti-button ti-button-secondary"
@@ -1071,11 +1098,11 @@
               <strong class="text-sm font-semibold">Microphone</strong>
               <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">Check the connection before recording. Sound quality is checked after each take.</p>
             </div>
-            <button type="button" class="ti-button ti-button-secondary" disabled={busy || voiceChangesLocked || buildStatusUnavailable || buildSnapshot?.active === true || buildSnapshot?.preview_active === true || recordingStatusUnknown || isRecording || pendingLineId !== null} onclick={() => void checkMicrophone()}>
+            <button type="button" class="ti-button ti-button-secondary" bind:this={microphoneCheckButton} aria-busy={microphoneCheck === "checking"} disabled={busy || voiceChangesLocked || buildStatusUnavailable || buildSnapshot?.active === true || buildSnapshot?.preview_active === true || recordingStatusUnknown || isRecording || pendingLineId !== null} onclick={() => void checkMicrophone()}>
               <Mic size={15} /><span>{microphoneCheck === "checking" ? "Checking..." : "Check microphone"}</span>
             </button>
             {#if microphoneCheck !== "idle"}
-              <p role="status" class={microphoneCheck === "unavailable" ? "mb-0 w-full text-xs leading-5 text-[var(--ti-danger)]" : "mb-0 w-full text-xs leading-5 text-[var(--ti-text-muted)]"}>{microphoneCheckMessage}</p>
+              <p role={microphoneCheck === "unavailable" ? "alert" : "status"} class={microphoneCheck === "unavailable" ? "mb-0 w-full break-words text-[13px] leading-5 text-[var(--ti-danger)]" : "mb-0 w-full break-words text-[13px] leading-5 text-[var(--ti-text-muted)]"}>{microphoneCheckMessage}</p>
             {/if}
           </div>
 

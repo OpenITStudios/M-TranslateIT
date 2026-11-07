@@ -93,10 +93,10 @@
     deviceMessage = "Loading audio devices...";
     try {
       devices = await runtimeProductFacade.loadProductAudioDevices();
-      deviceMessage = devices.ok ? "Choose a device. TranslateIT checks it before saving." : "Audio devices are unavailable right now. Try again.";
+      deviceMessage = devices.ok ? "Choose a device. TranslateIT checks it before saving." : "Audio devices could not be checked. Select Refresh devices to retry.";
     } catch {
       devices = null;
-      deviceMessage = "Audio devices are unavailable right now. Try again.";
+      deviceMessage = "Audio devices could not be checked. Select Refresh devices to retry.";
     } finally {
       devicesLoading = false;
     }
@@ -221,10 +221,10 @@
           {/if}
         </header>
 
-        <div class="grid grid-cols-1 gap-5 p-5 2xl:grid-cols-2">
+        <div class="grid grid-cols-1 gap-5 p-5 2xl:grid-cols-2" aria-busy={devicesLoading || deviceSaving}>
           <label class="grid min-w-0 gap-2">
             <span class="ti-field-label">Microphone</span>
-            <select class="ti-field min-h-10 px-3" disabled={meetingResourcesLocked || devicesLoading || deviceSaving} value={currentDevice("microphone")} onchange={(event) => void changeDevice("microphone", selectValue(event))}>
+            <select class="ti-field min-h-10 px-3" disabled={meetingResourcesLocked || devicesLoading || deviceSaving || !devices?.ok} value={currentDevice("microphone")} onchange={(event) => void changeDevice("microphone", selectValue(event))}>
               <option value="">Windows Default</option>
               {#each devices?.input_devices ?? [] as device (deviceId(device))}
                 <option value={deviceId(device)} disabled={devices?.ambiguous_input_names.includes(device.name) || routeStatus?.selected_input_device === device.name}>{device.name}{devices?.ambiguous_input_names.includes(device.name) ? " · ambiguous" : routeStatus?.selected_input_device === device.name ? " · virtual output (not a spoken mic)" : device.is_default ? " · Windows default" : ""}</option>
@@ -238,7 +238,7 @@
 
           <label class="grid min-w-0 gap-2">
             <span class="ti-field-label">Sound from your meeting</span>
-            <select class="ti-field min-h-10 px-3" disabled={meetingResourcesLocked || devicesLoading || deviceSaving} value={currentDevice("meeting-sound")} onchange={(event) => void changeDevice("meeting-sound", selectValue(event))}>
+            <select class="ti-field min-h-10 px-3" disabled={meetingResourcesLocked || devicesLoading || deviceSaving || !devices?.ok} value={currentDevice("meeting-sound")} onchange={(event) => void changeDevice("meeting-sound", selectValue(event))}>
               <option value="">Windows Default</option>
               {#each devices?.output_devices ?? [] as device (deviceId(device))}
                 <option value={deviceId(device)} disabled={devices?.ambiguous_output_names.includes(device.name) || routeStatus?.selected_output_device === device.name}>{device.name}{devices?.ambiguous_output_names.includes(device.name) ? " · ambiguous" : routeStatus?.selected_output_device === device.name ? " · virtual TTS output (not meeting sound)" : device.is_default ? " · Windows default" : ""}</option>
@@ -293,8 +293,13 @@
         </div>
 
         <footer class="flex flex-wrap items-center justify-between gap-4 border-t border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-4">
-          <p class="m-0 min-w-0 flex-1 text-[12px] leading-5 text-[var(--ti-text-muted)]" aria-live="polite">{meetingResourcesLocked ? meetingResourceLockMessage : deviceMessage}</p>
+          <p class="m-0 min-w-0 flex-1 break-words text-[13px] leading-5 text-[var(--ti-text-muted)]" aria-live="polite" aria-atomic="true">{meetingResourcesLocked ? meetingResourceLockMessage : deviceMessage}</p>
           <div class="ti-action-row shrink-0">
+            <!-- Device list refresh remains mounted: a failed read has an actionable, stable retry. -->
+            <button type="button" class="ti-button ti-button-secondary"
+              disabled={devicesLoading || deviceSaving} onclick={() => void loadDevices()}>
+              {devicesLoading ? "Checking devices..." : "Refresh devices"}
+            </button>
             {#if routeCheck === "unavailable"}
               <button type="button" class="ti-button ti-button-secondary" disabled={devicesLoading || deviceSaving} onclick={() => void loadRouteStatus()}>Check Again</button>
             {/if}
