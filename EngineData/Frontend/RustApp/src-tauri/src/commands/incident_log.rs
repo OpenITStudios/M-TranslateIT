@@ -104,9 +104,9 @@ fn write_incidents(path: &Path, incidents: &[RuntimeIncident]) -> io::Result<()>
         return Err(io::Error::new(io::ErrorKind::InvalidData, "incident history too large"));
     }
     fs::write(&temp, body)?;
-    if path.exists() {
-        fs::remove_file(path)?;
-    }
+    // Rename over the destination; never delete the only retained history
+    // before a replacement has been successfully published. Windows rename
+    // supports replacement of an existing regular destination file.
     fs::rename(temp, path)
 }
 
@@ -253,6 +253,7 @@ pub fn get_recent_runtime_incidents() -> RuntimeIncidentSnapshot {
 mod tests {
     use super::{
         group_issue_areas, incident_recording_suppressed, inspect_incidents, persist_incident,
+        write_incidents,
         without_runtime_incident_recording, RuntimeIncident, INCIDENT_REPEAT_SUPPRESSION_MS,
         MAX_INCIDENTS, MAX_REVIEW_BYTES,
     };
@@ -345,6 +346,32 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[1], old);
         fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn existing_history_is_replaced_without_deleting_before_publication() {
+        let path = test_path();
+        let original = same_incident_at(1);
+        write_incidents(&path, &[original]).unwrap();
+        let updated = same_incident_at(2);
+        write_incidents(&path, &[updated.clone()]).unwrap();
+        assert_eq!(inspect_incidents(&path).unwrap().unwrap(), vec![updated]);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn failed_staging_preserves_previous_incident_history() {
+        let path = test_path();
+        let original = same_incident_at(1);
+        write_incidents(&path, &[original.clone()]).unwrap();
+        let before = fs::read(&path).unwrap();
+        let temp = path.with_extension("json.tmp");
+        fs::create_dir(&temp).unwrap();
+        assert!(write_incidents(&path, &[same_incident_at(2)]).is_err());
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(inspect_incidents(&path).unwrap().unwrap(), vec![original]);
+        fs::remove_dir(temp).unwrap();
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

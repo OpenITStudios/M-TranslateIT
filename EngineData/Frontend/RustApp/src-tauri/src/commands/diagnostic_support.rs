@@ -1,8 +1,12 @@
 use serde::Serialize;
 use serde_json::json;
-use std::fs;
-use std::path::PathBuf;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static SUPPORT_EXPORT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 use crate::engine::audio::finalized_utterance::{finalized_callback_lock_metrics, finalized_pcm_drop_breakdown};
 use crate::engine::audio::live_capture::live_capture_status;
@@ -38,6 +42,26 @@ fn unix_ms() -> u128 {
 
 fn sanitized(value: &str) -> String {
     sanitize_diagnostic_text(value)
+}
+
+// Each explicit export receives a distinct filename and create_new publication.
+// A collision or disk failure must not overwrite an earlier diagnostic report.
+fn write_support_bundle(directory: &Path, body: &[u8]) -> io::Result<PathBuf> {
+    let path = directory.join(format!(
+        "translateit_support_{}_{}_{}.json",
+        unix_ms(),
+        std::process::id(),
+        SUPPORT_EXPORT_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+    ));
+    let mut file = OpenOptions::new().write(true).create_new(true).open(&path)?;
+    let written = file.write_all(body).and_then(|_| file.sync_all());
+    drop(file);
+    if let Err(error) = written {
+        // This is the newly created file only, never any previous report.
+        let _ = fs::remove_file(&path);
+        return Err(error);
+    }
+    Ok(path)
 }
 
 #[tauri::command]
@@ -271,7 +295,6 @@ pub fn export_diagnostic_support_bundle() -> DiagnosticSupportBundleResult {
             blocker: "diagnostic_bundle:create_dir_failed".to_string(),
         };
     }
-    let path = directory.join(format!("translateit_support_{}.json", unix_ms()));
     let body = match serde_json::to_vec_pretty(&payload) {
         Ok(body) => body,
         Err(_) => {
@@ -283,14 +306,17 @@ pub fn export_diagnostic_support_bundle() -> DiagnosticSupportBundleResult {
             }
         }
     };
-    if fs::write(&path, body).is_err() {
-        return DiagnosticSupportBundleResult {
-            ok: false,
-            file_path: None,
-            message: "Diagnostic support bundle could not be written.".to_string(),
-            blocker: "diagnostic_bundle:write_failed".to_string(),
-        };
-    }
+    let path = match write_support_bundle(&directory, &body) {
+        Ok(path) => path,
+        Err(_) => {
+            return DiagnosticSupportBundleResult {
+                ok: false,
+                file_path: None,
+                message: "Diagnostic support bundle could not be written.".to_string(),
+                blocker: "diagnostic_bundle:write_failed".to_string(),
+            };
+        }
+    };
 
     DiagnosticSupportBundleResult {
         ok: true,
@@ -302,7 +328,25 @@ pub fn export_diagnostic_support_bundle() -> DiagnosticSupportBundleResult {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitized;
+    use super::{sanitized, write_support_bundle};
+    use std::{fs, time::{SystemTime, UNIX_EPOCH}};
+
+    #[test]
+    fn two_support_exports_never_clobber_the_first_file() {
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let folder = std::env::temp_dir().join(format!(
+            "translateit-support-{}-{stamp}", std::process::id()
+        ));
+        fs::create_dir(&folder).unwrap();
+        let first = write_support_bundle(&folder, br#"{"status":"first"}"#).unwrap();
+        let second = write_support_bundle(&folder, br#"{"status":"second"}"#).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(fs::read(&first).unwrap(), br#"{"status":"first"}"#);
+        assert_eq!(fs::read(&second).unwrap(), br#"{"status":"second"}"#);
+        fs::remove_file(first).unwrap();
+        fs::remove_file(second).unwrap();
+        fs::remove_dir(folder).unwrap();
+    }
 
     #[test]
     fn bundle_text_uses_runtime_redaction() {

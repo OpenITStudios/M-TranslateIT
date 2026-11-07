@@ -78,3 +78,11 @@ test("support bundle includes optional build attribution without claiming releas
   assert.match(support, /"source_sha_is_signed_attestation": false/);
   assert.match(support, /"legacy_issue_build_attribution": "UNKNOWN"/);
 });
+
+test("each support export creates a fresh non-overwriting file and checks full write", () => {
+  assert.match(support, /fn write_support_bundle\(directory: &Path, body: &\[u8\]\)/);
+  assert.match(support, /\.create_new\(true\)/);
+  assert.match(support, /file\.write_all\(body\)\.and_then\(\|_\| file\.sync_all\(\)\)/);
+  assert.match(support, /fn two_support_exports_never_clobber_the_first_file/);
+  assert.doesNotMatch(support, /fs::write\(&path, body\)/);
+});

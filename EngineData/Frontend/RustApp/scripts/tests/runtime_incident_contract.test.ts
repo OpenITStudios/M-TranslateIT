@@ -43,3 +43,10 @@ test("incident writes fail closed on corrupted history and separate clean build 
   assert.match(incident, /fn legacy_incidents_survive_bounded_append_without_build_forgery/);
   assert.doesNotMatch(incident, /fs::read\(path\)/);
 });
+
+test("incident publication preserves the existing report on replacement or staging failure", () => {
+  assert.match(incident, /fs::rename\(temp, path\)/);
+  assert.doesNotMatch(incident, /fs::remove_file\(path\)/);
+  assert.match(incident, /fn existing_history_is_replaced_without_deleting_before_publication/);
+  assert.match(incident, /fn failed_staging_preserves_previous_incident_history/);
+});
