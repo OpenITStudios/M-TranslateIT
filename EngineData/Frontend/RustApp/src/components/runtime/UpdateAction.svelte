@@ -76,7 +76,7 @@
 {#if update?.available}
   <button
     type="button"
-    class="ti-button ti-button-secondary min-h-8 shrink-0 px-3 text-[11.5px]"
+    class="ti-button ti-button-secondary min-h-10 shrink-0 px-3 text-[13px]"
     disabled={busy || audioLocked || myVoiceRecording || voiceBuildActive}
     title={audioLocked
       ? audioOwnerKind === "meeting"

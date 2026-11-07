@@ -170,7 +170,7 @@
         <p class="m-0 py-7 text-sm leading-6 text-[var(--ti-text-muted)]">Recognized phrases from your microphone and meeting audio will appear here.</p>
       {:else}
         <div bind:this={transcriptScroller} onscroll={updateScrollPosition}
-          class="max-h-[54vh] min-h-[160px] overflow-y-auto" role="log" aria-label="Meeting conversation" aria-live="off">
+          class="max-h-[54vh] min-h-[160px] overflow-y-auto" role="log" aria-label="Meeting conversation" aria-live="off" tabindex="0">
           {#each orderedTurns as turn (turn.sequence)}
             <div class="border-b border-[var(--ti-border)] py-3 last:border-b-0">
               <MeetingTurnBubble {turn} statusLabel={turn.lane === "you" ? deliveryLabel(turn) : ""} />

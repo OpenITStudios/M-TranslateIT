@@ -244,7 +244,7 @@
               {#if !preview}
                 <p class="m-0 text-xs text-[var(--ti-text-muted)]">Loading saved conversation...</p>
               {:else}
-                <div class="max-h-[360px] divide-y divide-[var(--ti-border)] overflow-y-auto" aria-label="Saved conversation">
+                <div class="max-h-[360px] divide-y divide-[var(--ti-border)] overflow-y-auto" role="region" aria-label="Saved conversation" tabindex="0">
                   {#each preview.turns as turn (turn.sequence)}
                     <div class="py-3 first:pt-0 last:pb-0">
                       {#if language === "bilingual"}

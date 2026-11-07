@@ -56,7 +56,7 @@
   {#if entries.length === 0}
     <p class="m-0 px-5 py-5 text-[12.5px] text-[var(--ti-text-muted)]">No translation issues have been reported.</p>
   {:else}
-    <div class="max-h-[260px] divide-y divide-[var(--ti-border)] overflow-y-auto">
+    <div class="max-h-[260px] divide-y divide-[var(--ti-border)] overflow-y-auto" role="region" aria-label="Saved translation issue reports" tabindex="0">
       {#each entries as entry (entry.id)}
         <div class="grid gap-1.5 px-5 py-3.5">
           <div class="flex flex-wrap items-center justify-between gap-2">

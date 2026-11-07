@@ -1324,7 +1324,7 @@
                 </label>
               </div>
               <p class="mt-3 text-xs text-[var(--ti-text-muted)]">{browseFiltered.length} matching lines · up to {browsePageSize} per page</p>
-              <div class="max-h-[320px] overflow-y-auto">
+              <div class="max-h-[320px] overflow-y-auto" role="region" aria-label="Recording lines" tabindex="0">
                 {#each browseVisible as line (line.line_id)}
                   <button type="button"
                     class={selectedLineId === line.line_id ? "mt-1 flex w-full items-center gap-2 rounded-[var(--ti-radius-sm)] bg-[var(--ti-surface-raised)] px-2 py-2 text-left text-sm" : "mt-1 flex w-full items-center gap-2 rounded-[var(--ti-radius-sm)] px-2 py-2 text-left text-sm text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)]"}

@@ -81,7 +81,7 @@
           <input class="ti-field min-h-10 w-full pl-9 pr-3 text-sm" bind:value={query} placeholder="Search last session..." aria-label="Search last session" />
         </label>
       </div>
-      <div class="max-h-[360px] overflow-y-auto divide-y divide-[var(--ti-border)]">
+      <div class="max-h-[360px] overflow-y-auto divide-y divide-[var(--ti-border)]" role="region" aria-label="Last Meeting conversation" tabindex="0">
         {#each visibleTurns as turn (turn.sequence)}
           <div class="px-4 py-3">
             <MeetingTurnBubble {turn} />
