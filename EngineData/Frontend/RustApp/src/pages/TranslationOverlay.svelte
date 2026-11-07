@@ -246,16 +246,16 @@
       <div class="caption-meta" data-tauri-drag-region>
         {#if caption?.source === "meeting"}
           <span class="live-dot" aria-hidden="true"></span>
-          <span>MEETING · {languageLabel(caption.language)}</span>
+          <span title={`MEETING · ${languageLabel(caption.language)}`}>MEETING · {languageLabel(caption.language)}</span>
         {:else}
-          <span>{caption ? languageLabel(caption.language) : "TRANSLATION"}</span>
+          <span title={caption ? languageLabel(caption.language) : "TRANSLATION"}>{caption ? languageLabel(caption.language) : "TRANSLATION"}</span>
         {/if}
       </div>
-      <div class="caption-controls">
+      <div class="caption-controls" role="group" aria-label="Floating caption window controls">
         <button type="button" class="caption-control" aria-label={collapsed ? "Expand floating caption" : "Collapse floating caption"} title={collapsed ? "Expand" : "Collapse"} onclick={() => void setVisibility(collapsed ? "expanded" : "collapsed")}>
-          {#if collapsed}<Maximize2 size={15} />{:else}<Minus size={16} />{/if}
+          {#if collapsed}<Maximize2 size={17} aria-hidden="true" />{:else}<Minus size={17} aria-hidden="true" />{/if}
         </button>
-        <button type="button" class="caption-control" aria-label="Hide floating caption" title="Hide" onclick={() => void hide()}><X size={15} /></button>
+        <button type="button" class="caption-control" aria-label="Hide floating caption" title="Hide" onclick={() => void hide()}><X size={17} aria-hidden="true" /></button>
       </div>
     </header>
     {#if !collapsed}
