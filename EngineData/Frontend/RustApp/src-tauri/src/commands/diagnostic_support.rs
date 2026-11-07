@@ -214,6 +214,15 @@ pub fn export_diagnostic_support_bundle() -> DiagnosticSupportBundleResult {
             "warning_count": long_session.warning_count,
             "note": sanitized(&long_session.note),
         },
+        "issue_map": {
+            "scope": "RECENT_BOUNDED_INCIDENTS",
+            "coverage": incidents.coverage,
+            "retained_records": incidents.count,
+            "at_capacity": incidents.truncated,
+            "areas": &incidents.issue_areas,
+            "total_failure_frequency_measured": false,
+            "native_root_cause_verified": false,
+        },
         "incident_summary": {
             "count": incidents.count,
             "truncated": incidents.truncated,

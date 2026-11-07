@@ -26,10 +26,20 @@ export type RuntimeIncident = {
   occurred_unix_ms: number;
 };
 
+export type RuntimeIssueArea = {
+  category: string;
+  component: string;
+  retained_records: number;
+  blockers: string[];
+  latest_unix_ms: number;
+};
+
 export type RuntimeIncidentSnapshot = {
   incidents: RuntimeIncident[];
   count: number;
   truncated: boolean;
+  coverage: "NO_DATA" | "RECENT_ONLY" | "AT_CAPACITY" | "UNAVAILABLE";
+  issue_areas: RuntimeIssueArea[];
   note: string;
 };
 
@@ -101,6 +111,8 @@ export async function getRecentRuntimeIncidents(): Promise<RuntimeIncidentSnapsh
     incidents: [],
     count: 0,
     truncated: false,
+    coverage: "UNAVAILABLE",
+    issue_areas: [],
     note: "Recent incident history is unavailable right now.",
   };
 }

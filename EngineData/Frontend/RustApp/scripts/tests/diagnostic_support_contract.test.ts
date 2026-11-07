@@ -58,3 +58,12 @@ test("capture callback contention evidence contains aggregates, not private spee
   }
   assert.doesNotMatch(support, /"audio_samples"\s*:|"source_text"\s*:/);
 });
+
+test("support export projects a bounded incident issue map without claiming native root cause", () => {
+  assert.match(support, /"issue_map"/);
+  assert.match(support, /"scope": "RECENT_BOUNDED_INCIDENTS"/);
+  assert.match(support, /"coverage": incidents\.coverage/);
+  assert.match(support, /"areas": &incidents\.issue_areas/);
+  assert.match(support, /"total_failure_frequency_measured": false/);
+  assert.match(support, /"native_root_cause_verified": false/);
+});

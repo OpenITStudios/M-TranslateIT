@@ -22,3 +22,14 @@ test("required and optional meeting failures record incidents at their source", 
   assert.match(sessionState, /record_runtime_incident\("meeting_outbound"/);
   assert.match(sessionState, /record_runtime_incident\("meeting_incoming"/);
 });
+
+test("incident issue projection is bounded, source-owned and distinguishes absent from unreadable history", () => {
+  assert.match(incident, /fn inspect_incidents\(path: &Path\)/);
+  assert.match(incident, /symlink_metadata\(path\)/);
+  assert.match(incident, /take\(MAX_REVIEW_BYTES \+ 1\)/);
+  assert.match(incident, /group_issue_areas\(&incidents\)/);
+  for (const status of ["NO_DATA", "RECENT_ONLY", "AT_CAPACITY", "UNAVAILABLE"]) {
+    assert.ok(incident.includes('"' + status + '"'), status);
+  }
+  assert.match(incident, /fn issue_map_groups_only_retained_records_without_inventing_failure_frequency/);
+});

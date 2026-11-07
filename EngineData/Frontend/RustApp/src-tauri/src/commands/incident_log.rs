@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
+use std::collections::BTreeMap;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -11,6 +12,7 @@ use crate::engine::paths::ProjectPaths;
 
 const INCIDENT_FILE: &str = "runtime_incidents.json";
 const MAX_INCIDENTS: usize = 20;
+const MAX_REVIEW_BYTES: u64 = 64 * 1024;
 const INCIDENT_REPEAT_SUPPRESSION_MS: u128 = 60_000;
 static INCIDENT_IO_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -51,11 +53,23 @@ pub struct RuntimeIncident {
     pub occurred_unix_ms: u128,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuntimeIssueArea {
+    pub category: String,
+    pub component: String,
+    // These are retained records, not total failures: repeated events are suppressed.
+    pub retained_records: usize,
+    pub blockers: Vec<String>,
+    pub latest_unix_ms: u128,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RuntimeIncidentSnapshot {
     pub incidents: Vec<RuntimeIncident>,
     pub count: usize,
     pub truncated: bool,
+    pub coverage: &'static str,
+    pub issue_areas: Vec<RuntimeIssueArea>,
     pub note: String,
 }
 
@@ -153,26 +167,81 @@ pub fn runtime_incident_count() -> usize {
     read_incidents(&incident_path()).len()
 }
 
+// Analytics is a bounded, read-only projection of the existing incident log.
+// Missing history, malformed history and the 20-record retention ceiling must not
+// be conflated with a verified healthy runtime or complete failure frequency.
+fn inspect_incidents(path: &Path) -> io::Result<Option<Vec<RuntimeIncident>>> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if !metadata.file_type().is_file() || metadata.len() == 0 || metadata.len() > MAX_REVIEW_BYTES {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid incident file"));
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(path)?.take(MAX_REVIEW_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.is_empty() || bytes.len() as u64 > MAX_REVIEW_BYTES {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid incident size"));
+    }
+    let incidents: Vec<RuntimeIncident> = serde_json::from_slice(&bytes)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid incident JSON"))?;
+    if incidents.len() > MAX_INCIDENTS {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "unbounded incident history"));
+    }
+    Ok(Some(incidents))
+}
+
+fn group_issue_areas(incidents: &[RuntimeIncident]) -> Vec<RuntimeIssueArea> {
+    let mut grouped: BTreeMap<(String, String), RuntimeIssueArea> = BTreeMap::new();
+    for item in incidents {
+        let key = (item.category.clone(), item.component.clone());
+        let area = grouped.entry(key).or_insert_with(|| RuntimeIssueArea {
+            category: item.category.clone(),
+            component: item.component.clone(),
+            retained_records: 0,
+            blockers: Vec::new(),
+            latest_unix_ms: 0,
+        });
+        area.retained_records += 1;
+        area.latest_unix_ms = area.latest_unix_ms.max(item.occurred_unix_ms);
+        if !area.blockers.contains(&item.blocker) {
+            area.blockers.push(item.blocker.clone());
+        }
+    }
+    let mut areas: Vec<_> = grouped.into_values().collect();
+    areas.sort_by(|a, b| b.latest_unix_ms.cmp(&a.latest_unix_ms)
+        .then(a.category.cmp(&b.category))
+        .then(a.component.cmp(&b.component)));
+    areas
+}
+
 #[tauri::command]
 pub fn get_recent_runtime_incidents() -> RuntimeIncidentSnapshot {
-    let incidents = incident_io_lock()
-        .lock()
-        .ok()
-        .map(|_guard| read_incidents(&incident_path()))
-        .unwrap_or_default();
+    let (incidents, coverage) = match incident_io_lock().lock() {
+        Ok(_guard) => match inspect_incidents(&incident_path()) {
+            Ok(None) => (Vec::new(), "NO_DATA"),
+            Ok(Some(records)) if records.len() >= MAX_INCIDENTS => (records, "AT_CAPACITY"),
+            Ok(Some(records)) => (records, "RECENT_ONLY"),
+            Err(_) => (Vec::new(), "UNAVAILABLE"),
+        },
+        Err(_) => (Vec::new(), "UNAVAILABLE"),
+    };
     RuntimeIncidentSnapshot {
         count: incidents.len(),
         truncated: incidents.len() >= MAX_INCIDENTS,
+        coverage,
+        issue_areas: group_issue_areas(&incidents),
         incidents,
-        note: "Recent incidents contain redacted runtime failure metadata only; conversation text and audio are never stored here.".to_string(),
+        note: "Read-only grouped recent incidents; suppressed repeats and older history are not measured. No audio or transcript is collected.".to_string(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        incident_recording_suppressed, without_runtime_incident_recording, RuntimeIncident,
-        INCIDENT_REPEAT_SUPPRESSION_MS, MAX_INCIDENTS,
+        group_issue_areas, incident_recording_suppressed, without_runtime_incident_recording,
+        RuntimeIncident, INCIDENT_REPEAT_SUPPRESSION_MS, MAX_INCIDENTS,
     };
 
     fn same_incident_at(occurred_unix_ms: u128) -> RuntimeIncident {
@@ -192,6 +261,28 @@ mod tests {
         let suppressed = without_runtime_incident_recording(incident_recording_suppressed);
         assert!(suppressed);
         assert!(!incident_recording_suppressed());
+    }
+
+    #[test]
+    fn issue_map_groups_only_retained_records_without_inventing_failure_frequency() {
+        let items = [
+            same_incident_at(3),
+            RuntimeIncident { category: "runtime_watchdog".to_string(),
+                component: "meeting_outbound".to_string(),
+                blocker: "runtime_watchdog:another_issue".to_string(),
+                note: "internal detail".to_string(), occurred_unix_ms: 2 },
+            RuntimeIncident { category: "device_loss".to_string(), component: "microphone".to_string(),
+                blocker: "device_loss:microphone_capture_inactive".to_string(),
+                note: "private path must not be projected".to_string(), occurred_unix_ms: 1 },
+        ];
+        let mapped = group_issue_areas(&items);
+        assert_eq!(mapped.len(), 2);
+        assert_eq!(mapped[0].retained_records, 2);
+        assert_eq!(mapped[0].latest_unix_ms, 3);
+        assert_eq!(mapped[0].blockers.len(), 2);
+        let encoded = serde_json::to_string(&mapped).unwrap();
+        assert!(!encoded.contains("internal detail"));
+        assert!(!encoded.contains("private path"));
     }
 
     #[test]

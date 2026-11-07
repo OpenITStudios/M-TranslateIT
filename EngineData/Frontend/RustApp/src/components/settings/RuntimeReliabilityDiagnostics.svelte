@@ -129,6 +129,39 @@
     </div>
   {/if}
 
+  {#if !loading && incidents}
+    <details class="mt-4 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-4">
+      <summary class="min-h-9 cursor-pointer text-[13px] font-semibold">
+        Recent issue map · {incidents.coverage === "UNAVAILABLE" ? "Not verified" : `${incidents.issue_areas?.length ?? 0} areas`}
+      </summary>
+      <p class="mb-3 mt-2 text-[12px] leading-5 text-[var(--ti-text-muted)]">
+        Retained runtime incident records only. Repeated notifications may be suppressed; this is not a full failure count or a confirmed root-cause report.
+        {incidents.coverage === "AT_CAPACITY" ? " The 20-record limit has been reached; earlier issues may be omitted." : ""}
+      </p>
+      {#if incidents.coverage === "UNAVAILABLE"}
+        <p class="m-0 text-[13px] text-[var(--ti-warning)]" role="status">Incident history could not be verified. Check Again or export the current diagnostics.</p>
+      {:else if (incidents.issue_areas?.length ?? 0) === 0}
+        <p class="m-0 text-[13px] text-[var(--ti-text-muted)]">No incident records in the retained local window; runtime health is checked separately.</p>
+      {:else}
+        <div class="grid gap-3">
+          {#each incidents.issue_areas as area (`${area.category}:${area.component}`)}
+            <section class="ti-subtle-card min-w-0 p-3">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <strong class="break-words text-[13px]">{sanitizeDiagnosticText(area.category)} · {sanitizeDiagnosticText(area.component)}</strong>
+                <span class="text-[12px] text-[var(--ti-text-muted)]">{area.retained_records} retained</span>
+              </div>
+              <ul class="mb-0 mt-2 grid gap-1 pl-4 text-[12px] leading-5">
+                {#each area.blockers as blocker (blocker)}
+                  <li><code class="break-all">{sanitizeDiagnosticText(blocker)}</code></li>
+                {/each}
+              </ul>
+            </section>
+          {/each}
+        </div>
+      {/if}
+    </details>
+  {/if}
+
   {#if incidents?.incidents[0]}
     <div class="mt-4 ti-subtle-card px-4 py-3">
       <span class="ti-field-label">Last incident · {incidents.incidents[0].category}</span>
