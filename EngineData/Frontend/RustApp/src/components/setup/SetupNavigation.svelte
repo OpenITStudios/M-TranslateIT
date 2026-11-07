@@ -5,6 +5,7 @@
   let {
     step,
     busy,
+    setupVerified,
     microphoneReady,
     microphoneSelectionPending,
     meetingRouteReady,
@@ -19,6 +20,7 @@
   }: {
     step: SetupStep;
     busy: boolean;
+    setupVerified: boolean;
     microphoneReady: boolean;
     microphoneSelectionPending: boolean;
     meetingRouteReady: boolean;
@@ -43,35 +45,39 @@
   </div>
 
   <div class="ti-action-row justify-end">
-    <button type="button" class="ti-button ti-button-secondary" disabled={busy} onclick={() => void onDefer()}>
+    <button type="button" class="ti-button ti-button-secondary" disabled={busy || !setupVerified} onclick={() => void onDefer()}>
       Set Up Later
     </button>
 
     {#if step === 1}
-      <button type="button" class="ti-button" disabled={busy} onclick={() => void onAdvance(2)}>
+      <button type="button" class="ti-button" disabled={busy || !setupVerified} onclick={() => void onAdvance(2)}>
         Set up meeting translation <ChevronRight size={16} />
       </button>
     {:else if step === 2}
-      <button type="button" class="ti-button" disabled={busy || !microphoneReady || microphoneSelectionPending} onclick={() => void onAdvance(3)}>
+      <button type="button" class="ti-button" disabled={busy || !setupVerified || !microphoneReady || microphoneSelectionPending} onclick={() => void onAdvance(3)}>
         Continue <ChevronRight size={16} />
       </button>
     {:else if step === 3}
-      <button type="button" class="ti-button ti-button-secondary" disabled={busy} onclick={() => void onRefresh()}>
-        Check Again
-      </button>
-      <button type="button" class="ti-button" disabled={busy || !meetingRouteReady} onclick={() => void onAdvance(4)}>
+      {#if setupVerified}
+        <button type="button" class="ti-button ti-button-secondary" disabled={busy} onclick={() => void onRefresh()}>
+          Check Again
+        </button>
+      {/if}
+      <button type="button" class="ti-button" disabled={busy || !setupVerified || !meetingRouteReady} onclick={() => void onAdvance(4)}>
         Continue <ChevronRight size={16} />
       </button>
     {:else}
-      <button type="button" class="ti-button ti-button-secondary" disabled={busy} onclick={() => void onRefresh()}>
-        Check Again
-      </button>
+      {#if setupVerified}
+        <button type="button" class="ti-button ti-button-secondary" disabled={busy} onclick={() => void onRefresh()}>
+          Check Again
+        </button>
+      {/if}
       {#if meetingVoiceReady && !meetingReady}
-        <button type="button" class="ti-button ti-button-secondary" disabled={busy} onclick={() => void onRepair()}>
+        <button type="button" class="ti-button ti-button-secondary" disabled={busy || !setupVerified} onclick={() => void onRepair()}>
           Fix Setup
         </button>
       {/if}
-      <button type="button" class="ti-button" disabled={busy || !meetingVoiceReady || !meetingReady} onclick={() => void onComplete()}>
+      <button type="button" class="ti-button" disabled={busy || !setupVerified || !meetingVoiceReady || !meetingReady} onclick={() => void onComplete()}>
         <Check size={16} /> Finish Setup
       </button>
     {/if}

@@ -186,6 +186,10 @@
       message = "Saved engine settings must be verified before setup can be saved. Confirm the translation engine first.";
       return false;
     }
+    if (setupReadState !== "verified") {
+      message = "Saved setup status is not verified. Select Check setup status before saving or leaving setup.";
+      return false;
+    }
     const expected = cloneSettings(settings);
     const candidate = cloneSettings(expected);
     let savedByNative = false;
@@ -201,11 +205,21 @@
       }
       savedByNative = true;
       const savedSettings = await runtimeApi.loadSettings();
-      settings = cloneSettings(savedSettings ?? candidate);
+      if (!savedSettings
+        || savedSettings.meeting_setup_state !== state
+        || savedSettings.meeting_setup_checkpoint !== candidate.meeting_setup_checkpoint) {
+        // A successful native acknowledgement without an exact readback is not
+        // authority to leave setup or reuse the candidate as persisted state.
+        setupReadState = "unavailable";
+        message = "Setup save was acknowledged, but its saved state could not be verified. Select Check setup status before another action.";
+        return false;
+      }
+      settings = cloneSettings(savedSettings);
       return true;
     } catch {
+      if (savedByNative) setupReadState = "unavailable";
       message = savedByNative
-        ? "Setup save was acknowledged, but its current settings could not be read back. Check setup status before another change."
+        ? "Setup save was acknowledged, but its current settings could not be read back. Select Check setup status before another change."
         : "Couldn't verify whether setup progress was saved. Check the current setup status before trying again.";
       return false;
     }
@@ -312,12 +326,37 @@
     }
   }
 
+  async function checkSetupStatus(): Promise<void> {
+    if (busy || checkingSetup) return;
+    busy = true;
+    message = "Checking saved setup status...";
+    try {
+      await refreshSnapshot();
+      if (setupReadState !== "verified") return;
+      if (engineSettingsUnverified) {
+        message = "Saved engine settings need confirmation before setup can continue.";
+        return;
+      }
+      // An earlier acknowledged Defer/Finish may have reached native storage.
+      // Leave only after a fresh verified read shows that exact saved state.
+      if (settings.meeting_setup_state === "deferred" || settings.meeting_setup_state === "completed") {
+        await onComplete(settings);
+        return;
+      }
+      message = "Saved setup status verified. Continue setup or choose Set Up Later.";
+    } catch {
+      message = "Couldn't finish checking setup status. Check the saved state before trying again.";
+    } finally {
+      busy = false;
+    }
+  }
+
   async function refreshReadiness(): Promise<void> {
     if (busy) return;
     busy = true;
     message = "Refreshing status...";
     try {
-      const readinessMessage = step === 4
+      const readinessMessage = step === 4 && setupReadState === "verified"
         ? await runtimeProductFacade.runProductSetupAction("check-readiness")
         : null;
       await refreshSnapshot();
@@ -550,6 +589,19 @@
         />
       {/if}
 
+      {#if setupReadState !== "verified"}
+        <div class="flex flex-wrap items-center justify-between gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-warning-border)] bg-[var(--ti-warning-surface)] p-4">
+          <p class="m-0 min-w-0 flex-1 text-[13px] leading-5 text-[var(--ti-text-muted)]" role="status">
+            {setupReadState === "checking" ? "Checking saved setup status..."
+              : "The current saved setup status could not be verified. Recheck it before saving or leaving setup."}
+          </p>
+          <button type="button" class="ti-button ti-button-secondary" aria-busy={busy || checkingSetup}
+            disabled={busy || checkingSetup} onclick={() => void checkSetupStatus()}>
+            {busy || checkingSetup ? "Checking..." : "Check setup status"}
+          </button>
+        </div>
+      {/if}
+
       {#if message}
         <p class="m-0 rounded-[var(--ti-radius-sm)] border border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-4 py-3 text-sm leading-6 text-[var(--ti-text-muted)]" aria-live="polite">{message}</p>
       {/if}
@@ -557,10 +609,11 @@
       <SetupNavigation
         {step}
         {busy}
+        setupVerified={setupReadState === "verified"}
         microphoneReady={setupReadState === "verified" && snapshot?.readiness.microphoneReady === true}
         {microphoneSelectionPending}
         meetingRouteReady={setupReadState === "verified" && snapshot?.readiness.meetingRouteReady === true && routeCheck === "ready"}
-        {meetingVoiceReady}
+        meetingVoiceReady={setupReadState === "verified" ? meetingVoiceReady : null}
         meetingReady={setupReadState === "verified" && snapshot?.readiness.meetingReady === true && routeCheck === "ready"}
         onBack={goBack}
         onDefer={deferSetup}
