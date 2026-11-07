@@ -241,7 +241,10 @@
           {#if meetingResourcesLocked}
             <StatusBadge label="In Use" tone="neutral" />
           {:else if !snapshot.readiness.meetingReady}
-            <StatusBadge label={snapshot.readiness.level === "unavailable" ? "Unavailable" : "Setup Needed"} tone={snapshot.readiness.level === "unavailable" ? "danger" : "warning"} />
+            <StatusBadge
+              label={snapshot.readiness.level === "unavailable" ? "Unavailable" : snapshot.readiness.level === "checking" ? "Checking" : "Setup Needed"}
+              tone={snapshot.readiness.level === "unavailable" ? "danger" : snapshot.readiness.level === "checking" ? "neutral" : "warning"}
+            />
           {/if}
         </header>
 
