@@ -340,6 +340,38 @@ mod tests {
     }
 
     #[test]
+    fn codex_handoff_after_source_revokes_pair_and_late_reply_cannot_be_committed() {
+        let mut observer = RealtimeObserver::new("thr_1").unwrap();
+        let mut gate = CorrelationGate::default();
+        gate.begin(lease()).unwrap();
+        gate.observe_event(&mut observer, "thread/realtime/started",
+            &json!({"threadId":"thr_1","realtimeSessionId":"sess_1","version":"v3"}))
+            .unwrap();
+        gate.observe_event(&mut observer, "thread/realtime/item/completed",
+            &json!({"threadId":"thr_1","item":{
+                "id":"user_1","realtimeSessionId":"sess_1",
+                "type":"transcriptSegment","role":"user","text":"Jangan hapus project."
+            }})).unwrap();
+        let handoff = json!({"threadId":"thr_1","item":{
+            "type":"handoff_request","handoff_id":"handoff_1","item_id":"coding_1",
+            "input_transcript":"private spoken command","active_transcript":[]
+        }});
+        assert_eq!(
+            gate.observe_event(&mut observer, "thread/realtime/itemAdded", &handoff),
+            Err("codex_realtime:agent_handoff_observed")
+        );
+        assert!(gate.is_retired());
+        assert_eq!(
+            gate.observe_event(&mut observer, "thread/realtime/item/completed",
+                &json!({"threadId":"thr_1","item":{
+                    "id":"assistant_late","realtimeSessionId":"sess_1",
+                    "type":"transcriptSegment","role":"assistant","text":"Unsafe late response"
+                }})),
+            Err("codex_correlation:retired")
+        );
+    }
+
+    #[test]
     fn assistant_before_source_cannot_be_guessed_into_pairing() {
         let mut gate = CorrelationGate::default();
         gate.begin(lease()).unwrap();

@@ -347,6 +347,41 @@ fn unsolicited_realtime_notification_is_rejected_by_the_real_idle_dispatch() {
 }
 
 #[test]
+fn agent_turn_during_account_probe_refuses_a_later_successful_account_reply() {
+    let (server, mut client) = fixture();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker_cancel = Arc::clone(&cancelled);
+    let worker = thread::spawn(move || {
+        let result = client.request(
+            "account/read", &worker_cancel, Instant::now() + FIXTURE_DEADLINE,
+        );
+        (client, result)
+    });
+    let request = server.next_request();
+    assert_eq!(request["method"], "account/read");
+    let id = request["id"].as_u64().unwrap();
+    // Diagnostic-only Codex AppServer cannot own a turn. Refuse it even
+    // if the account response is otherwise valid and arrives immediately.
+    server.send_notification("turn/started");
+    server.send_response(id, json!({"account":{"type":"chatgpt"}}));
+    let (client, result) = worker.join().unwrap();
+    assert_eq!(result, Err("codex_gateway:agent_activity_in_diagnostics"));
+    assert!(client.shutdown(server));
+}
+
+#[test]
+fn agent_turn_during_idle_diagnostic_poll_is_not_ignored() {
+    let (server, mut client) = fixture();
+    let cancelled = AtomicBool::new(false);
+    server.send_notification("thread/started");
+    assert_eq!(
+        client.poll(&cancelled),
+        Err("codex_gateway:agent_activity_in_diagnostics")
+    );
+    assert!(client.shutdown(server));
+}
+
+#[test]
 fn scripted_reply_after_deadline_cannot_complete_the_next_rpc() {
     let (server, mut client) = fixture();
     let worker = thread::spawn(move || {

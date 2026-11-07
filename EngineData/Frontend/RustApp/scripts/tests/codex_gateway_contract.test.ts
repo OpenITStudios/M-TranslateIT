@@ -490,3 +490,15 @@ test("current Codex handoff telemetry is denied before candidate delivery, never
   assert.match(gateway, /meeting_route_enabled: false/);
   assert.doesNotMatch(realtime, /voice_actor_synthesize|deliver_meeting_output|commit_meeting_turn/);
 });
+
+test("Codex handoff after a source cannot survive correlation or account-only transport", () => {
+  assert.match(correlation, /fn codex_handoff_after_source_revokes_pair_and_late_reply_cannot_be_committed/);
+  assert.match(correlation, /codex_realtime:agent_handoff_observed/);
+  assert.match(correlation, /codex_correlation:retired/);
+  assert.match(fakeServer, /fn agent_turn_during_account_probe_refuses_a_later_successful_account_reply/);
+  assert.match(fakeServer, /fn agent_turn_during_idle_diagnostic_poll_is_not_ignored/);
+  assert.match(fakeServer, /account\/read/);
+  assert.match(fakeServer, /codex_gateway:agent_activity_in_diagnostics/);
+  assert.match(gateway, /realtime_audio_verified: false/);
+  assert.match(gateway, /meeting_route_enabled: false/);
+});
