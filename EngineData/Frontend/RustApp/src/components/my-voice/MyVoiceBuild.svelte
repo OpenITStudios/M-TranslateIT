@@ -657,7 +657,7 @@
     {/if}
   </div>
 
-  <div class="mt-5 rounded-[var(--ti-radius-md)] bg-[var(--ti-surface-soft)] px-4 py-3" aria-label="My Voice training hardware">
+  <div class="mt-5 min-w-0 rounded-[var(--ti-radius-md)] bg-[var(--ti-surface-soft)] px-4 py-3" aria-label="My Voice training hardware">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <strong class="text-sm font-semibold">Training hardware</strong>
       <button type="button" class="ti-button ti-button-secondary" disabled={computeChecking || build.active || quickPreviewBusy} onclick={() => void checkCompute()}>
@@ -672,21 +672,21 @@
         ? "Insufficient free GPU memory" : "Training hardware unavailable"}
     </p>
     <details class="mt-3 border-t border-[var(--ti-border)] pt-3">
-      <summary class="min-h-9 cursor-pointer py-2 text-[13px] font-medium text-[var(--ti-text-muted)] hover:text-[var(--ti-text)]">Technical device details</summary>
+      <summary class="min-h-10 cursor-pointer py-2 text-[13px] font-medium text-[var(--ti-text-muted)] hover:text-[var(--ti-text)]">Technical device details</summary>
     {#if computeStatus}
-      <p class="mb-0 mt-1 text-xs text-[var(--ti-text-muted)]">CPU: {computeStatus.cpu_name}</p>
-      <p class="mb-0 mt-1 text-xs text-[var(--ti-text-muted)]">
+      <p class="mb-0 mt-1 text-[13px] text-[var(--ti-text-muted)]">CPU: {computeStatus.cpu_name}</p>
+      <p class="mb-0 mt-1 text-[13px] text-[var(--ti-text-muted)]">
         GPU: {computeStatus.gpu_name ?? "No usable CUDA device reported"}{computeStatus.vram_mib !== null ? ` · Total VRAM: ${Math.round(computeStatus.vram_mib / 1024 * 10) / 10} GiB` : ""}{computeStatus.free_vram_mib !== null ? ` · Currently free: ${Math.round(computeStatus.free_vram_mib / 1024 * 10) / 10} GiB` : ""}
       </p>
       {#if computeStatus.gpu_uuid}
-        <p class="mb-0 mt-1 text-xs text-[var(--ti-text-muted)]">Verified GPU ID: {computeStatus.gpu_uuid} · Visible CUDA devices: {computeStatus.visible_cuda_devices} · Selected CUDA index: {computeStatus.cuda_index}{computeStatus.compute_capability ? ` · Compute capability: ${computeStatus.compute_capability}` : ""}{computeStatus.precision_profile === "mixed_fp16" ? " · Trainer precision: mixed FP16" : ""}</p>
+        <p class="mb-0 mt-1 break-all text-[13px] leading-5 text-[var(--ti-text-muted)]">Verified GPU ID: {computeStatus.gpu_uuid} · Visible CUDA devices: {computeStatus.visible_cuda_devices} · Selected CUDA index: {computeStatus.cuda_index}{computeStatus.compute_capability ? ` · Compute capability: ${computeStatus.compute_capability}` : ""}{computeStatus.precision_profile === "mixed_fp16" ? " · Trainer precision: mixed FP16" : ""}</p>
       {/if}
       {#if computeStatus.safe_budget_mib !== null}
-        <p class="mb-0 mt-1 text-xs text-[var(--ti-text-muted)]">Initial per-stage budget: {Math.round(computeStatus.safe_budget_mib / 1024 * 10) / 10} GiB · Headroom reserve: {Math.round((computeStatus.reserve_mib ?? 0) / 1024 * 10) / 10} GiB · Not an absolute GPU cap.</p>
+        <p class="mb-0 mt-1 text-[13px] text-[var(--ti-text-muted)]">Initial per-stage budget: {Math.round(computeStatus.safe_budget_mib / 1024 * 10) / 10} GiB · Headroom reserve: {Math.round((computeStatus.reserve_mib ?? 0) / 1024 * 10) / 10} GiB · Not an absolute GPU cap.</p>
       {/if}
-      <p class="mb-0 mt-1 text-xs leading-5 text-[var(--ti-text-muted)]">{computeStatus.detail}</p>
+      <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">{computeStatus.detail}</p>
     {:else if !computeChecking}
-      <p class="mb-0 mt-1 text-xs text-[var(--ti-text-muted)]">Recheck to identify your local compute environment before creating a voice.</p>
+      <p class="mb-0 mt-1 text-[13px] text-[var(--ti-text-muted)]">Recheck to identify your local compute environment before creating a voice.</p>
     {/if}
     </details>
   </div>
@@ -694,7 +694,7 @@
   <div class="mt-5 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-4 py-3.5">
     <div class="flex items-center justify-between gap-4">
       <strong class="text-sm font-semibold">Accepted recordings</strong>
-      <span class="text-xs font-semibold text-[var(--ti-text-muted)]">{formatDuration(build.accepted_duration_ms)} / {formatDuration(build.minimum_duration_ms)}</span>
+      <span class="text-[13px] font-semibold text-[var(--ti-text-muted)]">{formatDuration(build.accepted_duration_ms)} / {formatDuration(build.minimum_duration_ms)}</span>
     </div>
     <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">{build.accepted_take_count} accepted recordings · the minimum duration is only one requirement</p>
     <div
@@ -731,7 +731,7 @@
       <strong class="text-[15px] font-semibold">Listen before using My Voice</strong>
       <p class="mb-0 mt-1 text-sm leading-5 text-[var(--ti-text-muted)]">Listen to these new sentences. Use My Voice only if it sounds like you.</p>
       <details class="mt-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-3" aria-label="Training reference selection explanation">
-        <summary class="cursor-pointer text-sm font-medium">Why was this voice reference chosen?</summary>
+        <summary class="min-h-10 cursor-pointer py-2 text-sm font-medium">Why was this voice reference chosen?</summary>
         {#if build.reference_selection}
           <p class="mb-0 mt-2 text-sm leading-5 text-[var(--ti-text-muted)]">
             Guided line {build.reference_selection.line_id} · {formatDuration(build.reference_selection.duration_ms)} ·
@@ -739,32 +739,32 @@
           </p>
           <p class="mb-0 mt-2 text-sm leading-5">{referenceCriterionLabel(build.reference_selection.criterion)}</p>
           {#if !build.reference_selection.quiet_edge_comparable}
-            <p class="mb-0 mt-2 text-xs text-[var(--ti-text-muted)]">
+            <p class="mb-0 mt-2 text-[13px] text-[var(--ti-text-muted)]">
               Not all eligible recordings had comparable quiet-edge context; that comparison was excluded from ranking.
             </p>
           {/if}
-          <p class="mb-0 mt-2 text-xs leading-5 text-[var(--ti-text-muted)]">
+          <p class="mb-0 mt-2 text-[13px] leading-5 text-[var(--ti-text-muted)]">
             This explains the first difference from the next-ranked eligible take, or confirms that only one take was eligible.
             Selection is not proof of low noise, speaker identity, naturalness or superior voice quality.
             Listen to all eight generated samples before any approval.
           </p>
         {:else}
-          <p class="mb-0 mt-2 text-xs leading-5 text-[var(--ti-text-muted)]">
+          <p class="mb-0 mt-2 text-[13px] leading-5 text-[var(--ti-text-muted)]">
             Verified selection details are unavailable for this review. No ranking explanation is inferred;
             the existing listening and approval requirements remain unchanged.
           </p>
         {/if}
       </details>
       <details class="mt-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-3" aria-label="Compare evaluated voice candidates">
-        <summary class="cursor-pointer text-sm font-medium">Compare evaluated checkpoints</summary>
-        <p class="mb-0 mt-2 text-xs leading-5 text-[var(--ti-text-muted)]">
+        <summary class="min-h-10 cursor-pointer py-2 text-sm font-medium">Compare evaluated checkpoints</summary>
+        <p class="mb-0 mt-2 text-[13px] leading-5 text-[var(--ti-text-muted)]">
           This compares checkpoints evaluated on the same eight held-out English sentences in this build, not your previously approved Meeting voice.
           Lower WER means fewer words differed from the local recognizer's transcription; speaker similarity is a relative cosine, not proof of identity or naturalness.
         </p>
         {#if build.evaluation_comparison?.length}
           <div class="mt-3 overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ti-accent)]"
             role="region" aria-label="Checkpoint comparison metrics, scroll horizontally" tabindex="0">
-            <table class="w-full min-w-[620px] border-collapse text-left text-xs">
+            <table class="w-full min-w-[620px] border-collapse text-left text-[13px]">
               <caption class="sr-only">Reported metrics for checkpoints in the current My Voice build</caption>
               <thead>
                 <tr class="border-b border-[var(--ti-border)] text-[var(--ti-text-muted)]">
@@ -795,12 +795,12 @@
               </tbody>
             </table>
           </div>
-          <p class="mb-0 mt-2 text-xs leading-5 text-[var(--ti-text-muted)]">
+          <p class="mb-0 mt-2 text-[13px] leading-5 text-[var(--ti-text-muted)]">
             The existing training selector prioritizes artifact-free results, then mean/worst WER, then speaker similarity.
             Nonselected checkpoint audio is not available for verified playback here. Only the prepared candidate can be approved after listening.
           </p>
         {:else}
-          <p class="mb-0 mt-2 text-xs text-[var(--ti-text-muted)]">
+          <p class="mb-0 mt-2 text-[13px] text-[var(--ti-text-muted)]">
             Matched checkpoint evidence is unavailable for this review. No prior-voice quality comparison is claimed; listen to the eight available previews.
           </p>
         {/if}
@@ -813,10 +813,10 @@
             </button>
             <span class="min-w-0 flex-1 text-[14px] leading-6 text-[var(--ti-text)]">{sample.exact_text}</span>
             {#if reviewedLineIds.includes(sample.line_id)}
-              <span class="flex shrink-0 items-center gap-1 text-xs font-semibold text-[var(--ti-success)]"><Check size={13} />Listened</span>
+              <span class="flex shrink-0 items-center gap-1 text-[13px] font-semibold text-[var(--ti-success)]"><Check size={13} />Listened</span>
             {/if}
-            <details class="w-full text-xs text-[var(--ti-text-muted)]">
-              <summary class="cursor-pointer">Evaluation details</summary>
+            <details class="w-full text-[13px] text-[var(--ti-text-muted)]">
+              <summary class="min-h-9 cursor-pointer py-2 font-medium">Evaluation details</summary>
               <p class="mb-0 mt-2">Recognizer transcript: {sample.intelligibility_text}</p>
               <p class="mb-0 mt-1">
                 Word error rate: {formatWordErrorRate(sample.intelligibility_wer)}
@@ -842,9 +842,9 @@
       <button type="button" class="ti-button mt-4" disabled={busy || statusCheckUnavailable || voiceChangesLocked || !evaluationReviewComplete || !qualityConfirmed} onclick={() => void approve()}>
         <Check size={15} /><span>{busy ? "Saving..." : "Use My Voice"}</span>
       </button>
-      <p class="mb-0 mt-4 text-xs leading-5 text-[var(--ti-text-muted)]">Not satisfied? Keep the current Meeting voice and record more samples before creating another candidate.</p>
+      <p class="mb-0 mt-4 text-[13px] leading-5 text-[var(--ti-text-muted)]">Not satisfied? Keep the current Meeting voice and record more samples before creating another candidate.</p>
       {#if build.can_build}
-        <label class="mt-3 flex items-start gap-2 text-xs text-[var(--ti-text-muted)]">
+        <label class="mt-3 flex items-start gap-2 text-[13px] text-[var(--ti-text-muted)]">
           <input class="mt-0.5 size-4 accent-[var(--ti-accent)]" type="checkbox" bind:checked={authorized} disabled={busy} />
           I own this voice or have permission to create another version.
         </label>
@@ -877,7 +877,7 @@
   <details class="mt-5 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)]">
     <summary class="min-h-11 cursor-pointer px-4 py-3 text-sm font-medium hover:bg-[var(--ti-surface-soft)]">Advanced: temporary voice sample</summary>
     <div class="border-t border-[var(--ti-border)] p-4">
-      <p class="mb-0 text-xs leading-5 text-[var(--ti-text-muted)]">Optional experiment. This sample cannot be selected as a Meeting voice; it does not replace training or final voice review.</p>
+      <p class="mb-0 text-[13px] leading-5 text-[var(--ti-text-muted)]">Optional experiment. This sample cannot be selected as a Meeting voice; it does not replace training or final voice review.</p>
       <QuickVoicePreview
         {build}
         busy={busy || statusCheckUnavailable}

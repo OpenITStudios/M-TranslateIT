@@ -84,11 +84,11 @@
   });
 </script>
 
-<article class="ti-panel p-5">
+<article class="ti-panel min-w-0 p-5">
   <div class="flex items-start justify-between gap-4">
     <div>
       <span class="ti-field-label">Reliability</span>
-      <h4 class="mb-0 mt-1.5 text-[14px] font-semibold">Runtime health</h4>
+      <h4 class="mb-0 mt-1.5 text-[15px] font-semibold">Runtime health</h4>
     </div>
     <StatusBadge
       label={watchdogLabel}
@@ -96,43 +96,43 @@
     />
   </div>
 
-  <div class="mt-4 grid grid-cols-3 gap-3">
-    <div class="ti-state-card">
+  <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+    <div class="ti-state-card min-w-0">
       <span class="ti-field-label">Watchdog</span>
-      <strong class="mt-2 block text-[12px]">{watchdog?.state ?? "Not checked"}</strong>
-      <p class="mb-0 mt-1 text-[11px] leading-5 text-[var(--ti-text-soft)]">{sanitizeDiagnosticText(watchdog?.note, "Watchdog status has not been loaded.")}</p>
+      <strong class="mt-2 block text-[13px]">{watchdog?.state ?? "Not checked"}</strong>
+      <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-soft)]">{sanitizeDiagnosticText(watchdog?.note, "Watchdog status has not been loaded.")}</p>
     </div>
-    <div class="ti-state-card">
+    <div class="ti-state-card min-w-0">
       <span class="ti-field-label">Devices</span>
-      <strong class="mt-2 block text-[12px]">{devices?.state ?? "Not checked"}</strong>
-      <p class="mb-0 mt-1 text-[11px] leading-5 text-[var(--ti-text-soft)]">{sanitizeDiagnosticText(devices?.note, "Device-loss status has not been loaded.")}</p>
+      <strong class="mt-2 block text-[13px]">{devices?.state ?? "Not checked"}</strong>
+      <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-soft)]">{sanitizeDiagnosticText(devices?.note, "Device-loss status has not been loaded.")}</p>
     </div>
-    <div class="ti-state-card">
+    <div class="ti-state-card min-w-0">
       <span class="ti-field-label">Previous shutdown</span>
-      <strong class="mt-2 block text-[12px]">{recoveryLabel}</strong>
-      <p class="mb-0 mt-1 text-[11px] leading-5 text-[var(--ti-text-soft)]">{sanitizeDiagnosticText(recovery?.note, "Startup recovery status has not been loaded.")}</p>
+      <strong class="mt-2 block text-[13px]">{recoveryLabel}</strong>
+      <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-soft)]">{sanitizeDiagnosticText(recovery?.note, "Startup recovery status has not been loaded.")}</p>
     </div>
   </div>
 
   {#if longSession}
-    <div class="mt-4 grid grid-cols-4 gap-2">
-      <div class="ti-state-card"><span class="ti-field-label">Session age</span><strong class="mt-1 block text-[11.5px]">{Math.round(longSession.session_age_ms / 60000)} min</strong></div>
-      <div class="ti-state-card"><span class="ti-field-label">Queue drops</span><strong class="mt-1 block text-[11.5px]">{longSession.outbound_overflow_dropped + longSession.outbound_evicted_pending}</strong></div>
-      <div class="ti-state-card"><span class="ti-field-label">Transcript drops</span><strong class="mt-1 block text-[11.5px]">{longSession.transcript_dropped_turns}</strong></div>
-      <div class="ti-state-card"><span class="ti-field-label">Meeting temp files</span><strong class="mt-1 block text-[11.5px]">{longSession.meeting_temp_file_count}</strong></div>
+    <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-4">
+      <div class="ti-state-card min-w-0"><span class="ti-field-label">Session age</span><strong class="mt-1 block text-[13px]">{Math.round(longSession.session_age_ms / 60000)} min</strong></div>
+      <div class="ti-state-card min-w-0"><span class="ti-field-label">Queue drops</span><strong class="mt-1 block text-[13px]">{longSession.outbound_overflow_dropped + longSession.outbound_evicted_pending}</strong></div>
+      <div class="ti-state-card min-w-0"><span class="ti-field-label">Transcript drops</span><strong class="mt-1 block text-[13px]">{longSession.transcript_dropped_turns}</strong></div>
+      <div class="ti-state-card min-w-0"><span class="ti-field-label">Meeting temp files</span><strong class="mt-1 block text-[13px]">{longSession.meeting_temp_file_count}</strong></div>
     </div>
   {/if}
 
   {#if incidents?.incidents[0]}
     <div class="mt-4 ti-subtle-card px-4 py-3">
       <span class="ti-field-label">Last incident · {incidents.incidents[0].category}</span>
-      <strong class="mt-1 block text-[11.5px]">{sanitizeDiagnosticText(incidents.incidents[0].blocker)}</strong>
-      <p class="mb-0 mt-1 text-[11px] leading-5 text-[var(--ti-text-soft)]">{sanitizeDiagnosticText(incidents.incidents[0].note)}</p>
+      <strong class="mt-1 block break-words text-[13px] font-semibold">{sanitizeDiagnosticText(incidents.incidents[0].blocker)}</strong>
+      <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-soft)]">{sanitizeDiagnosticText(incidents.incidents[0].note)}</p>
     </div>
   {/if}
 
-  <div class="mt-4 flex items-center justify-between gap-4 border-t border-[var(--ti-border)] pt-4">
-    <p class="m-0 text-[11px] leading-5 text-[var(--ti-text-soft)]">
+  <div class="mt-4 flex flex-wrap items-center justify-between gap-4 border-t border-[var(--ti-border)] pt-4">
+    <p class="m-0 text-[13px] leading-5 text-[var(--ti-text-soft)]">
       Support export contains redacted runtime metadata only—never transcript, audio, or voice reference.
     </p>
     <button type="button" class="ti-button ti-button-secondary shrink-0" disabled={exporting} onclick={() => void exportSupport()}>
@@ -140,6 +140,6 @@
     </button>
   </div>
   {#if exportMessage}
-    <p class="mb-0 mt-3 break-words text-[11px] leading-5 text-[var(--ti-text-muted)]">{exportMessage}</p>
+    <p class="mb-0 mt-3 break-words text-[13px] leading-5 text-[var(--ti-text-muted)]">{exportMessage}</p>
   {/if}
 </article>

@@ -46,7 +46,7 @@
   <header class="flex flex-wrap items-start justify-between gap-4 border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-4">
     <div>
       <h3 class="m-0 text-[15px] font-semibold">Translation quality feedback</h3>
-      <p class="mb-0 mt-1 text-[12px] leading-5 text-[var(--ti-text-muted)]">
+      <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">
         Reports are opt-in, local only, and bounded to 40 entries. Export them explicitly when you want to review or add cases to the quality corpus.
       </p>
     </div>
@@ -54,19 +54,19 @@
   </header>
 
   {#if entries.length === 0}
-    <p class="m-0 px-5 py-5 text-[12.5px] text-[var(--ti-text-muted)]">No translation issues have been reported.</p>
+    <p class="m-0 px-5 py-5 text-[13px] leading-5 text-[var(--ti-text-muted)]">No translation issues have been reported.</p>
   {:else}
     <div class="max-h-[260px] divide-y divide-[var(--ti-border)] overflow-y-auto" role="region" aria-label="Saved translation issue reports" tabindex="0">
       {#each entries as entry (entry.id)}
-        <div class="grid gap-1.5 px-5 py-3.5">
+        <div class="grid min-w-0 gap-1.5 px-5 py-3.5">
           <div class="flex flex-wrap items-center justify-between gap-2">
             <strong class="text-[13px] font-semibold">{categoryLabel(entry.category)}</strong>
             <time class="text-[12px] text-[var(--ti-text-muted)]" datetime={new Date(entry.createdAt).toISOString()}>
               {new Date(entry.createdAt).toLocaleString()}
             </time>
           </div>
-          <p class="m-0 line-clamp-2 text-[13px] leading-5 text-[var(--ti-text-muted)]">{entry.source}</p>
-          <p class="m-0 line-clamp-2 text-[13px] leading-5 text-[var(--ti-text-muted)]">{entry.translation}</p>
+          <p class="m-0 whitespace-pre-wrap break-words text-[13px] leading-5 text-[var(--ti-text-muted)]">{entry.source}</p>
+          <p class="m-0 whitespace-pre-wrap break-words text-[13px] leading-5 text-[var(--ti-text-muted)]">{entry.translation}</p>
         </div>
       {/each}
     </div>

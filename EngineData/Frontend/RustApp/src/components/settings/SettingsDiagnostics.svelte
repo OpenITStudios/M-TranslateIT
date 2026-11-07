@@ -53,23 +53,23 @@
   });
 </script>
 
-<section class="grid gap-4">
-  <header class="ti-page-header">
+<section class="grid min-w-0 gap-4">
+  <header class="ti-page-header flex-wrap">
     <div>
       <h3 class="m-0 text-xl font-semibold tracking-[-0.02em]">Diagnostics</h3>
-      <p class="mb-0 mt-1.5 text-[12.5px] text-[var(--ti-text-muted)]">Detailed technical information for troubleshooting.</p>
+      <p class="mb-0 mt-1.5 text-[13px] text-[var(--ti-text-muted)]">Detailed technical information for troubleshooting.</p>
     </div>
     <button type="button" class="ti-button ti-button-secondary" onclick={onBack}><ArrowLeft size={15} /> Back</button>
   </header>
 
   <article class="ti-panel p-5">
-    <div class="grid grid-cols-[repeat(3,minmax(0,1fr))] gap-3">
-      <div class="ti-state-card"><span class="ti-field-label">Worker</span><strong class="mt-2 block text-[13px]">{snapshot.helper?.state ?? "Not checked"}</strong></div>
-      <div class="ti-state-card"><span class="ti-field-label">Outbound provider</span><strong class="mt-2 block text-[13px]">{snapshot.helper?.provider_ready ? "Available" : "Setup Needed"}</strong></div>
-      <div class="ti-state-card"><span class="ti-field-label">Execution device</span><strong class="mt-2 block text-[13px]">{snapshot.helper?.cuda_ready ? "CUDA" : snapshot.helper?.degraded_mode ? "CPU / degraded" : "Not verified"}</strong></div>
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+      <div class="ti-state-card min-w-0"><span class="ti-field-label">Worker</span><strong class="mt-2 block text-[13px]">{snapshot.helper?.state ?? "Not checked"}</strong></div>
+      <div class="ti-state-card min-w-0"><span class="ti-field-label">Outbound provider</span><strong class="mt-2 block text-[13px]">{snapshot.helper?.provider_ready ? "Available" : "Setup Needed"}</strong></div>
+      <div class="ti-state-card min-w-0"><span class="ti-field-label">Execution device</span><strong class="mt-2 block text-[13px]">{snapshot.helper?.cuda_ready ? "CUDA" : snapshot.helper?.degraded_mode ? "CPU / degraded" : "Not verified"}</strong></div>
     </div>
 
-    <p class="mb-0 mt-4 text-[12px] leading-5 text-[var(--ti-text-muted)]">{helperDiagnosticMessage}</p>
+    <p class="mb-0 mt-4 text-[13px] leading-5 text-[var(--ti-text-muted)]">{helperDiagnosticMessage}</p>
 
     <div class="ti-action-row mt-4">
       <button type="button" class="ti-button ti-button-secondary" disabled={setupBusy || diagnosticsLoading} onclick={() => void onRefreshDiagnostics()}><RefreshCw size={15} /> {diagnosticsLoading || setupBusy ? "Refreshing..." : "Check Again"}</button>
@@ -85,32 +85,32 @@
       <span class="ti-field-label">Technical components</span>
       <h4 class="mb-0 mt-1.5 text-[14px] font-semibold">Local AI status</h4>
     </div>
-    <div class="mt-4 grid grid-cols-[repeat(3,minmax(0,1fr))] gap-3">
-      <div class="ti-state-card">
+    <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+      <div class="ti-state-card min-w-0">
         <span class="ti-field-label">ASR</span>
-        <strong class="mt-2 block break-words text-[12px] leading-5">{workerDiagnostics.asrDisplay}</strong>
+        <strong class="mt-2 block break-words text-[13px] leading-5">{workerDiagnostics.asrDisplay}</strong>
       </div>
-      <div class="ti-state-card">
+      <div class="ti-state-card min-w-0">
         <span class="ti-field-label">Translation</span>
-        <strong class="mt-2 block break-words text-[12px] leading-5">{workerDiagnostics.translationDisplay}</strong>
+        <strong class="mt-2 block break-words text-[13px] leading-5">{workerDiagnostics.translationDisplay}</strong>
       </div>
-      <div class="ti-state-card">
+      <div class="ti-state-card min-w-0">
         <span class="ti-field-label">Meeting voice</span>
-        <strong class="mt-2 block break-words text-[12px] leading-5">{workerDiagnostics.voiceDisplay}</strong>
+        <strong class="mt-2 block break-words text-[13px] leading-5">{workerDiagnostics.voiceDisplay}</strong>
       </div>
     </div>
-    <p class="mb-0 mt-3 text-[11.5px] leading-5 text-[var(--ti-text-soft)]">Processing mode: {workerDiagnostics.executionDisplay}. This information is only needed for troubleshooting.</p>
+    <p class="mb-0 mt-3 text-[13px] leading-5 text-[var(--ti-text-soft)]">Processing mode: {workerDiagnostics.executionDisplay}. This information is only needed for troubleshooting.</p>
     <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-      <div class="ti-state-card">
+      <div class="ti-state-card min-w-0">
         <span class="ti-field-label">PyTorch CUDA allocator</span>
-        <strong class="mt-2 block break-words text-[12px] leading-5">{workerDiagnostics.torchMemoryDisplay}</strong>
+        <strong class="mt-2 block break-words text-[13px] leading-5">{workerDiagnostics.torchMemoryDisplay}</strong>
       </div>
-      <div class="ti-state-card">
+      <div class="ti-state-card min-w-0">
         <span class="ti-field-label">CUDA device memory</span>
-        <strong class="mt-2 block break-words text-[12px] leading-5">{workerDiagnostics.deviceMemoryDisplay}</strong>
+        <strong class="mt-2 block break-words text-[13px] leading-5">{workerDiagnostics.deviceMemoryDisplay}</strong>
       </div>
     </div>
-    <p class="mb-0 mt-3 text-[11.5px] leading-5 text-[var(--ti-text-soft)]">
+    <p class="mb-0 mt-3 text-[13px] leading-5 text-[var(--ti-text-soft)]">
       Read-only snapshot from Check Again. PyTorch values are current allocator usage and lifetime peaks; device free/total is not attributable to a model. Neither value measures CTranslate2-only memory, transient whole-device peaks, or Meeting stability.
     </p>
   </article>
@@ -122,12 +122,12 @@
   <article class="ti-panel p-5">
     <span class="ti-field-label">Microphone quality</span>
     <strong class="mt-2 block text-[13px]">{audioQualityLoading ? "Checking..." : audioQuality?.label ?? "Not verified"}</strong>
-    <p class="mb-0 mt-2 text-[12px] leading-5 text-[var(--ti-text-muted)]">{audioQualityLoading ? "Reading the current microphone buffer." : sanitizeDiagnosticText(audioQuality?.note, "Audio quality is unavailable. Use Check Again to retry.")}</p>
-    <p class="mb-0 mt-2 text-[11.5px] leading-5 text-[var(--ti-text-soft)]">Uses existing Mic Test or Meeting capture. Checking quality does not start the microphone.</p>
+    <p class="mb-0 mt-2 text-[13px] leading-5 text-[var(--ti-text-muted)]">{audioQualityLoading ? "Reading the current microphone buffer." : sanitizeDiagnosticText(audioQuality?.note, "Audio quality is unavailable. Use Check Again to retry.")}</p>
+    <p class="mb-0 mt-2 text-[13px] leading-5 text-[var(--ti-text-soft)]">Uses existing Mic Test or Meeting capture. Checking quality does not start the microphone.</p>
   </article>
 
   <article class="ti-panel p-5">
-    <div class="flex items-end justify-between gap-5">
+    <div class="flex flex-wrap items-end justify-between gap-4">
       <div>
         <span class="ti-field-label">Troubleshooting</span>
         <h4 class="mb-0 mt-1.5 text-[14px] font-semibold">Recent technical errors</h4>
@@ -136,12 +136,12 @@
     </div>
     <div class="mt-4 grid gap-2">
       {#if commandErrors.length === 0}
-        <p class="m-0 text-[12px] text-[var(--ti-text-muted)]">No recent technical errors.</p>
+        <p class="m-0 text-[13px] text-[var(--ti-text-muted)]">No recent technical errors.</p>
       {:else}
         {#each commandErrors as error (`${error.occurred_at}-${error.command}`)}
           <div class="ti-subtle-card px-4 py-3">
-            <strong class="text-[11px]">{error.command}</strong>
-            <p class="mb-0 mt-1 text-[11px] leading-5 text-[var(--ti-text-muted)]">{error.message}</p>
+            <strong class="block break-all text-[13px] font-semibold">{error.command}</strong>
+            <p class="mb-0 mt-1 break-words text-[13px] leading-5 text-[var(--ti-text-muted)]">{error.message}</p>
           </div>
         {/each}
       {/if}

@@ -92,91 +92,91 @@
   });
 </script>
 
-<article class="ti-panel p-5">
+<article class="ti-panel min-w-0 p-5">
   <div>
     <span class="ti-field-label">Latest outbound phrase</span>
     <h4 class="mb-0 mt-1.5 text-[14px] font-semibold">Meeting performance</h4>
   </div>
 
-  <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
-    <div class="ti-state-card"><span class="ti-field-label">After finalization</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.outbound_latency_ms)}</strong></div>
-    <div class="ti-state-card"><span class="ti-field-label">ASR</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.asr_ms)}</strong></div>
-    <div class="ti-state-card"><span class="ti-field-label">Translation</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.translation_ms)}</strong></div>
-    <div class="ti-state-card"><span class="ti-field-label">Voice TTS</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.tts_ms)}</strong></div>
-    <div class="ti-state-card"><span class="ti-field-label">Delivery</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.delivery_ms)}</strong></div>
+  <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-5">
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">After finalization</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(timing?.outbound_latency_ms)}</strong></div>
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">ASR</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(timing?.asr_ms)}</strong></div>
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">Translation</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(timing?.translation_ms)}</strong></div>
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">Voice TTS</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(timing?.tts_ms)}</strong></div>
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">Delivery</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(timing?.delivery_ms)}</strong></div>
   </div>
 
-  <div class="mt-3 grid grid-cols-2 gap-3">
-    <div class="ti-state-card"><span class="ti-field-label">Estimated speech onset → first audio</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.estimated_onset_to_first_audio_ms)}</strong></div>
-    <div class="ti-state-card"><span class="ti-field-label">Estimated speech end → first audio</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.estimated_end_to_first_audio_ms)}</strong></div>
+  <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">Estimated speech onset → first audio</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(timing?.estimated_onset_to_first_audio_ms)}</strong></div>
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">Estimated speech end → first audio</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(timing?.estimated_end_to_first_audio_ms)}</strong></div>
   </div>
-  <p class="mt-2 text-[11px] leading-5 text-[var(--ti-text-soft)]">Speech onset/end estimates include VAD's buffered speech span and trailing silence. They are not precise microphone or remote-participant timestamps.</p>
+  <p class="mt-2 text-[13px] leading-5 text-[var(--ti-text-soft)]">Speech onset/end estimates include VAD's buffered speech span and trailing silence. They are not precise microphone or remote-participant timestamps.</p>
 
-  <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
-    <div class="ti-state-card"><span class="ti-field-label">ASR scheduler wait</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.asr_scheduler_wait_ms)}</strong></div>
-    <div class="ti-state-card"><span class="ti-field-label">Translation scheduler wait</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.translation_scheduler_wait_ms)}</strong></div>
-    <div class="ti-state-card"><span class="ti-field-label">TTS scheduler wait</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.tts_scheduler_wait_ms)}</strong></div>
+  <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">ASR scheduler wait</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(timing?.asr_scheduler_wait_ms)}</strong></div>
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">Translation scheduler wait</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(timing?.translation_scheduler_wait_ms)}</strong></div>
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">TTS scheduler wait</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(timing?.tts_scheduler_wait_ms)}</strong></div>
   </div>
-  <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
-    <div class="ti-state-card"><span class="ti-field-label">ASR post-admission</span><strong class="mt-2 block text-[12px]">{formatTiming(postScheduler.asr)}</strong></div>
-    <div class="ti-state-card"><span class="ti-field-label">Translation post-admission</span><strong class="mt-2 block text-[12px]">{formatTiming(postScheduler.translation)}</strong></div>
-    <div class="ti-state-card"><span class="ti-field-label">TTS post-admission</span><strong class="mt-2 block text-[12px]">{formatTiming(postScheduler.tts)}</strong></div>
+  <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">ASR post-admission</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(postScheduler.asr)}</strong></div>
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">Translation post-admission</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(postScheduler.translation)}</strong></div>
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">TTS post-admission</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(postScheduler.tts)}</strong></div>
   </div>
-  <div class="mt-3 grid grid-cols-2 gap-3">
-    <div class="ti-state-card"><span class="ti-field-label">Playback queue wait</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.playback_queue_ms)}</strong></div>
-    <div class="ti-state-card"><span class="ti-field-label">Worker admission truth</span><strong class="mt-2 block text-[12px]">{postScheduler.asr != null && postScheduler.translation != null && postScheduler.tts != null ? "Complete" : "Partial / unmeasured"}</strong></div>
+  <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">Playback queue wait</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(timing?.playback_queue_ms)}</strong></div>
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">Worker admission truth</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{postScheduler.asr != null && postScheduler.translation != null && postScheduler.tts != null ? "Complete" : "Partial / unmeasured"}</strong></div>
   </div>
 
-  <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
-    <div class="ti-state-card"><span class="ti-field-label">ASR attempts</span>
-      <p class="mt-2 mb-0 text-[12px]">Initial: {formatTiming(timing?.asr_worker_attempt_timing?.initial_attempt_ms)}</p>
-      <p class="mb-0 text-[12px]">Recovery: {formatOptionalAttempt(timing?.asr_worker_attempt_timing, "recovery_ms")}</p>
-      <p class="mb-0 text-[12px]">Retry: {formatOptionalAttempt(timing?.asr_worker_attempt_timing, "retry_attempt_ms")}</p>
+  <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">ASR attempts</span>
+      <p class="mt-2 mb-0 text-[13px]">Initial: {formatTiming(timing?.asr_worker_attempt_timing?.initial_attempt_ms)}</p>
+      <p class="mb-0 text-[13px]">Recovery: {formatOptionalAttempt(timing?.asr_worker_attempt_timing, "recovery_ms")}</p>
+      <p class="mb-0 text-[13px]">Retry: {formatOptionalAttempt(timing?.asr_worker_attempt_timing, "retry_attempt_ms")}</p>
     </div>
-    <div class="ti-state-card"><span class="ti-field-label">Translation attempts</span>
-      <p class="mt-2 mb-0 text-[12px]">Initial: {formatTiming(timing?.translation_worker_attempt_timing?.initial_attempt_ms)}</p>
-      <p class="mb-0 text-[12px]">Recovery: {formatOptionalAttempt(timing?.translation_worker_attempt_timing, "recovery_ms")}</p>
-      <p class="mb-0 text-[12px]">Retry: {formatOptionalAttempt(timing?.translation_worker_attempt_timing, "retry_attempt_ms")}</p>
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">Translation attempts</span>
+      <p class="mt-2 mb-0 text-[13px]">Initial: {formatTiming(timing?.translation_worker_attempt_timing?.initial_attempt_ms)}</p>
+      <p class="mb-0 text-[13px]">Recovery: {formatOptionalAttempt(timing?.translation_worker_attempt_timing, "recovery_ms")}</p>
+      <p class="mb-0 text-[13px]">Retry: {formatOptionalAttempt(timing?.translation_worker_attempt_timing, "retry_attempt_ms")}</p>
     </div>
-    <div class="ti-state-card"><span class="ti-field-label">TTS attempts</span>
-      <p class="mt-2 mb-0 text-[12px]">Initial: {formatTiming(timing?.tts_worker_attempt_timing?.initial_attempt_ms)}</p>
-      <p class="mb-0 text-[12px]">Recovery: {formatOptionalAttempt(timing?.tts_worker_attempt_timing, "recovery_ms")}</p>
-      <p class="mb-0 text-[12px]">Retry: {formatOptionalAttempt(timing?.tts_worker_attempt_timing, "retry_attempt_ms")}</p>
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">TTS attempts</span>
+      <p class="mt-2 mb-0 text-[13px]">Initial: {formatTiming(timing?.tts_worker_attempt_timing?.initial_attempt_ms)}</p>
+      <p class="mb-0 text-[13px]">Recovery: {formatOptionalAttempt(timing?.tts_worker_attempt_timing, "recovery_ms")}</p>
+      <p class="mb-0 text-[13px]">Retry: {formatOptionalAttempt(timing?.tts_worker_attempt_timing, "retry_attempt_ms")}</p>
     </div>
   </div>
-  <p class="mt-2 text-[11px] leading-5 text-[var(--ti-text-soft)]">Initial and retry durations each include their own scheduler waits. Recovery includes worker restart and re-proof. TTS is not retried after uncertain output.</p>
-  <div class="mt-3 grid grid-cols-2 gap-3">
-    <div class="ti-state-card"><span class="ti-field-label">Output stream build</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.output_stream_build_ms)}</strong></div>
-    <div class="ti-state-card"><span class="ti-field-label">Output stream start → first callback</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.output_stream_start_to_first_audio_ms)}</strong></div>
+  <p class="mt-2 text-[13px] leading-5 text-[var(--ti-text-soft)]">Initial and retry durations each include their own scheduler waits. Recovery includes worker restart and re-proof. TTS is not retried after uncertain output.</p>
+  <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">Output stream build</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(timing?.output_stream_build_ms)}</strong></div>
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">Output stream start → first callback</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(timing?.output_stream_start_to_first_audio_ms)}</strong></div>
   </div>
 
-  <div class="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-4">
-    <div class="ti-state-card"><span class="ti-field-label">Translate tokenize</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.translation_tokenization_ms)}</strong></div>
-    <div class="ti-state-card"><span class="ti-field-label">Translate inference</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.translation_inference_ms)}</strong></div>
-    <div class="ti-state-card"><span class="ti-field-label">Translate decode</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.translation_decode_ms)}</strong></div>
-    <div class="ti-state-card"><span class="ti-field-label">Translate throughput</span><strong class="mt-2 block text-[12px]">{formatRate(timing?.translation_tokens_per_second)}</strong></div>
+  <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-4">
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">Translate tokenize</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(timing?.translation_tokenization_ms)}</strong></div>
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">Translate inference</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(timing?.translation_inference_ms)}</strong></div>
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">Translate decode</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(timing?.translation_decode_ms)}</strong></div>
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">Translate throughput</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatRate(timing?.translation_tokens_per_second)}</strong></div>
   </div>
 
-  <div class="mt-3 grid grid-cols-[repeat(4,minmax(0,1fr))] gap-3">
-    <div class="ti-state-card"><span class="ti-field-label">Speech boundary</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.speech_boundary_ms)}</strong></div>
-    <div class="ti-state-card"><span class="ti-field-label">Finalization</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.finalization_ms)}</strong></div>
-    <div class="ti-state-card"><span class="ti-field-label">Queue wait</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.queue_ms)}</strong></div>
-    <div class="ti-state-card"><span class="ti-field-label">Audio prepare</span><strong class="mt-2 block text-[12px]">{formatTiming(timing?.audio_prepare_ms)}</strong></div>
+  <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-4">
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">Speech boundary</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(timing?.speech_boundary_ms)}</strong></div>
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">Finalization</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(timing?.finalization_ms)}</strong></div>
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">Queue wait</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(timing?.queue_ms)}</strong></div>
+    <div class="ti-state-card min-w-0"><span class="ti-field-label">Audio prepare</span><strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatTiming(timing?.audio_prepare_ms)}</strong></div>
   </div>
 
-  <div class="mt-3 grid grid-cols-2 gap-3">
-    <div class="ti-state-card">
+  <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+    <div class="ti-state-card min-w-0">
       <span class="ti-field-label">Overflow-dropped utterances</span>
-      <strong class="mt-2 block text-[12px]">{formatCount(outbound?.overflow_dropped_utterance_count)}</strong>
+      <strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatCount(outbound?.overflow_dropped_utterance_count)}</strong>
     </div>
-    <div class="ti-state-card">
+    <div class="ti-state-card min-w-0">
       <span class="ti-field-label">Evicted pending utterances</span>
-      <strong class="mt-2 block text-[12px]">{formatCount(outbound?.evicted_pending_utterance_count)}</strong>
+      <strong class="mt-2 block break-words text-[14px] font-semibold tabular-nums">{formatCount(outbound?.evicted_pending_utterance_count)}</strong>
     </div>
   </div>
 
-  <p class="mb-0 mt-3 text-[11.5px] leading-5 text-[var(--ti-text-muted)]" role="status">{diagnosis}</p>
-  <p class="mb-0 mt-2 text-[11.5px] leading-5 text-[var(--ti-text-soft)]">
+  <p class="mb-0 mt-3 text-[13px] leading-5 text-[var(--ti-text-muted)]" role="status">{diagnosis}</p>
+  <p class="mb-0 mt-2 text-[13px] leading-5 text-[var(--ti-text-soft)]">
     Stage timings are observational evidence from this device only. ASR/translation/TTS totals already include scheduler wait, so do not add wait times to them. Residual processing elapsed excludes observed scheduler waits and recovery but still includes worker transport and preprocessing; it is not isolated AI inference. Incomplete or inconsistent admission receipts remain Not measured. Measure whole-product VRAM with Windows/NVIDIA GPU tools (including browser and WDDM); no app-level VRAM figure is inferred.
   </p>
 </article>
