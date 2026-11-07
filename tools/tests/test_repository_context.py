@@ -284,5 +284,51 @@ class DevelopmentContextTests(unittest.TestCase):
         self.assertEqual(p["writePreflight"]["status"], "NOT_REQUESTED")
 
 
+
+    def test_graph_navigation_from_scoped_query_is_witnessed_but_not_authority(self):
+        p = plan_context(
+            intent="Find exact product routing", mode="context-recovery",
+            knowledge_query="product", knowledge_domain="foundation")
+        route = p["knowledgeNavigation"]
+        self.assertIsNotNone(route)
+        self.assertEqual(route["status"], "FOUND")
+        self.assertTrue(route["routingOnly"])
+        self.assertTrue(route["advisoryOnly"])
+        self.assertTrue(route["steps"])
+        self.assertTrue(all(e["type"] == "ROUTES_TO" for e in route["steps"]))
+        self.assertTrue(all(e["evidence"]["path"].startswith("docs/")
+                            and e["evidence"]["line"] > 0
+                            for e in route["steps"]))
+        self.assertFalse(p["ciTriggered"])
+        self.assertIsNone(p["activeSpecialist"])
+
+    def test_explicit_resource_navigation_is_bounded_and_never_activates(self):
+        p = plan_context(intent="Explain source architecture", mode="context-recovery",
+                         knowledge_id="document.system.knowledge-architecture")
+        nav = p["knowledgeNavigation"]
+        self.assertEqual(nav["status"], "FOUND")
+        self.assertEqual(nav["resource"]["authority"], "CANONICAL")
+        self.assertLessEqual(len(nav["relations"]), 6)
+        self.assertLessEqual(len(nav["sections"]), 8)
+        self.assertIsNone(p["rankedKnowledge"])
+        self.assertEqual(p["writePreflight"]["status"], "NOT_REQUESTED")
+        self.assertIsNone(p["activeSpecialist"])
+        self.assertEqual(p["execution"], "NOT_EXECUTED")
+
+    def test_draft_and_missing_resource_do_not_acquire_authority(self):
+        draft = plan_context(
+            intent="Show unadmitted provider design", mode="context-recovery",
+            knowledge_id="document.knowledge.proposals.realtime-translation-alternative")
+        self.assertEqual(draft["knowledgeNavigation"]["status"], "NO_PATH")
+        self.assertEqual(draft["knowledgeNavigation"]["reason"], "DRAFT_EXCLUDED")
+        self.assertEqual(draft["knowledgeNavigation"]["resource"]["lifecycle"], "DRAFT")
+        unknown = plan_context(intent="Locate missing doc", mode="context-recovery",
+                               knowledge_id="document.system.does-not-exist")
+        self.assertEqual(unknown["knowledgeNavigation"]["status"], "UNKNOWN_RESOURCE")
+        with self.assertRaises(ValueError):
+            plan_context(intent="Conflicting selectors", mode="context-recovery",
+                         knowledge_id="document.system.knowledge-architecture",
+                         knowledge_query="runtime", knowledge_domain="system")
+
 if __name__ == "__main__":
     unittest.main()

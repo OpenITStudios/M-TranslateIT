@@ -148,6 +148,25 @@ def wiki_target(raw: str) -> str | None:
     return value if posixpath.normpath(value) == value else None
 
 
+
+def _router_relation(source: dict, target: dict) -> str:
+    """ROUTES_TO only for a router's own domain, never incidental cross-links."""
+    if source["role"] != "ROUTER":
+        return "RELATES_TO"
+    if target["lifecycle"] != "ACTIVE" or target["authority"] == "HISTORICAL":
+        return "RELATES_TO"
+    if source["path"] == "docs/README.md":
+        root_domains = {
+            "docs/foundation/README.md", "docs/knowledge/README.md",
+            "docs/system/README.md",
+        }
+        return "ROUTES_TO" if target["path"] in root_domains else "RELATES_TO"
+    # A nested router owns its own subtree. References to other domains,
+    # ancestor routers or work state are not navigation authority.
+    prefix = posixpath.dirname(source["path"]) + "/"
+    return "ROUTES_TO" if target["path"].startswith(prefix) else "RELATES_TO"
+
+
 def catalog(root: Path = ROOT) -> tuple[list[dict], list[dict], list[str]]:
     documents: list[dict] = []
     contents: dict[str, str] = {}
@@ -189,7 +208,7 @@ def catalog(root: Path = ROOT) -> tuple[list[dict], list[dict], list[str]]:
             if edge in seen_edges:
                 continue
             seen_edges.add(edge)
-            relation = "ROUTES_TO" if by_path[path]["role"] == "ROUTER" else "RELATES_TO"
+            relation = _router_relation(by_path[path], by_path[target])
             edges.append({
                 "from": edge[0], "to": edge[1], "type": relation,
                 "evidence": {"path": path, **witness},
@@ -211,8 +230,9 @@ def verify_knowledge(root: Path = ROOT) -> list[str]:
     adjacency: dict[str, list[str]] = {}
     by_id = {doc["id"]: doc for doc in documents}
     for edge in edges:
-        # Neither a draft nor a retired/historical note can act as an active
-        # document-routing bridge. Graph discovery may still show those edges.
+        # Reachability is through real domain routers, not incidental backlinks.
+        if edge["type"] != "ROUTES_TO":
+            continue
         source, target = by_id[edge["from"]], by_id[edge["to"]]
         if any(item["lifecycle"] != "ACTIVE" or item["authority"] == "HISTORICAL"
                for item in (source, target)):
@@ -227,7 +247,8 @@ def verify_knowledge(root: Path = ROOT) -> list[str]:
         seen.add(node)
         queue.extend(adjacency.get(node, []))
     for doc in documents:
-        if doc["lifecycle"] == "ACTIVE" and doc["id"] not in seen:
+        if (doc["lifecycle"] == "ACTIVE" and doc["authority"] != "HISTORICAL"
+                and doc["id"] not in seen):
             issues.append(f"document not reachable from canonical router: {doc['path']}")
     return sorted(set(issues))
 
@@ -345,7 +366,8 @@ def resource_view(resource_id: str, root: Path = ROOT) -> dict:
 
 def explain_resource_path(start: str, target: str, root: Path = ROOT, *,
                           max_hops: int = 4, allow_reverse: bool = False,
-                          include_historical: bool = False) -> dict:
+                          include_historical: bool = False,
+                          routes_only: bool = False) -> dict:
     if max_hops < 1 or max_hops > 6:
         raise ValueError("graph trace max_hops must be 1..6")
     nodes, edges, issues = build_architecture_graph(root)
@@ -353,7 +375,7 @@ def explain_resource_path(start: str, target: str, root: Path = ROOT, *,
         raise ValueError("invalid architecture graph: " + "; ".join(issues[:3]))
     common = {"from": start, "to": target, "maxHops": max_hops,
               "reverse": allow_reverse, "history": include_historical,
-              "proofBoundary": PROOF_BOUNDARY}
+              "routesOnly": routes_only, "proofBoundary": PROOF_BOUNDARY}
     if start not in nodes or target not in nodes:
         return {**common, "status": "UNKNOWN_RESOURCE", "nodes": [], "steps": []}
     def exclusion_reason(node_id: str) -> str | None:
@@ -375,6 +397,8 @@ def explain_resource_path(start: str, target: str, root: Path = ROOT, *,
                     "nodes": [], "steps": []}
     adjacency: dict[str, list[tuple[str, dict]]] = {}
     for edge in edges:
+        if routes_only and edge["type"] != "ROUTES_TO":
+            continue
         adjacency.setdefault(edge["from"], []).append((
             edge["to"], {**edge, "traversal": "FORWARD"}))
         if allow_reverse:
@@ -453,12 +477,13 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=8)
     parser.add_argument("--max-hops", type=int, default=4)
     parser.add_argument("--both-directions", action="store_true")
+    parser.add_argument("--routes-only", action="store_true")
     parser.add_argument("--history", action="store_true")
     parser.add_argument("--format", choices=["json", "markdown", "mermaid"], default="json")
     args = parser.parse_args()
     if args.format != "json" and not (args.id or args.trace):
         parser.error("--format markdown/mermaid requires --id or --trace")
-    if (args.both_directions or args.history or args.max_hops != 4) and not args.trace:
+    if (args.both_directions or args.history or args.routes_only or args.max_hops != 4) and not args.trace:
         parser.error("--both-directions, --history and --max-hops require --trace")
     if args.check:
         issues = verify_knowledge()
@@ -485,7 +510,8 @@ def main() -> int:
         view = explain_resource_path(args.trace[0], args.trace[1],
                                      max_hops=args.max_hops,
                                      allow_reverse=args.both_directions,
-                                     include_historical=args.history)
+                                     include_historical=args.history,
+                                     routes_only=args.routes_only)
     else:
         if not args.all and not args.domain:
             parser.error("specify --domain to bound retrieval; use --all only for diagnostic broad search")

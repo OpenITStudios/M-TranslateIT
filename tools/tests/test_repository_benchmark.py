@@ -75,5 +75,18 @@ class SourceMethodFlowBenchmarkTests(unittest.TestCase):
         self.assertIsNone(result["optionalSourceGraph"])
 
 
+
+    def test_extended_benchmark_rejects_unknown_capacity_as_complete(self):
+        from unittest.mock import patch
+        from repository_dependencies import SourceGraphCapacityExceeded
+        with patch("repository_impact.build_source_graph",
+                   side_effect=SourceGraphCapacityExceeded("test capacity bound")):
+            result = check_source_impact(ROOT, extended=True)
+        self.assertFalse(result["conservativeImpactConformance"])
+        self.assertEqual(result["optionalSourceGraph"]["analysisStatus"],
+                         "UNKNOWN_CAPACITY")
+        self.assertTrue(any("full conformance cannot be claimed" in issue
+                            for issue in result["issues"]))
+
 if __name__ == "__main__":
     unittest.main()

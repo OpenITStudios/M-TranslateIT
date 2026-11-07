@@ -27,5 +27,10 @@ Historical and bounded design proposals (reference only, not current product aut
 - [My Voice UI implementation](./proposals/2026-10-13-my-voice-ui-implementation.md)
 - [My Voice safe 8 GB training](./proposals/2026-10-14-my-voice-safe-8gb-training.md)
 - [Meeting audio source switching](./proposals/2026-10-15-meeting-audio-source-switching.md)
+- [Codex gateway investigation](./proposals/2026-11-01-codex-gateway.md) — admitted as REFERENCE, not an active Meeting provider
+
+Unadmitted draft, available for explicit reference only (never current architecture authority):
+
+- [Realtime translation alternative (DRAFT)](./proposals/2026-11-07-realtime-translation-alternative.md)
 
 **Current next action:** [planning/development.md](../../planning/development.md), outside the document Catalog. Current behavior is the exact `Local` source with matching proof.

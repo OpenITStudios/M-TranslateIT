@@ -191,5 +191,62 @@ class KnowledgeTests(unittest.TestCase):
 
 
 
+
+    def test_router_edges_do_not_promote_cross_domain_references(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "docs/system").mkdir(parents=True)
+            (root / "docs/knowledge").mkdir(parents=True)
+            def document(identifier: str, domain: str, role: str, body: str):
+                return ("---\nid: " + identifier + "\nclass: DOCUMENT\ndomain: "
+                        + domain + "\nrole: " + role +
+                        "\nauthority: CANONICAL\nlifecycle: ACTIVE\n---\n# Doc\n" + body)
+            (root / "docs/README.md").write_text(document(
+                "document.docs.router", "docs", "ROUTER",
+                "[System](./system/README.md)\n"), encoding="utf-8")
+            (root / "docs/system/README.md").write_text(document(
+                "document.system.router", "system", "ROUTER",
+                "[Owner](./owner.md)\n[Cross-domain reference](../knowledge/unrouted.md)\n"),
+                encoding="utf-8")
+            (root / "docs/system/owner.md").write_text(document(
+                "document.system.owner", "system", "CONTRACT", ""),
+                encoding="utf-8")
+            (root / "docs/knowledge/unrouted.md").write_text(document(
+                "document.knowledge.unrouted", "knowledge", "GUIDE", ""),
+                encoding="utf-8")
+            docs, edges, problems = catalog(root)
+            self.assertEqual(problems, [])
+            self.assertEqual(len(docs), 4)
+            relations = {(e["from"], e["to"]): e["type"] for e in edges}
+            self.assertEqual(
+                relations[("document.system.router", "document.system.owner")],
+                "ROUTES_TO")
+            self.assertEqual(
+                relations[("document.system.router", "document.knowledge.unrouted")],
+                "RELATES_TO")
+            self.assertEqual(explain_resource_path(
+                "document.docs.router", "document.knowledge.unrouted", root,
+                routes_only=True)["status"], "NO_PATH")
+            self.assertEqual(explain_resource_path(
+                "document.docs.router", "document.knowledge.unrouted", root)["status"],
+                "FOUND")
+            problems = verify_knowledge(root)
+            self.assertTrue(any("docs/knowledge/unrouted.md" in error for error in problems))
+
+    def test_historical_active_document_never_requires_current_routing(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "docs/knowledge").mkdir(parents=True)
+            (root / "docs/README.md").write_text(
+                "---\nid: document.docs.router\nclass: DOCUMENT\ndomain: docs\n"
+                "role: ROUTER\nauthority: CANONICAL\nlifecycle: ACTIVE\n---\n# Root\n",
+                encoding="utf-8")
+            (root / "docs/knowledge/archive.md").write_text(
+                "---\nid: document.knowledge.archive\nclass: DOCUMENT\n"
+                "domain: knowledge\nrole: REFERENCE\nauthority: HISTORICAL\n"
+                "lifecycle: ACTIVE\n---\n# Old record\n", encoding="utf-8")
+            errors = verify_knowledge(root)
+            self.assertFalse(any("document not reachable" in error for error in errors))
+
 if __name__ == "__main__":
     unittest.main()

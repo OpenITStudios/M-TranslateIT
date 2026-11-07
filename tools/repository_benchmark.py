@@ -139,6 +139,7 @@ def check_source_impact(root: Path, *, extended: bool = False) -> dict[str, Any]
         if impacted["sourceAnalysisStatus"] == "UNKNOWN_CAPACITY":
             if not impacted["reviewRequired"] or not impacted["capacityWarnings"]:
                 issues.append("source analysis capacity was not reported as missing proof")
+            issues.append("extended source dependency graph unavailable: UNKNOWN_CAPACITY; full conformance cannot be claimed")
         elif graph is None or graph["fullClosureProven"] is not False:
             issues.append("cross-language affected proof is not conservatively bounded")
         if impacted["proof"] != "PLANNING_ONLY_NOT_EXECUTED" or impacted["ciTriggered"]:

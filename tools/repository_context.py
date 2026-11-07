@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from repository_impact import canonical_path, plan_impacted
-from repository_knowledge import retrieve
+from repository_knowledge import retrieve, resource_view, explain_resource_path
 from repository_permissions import evaluate_permission, load_policy
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -104,6 +104,46 @@ def _external_audit_plan(kind: str | None) -> dict[str, Any] | None:
     }
 
 
+
+def _document_navigation(resource_id: str, root: Path, *, exact: bool) -> dict[str, Any]:
+    """Bounded navigation context; neither lexical matches nor links own decisions."""
+    trace = explain_resource_path(
+        "document.docs.router", resource_id, root=root,
+        max_hops=4, routes_only=True,
+    )
+    result: dict[str, Any] = {
+        "status": trace["status"], "candidateId": resource_id,
+        "proofBoundary": trace["proofBoundary"],
+        "routingOnly": True, "advisoryOnly": True,
+        "steps": [
+            {"from": edge["from"], "to": edge["to"], "type": edge["type"],
+             "evidence": edge["evidence"]}
+            for edge in trace.get("steps", ())
+        ],
+    }
+    if "reason" in trace:
+        result["reason"] = trace["reason"]
+    if exact:
+        view = resource_view(resource_id, root=root)
+        if view["status"] == "FOUND":
+            owner = view["resource"]
+            result["resource"] = {
+                key: owner[key]
+                for key in ("id", "path", "title", "authority", "lifecycle", "role")
+            }
+            links = [edge for edge in view["steps"] if edge["type"] != "DERIVED_FROM"]
+            result["relations"] = links[:6]
+            result["relationsOmitted"] = max(0, len(links) - 6)
+            sections = view["sections"]
+            result["sections"] = [
+                {"id": sec["id"], "title": sec["title"], "line": sec["line"],
+                 "authority": sec["authority"]}
+                for sec in sections[:8]
+            ]
+            result["sectionsOmitted"] = max(0, len(sections) - 8)
+    return result
+
+
 def plan_context(
     *,
     intent: str,
@@ -117,6 +157,7 @@ def plan_context(
     resume: bool = False,
     knowledge_query: str | None = None,
     knowledge_domain: str | None = None,
+    knowledge_id: str | None = None,
     handoff: dict[str, Any] | None = None,
     external_audit_target: str | None = None,
     branch: str = "Local",
@@ -225,11 +266,20 @@ def plan_context(
         {"mode": mode, "action": "release-publish", "scope": scope}, policy
     ) if selected_task == "RELEASE" else None)
     ranked = []
+    navigation = None
+    if knowledge_id is not None and (knowledge_query is not None
+                                      or knowledge_domain is not None):
+        raise ValueError("select an exact knowledge ID or a scoped query, not both")
+    if knowledge_id is not None:
+        navigation = _document_navigation(
+            _nonempty(knowledge_id, "knowledge ID"), root, exact=True)
     if knowledge_query is not None:
         _nonempty(knowledge_query, "knowledge query")
         if knowledge_domain not in {"foundation", "knowledge", "system"}:
             raise ValueError("ranked retrieval requires an explicit documentation domain")
         ranked = retrieve(knowledge_query, knowledge_domain, root=root, limit=4)
+        if ranked:
+            navigation = _document_navigation(ranked[0]["id"], root, exact=False)
     elif knowledge_domain is not None:
         raise ValueError("documentation domain without a query is not a task")
     impact = plan_impacted(changed_paths, root=root) if changed_paths else None
@@ -264,6 +314,7 @@ def plan_context(
         "knownImpact": impact,
         "rankedKnowledge": {"status": "RANKING_NOT_AUTHORITY",
                             "matches": ranked} if knowledge_query is not None else None,
+        "knowledgeNavigation": navigation,
         "execution": "NOT_EXECUTED",
         "ciTriggered": False,
         "next": ("STOP_AND_RESOLVE_SCOPE_OR_APPROVAL" if overall in {"ASK", "DENY"}
@@ -315,6 +366,7 @@ def main() -> int:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--knowledge-query")
     parser.add_argument("--knowledge-domain", choices=("foundation", "knowledge", "system"))
+    parser.add_argument("--knowledge-id", help="Exact document/section ID (read-only)")
     parser.add_argument("--handoff", help="Explicit JSON handoff; never switches lanes")
     parser.add_argument("--external-audit-target",
                         choices=sorted(EXTERNAL_AUDIT_TARGETS),
@@ -333,6 +385,7 @@ def main() -> int:
             changed=args.changed, proposed_writes=args.write,
             activate_specialist=args.activate_specialist, resume=args.resume,
             knowledge_query=args.knowledge_query, knowledge_domain=args.knowledge_domain,
+            knowledge_id=args.knowledge_id,
             handoff=value, external_audit_target=args.external_audit_target,
             branch=args.branch,
         )

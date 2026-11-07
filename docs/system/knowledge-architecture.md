@@ -23,11 +23,11 @@ current task + explicit work mode
 → evidence-limited decision → STOP
 ```
 
-Document frontmatter owns stable document identity (a rename keeps the ID when meaning is unchanged). H2/H3 section addresses are derived from each document's headings; duplicate headings use ordinal suffixes. Sections have DERIVED authority and point back to their one physical parent with DERIVED_FROM. Authored router links yield ROUTES_TO; other explicit links yield RELATES_TO. Neither relationship implies a code call, runtime behavior or approval.
+Document frontmatter owns stable document identity (a rename keeps the ID when meaning is unchanged). H2/H3 section addresses are derived from each document's headings; duplicate headings use ordinal suffixes. Sections have DERIVED authority and point back to their one physical parent with DERIVED_FROM. Only an active router's **own-domain links** yield ROUTES_TO; cross-domain, historical and draft references remain RELATES_TO. Active reachability uses only ROUTES_TO, never backlinks or incidental references. Neither relationship implies a code call, runtime behavior or approval.
 
 ## Source witnesses and missing paths
 
-The existing [repository knowledge tool](../../tools/README.md) extracts links from Markdown prose with path and line witnesses; fenced code, inline code, HTML comments, images and indented examples are excluded. Obsidian-style links must use unambiguous repository-root paths such as [[docs/system/authority-model.md|authority owner]]; fuzzy note titles and aliases are not promoted into relationships. The trace follows only those registered edges, defaults to directed traversal within four hops, excludes HISTORICAL sources, and returns NO_PATH or UNKNOWN_RESOURCE when evidence is missing. Reverse paths and history require explicit opt-in.
+The existing [repository knowledge tool](../../tools/README.md) extracts links from Markdown prose with path and line witnesses; fenced code, inline code, HTML comments, images and indented examples are excluded. Obsidian-style links must use unambiguous repository-root paths such as [[docs/system/authority-model.md|authority owner]]; fuzzy note titles and aliases are not promoted into relationships. The trace follows only those registered edges, defaults to directed traversal within four hops, excludes HISTORICAL sources, and returns NO_PATH or UNKNOWN_RESOURCE when evidence is missing. With `--routes-only`, traversal permits only declared ROUTES_TO; this is the admissible documentation route used by the Context Planner. Reverse paths and history require explicit opt-in.
 
 Lifecycle admission and graph traversal follow the single [authority model](./authority-model.md): `DRAFT` is non-active, `RETIRED` requires explicit historical access, and neither can become a current decision through a graph link.
 
@@ -40,7 +40,8 @@ python tools/repository_knowledge.py --check
 python tools/repository_knowledge.py --summary
 python tools/repository_knowledge.py --id document.system.authority-model
 python tools/repository_knowledge.py --trace document.docs.router document.system.authority-model
-python tools/repository_knowledge.py --trace document.docs.router document.system.authority-model --format markdown
+python tools/repository_knowledge.py --trace document.docs.router document.system.authority-model --routes-only --format markdown
+python tools/repository_context.py --intent "Explain architecture" --mode context-recovery --knowledge-id document.system.knowledge-architecture
 python tools/repository_knowledge.py --trace document.system.authority-model document.docs.router --both-directions --format mermaid
 python tools/repository_knowledge.py --query "Meeting audio" --domain knowledge
 ```
@@ -55,4 +56,4 @@ python tools/repository_knowledge.py --query "Meeting audio" --domain knowledge
 
 ## Quality gate and evolution
 
-One canonical owner per concern, no saved graph cache, no new agent Skills, no automatic CI/hosted inference, no branch promotion, and no private UserData ingestion. Graph extraction and query behavior are covered by source-authored regression tests in tools/tests/test_repository_knowledge.py. Each result has DOCUMENT_NAVIGATION_ONLY_NOT_SOURCE_OR_RUNTIME_PROOF. When a document is moved, update routers and real links as a bounded migration, then verify reachability; Git history retains superseded rationale.
+One canonical owner per concern, no saved graph cache, no new agent Skills, no automatic CI/hosted inference, no branch promotion, and no private UserData ingestion. Graph extraction and query behavior are covered by source-authored regression tests in tools/tests/test_repository_knowledge.py. Each result has DOCUMENT_NAVIGATION_ONLY_NOT_SOURCE_OR_RUNTIME_PROOF. The Context Planner surfaces one candidate's bounded route with exact line witnesses and optional explicit-ID backlinks/sections, but never promotes ranking, changes modes, chooses skills, authorizes writes or claims executed proof. When a document is moved, update routers and real links as a bounded migration, then verify reachability; Git history retains superseded rationale.
