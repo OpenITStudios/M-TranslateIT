@@ -342,7 +342,7 @@
       <article class="ti-panel overflow-hidden">
         <header class="border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-4">
           <h3 class="m-0 text-[16px] font-semibold">Meeting readiness</h3>
-          <p class="mb-0 mt-1 text-[12px] text-[var(--ti-text-muted)]">Check the current setup. Open Diagnostics only if you need to investigate a problem.</p>
+          <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">Check the current setup. Open Diagnostics only if you need to investigate a problem.</p>
         </header>
 
         <div class="divide-y divide-[var(--ti-border)]">
@@ -351,7 +351,7 @@
             value="Indonesian voice → English voice"
             detail="Checks the microphone, voice, and connection needed for calls."
             status={snapshot.readiness.meetingReady ? "Ready" : snapshot.readiness.meetingStatus}
-            tone={snapshot.readiness.meetingReady ? "good" : snapshot.readiness.level === "unavailable" ? "danger" : "warning"}
+            tone={snapshot.readiness.meetingReady ? "good" : snapshot.readiness.level === "unavailable" ? "danger" : snapshot.readiness.level === "checking" ? "neutral" : "warning"}
           />
         </div>
 
@@ -360,7 +360,7 @@
         </footer>
       </article>
       <details class="ti-panel mt-4">
-        <summary class="cursor-pointer px-5 py-4 text-sm font-medium">Past translation issue reports</summary>
+        <summary class="min-h-11 cursor-pointer px-5 py-4 text-sm font-medium hover:bg-[var(--ti-surface-soft)]">Past translation issue reports</summary>
         <div class="border-t border-[var(--ti-border)] p-4">
           <TranslationFeedbackReview {onNotice} />
         </div>
