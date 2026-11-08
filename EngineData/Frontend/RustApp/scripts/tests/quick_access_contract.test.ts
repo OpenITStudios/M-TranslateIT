@@ -59,7 +59,7 @@ test("Meeting and Quick Access present native-derived ready, live, mute and reco
   assert.match(popup, /\{sourceSummary\}/);
   assert.match(meetingPage, /readyForSelectedSource/);
   assert.match(meetingPage, /meeting\.live && meetingStatus\?\.muted \? "Muted"/);
-  assert.match(meetingPage, /for="meeting-audio-source" class="ti-field-label">Audio sent to meeting/);
+  assert.match(meetingPage, /aria-label="Audio sent to meeting"/);
 });
 
 test("Dismissing Quick Access does not end Meeting; app exit destroys its window", () => {

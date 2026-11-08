@@ -19,6 +19,7 @@ test("You is distinct from the one mixed incoming audio lane, not fake diarizati
 test("session presentation uses a real timestamp and has safe missing-date fallback", () => {
   assert.equal(meetingSessionTitle(null), "Meeting session");
   assert.equal(meetingTime(null), "Time unavailable");
+  assert.match(meetingTime(Date.UTC(2026, 10, 8, 14, 32, 17)), /^\d{2}:\d{2}:\d{2}$/);
   assert.match(meetingSessionTitle(1791800000000), /^Meeting · /);
 });
 test("a last-session label uses the earliest retained turn, never reuses a prior meeting", () => {

@@ -1037,7 +1037,7 @@
   });
 </script>
 
-<section class="ti-page">
+<section class="ti-page ti-voice-page">
   <header class="ti-page-header">
     <div>
       <h2 class="ti-page-title">My Voice</h2>

@@ -31,7 +31,7 @@
   );
 </script>
 
-<section class="ti-panel p-3 sm:p-4" aria-labelledby="my-voice-selected-heading">
+<section class="border-b border-[var(--ti-border)] px-0 pb-5" aria-labelledby="my-voice-selected-heading">
   <div class="flex flex-wrap items-center justify-between gap-3">
     <div class="min-w-0">
       <h3 id="my-voice-selected-heading" class="mb-0 text-[13px] font-semibold text-[var(--ti-text-muted)]">Current Meeting voice</h3>

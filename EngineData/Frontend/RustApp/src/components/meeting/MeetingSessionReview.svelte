@@ -7,9 +7,11 @@
 
   let {
     sessionActive,
+    openByDefault = false,
     onNotice,
   }: {
     sessionActive: boolean;
+    openByDefault?: boolean;
     onNotice: (message: string) => void;
   } = $props();
 
@@ -60,6 +62,10 @@
       void loadReview();
     }
   });
+
+  $effect(() => {
+    if (openByDefault && snapshot?.turns.length) reviewOpen = true;
+  });
 </script>
 
 {#if !sessionActive && snapshot?.turns.length}
@@ -94,4 +100,8 @@
       </div>
     </div>
   </details>
+{:else if openByDefault}
+  <p class="m-0 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-4 text-[13px] text-[var(--ti-text-muted)]" role="status">
+    No last Meeting transcript is currently available. Saved Transcripts may still contain earlier conversations.
+  </p>
 {/if}

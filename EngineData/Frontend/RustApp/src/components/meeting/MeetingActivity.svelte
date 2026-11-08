@@ -171,9 +171,9 @@
       {:else}
         <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users need focus to scroll this named region.) -->
         <div bind:this={transcriptScroller} onscroll={updateScrollPosition}
-          class="max-h-[54vh] min-h-[160px] overflow-y-auto" role="log" aria-label="Meeting conversation" aria-live="off" tabindex="0">
+          class="max-h-[calc(100vh-295px)] min-h-[160px] overflow-y-auto" role="log" aria-label="Meeting conversation" aria-live="off" tabindex="0">
           {#each orderedTurns as turn (turn.sequence)}
-            <div class="border-b border-[var(--ti-border)] py-3 last:border-b-0">
+            <div class="group py-2 last:pb-0">
               <MeetingTurnBubble {turn} statusLabel={turn.lane === "you" ? deliveryLabel(turn) : ""} />
               <div class={"mt-1 flex items-center gap-1 " + (turn.lane === "you" ? "justify-end" : "justify-start")}>
                 <button type="button" class="grid size-10 place-items-center rounded-[var(--ti-radius-sm)] text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)]"

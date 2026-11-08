@@ -10,7 +10,7 @@ export function meetingSpeakerDescription(lane: string): string {
 
 export function meetingTime(unixMs: number | null | undefined): string {
   if (typeof unixMs !== "number" || !Number.isFinite(unixMs) || unixMs <= 0) return "Time unavailable";
-  return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" }).format(new Date(unixMs));
+  return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(unixMs));
 }
 
 export function meetingSessionTitle(unixMs: number | null | undefined): string {

@@ -14,20 +14,22 @@ test("Meeting has a single primary button that can Start, Stop, or guide recover
   assert.match(meeting, /onclick=\{handlePrimary\}/);
   assert.match(meeting, /needsSetup \? "Finish Setup"/);
   assert.match(meeting, /needsVoice \? "Choose Voice"/);
-  assert.equal((meeting.match(/onclick=\{/g) ?? []).length, 1);
+  assert.equal((meeting.match(/onclick=\{handlePrimary\}/g) ?? []).length, 1);
   for (const retired of ["MeetingPresetPanel", "meeting-presets", "swapListenDirection",
     "detectMeetingApp", "Meeting options", "Mic Test"]) {
     assert.equal(meeting.includes(retired), false, retired);
   }
 });
-test("Meeting keeps a single accessible Stop or Retry Stop above live transcript", () => {
+test("Meeting keeps a single accessible Stop or Retry Stop in a persistent dock below the transcript", () => {
   assert.match(meeting, /meeting\.lifecycle === "cleanup_incomplete" \? primaryControl\.label : "Stop Microphone"/);
   assert.match(meeting, /meeting\.lifecycle === "cleanup_incomplete" \? "warning"/);
   const action = meeting.indexOf('aria-label="Meeting main action"');
-  const sourceSelector = meeting.indexOf('for="meeting-audio-source"');
+  const sourceSelector = meeting.indexOf('id="meeting-audio-source"');
   const transcript = meeting.indexOf("<MeetingActivity status={meetingStatus}");
-  assert.ok(action > 0 && action < sourceSelector && sourceSelector < transcript,
-    "Stop/Retry Stop must remain before the scrollable conversation");
+  assert.ok(transcript > 0 && transcript < action && action < sourceSelector,
+    "Live transcript must appear before the fixed action dock and source selector");
+  assert.match(meeting, /section === "live" \|\| meeting\.hasSession \|\| meeting\.canStop/);
+  assert.match(meeting, /onToggleMute/);
   assert.equal((meeting.match(/onclick=\{handlePrimary\}/g) ?? []).length, 1);
 });
 
@@ -41,7 +43,7 @@ test("deferred setup has a real recovery path without creating another Meeting s
 test("live Meeting retains committed conversation and optional session review", () => {
   assert.match(meeting, /<MeetingActivity status=\{meetingStatus\} turns=\{meetingTurns\}/);
   assert.match(meeting, /<MeetingSessionReview/);
-  assert.match(meeting, /meeting\.canStop \|\| meeting\.hasSession/);
+  assert.match(meeting, /section === "live" \|\| meeting\.hasSession \|\| meeting\.canStop/);
 });
 test("Meeting Live reports local output truth, not fabricated participant delivery", () => {
   assert.match(live, /if \(status\.outbound\.output_active\)/);
@@ -121,4 +123,36 @@ test("failed Meeting translation retains source and cannot look completed", () =
   assert.match(native, /translation_state = "failed"/);
   assert.match(native, /fn live_turn_owner_matches\([\s\S]*?session\.authority_active\s*&& session\.phase == "live"/);
   assert.match(native, /pub\(super\) fn finish_meeting_turn_translation\([\s\S]*?if !live_turn_owner_matches\(current\.snapshot\.as_ref\(\), session_id, generation\) \{\s*return false;/);
+});
+
+test("Discord-inspired shell uses exactly one sidebar, channel navigation, and bottom settings", () => {
+  const app = readFileSync(new URL("../../src/App.svelte", import.meta.url), "utf8");
+  const sidebar = readFileSync(new URL("../../src/components/layout/Sidebar.svelte", import.meta.url), "utf8");
+  const settings = readFileSync(new URL("../../src/pages/Settings.svelte", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../../src/styles/tokens.css", import.meta.url), "utf8");
+  assert.equal((app.match(/<Sidebar\b/g) ?? []).length, 1);
+  assert.match(app, /meetingSection = \$state<"live" \| "last" \| "saved">/);
+  assert.match(sidebar, /onMeetingSection\("live"\)/);
+  assert.match(sidebar, /Live Meeting/);
+  assert.match(sidebar, /Last Meeting/);
+  assert.match(sidebar, /Saved Transcripts/);
+  assert.match(sidebar, /ti-sidebar-footer/);
+  assert.match(sidebar, /aria-label="Open Settings"/);
+  assert.match(sidebar, /aria-label="Open Quick Access"/);
+  assert.doesNotMatch(settings, /aria-label="Settings categories"/);
+  assert.match(css, /--ti-sidebar-width: 248px/);
+  assert.match(app, /route === "meeting" \? "overflow-hidden" : "overflow-y-auto"/);
+});
+
+test("Native Meeting mute and source owner are reused by two-column call dock", () => {
+  const app = readFileSync(new URL("../../src/App.svelte", import.meta.url), "utf8");
+  const sidebar = readFileSync(new URL("../../src/components/layout/Sidebar.svelte", import.meta.url), "utf8");
+  const native = readFileSync(new URL("../../src-tauri/src/commands/meeting_session/audio_source.rs", import.meta.url), "utf8");
+  assert.match(app, /runtimeApi\.setMeetingOutputMuted\(desired\)/);
+  assert.match(app, /if \(muteBusy \|\| !snapshot\?\.meeting\.live/);
+  assert.match(sidebar, /onToggleMute/);
+  assert.match(meeting, /onToggleMute/);
+  assert.match(native, /Mute is an output gate, never a third microphone source/);
+  assert.match(meeting, /<MeetingSessionReview sessionActive=\{meeting\.hasSession\} openByDefault=\{true\}/);
+  assert.match(meeting, /<MeetingTranscriptExport hasSession=\{meeting\.hasSession\}/);
 });

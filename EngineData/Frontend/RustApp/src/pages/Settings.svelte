@@ -21,6 +21,7 @@
   type SettingsTab = "meeting" | "translation" | "advanced";
 
   let {
+    tab,
     snapshot,
     settings,
     setupBusy = false,
@@ -32,6 +33,7 @@
     onMicTest,
     onNotice,
   }: {
+    tab: SettingsTab;
     snapshot: ProductRuntimeSnapshot;
     settings: RuntimeSettings;
     setupBusy?: boolean;
@@ -44,7 +46,6 @@
     onNotice: (message: string) => void;
   } = $props();
 
-  let tab = $state<SettingsTab>("meeting");
   let diagnosticsOpen = $state(false);
   let diagnosticsLoading = $state(false);
   let diagnosticsRefreshRevision = $state(0);
@@ -211,28 +212,14 @@
   <div class="ti-page">
     <header class="ti-page-header">
       <div>
-        <h2 class="ti-page-title">Settings</h2>
-        <p class="ti-page-copy">Manage audio devices, captions, and meeting support.</p>
+        <h2 class="ti-page-title">{tab === "meeting" ? "Voice & Audio" : tab === "translation" ? "Meeting Captions" : "Help & Diagnostics"}</h2>
+        <p class="ti-page-copy">{tab === "meeting" ? "Choose your microphone, speakers, and meeting audio options." : tab === "translation" ? "Control the captions displayed during your meetings." : "Review setup health and find recovery options."}</p>
       </div>
     </header>
-    <div class="grid min-w-0 grid-cols-1 gap-3 lg:grid-cols-[186px_minmax(0,1fr)] lg:gap-5">
-      <div class="flex w-full min-w-0 flex-nowrap gap-1 self-start overflow-x-auto rounded-[var(--ti-radius-lg)] border border-[var(--ti-border)] bg-[var(--ti-sidebar)] p-2 lg:w-auto lg:flex-col lg:overflow-visible lg:p-2.5" role="group" aria-label="Settings categories">
-        <p class="hidden px-3 pb-1 pt-2 text-[12px] font-semibold text-[var(--ti-text-muted)] lg:block">PREFERENCES</p>
-        <button type="button" class={"flex min-h-11 shrink-0 items-center whitespace-nowrap rounded-[var(--ti-radius-sm)] border-b-2 px-3 text-left text-[13px] transition-colors lg:min-h-10 lg:whitespace-normal lg:border-b-0 lg:border-l-2 " + (tab === "meeting" ? "border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] font-semibold text-[var(--ti-text)]" : "border-transparent text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)] hover:text-[var(--ti-text)]")}
-          aria-pressed={tab === "meeting"} aria-controls="settings-category-panel"
-          onclick={() => { tab = "meeting"; diagnosticsOpen = false; }}>Voice &amp; Audio</button>
-        <button type="button" class={"flex min-h-11 shrink-0 items-center whitespace-nowrap rounded-[var(--ti-radius-sm)] border-b-2 px-3 text-left text-[13px] transition-colors lg:min-h-10 lg:whitespace-normal lg:border-b-0 lg:border-l-2 " + (tab === "translation" ? "border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] font-semibold text-[var(--ti-text)]" : "border-transparent text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)] hover:text-[var(--ti-text)]")}
-          aria-pressed={tab === "translation"} aria-controls="settings-category-panel"
-          onclick={() => { tab = "translation"; diagnosticsOpen = false; }}>Meeting Captions</button>
-        <p class="mt-3 hidden px-3 pb-1 text-[12px] font-semibold text-[var(--ti-text-muted)] lg:block">SUPPORT</p>
-        <button type="button" class={"flex min-h-11 shrink-0 items-center whitespace-nowrap rounded-[var(--ti-radius-sm)] border-b-2 px-3 text-left text-[13px] transition-colors lg:min-h-10 lg:whitespace-normal lg:border-b-0 lg:border-l-2 " + (tab === "advanced" ? "border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] font-semibold text-[var(--ti-text)]" : "border-transparent text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)] hover:text-[var(--ti-text)]")}
-          aria-pressed={tab === "advanced"} aria-controls="settings-category-panel"
-          onclick={() => { tab = "advanced"; diagnosticsOpen = false; }}>Help &amp; Diagnostics</button>
-      </div>
       <div id="settings-category-panel" class="min-w-0" role="region"
         aria-label={tab === "meeting" ? "Voice & Audio settings" : tab === "translation" ? "Meeting Captions settings" : "Help and diagnostics"}>
     {#if tab === "meeting"}
-      <article class="ti-panel overflow-hidden">
+      <article class="ti-panel ti-settings-panel overflow-hidden">
         <header class="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-4">
           <div class="min-w-0 flex-1">
             <h3 class="m-0 text-[16px] font-semibold tracking-[-0.015em]">Audio devices</h3>
@@ -402,6 +389,5 @@
       </div>
     {/if}
       </div>
-    </div>
   </div>
 </section>

@@ -2,19 +2,19 @@
   color-scheme: dark;
 
   /* Core surfaces */
-  --ti-bg: #1e2025;
-  --ti-sidebar: #13151b;
-  --ti-surface: #25282f;
-  --ti-surface-raised: #30343d;
-  --ti-surface-soft: #202329;
-  --ti-surface-hover: #343945;
-  --ti-border: #353b46;
-  --ti-border-strong: #49515e;
+  --ti-bg: #313338;
+  --ti-sidebar: #2b2d31;
+  --ti-surface: #313338;
+  --ti-surface-raised: #383a40;
+  --ti-surface-soft: #232428;
+  --ti-surface-hover: #404249;
+  --ti-border: #27282e;
+  --ti-border-strong: #4e5058;
 
   /* Typography */
   --ti-text: #f2f3f5;
-  --ti-text-muted: #b8c0cc;
-  --ti-text-soft: #97a2b2;
+  --ti-text-muted: #b5bac1;
+  --ti-text-soft: #949ba4;
 
   /* Primary action */
   --ti-accent: #2453d8;
@@ -23,6 +23,7 @@
 
   /* Brand highlight is separate from action and readiness colors. */
   --ti-brand: #2453d8;
+  --ti-chat-own: #243858;
 
   /* Product states */
   --ti-success: #63d59b;
@@ -45,8 +46,8 @@
   --ti-overlay: rgb(0 0 0 / 0.72);
 
   /* Desktop composition */
-  --ti-sidebar-width: 88px;
-  --ti-content-width: 1180px;
+  --ti-sidebar-width: 248px;
+  --ti-content-width: 1020px;
   --ti-page-padding-x: clamp(20px, 2.2vw, 32px);
-  --ti-page-padding-y: 24px;
+  --ti-page-padding-y: 32px;
 }

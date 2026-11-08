@@ -53,6 +53,9 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
 
   let booting = $state(true);
   let route=$state<AppRoute>("meeting");
+  let meetingSection = $state<"live" | "last" | "saved">("live");
+  let settingsTab = $state<"meeting" | "translation" | "advanced">("meeting");
+  let muteBusy = $state(false);
   let notice = $state<AppNotice>(appNotice("Getting TranslateIT ready...", "progress"));
   let liveHealthNotice = $state<AppNotice | null>(null);
   let longSessionNotice = $state<AppNotice | null>(null);
@@ -117,7 +120,35 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
       setKnownNotice("Stop the current My Voice recording before leaving My Voice.", "attention");
       return;
     }
+    if (next === "meeting") meetingSection = "live";
     route = next;
+  }
+
+  function openMeetingSection(next: "live" | "last" | "saved"): void {
+    if (voiceRecordingLock && route !== "meeting") {
+      navigate("meeting");
+      return;
+    }
+    meetingSection = next;
+    route = "meeting";
+  }
+
+  async function toggleMeetingMute(): Promise<void> {
+    if (muteBusy || !snapshot?.meeting.live || !meetingStatus?.session_id) return;
+    muteBusy = true;
+    try {
+      const desired = !meetingStatus.muted;
+      const result = await runtimeApi.setMeetingOutputMuted(desired);
+      if (!result?.ok) {
+        setKnownNotice(result?.message ?? "Mute status could not be verified. Check Meeting before retrying.", "unverified");
+        return;
+      }
+      await refreshSnapshot(result.message);
+    } catch {
+      setKnownNotice("Mute status could not be verified. Check Meeting before retrying.", "unverified");
+    } finally {
+      muteBusy = false;
+    }
   }
 
   function applyMeetingStatus(status: MeetingSessionStatus, preferredNotice?: string, kind: AppNoticeKind = "info"): void {
@@ -544,21 +575,32 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
   <FirstSetup initialSettings={setupSettings} onComplete={finishFirstSetup} onOpenMyVoice={openMyVoiceFromSetup} />
 {:else if snapshot}
   <main class="flex h-screen min-h-0 bg-[var(--ti-bg)]">
-    <Sidebar active={route} {presence} onNavigate={navigate} />
+    <Sidebar
+      active={route} {presence} {meetingSection} {settingsTab}
+      meetingLive={snapshot.meeting.live} meetingMuted={Boolean(meetingStatus?.muted)}
+      {muteBusy} onNavigate={navigate}
+      onMeetingSection={openMeetingSection}
+      onSettingsTab={(tab) => { settingsTab = tab; }}
+      onToggleMute={toggleMeetingMute} onNotice={setNotice}
+    />
 
     <section class="flex min-w-0 flex-1 flex-col">
       <AppHeader
         {snapshot}
         {route}
+        {meetingSection}
         notice={displayedNotice}
         myVoiceRecording={voiceRecordingLock}
         onNavigate={navigate}
         onNotice={setNotice}
       />
 
-      <div class="min-h-0 flex-1 overflow-y-auto">
+      <div class={"min-h-0 flex-1 " + (route === "meeting" ? "overflow-hidden" : "overflow-y-auto")}>
         {#if route === "meeting"}
           <Meeting
+            section={meetingSection}
+            muteBusy={muteBusy}
+            onToggleMute={toggleMeetingMute}
             {snapshot}
             {meetingStatus}
             meetingTurns={meetingViewState.turns}
@@ -576,6 +618,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
           />
         {:else}
           <Settings
+            tab={settingsTab}
             {snapshot}
             settings={snapshot.settings}
             setupBusy={setupActionBusy}

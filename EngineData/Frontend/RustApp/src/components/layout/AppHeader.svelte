@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { ProductRuntimeSnapshot } from "../../app/bridge/runtimeProductFacade";
   import type { AppRoute } from "../../app/shared/types";
-  import { Zap, Info, TriangleAlert, CircleAlert } from "@lucide/svelte";
+  import { Zap, Hash, Info, TriangleAlert, CircleAlert } from "@lucide/svelte";
   import type { AppNotice } from "../../app/runtime/applicationNotice";
   import UpdateAction from "../runtime/UpdateAction.svelte";
   import { toggleQuickAccess } from "../../app/runtime/quickAccessRuntime";
@@ -9,6 +9,7 @@
   let {
     snapshot,
     route,
+    meetingSection,
     notice,
     myVoiceRecording,
     onNavigate,
@@ -16,6 +17,7 @@
   }: {
     snapshot: ProductRuntimeSnapshot;
     route: AppRoute;
+    meetingSection: "live" | "last" | "saved";
     notice: AppNotice;
     myVoiceRecording: boolean;
     onNavigate: (route: AppRoute) => void;
@@ -37,7 +39,7 @@
 
   const routeTitle = $derived(
     route === "meeting"
-      ? "Meeting"
+      ? meetingSection === "live" ? "live-meeting" : meetingSection === "last" ? "last-meeting" : "saved-transcripts"
       : route === "my-voice"
         ? "My Voice"
         : "Settings",
@@ -47,9 +49,8 @@
 
 <header class="ti-appbar flex min-h-[58px] shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-2">
   <div class="flex min-w-0 shrink-0 items-center gap-3">
-    <strong class="text-[13px] font-bold tracking-[-0.01em]">TranslateIT</strong>
-    <span class="h-4 w-px bg-[var(--ti-border-strong)]" aria-hidden="true"></span>
-    <span class="text-[13px] font-medium text-[var(--ti-text-muted)]">{routeTitle}</span>
+    {#if route === "meeting"}<Hash size={19} class="shrink-0 text-[var(--ti-text-soft)]" aria-hidden="true"/>{/if}
+    <strong class="text-[15px] font-semibold text-[var(--ti-text)]">{routeTitle}</strong>
   </div>
 
   {#if !showBanner}

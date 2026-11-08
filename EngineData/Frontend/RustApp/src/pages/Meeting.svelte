@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { Hash, Mic, MicOff, Captions, PhoneOff, ArrowLeftRight } from "@lucide/svelte";
+  import { toggleQuickAccess } from "../app/runtime/quickAccessRuntime";
   import { runtimeApi, type MeetingCommittedTurnsSnapshot, type MeetingSessionStatus } from "../app/bridge/runtimeApi";
   import type { AppRoute } from "../app/shared/types";
   import type { ProductRuntimeSnapshot } from "../app/bridge/runtimeProductFacade";
@@ -9,8 +11,14 @@
   import StatusBadge from "../components/ui/StatusBadge.svelte";
   import { MEETING_SOURCE_LABELS } from "../components/ui/meetingSourceLabels";
 
-  let { snapshot, meetingStatus, meetingTurns, actionBusy = false, onMeetingAction, onRefresh, onNavigate }: {
+  let {
+    section = "live", snapshot, meetingStatus, meetingTurns, actionBusy = false,
+    muteBusy = false, onToggleMute, onMeetingAction, onRefresh, onNavigate,
+  }: {
+    section?: "live" | "last" | "saved";
     snapshot: ProductRuntimeSnapshot;
+    muteBusy?: boolean;
+    onToggleMute: () => void | Promise<void>;
     meetingStatus: MeetingSessionStatus | null;
     meetingTurns: MeetingCommittedTurnsSnapshot | null;
     actionBusy?: boolean;
@@ -152,52 +160,85 @@
       : needsSetup || needsVoice || needsSettings ? "warning" : "neutral"
   );
 </script>
-
-<section class="ti-page">
-  <header class="ti-page-header">
-    <div>
-      <h2 class="ti-page-title">Meeting</h2>
-      <p class="ti-page-copy">Indonesian speech → English voice</p>
-    </div>
-  </header>
-
-  <article class="ti-panel overflow-hidden">
-    <div class="flex flex-wrap items-start justify-between gap-3 px-4 py-4 sm:px-6 sm:py-5">
-      <div class="min-w-0 flex-1">
-        <strong class="text-[15px] font-semibold">{meeting.live && meetingStatus?.audio_source === "original" ? MEETING_SOURCE_LABELS.original : meeting.live && meetingStatus?.audio_source === "translateit" ? MEETING_SOURCE_LABELS.translateit : "Meeting audio"}</strong>
-        <p class="mb-0 mt-2 text-[13px] leading-6 text-[var(--ti-text-muted)]" aria-live="polite">{statusMessage}</p>
-      </div>
+<section class="flex h-full min-h-0 flex-col bg-[var(--ti-bg)]" aria-label="Meeting workspace">
+  {#if section === "live"}
+    <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--ti-border)] px-6 py-3">
+      <p class="m-0 text-[13px] text-[var(--ti-text-muted)]">Indonesian speech → English voice</p>
       <StatusBadge label={statusLabel} tone={statusTone} />
     </div>
-    <footer class="flex justify-end border-t border-[var(--ti-border)] px-4 py-4 sm:px-6" aria-label="Meeting main action">
-      <button type="button" class={"ti-button w-full min-w-0 sm:w-auto sm:min-w-44 " + (primaryControl.action === "stop" ? "ti-button-danger" : "")}
-        disabled={!actionEnabled} onclick={handlePrimary}>{primaryLabel}</button>
-    </footer>
-    {#if sourceChangeAllowed && meetingStatus}
-      <div class="border-t border-[var(--ti-border)] px-4 py-4 sm:px-6">
-        <label for="meeting-audio-source" class="ti-field-label">Audio sent to meeting</label>
-        <select id="meeting-audio-source" class="ti-field mt-2 min-h-11 px-3"
-          value={currentSource} disabled={sourceChanging || actionBusy || !sourceChangeAllowed}
-          onchange={(event) => void selectSource(event.currentTarget.value === "original" ? "original" : "translateit")}
-        >
-          <option value="translateit">{MEETING_SOURCE_LABELS.translateit}</option>
-          <option value="original">{MEETING_SOURCE_LABELS.original}</option>
-        </select>
-        <p class="mb-0 mt-2 text-[13px] leading-5 text-[var(--ti-text-muted)]">
-          Both options use the same virtual microphone selected in your calling app.
-        </p>
-      </div>
-    {/if}
-    {#if activityVisible && meetingStatus && meetingStatus.audio_source !== "original"}
-      <div class="border-t border-[var(--ti-border)] px-4 py-4 sm:px-6 sm:py-5">
+    <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-7" role="region" aria-label="Live Meeting transcript and status">
+      {#if activityVisible && meetingStatus && meetingStatus.audio_source !== "original"}
         <MeetingActivity status={meetingStatus} turns={meetingTurns} />
-      </div>
-    {/if}
-  </article>
-  {#key savedDeletionRevision}
-    <MeetingSessionReview sessionActive={meeting.hasSession} onNotice={(message) => void onRefresh(message)} />
-  {/key}
-  <MeetingTranscriptExport hasSession={meeting.hasSession}
-    onNotice={(message) => void onRefresh(message)}
-    onDeleted={() => { savedDeletionRevision += 1; }} />
+      {:else}
+        <div class="flex min-h-[280px] flex-col items-center justify-center gap-3 text-center">
+          <Hash size={28} class="text-[var(--ti-text-soft)]" aria-hidden="true"/>
+          <h3 class="m-0 text-[19px] font-semibold">{meeting.live ? "Original Microphone is live" : "Ready for your meeting"}</h3>
+          <p class="m-0 max-w-[520px] text-[13px] leading-6 text-[var(--ti-text-muted)]" role="status" aria-live="polite">{statusMessage}</p>
+          {#if meeting.live && meetingStatus?.audio_source === "original"}
+            <p class="m-0 text-[12px] text-[var(--ti-text-soft)]">Original Microphone bypasses translation; no translated transcript is generated for your outbound speech.</p>
+          {/if}
+        </div>
+      {/if}
+    </div>
+  {:else if section === "last"}
+    <p class="m-0 shrink-0 border-b border-[var(--ti-border)] px-6 py-3 text-[13px] text-[var(--ti-text-muted)]">
+      Read your last recognized conversation after the session ends.
+    </p>
+    <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-7">
+      {#if meeting.hasSession}
+        <p class="m-0 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-4 text-[13px] text-[var(--ti-text-muted)]">
+          The last-session review becomes available after Meeting stops. The current session is still running; choose Live Meeting to view its transcript.
+        </p>
+      {:else}
+        {#key savedDeletionRevision}
+          <MeetingSessionReview sessionActive={meeting.hasSession} openByDefault={true} onNotice={(message) => void onRefresh(message)} />
+        {/key}
+      {/if}
+    </div>
+  {:else}
+    <p class="m-0 shrink-0 border-b border-[var(--ti-border)] px-6 py-3 text-[13px] text-[var(--ti-text-muted)]">
+      Choose a saved meeting to read, export, or delete its local archive.
+    </p>
+    <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-7">
+      <MeetingTranscriptExport hasSession={meeting.hasSession}
+        onNotice={(message) => void onRefresh(message)}
+        onDeleted={() => { savedDeletionRevision += 1; }} />
+    </div>
+  {/if}
+
+  {#if section === "live" || meeting.hasSession || meeting.canStop}
+    <footer class="ti-call-dock flex min-h-[78px] shrink-0 flex-wrap items-center justify-center gap-2 px-5 py-3 sm:gap-3"
+      aria-label="Meeting main action">
+      {#if sourceChangeAllowed && meetingStatus}
+        <label class="flex min-w-[210px] max-w-[260px] flex-1 flex-col gap-1">
+          <span class="ti-field-label flex items-center gap-1.5"><ArrowLeftRight size={13} aria-hidden="true"/> Audio sent to meeting</span>
+          <select id="meeting-audio-source" class="ti-field min-h-10 px-3"
+            aria-label="Audio sent to meeting"
+            value={currentSource} disabled={sourceChanging || actionBusy || !sourceChangeAllowed}
+            onchange={(event) => void selectSource(event.currentTarget.value === "original" ? "original" : "translateit")}>
+            <option value="translateit">{MEETING_SOURCE_LABELS.translateit}</option>
+            <option value="original">{MEETING_SOURCE_LABELS.original}</option>
+          </select>
+        </label>
+      {/if}
+      <button type="button" class={"ti-button ti-button-secondary min-h-11 " + (meetingStatus?.muted ? "border-[var(--ti-danger-border)] text-[var(--ti-danger)]" : "")}
+        disabled={!meeting.live || !meetingStatus || muteBusy}
+        aria-pressed={meeting.live && Boolean(meetingStatus?.muted)}
+        title="Mute silences TranslateIT virtual output, not your physical microphone"
+        onclick={() => void onToggleMute()}>
+        {#if meetingStatus?.muted}<MicOff size={18} aria-hidden="true"/> Unmute{:else}<Mic size={18} aria-hidden="true"/> Mute{/if}
+      </button>
+      <button type="button" class="ti-button ti-button-secondary min-h-11"
+        aria-label="Open captions controls in Quick Access"
+        onclick={() => void toggleQuickAccess().catch(() => onRefresh("Quick Access couldn't be opened."))}>
+        <Captions size={18} aria-hidden="true"/> Captions
+      </button>
+      <button type="button"
+        class={"ti-button min-h-11 min-w-[160px] " + (primaryControl.action === "stop" ? "ti-button-danger" : "")}
+        disabled={!actionEnabled} onclick={handlePrimary}>
+        {#if primaryControl.action === "stop"}<PhoneOff size={18} aria-hidden="true"/>{:else}<Mic size={18} aria-hidden="true"/>{/if}
+        {primaryLabel}
+      </button>
+    </footer>
+  {/if}
 </section>
