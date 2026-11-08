@@ -98,9 +98,21 @@ pub(super) fn reject_unsafe_realtime_item(
                 _ => Err("codex_realtime:started_item_unadmitted"),
             }
         }
-        "thread/realtime/item/completed"
-            if params.pointer("/item/type").and_then(Value::as_str) == Some("bemItemPromoted") =>
-                Err("codex_realtime:agent_item_promoted"),
+        "thread/realtime/item/completed" => {
+            // Only the canonical non-agent timeline kinds reach the observer.
+            // Identity, role, text and completion remain its own admission.
+            let item = params.get("item").and_then(Value::as_object)
+                .ok_or("codex_realtime:item_invalid")?;
+            match item.get("type").and_then(Value::as_str) {
+                Some("realtimeSessionStarted" | "transcriptSegment" | "realtimeSessionClosed") =>
+                    Ok(()),
+                Some("bemItemPromoted") =>
+                    Err("codex_realtime:agent_item_promoted"),
+                Some("handoff_request" | "function_call") =>
+                    Err("codex_realtime:agent_handoff_observed"),
+                _ => Err("codex_realtime:item_type_unrecognized"),
+            }
+        }
         _ => Ok(()),
     }
 }
@@ -718,6 +730,71 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[test]
+    fn completed_realtime_items_reject_agent_unknown_and_malformed_types() {
+        for (kind, blocker) in [
+            ("handoff_request", "codex_realtime:agent_handoff_observed"),
+            ("function_call", "codex_realtime:agent_handoff_observed"),
+            ("bemItemPromoted", "codex_realtime:agent_item_promoted"),
+            ("commandExecution", "codex_realtime:item_type_unrecognized"),
+            ("message", "codex_realtime:item_type_unrecognized"),
+        ] {
+            let mut o = observer();
+            let payload = json!({"threadId":"thr_a", "item":{
+                "id":"unsafe_1", "realtimeSessionId":"sess_a", "type":kind
+            }});
+            assert_eq!(
+                o.observe("thread/realtime/item/completed", &payload),
+                Err(blocker)
+            );
+            assert_eq!(
+                o.observe("thread/realtime/item/completed",
+                    &item("late","sess_a","assistant","Late text")),
+                Err("codex_realtime:session_revoked")
+            );
+        }
+
+        for malformed in [
+            json!({"threadId":"thr_a"}),
+            json!({"threadId":"thr_a","item":null}),
+        ] {
+            let mut o = observer();
+            assert_eq!(
+                o.observe("thread/realtime/item/completed", &malformed),
+                Err("codex_realtime:item_invalid")
+            );
+        }
+        for untyped in [
+            json!({"threadId":"thr_a","item":{"id":"i1","realtimeSessionId":"sess_a"}}),
+            json!({"threadId":"thr_a","item":{"id":"i1","realtimeSessionId":"sess_a","type":null}}),
+        ] {
+            let mut o = observer();
+            assert_eq!(
+                o.observe("thread/realtime/item/completed", &untyped),
+                Err("codex_realtime:item_type_unrecognized")
+            );
+        }
+    }
+
+    #[test]
+    fn completed_realtime_items_keep_canonical_non_agent_types() {
+        for item in [
+            json!({"id":"session_1", "realtimeSessionId":"sess_a",
+                "type":"realtimeSessionStarted"}),
+            json!({"id":"source_1", "realtimeSessionId":"sess_a",
+                "type":"transcriptSegment", "role":"user", "text":"Source"}),
+            json!({"id":"close_1", "realtimeSessionId":"sess_a",
+                "type":"realtimeSessionClosed", "outcome":"ended"}),
+        ] {
+            let payload = json!({"threadId":"thr_a","item":item});
+            assert_eq!(
+                reject_unsafe_realtime_item("thread/realtime/item/completed", &payload),
+                Ok(())
+            );
+        }
+        // The admission above is not a final translation or TTS authority.
     }
 
     #[test]

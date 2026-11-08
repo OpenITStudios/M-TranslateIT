@@ -1048,6 +1048,59 @@ mod tests {
     }
 
     #[test]
+    fn owned_voice_reader_rejects_unadmitted_completed_items_before_observer() {
+        for (kind, blocker) in [
+            ("handoff_request", "codex_realtime:agent_handoff_observed"),
+            ("function_call", "codex_realtime:agent_handoff_observed"),
+            ("bemItemPromoted", "codex_realtime:agent_item_promoted"),
+            ("commandExecution", "codex_realtime:item_type_unrecognized"),
+        ] {
+            let event = Inbound::Notification {
+                method: "thread/realtime/item/completed".into(),
+                params: serde_json::json!({"threadId":"thread_1","item":{
+                    "id":"item_1", "realtimeSessionId":"sess_1", "type":kind
+                }}),
+            };
+            assert_eq!(owned_realtime_inbound_allowed(&event, 10), Err(blocker));
+        }
+        for malformed in [
+            serde_json::json!({"threadId":"thread_1"}),
+            serde_json::json!({"threadId":"thread_1","item":null}),
+        ] {
+            let event = Inbound::Notification {
+                method: "thread/realtime/item/completed".into(),
+                params: malformed,
+            };
+            assert_eq!(
+                owned_realtime_inbound_allowed(&event, 10),
+                Err("codex_realtime:item_invalid")
+            );
+        }
+        let unknown = Inbound::Notification {
+            method: "thread/realtime/item/completed".into(),
+            params: serde_json::json!({"threadId":"thread_1","item":{"id":"item_1"}}),
+        };
+        assert_eq!(
+            owned_realtime_inbound_allowed(&unknown, 10),
+            Err("codex_realtime:item_type_unrecognized")
+        );
+        for item in [
+            serde_json::json!({"id":"s1","realtimeSessionId":"sess_1",
+                "type":"realtimeSessionStarted"}),
+            serde_json::json!({"id":"t1","realtimeSessionId":"sess_1",
+                "type":"transcriptSegment","role":"user","text":"Synthetic source"}),
+            serde_json::json!({"id":"c1","realtimeSessionId":"sess_1",
+                "type":"realtimeSessionClosed","outcome":"ended"}),
+        ] {
+            let event = Inbound::Notification {
+                method: "thread/realtime/item/completed".into(),
+                params: serde_json::json!({"threadId":"thread_1","item":item}),
+            };
+            assert_eq!(owned_realtime_inbound_allowed(&event, 10), Ok(()));
+        }
+    }
+
+    #[test]
     fn notification_dispatch_retains_only_account_changes_and_denies_voice() {
         assert_eq!(account_notification("account/updated"), Ok(true));
         assert_eq!(account_notification("account/rateLimits/updated"), Ok(true));
