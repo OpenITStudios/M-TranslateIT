@@ -518,6 +518,94 @@
     background: #aa242b;
   }
 
+  /* Discord-style user footer: both halves of the mute split button share the same state. */
+  .ti-mute-split.is-muted .ti-user-action {
+    color: var(--ti-danger);
+    background: var(--ti-danger-surface);
+  }
+
+  .ti-mute-split.is-muted .ti-user-action:hover:not(:disabled) {
+    background: var(--ti-danger-hover);
+    color: var(--ti-danger);
+  }
+
+  /* Live Meeting toolbar — audio mode belongs to the header, not the Stop dock. */
+  .ti-meeting-source select {
+    border: 0;
+    outline-offset: 2px;
+    color: var(--ti-text);
+    cursor: pointer;
+  }
+
+  .ti-meeting-source select option {
+    background: var(--ti-sidebar);
+    color: var(--ti-text);
+  }
+
+  /* Shared Live/Last/Saved conversation presentation. */
+  .ti-chat-bubble {
+    width: min(68%, 680px);
+    min-width: 0;
+    padding: 14px 16px;
+    border: 1px solid var(--ti-border);
+    border-radius: 11px;
+    background: var(--ti-surface-raised);
+    overflow-wrap: anywhere;
+  }
+
+  .ti-chat-bubble-incoming {
+    background: var(--ti-surface-raised);
+    border-color: var(--ti-border-strong);
+  }
+
+  .ti-chat-bubble-own {
+    background: var(--ti-chat-own);
+    border-color: #325180;
+  }
+
+  .ti-chat-meta {
+    color: var(--ti-text-muted);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.5;
+  }
+
+  .ti-chat-text {
+    color: var(--ti-text);
+    font-size: 14px;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
+  .ti-chat-divider {
+    border-top: 1px solid var(--ti-border-strong);
+  }
+
+  .ti-chat-bubble-own .ti-chat-divider {
+    border-top-color: rgba(255, 255, 255, 0.14);
+  }
+
+  .ti-chat-copy-button {
+    opacity: 0;
+    transition: opacity 120ms ease, background-color 120ms ease;
+  }
+
+  .ti-chat-bubble:hover .ti-chat-copy-button,
+  .ti-chat-bubble:focus-within .ti-chat-copy-button,
+  .ti-chat-copy-button:focus-visible {
+    opacity: 1;
+  }
+
+  .ti-chat-copy-button:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.10);
+    color: var(--ti-text);
+  }
+
+  @media (hover: none) {
+    .ti-chat-copy-button { opacity: 1; }
+  }
+
   .ti-settings-panel {
     border: 0;
     border-radius: 0;
@@ -559,6 +647,8 @@
 }
 
 @media (max-width: 1120px) {
+  .ti-chat-bubble { width: min(84%, 680px); }
+
   :root {
     --ti-sidebar-width: 224px;
     --ti-page-padding-x: 18px;

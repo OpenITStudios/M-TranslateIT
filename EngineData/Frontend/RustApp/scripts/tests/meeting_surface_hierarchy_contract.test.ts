@@ -21,15 +21,15 @@ test("Meeting has a single primary button that can Start, Stop, or guide recover
   }
 });
 test("Meeting keeps a single accessible Stop or Retry Stop in a persistent dock below the transcript", () => {
-  assert.match(meeting, /meeting\.lifecycle === "cleanup_incomplete" \? primaryControl\.label : "Stop Microphone"/);
+  assert.match(meeting, /meeting\.lifecycle === "cleanup_incomplete" \? primaryControl\.label : "Stop Meeting"/);
   assert.match(meeting, /meeting\.lifecycle === "cleanup_incomplete" \? "warning"/);
   const action = meeting.indexOf('aria-label="Meeting main action"');
   const sourceSelector = meeting.indexOf('id="meeting-audio-source"');
   const transcript = meeting.indexOf("<MeetingActivity status={meetingStatus}");
-  assert.ok(transcript > 0 && transcript < action && action < sourceSelector,
-    "Live transcript must appear before the fixed action dock and source selector");
+  assert.ok(sourceSelector > 0 && sourceSelector < transcript && transcript < action,
+    "Audio Sent belongs to the Live toolbar, transcript stays central, and the dock comes last");
   assert.match(meeting, /section === "live" \|\| meeting\.hasSession \|\| meeting\.canStop/);
-  assert.match(meeting, /onToggleMute/);
+  assert.doesNotMatch(meeting, /onToggleMute/);
   assert.equal((meeting.match(/onclick=\{handlePrimary\}/g) ?? []).length, 1);
 });
 
@@ -99,7 +99,7 @@ test("Last-session transcript is private-by-default and export remains explicit"
   assert.doesNotMatch(review, /\$effect\([\s\S]{0,250}exportMeetingTranscript\(/);
 });
 
-test("live and last-session transcript reuse one WhatsApp-style lane-aware bubble", () => {
+test("live and last-session transcript reuse one Discord-style bilingual lane-aware bubble", () => {
   const bubble = readFileSync(new URL("../../src/components/meeting/MeetingTurnBubble.svelte", import.meta.url), "utf8");
   assert.match(live, /<MeetingTurnBubble \{turn\}/);
   assert.match(review, /<MeetingTurnBubble \{turn\}/);
@@ -136,9 +136,10 @@ test("Discord-inspired shell uses exactly one sidebar, channel navigation, and b
   assert.match(sidebar, /Live Meeting/);
   assert.match(sidebar, /Last Meeting/);
   assert.match(sidebar, /Saved Transcripts/);
-  assert.match(sidebar, /ti-sidebar-footer/);
-  assert.match(sidebar, /aria-label="Open Settings"/);
-  assert.match(sidebar, /aria-label="Open Quick Access"/);
+  assert.match(sidebar, /<SidebarUserControls/);
+  const userControls = readFileSync(new URL("../../src/components/layout/SidebarUserControls.svelte", import.meta.url), "utf8");
+  assert.match(userControls, /aria-label="Open Settings"/);
+  assert.match(header, /aria-label="Open Quick Access"/);
   assert.doesNotMatch(settings, /aria-label="Settings categories"/);
   assert.match(css, /--ti-sidebar-width: 248px/);
   assert.match(app, /route === "meeting" \? "overflow-hidden" : "overflow-y-auto"/);
@@ -175,19 +176,59 @@ test("Discord-like footer groups Voice Actor, Mute, device dropdown and Settings
   assert.match(controls, /onOpenAudioSettings\(\)/);
 });
 
-test("Meeting footer has only compact Source, Stop and Captions, with native Stop ownership preserved", () => {
-  assert.match(meeting, /class="ti-call-source/);
-  assert.match(meeting, /ti-call-stop/);
+test("Meeting puts Audio Sent and Captions in the header while only Stop remains below", () => {
+  assert.match(meeting, /aria-label="Live Meeting toolbar"/);
+  assert.match(meeting, /id="meeting-audio-source"/);
   assert.match(meeting, /aria-label="Open captions controls in Quick Access"/);
+  assert.match(meeting, /ti-call-stop/);
   assert.match(meeting, /onclick=\{handlePrimary\}/);
   assert.doesNotMatch(meeting, /onToggleMute|MicOff|Deafen|Undeafen/);
   const source = meeting.indexOf('id="meeting-audio-source"');
-  const stop = meeting.indexOf("onclick={handlePrimary}", source);
-  const captions = meeting.indexOf('aria-label="Open captions controls', stop);
-  assert.ok(source > 0 && stop > source && captions > stop,
-    "Source and Captions flank the single Stop/Start primary action");
+  const captions = meeting.indexOf('aria-label="Open captions controls in Quick Access"');
+  const transcript = meeting.indexOf("<MeetingActivity status={meetingStatus}");
+  const dock = meeting.indexOf('aria-label="Meeting main action"');
+  assert.ok(source > 0 && captions > source && transcript > captions && dock > transcript);
+  assert.equal((meeting.match(/onclick=\{handlePrimary\}/g) ?? []).length, 1);
+  const footer = meeting.slice(dock);
+  assert.doesNotMatch(footer, /meeting-audio-source|Captions|onToggleMute/);
+  assert.match(meeting, /does not leave the Discord or Zoom call/);
+});
+
+test("muted state colors both halves of the sidebar split button", () => {
+  const userControls = readFileSync(new URL("../../src/components/layout/SidebarUserControls.svelte", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../../src/styles/app.css", import.meta.url), "utf8");
+  assert.match(userControls, /ti-mute-split flex/);
+  assert.match(userControls, /meetingMuted \? "is-muted" : ""/);
+  assert.match(css, /\.ti-mute-split\.is-muted \.ti-user-action/);
+  assert.doesNotMatch(meeting, /Deafen|Undeafen/);
+});
+
+test("bilingual bubble keeps statuses truthful, source and translation together, with accessible copy", () => {
+  const bubble = readFileSync(new URL("../../src/components/meeting/MeetingTurnBubble.svelte", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../../src/styles/app.css", import.meta.url), "utf8");
+  assert.match(bubble, /ti-chat-bubble-own/);
+  assert.match(bubble, /meetingTranslationDisplay\(turn\)/);
+  assert.match(bubble, /meetingTime\(turn\.created_unix_ms\)/);
+  assert.match(bubble, /\{#if onCopy\}/);
+  assert.match(bubble, /statusLabel/);
+  assert.match(live, /onCopy=\{\(\) => void copyTurn\(turn\)\}/);
+  assert.match(live, /followingLatest/);
+  assert.match(live, /role="log"/);
+  assert.match(css, /width: min\(68%, 680px\)/);
+  assert.match(css, /overflow-wrap: anywhere/);
+});
+
+test("Settings categories separate saved caption controls from read-only appearance defaults", () => {
+  const sidebar = readFileSync(new URL("../../src/components/layout/Sidebar.svelte", import.meta.url), "utf8");
+  const settings = readFileSync(new URL("../../src/pages/Settings.svelte", import.meta.url), "utf8");
   const app = readFileSync(new URL("../../src/App.svelte", import.meta.url), "utf8");
-  assert.match(app, /onToggleMute=\{toggleMeetingMute\}/);
-  assert.match(app, /onVoiceChanged=\{syncMeetingVoice\}/);
-  assert.match(app, /voiceSelectionRevision/);
+  assert.match(sidebar, /Meeting & Transcript/);
+  assert.match(sidebar, /Appearance/);
+  assert.match(sidebar, /Voice & Audio/);
+  assert.match(sidebar, /Help & Diagnostics/);
+  assert.match(app, /settingsTab = \$state<"meeting" \| "translation" \| "appearance" \| "advanced">/);
+  assert.match(settings, /Transcript Appearance/);
+  assert.match(settings, /not editable settings/);
+  assert.match(settings, /\{:else if tab === "appearance"\}/);
+  assert.match(settings, /<FloatingCaptionPreferences \{onNotice\}/);
 });

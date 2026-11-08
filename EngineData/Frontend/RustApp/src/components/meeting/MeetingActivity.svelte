@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import { Check, Copy } from "@lucide/svelte";
+
   import type { MeetingCommittedTurn, MeetingCommittedTurnsSnapshot, MeetingSessionStatus } from "../../app/bridge/runtimeApi";
   import { mapProductMeetingState } from "../../app/bridge/productMeetingState";
   import { languageName } from "../../app/shared/state";
@@ -111,7 +111,7 @@
   }
 </script>
 
-<section class="grid gap-4">
+<section class="flex h-full min-h-0 flex-col gap-3">
   <div class="flex flex-wrap items-center justify-between gap-3" role="status" aria-live="polite" aria-atomic="true">
     <div class="flex items-center gap-3">
       <span class={`size-2 shrink-0 rounded-full ${activity.warning ? "bg-[var(--ti-warning)]" : "bg-[var(--ti-success)]"}`} aria-hidden="true"></span>
@@ -146,8 +146,8 @@
     </p>
   {/if}
 
-  <section class="border-t border-[var(--ti-border)] pt-4" aria-label="Translated conversation">
-    <header class="flex flex-wrap items-center justify-between gap-3 pb-3">
+  <section class="flex min-h-0 flex-1 flex-col border-t border-[var(--ti-border)] pt-3" aria-label="Translated conversation">
+    <header class="flex shrink-0 flex-wrap items-center justify-between gap-3 pb-3">
       <div class="flex items-baseline gap-3">
         <h3 class="m-0 text-base font-semibold">Transcript</h3>
         <span class="text-xs text-[var(--ti-text-muted)]">{meetingSessionTitle(status.started_unix_ms)}</span>
@@ -171,19 +171,14 @@
       {:else}
         <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users need focus to scroll this named region.) -->
         <div bind:this={transcriptScroller} onscroll={updateScrollPosition}
-          class="max-h-[calc(100vh-295px)] min-h-[160px] overflow-y-auto" role="log" aria-label="Meeting conversation" aria-live="off" tabindex="0">
-          {#each orderedTurns as turn (turn.sequence)}
-            <div class="group py-2 last:pb-0">
-              <MeetingTurnBubble {turn} statusLabel={turn.lane === "you" ? deliveryLabel(turn) : ""} />
-              <div class={"mt-1 flex items-center gap-1 " + (turn.lane === "you" ? "justify-end" : "justify-start")}>
-                <button type="button" class="grid size-10 place-items-center rounded-[var(--ti-radius-sm)] text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)]"
-                  aria-label={`Copy bilingual phrase ${turn.sequence}`} title="Copy source and translation"
-                  onclick={() => void copyTurn(turn)}>
-                  {#if copiedSequence === turn.sequence}<Check size={15} />{:else}<Copy size={15} />{/if}
-                </button>
-              </div>
+          class="min-h-0 flex-1 overflow-y-auto pr-1" role="log" aria-label="Meeting conversation" aria-live="off" tabindex="0">
+          {#each orderedTurns as turn, index (turn.sequence)}
+            <div class={"ti-chat-message pb-2 last:pb-0 " +
+              (index > 0 && orderedTurns[index - 1]?.lane !== turn.lane ? "pt-3" : "pt-1")}>
+              <MeetingTurnBubble {turn} statusLabel={turn.lane === "you" ? deliveryLabel(turn) : ""}
+                onCopy={() => void copyTurn(turn)} copied={copiedSequence === turn.sequence} />
               {#if copyFailedSequence === turn.sequence}
-                <p class="m-0 text-sm text-[var(--ti-warning)]" role="alert">Couldn't copy this phrase. Try again.</p>
+                <p class="m-0 mt-1 text-[13px] text-[var(--ti-warning)]" role="alert">Couldn't copy this phrase. Try again.</p>
               {/if}
             </div>
           {/each}

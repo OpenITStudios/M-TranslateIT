@@ -18,7 +18,7 @@
   import StatusBadge from "../components/ui/StatusBadge.svelte";
   import StatusRow from "../components/ui/StatusRow.svelte";
 
-  type SettingsTab = "meeting" | "translation" | "advanced";
+  type SettingsTab = "meeting" | "translation" | "appearance" | "advanced";
 
   let {
     tab,
@@ -212,12 +212,12 @@
   <div class="ti-page">
     <header class="ti-page-header">
       <div>
-        <h2 class="ti-page-title">{tab === "meeting" ? "Voice & Audio" : tab === "translation" ? "Meeting Captions" : "Help & Diagnostics"}</h2>
-        <p class="ti-page-copy">{tab === "meeting" ? "Choose your microphone, speakers, and meeting audio options." : tab === "translation" ? "Control the captions displayed during your meetings." : "Review setup health and find recovery options."}</p>
+        <h2 class="ti-page-title">{tab === "meeting" ? "Voice & Audio" : tab === "translation" ? "Meeting & Transcript" : tab === "appearance" ? "Appearance" : "Help & Diagnostics"}</h2>
+        <p class="ti-page-copy">{tab === "meeting" ? "Choose your microphone, meeting sound and audio options." : tab === "translation" ? "Transcript presentation and floating caption preferences." : tab === "appearance" ? "The current visual language of TranslateIT." : "Review setup health and recovery options."}</p>
       </div>
     </header>
       <div id="settings-category-panel" class="min-w-0" role="region"
-        aria-label={tab === "meeting" ? "Voice & Audio settings" : tab === "translation" ? "Meeting Captions settings" : "Help and diagnostics"}>
+        aria-label={tab === "meeting" ? "Voice & Audio settings" : tab === "translation" ? "Meeting & Transcript settings" : tab === "appearance" ? "Appearance settings" : "Help and diagnostics"}>
     {#if tab === "meeting"}
       <article class="ti-panel ti-settings-panel overflow-hidden">
         <header class="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-4">
@@ -345,9 +345,68 @@
         </footer>
       </article>
     {:else if tab === "translation"}
-      <div >
-        <FloatingCaptionPreferences {onNotice} />
+      <div class="grid min-w-0 gap-7">
+        <section aria-labelledby="transcript-appearance-heading">
+          <h3 id="transcript-appearance-heading" class="m-0 text-[16px] font-semibold">Transcript Appearance</h3>
+          <p class="mb-4 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">
+            The Live, Last Meeting and Saved Transcripts channels share the same bilingual message style.
+          </p>
+          <dl class="grid grid-cols-1 gap-x-6 gap-y-4 border-y border-[var(--ti-border)] py-4 sm:grid-cols-2">
+            <div class="min-w-0">
+              <dt class="text-[12px] text-[var(--ti-text-muted)]">Layout</dt>
+              <dd class="m-0 mt-1 text-[13px] font-medium">Meeting audio left · You right</dd>
+            </div>
+            <div class="min-w-0">
+              <dt class="text-[12px] text-[var(--ti-text-muted)]">Text order</dt>
+              <dd class="m-0 mt-1 text-[13px] font-medium">Original then translation</dd>
+            </div>
+            <div class="min-w-0">
+              <dt class="text-[12px] text-[var(--ti-text-muted)]">Timestamps</dt>
+              <dd class="m-0 mt-1 text-[13px] font-medium">Always shown · HH:mm:ss</dd>
+            </div>
+            <div class="min-w-0">
+              <dt class="text-[12px] text-[var(--ti-text-muted)]">Reading position</dt>
+              <dd class="m-0 mt-1 text-[13px] font-medium">Follow latest; pause when scrolling up</dd>
+            </div>
+          </dl>
+          <p class="mb-0 mt-3 text-[12px] leading-5 text-[var(--ti-text-muted)]">
+            These are current display defaults, not editable settings. Customization will require verified preference storage.
+          </p>
+        </section>
+        <section aria-labelledby="floating-captions-heading" class="border-t border-[var(--ti-border)] pt-5">
+          <h3 id="floating-captions-heading" class="m-0 text-[16px] font-semibold">Floating Captions</h3>
+          <p class="mb-4 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">
+            Captions display separately from the main transcript. Available options below use the existing saved caption preferences.
+          </p>
+          <FloatingCaptionPreferences {onNotice} />
+        </section>
       </div>
+    {:else if tab === "appearance"}
+      <section class="grid gap-5" aria-label="Current appearance">
+        <h3 class="m-0 text-[16px] font-semibold">Interface Appearance</h3>
+        <dl class="grid grid-cols-1 gap-x-6 gap-y-4 border-y border-[var(--ti-border)] py-4 sm:grid-cols-2">
+          <div>
+            <dt class="text-[12px] text-[var(--ti-text-muted)]">Color theme</dt>
+            <dd class="m-0 mt-1 text-[13px] font-medium">Dark</dd>
+          </div>
+          <div>
+            <dt class="text-[12px] text-[var(--ti-text-muted)]">Interface density</dt>
+            <dd class="m-0 mt-1 text-[13px] font-medium">Comfortable</dd>
+          </div>
+          <div>
+            <dt class="text-[12px] text-[var(--ti-text-muted)]">Motion</dt>
+            <dd class="m-0 mt-1 text-[13px] font-medium">Follows reduced-motion preference</dd>
+          </div>
+          <div>
+            <dt class="text-[12px] text-[var(--ti-text-muted)]">Selected accent</dt>
+            <dd class="m-0 mt-1 text-[13px] font-medium">TranslateIT blue</dd>
+          </div>
+        </dl>
+        <p class="m-0 text-[13px] leading-6 text-[var(--ti-text-muted)]">
+          These are the current visual defaults. There are no appearance switches that silently reset or change only this screen.
+          Global themes and font-size controls will be added only with real preference persistence and responsive validation.
+        </p>
+      </section>
     {:else if !diagnosticsOpen}
       <article class="ti-panel overflow-hidden">
         <header class="border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-4">

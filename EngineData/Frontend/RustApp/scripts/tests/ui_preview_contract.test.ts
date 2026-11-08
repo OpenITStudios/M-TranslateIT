@@ -120,6 +120,8 @@ test("renderer defaults to plan-only, pins exact clean Local and blocks remote h
   assert.match(renderer, /approved_logo_asset_loaded/);
   assert.match(renderer, /stylesheet_applied/);
   assert.match(renderer, /call_dock_not_clipped/);
+  assert.match(renderer, /"Stop Meeting"/);
+  assert.match(renderer, /\[data-chat-timestamp\]/);
   assert.match(renderer, /dock_controls_not_clipped/);
   assert.match(renderer, /lanes_distinct/);
   assert.match(renderer, /timestamp_to_seconds/);

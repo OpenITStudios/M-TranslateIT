@@ -111,7 +111,7 @@
   const activityVisible = $derived(Boolean(meetingStatus && meeting.applicationOwned && meeting.live));
   const primaryLabel = $derived(
     primaryControl.action === "stop"
-      ? meeting.lifecycle === "cleanup_incomplete" ? primaryControl.label : "Stop Microphone"
+      ? meeting.lifecycle === "cleanup_incomplete" ? primaryControl.label : "Stop Meeting"
       : currentSource === "original" && originalAvailable ? "Start Original Microphone"
       : currentSource === "original" && !meeting.hasSession ? "Check Audio Setup"
       : meeting.busy || actionBusy ? primaryControl.label
@@ -160,11 +160,38 @@
 </script>
 <section class="flex h-full min-h-0 flex-col bg-[var(--ti-bg)]" aria-label="Meeting workspace">
   {#if section === "live"}
-    <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--ti-border)] px-6 py-3">
-      <p class="m-0 text-[13px] text-[var(--ti-text-muted)]">Indonesian speech → English voice</p>
-      <StatusBadge label={statusLabel} tone={statusTone} />
+    <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--ti-border)] px-5 py-3 sm:px-7"
+      aria-label="Live Meeting toolbar">
+      <div class="flex min-w-0 items-center gap-3">
+        <p class="m-0 text-[13px] text-[var(--ti-text-muted)]">Indonesian speech → English voice</p>
+        <StatusBadge label={statusLabel} tone={statusTone} />
+      </div>
+      <div class="flex min-w-0 flex-wrap items-center justify-end gap-2">
+        {#if sourceChangeAllowed && meetingStatus}
+          <label class="ti-meeting-source flex min-h-10 min-w-0 items-center gap-2 rounded-[var(--ti-radius-sm)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] px-3">
+            <ArrowLeftRight size={16} class="shrink-0 text-[var(--ti-text-muted)]" aria-hidden="true"/>
+            <span class="hidden shrink-0 text-[12px] text-[var(--ti-text-muted)] md:inline">Audio sent</span>
+            <select id="meeting-audio-source" class="min-h-9 min-w-0 max-w-[170px] bg-transparent text-[13px] font-medium text-[var(--ti-text)]"
+              aria-label="Audio sent to meeting" title="Choose the audio sent through TranslateIT's virtual microphone"
+              value={currentSource} disabled={sourceChanging || actionBusy || !sourceChangeAllowed}
+              onchange={(event) => void selectSource(event.currentTarget.value === "original" ? "original" : "translateit")}>
+              <option value="translateit">{MEETING_SOURCE_LABELS.translateit}</option>
+              <option value="original">{MEETING_SOURCE_LABELS.original}</option>
+            </select>
+          </label>
+        {:else if meetingStatus}
+          <span class="text-[12px] text-[var(--ti-text-muted)]" title="The current audio mode cannot be changed during cleanup">
+            Audio sent: {meetingStatus.audio_source === "original" ? MEETING_SOURCE_LABELS.original : MEETING_SOURCE_LABELS.translateit}
+          </span>
+        {/if}
+        <button type="button" class="ti-button ti-button-secondary min-h-10 px-3 text-[13px]"
+          aria-label="Open captions controls in Quick Access" title="Floating captions settings"
+          onclick={() => void toggleQuickAccess().catch(() => onRefresh("Quick Access couldn't be opened."))}>
+          <Captions size={17} aria-hidden="true"/> Captions
+        </button>
+      </div>
     </div>
-    <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-7" role="region" aria-label="Live Meeting transcript and status">
+    <div class="min-h-0 flex-1 overflow-hidden px-5 py-4 sm:px-7" role="region" aria-label="Live Meeting transcript and status">
       {#if activityVisible && meetingStatus && meetingStatus.audio_source !== "original"}
         <MeetingActivity status={meetingStatus} turns={meetingTurns} />
       {:else}
@@ -205,35 +232,15 @@
   {/if}
 
   {#if section === "live" || meeting.hasSession || meeting.canStop}
-    <footer class="ti-call-dock flex min-h-[66px] shrink-0 items-center justify-center gap-3 px-5 py-3"
+    <footer class="ti-call-dock flex min-h-[70px] shrink-0 items-center justify-center px-5 py-3"
       aria-label="Meeting main action">
-      <div class="flex min-w-0 max-w-full items-center justify-center gap-2.5">
-        {#if sourceChangeAllowed && meetingStatus}
-          <div class="ti-call-source flex min-w-0 items-center gap-2 rounded-[var(--ti-radius-sm)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] px-2">
-            <ArrowLeftRight size={17} class="shrink-0 text-[var(--ti-text-muted)]" aria-hidden="true"/>
-            <label for="meeting-audio-source" class="sr-only">Audio sent to meeting</label>
-            <select id="meeting-audio-source" class="ti-call-source-select min-h-10 min-w-0 max-w-[175px] bg-transparent text-[13px] font-medium"
-              aria-label="Audio sent to meeting"
-              title="Choose the voice sent to your call"
-              value={currentSource} disabled={sourceChanging || actionBusy || !sourceChangeAllowed}
-              onchange={(event) => void selectSource(event.currentTarget.value === "original" ? "original" : "translateit")}>
-              <option value="translateit">{MEETING_SOURCE_LABELS.translateit}</option>
-              <option value="original">{MEETING_SOURCE_LABELS.original}</option>
-            </select>
-          </div>
-        {/if}
-        <button type="button"
-          class={"ti-button min-h-11 min-w-[168px] " + (primaryControl.action === "stop" ? "ti-call-stop" : "")}
-          disabled={!actionEnabled} onclick={handlePrimary}>
-          {#if primaryControl.action === "stop"}<PhoneOff size={18} aria-hidden="true"/>{:else}<Mic size={18} aria-hidden="true"/>{/if}
-          {primaryLabel}
-        </button>
-        <button type="button" class="ti-button ti-button-secondary min-h-11 px-3 text-[13px]"
-          aria-label="Open captions controls in Quick Access"
-          onclick={() => void toggleQuickAccess().catch(() => onRefresh("Quick Access couldn't be opened."))}>
-          <Captions size={17} aria-hidden="true"/> Captions
-        </button>
-      </div>
+      <button type="button"
+        class={"ti-button min-h-11 min-w-[172px] px-5 " + (primaryControl.action === "stop" ? "ti-call-stop" : "")}
+        title={primaryControl.action === "stop" ? "Stops TranslateIT audio; does not leave the Discord or Zoom call" : "Start or recover TranslateIT meeting audio"}
+        disabled={!actionEnabled} onclick={handlePrimary}>
+        {#if primaryControl.action === "stop"}<PhoneOff size={18} aria-hidden="true"/>{:else}<Mic size={18} aria-hidden="true"/>{/if}
+        {primaryLabel}
+      </button>
     </footer>ter>
   {/if}
 </section>

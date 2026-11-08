@@ -54,7 +54,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
   let booting = $state(true);
   let route=$state<AppRoute>("meeting");
   let meetingSection = $state<"live" | "last" | "saved">("live");
-  let settingsTab = $state<"meeting" | "translation" | "advanced">("meeting");
+  let settingsTab = $state<"meeting" | "translation" | "appearance" | "advanced">("meeting");
   let muteBusy = $state(false);
   let voiceSelectionRevision = $state(0);
   let notice = $state<AppNotice>(appNotice("Getting TranslateIT ready...", "progress"));

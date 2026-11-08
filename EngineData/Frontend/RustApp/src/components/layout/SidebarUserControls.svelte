@@ -396,7 +396,7 @@
       </span>
     </button>
 
-    <div class="flex shrink-0 items-center rounded-md bg-[var(--ti-sidebar)]">
+    <div class={"ti-mute-split flex shrink-0 items-center rounded-md bg-[var(--ti-sidebar)] " + (meetingMuted ? "is-muted" : "")}>
       <button type="button" class={"ti-user-action " + (meetingMuted ? "is-muted" : "")}
         aria-label={meetingMuted ? "Unmute TranslateIT output" : "Mute TranslateIT output"}
         aria-pressed={meetingLive && meetingMuted}

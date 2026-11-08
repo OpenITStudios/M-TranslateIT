@@ -212,7 +212,7 @@ async function main() {
     };
     const primary = await frame.locator('footer[aria-label="Meeting main action"] button').last().textContent();
     const expectedPrimary = input.scenario === "cleanup" ? "Retry Stop"
-      : input.scenario === "ready" ? "Start Translation" : "Stop Microphone";
+      : input.scenario === "ready" ? "Start Translation" : "Stop Meeting";
     checks.truthful_primary_action = (primary ?? "").includes(expectedPrimary);
     if (input.scenario !== "ready" && input.scenario !== "cleanup") {
       const incoming = frame.locator('article[aria-label="Meeting audio"]').first();
@@ -223,7 +223,7 @@ async function main() {
         const incomingRect = await incoming.boundingBox();
         const outgoingRect = await outgoing.boundingBox();
         checks.lanes_distinct = Boolean(incomingRect && outgoingRect && outgoingRect.x > incomingRect.x);
-        const timestamp = await outgoing.locator("header span").first().textContent();
+        const timestamp = await outgoing.locator("[data-chat-timestamp]").first().textContent();
         checks.timestamp_to_seconds = /^\d{2}:\d{2}:\d{2}$/.test((timestamp ?? "").trim());
       }
     }

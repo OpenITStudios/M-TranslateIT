@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { AudioLines, Captions, Clock3, FolderClosed, Hash, Mic, Settings, ArrowLeft } from "@lucide/svelte";
+  import { AudioLines, Captions, Clock3, FolderClosed, Hash, Mic, Settings, Palette, ArrowLeft } from "@lucide/svelte";
   import type { AppRoute } from "../../app/shared/types";
   import type { RuntimeSettings } from "../../app/shared/types";
   import SidebarUserControls from "./SidebarUserControls.svelte";
   import TranslateITMark from "../brand/TranslateITMark.svelte";
 
   type MeetingSection = "live" | "last" | "saved";
-  type SettingsTab = "meeting" | "translation" | "advanced";
+  type SettingsTab = "meeting" | "translation" | "appearance" | "advanced";
 
   let {
     active, presence, meetingSection, settingsTab, meetingLive = false,
@@ -44,7 +44,8 @@
   ];
   const settingItems = [
     { id: "meeting" as const, label: "Voice & Audio", icon: Mic },
-    { id: "translation" as const, label: "Meeting Captions", icon: Captions },
+    { id: "translation" as const, label: "Meeting & Transcript", icon: Captions },
+    { id: "appearance" as const, label: "Appearance", icon: Palette },
     { id: "advanced" as const, label: "Help & Diagnostics", icon: Settings },
   ];
 
