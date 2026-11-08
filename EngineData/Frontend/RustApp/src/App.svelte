@@ -56,6 +56,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
   let meetingSection = $state<"live" | "last" | "saved">("live");
   let settingsTab = $state<"meeting" | "translation" | "advanced">("meeting");
   let muteBusy = $state(false);
+  let voiceSelectionRevision = $state(0);
   let notice = $state<AppNotice>(appNotice("Getting TranslateIT ready...", "progress"));
   let liveHealthNotice = $state<AppNotice | null>(null);
   let longSessionNotice = $state<AppNotice | null>(null);
@@ -220,6 +221,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
   }
 
   async function syncMeetingVoice(message?: string): Promise<void> {
+    voiceSelectionRevision += 1;
     await refreshSnapshot(message ?? "Meeting voice updated.");
   }
 
@@ -578,10 +580,17 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     <Sidebar
       active={route} {presence} {meetingSection} {settingsTab}
       meetingLive={snapshot.meeting.live} meetingMuted={Boolean(meetingStatus?.muted)}
-      {muteBusy} onNavigate={navigate}
+      {muteBusy} {voiceSelectionRevision} settings={snapshot.settings}
+      resourcesLocked={snapshot.resources.audio_locked}
+      voiceSelectionLocked={voiceRecordingLock || snapshot.voiceBuildActive || snapshot.resources.audio_locked}
+      onNavigate={navigate}
       onMeetingSection={openMeetingSection}
       onSettingsTab={(tab) => { settingsTab = tab; }}
-      onToggleMute={toggleMeetingMute} onNotice={setNotice}
+      onToggleMute={toggleMeetingMute}
+      onSettingsChange={applySettings}
+      onRefresh={refreshSnapshot}
+      onVoiceChanged={syncMeetingVoice}
+      onNotice={setNotice}
     />
 
     <section class="flex min-w-0 flex-1 flex-col">
@@ -599,8 +608,6 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
         {#if route === "meeting"}
           <Meeting
             section={meetingSection}
-            muteBusy={muteBusy}
-            onToggleMute={toggleMeetingMute}
             {snapshot}
             {meetingStatus}
             meetingTurns={meetingViewState.turns}

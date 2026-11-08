@@ -348,6 +348,176 @@
     color: var(--ti-text);
   }
 
+  /* Compact Discord-style bottom user controls; no separate deafen/headset action. */
+  .ti-actor-trigger {
+    color: var(--ti-text);
+    transition: background-color 120ms ease;
+  }
+
+  .ti-actor-trigger:hover:not(:disabled),
+  .ti-actor-trigger[aria-expanded="true"] {
+    background: var(--ti-surface-hover);
+  }
+
+  .ti-user-action {
+    display: grid;
+    width: 34px;
+    height: 36px;
+    flex-shrink: 0;
+    place-items: center;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--ti-text-muted);
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+
+  .ti-user-action:hover:not(:disabled),
+  .ti-user-action[aria-expanded="true"],
+  .ti-user-action.is-active {
+    background: var(--ti-surface-hover);
+    color: var(--ti-text);
+  }
+
+  .ti-user-action.is-muted {
+    color: var(--ti-danger);
+    background: var(--ti-danger-surface);
+  }
+
+  .ti-user-chevron {
+    width: 22px;
+    margin-left: -3px;
+  }
+
+  .ti-user-popover {
+    overflow: hidden;
+    border: 1px solid var(--ti-border-strong);
+    border-radius: var(--ti-radius-md);
+    background: var(--ti-sidebar);
+    color: var(--ti-text);
+    box-shadow: var(--ti-shadow-dialog);
+  }
+
+  .ti-user-popover-heading {
+    display: flex;
+    min-height: 43px;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--ti-border);
+    padding: 8px 12px;
+  }
+
+  .ti-user-popup-close {
+    display: grid;
+    width: 28px;
+    height: 28px;
+    place-items: center;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ti-text-muted);
+    font-size: 21px;
+  }
+
+  .ti-user-popup-close:hover {
+    background: var(--ti-surface-hover);
+    color: var(--ti-text);
+  }
+
+  .ti-user-menu-heading {
+    margin: 5px 10px 6px;
+    color: var(--ti-text-soft);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.045em;
+  }
+
+  .ti-user-menu-option {
+    display: flex;
+    min-height: 39px;
+    width: 100%;
+    align-items: center;
+    gap: 10px;
+    border: 0;
+    border-radius: 6px;
+    padding: 9px 10px;
+    background: transparent;
+    color: var(--ti-text-muted);
+    font-size: 13px;
+    text-align: left;
+  }
+
+  .ti-user-menu-option:hover:not(:disabled),
+  .ti-user-menu-option[aria-pressed="true"],
+  .ti-user-menu-option[aria-checked="true"] {
+    background: var(--ti-surface-hover);
+    color: var(--ti-text);
+  }
+
+  .ti-user-menu-footer {
+    display: block;
+    min-height: 40px;
+    width: 100%;
+    border: 0;
+    border-top: 1px solid var(--ti-border);
+    padding: 10px 12px;
+    background: var(--ti-surface-soft);
+    color: var(--ti-text);
+    font-size: 12px;
+    font-weight: 600;
+    text-align: left;
+  }
+
+  .ti-user-menu-footer:hover {
+    background: var(--ti-surface-hover);
+  }
+
+  .ti-user-menu-utility {
+    display: inline-flex;
+    min-height: 34px;
+    align-items: center;
+    gap: 6px;
+    border: 0;
+    border-radius: 6px;
+    padding: 0 9px;
+    background: transparent;
+    color: var(--ti-text-muted);
+    font-size: 12px;
+  }
+
+  .ti-user-menu-utility:hover:not(:disabled) {
+    background: var(--ti-surface-hover);
+    color: var(--ti-text);
+  }
+
+  .ti-call-source-select {
+    width: auto;
+    border: 0;
+    outline-offset: -2px;
+    color: var(--ti-text);
+    cursor: pointer;
+  }
+
+  .ti-call-source-select option {
+    background: var(--ti-sidebar);
+    color: var(--ti-text);
+  }
+
+  .ti-call-stop {
+    border-color: #da373c;
+    background: #da373c;
+    color: #fff;
+  }
+
+  .ti-call-stop:hover:not(:disabled) {
+    border-color: #b82930;
+    background: #b82930;
+  }
+
+  .ti-call-stop:active:not(:disabled) {
+    background: #aa242b;
+  }
+
   .ti-settings-panel {
     border: 0;
     border-radius: 0;

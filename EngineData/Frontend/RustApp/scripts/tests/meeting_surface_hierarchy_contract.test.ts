@@ -151,8 +151,43 @@ test("Native Meeting mute and source owner are reused by two-column call dock", 
   assert.match(app, /runtimeApi\.setMeetingOutputMuted\(desired\)/);
   assert.match(app, /if \(muteBusy \|\| !snapshot\?\.meeting\.live/);
   assert.match(sidebar, /onToggleMute/);
-  assert.match(meeting, /onToggleMute/);
+  assert.doesNotMatch(meeting, /onToggleMute/, "Mute must only be in the sidebar footer");
   assert.match(native, /Mute is an output gate, never a third microphone source/);
   assert.match(meeting, /<MeetingSessionReview sessionActive=\{meeting\.hasSession\} openByDefault=\{true\}/);
   assert.match(meeting, /<MeetingTranscriptExport hasSession=\{meeting\.hasSession\}/);
+});
+
+test("Discord-like footer groups Voice Actor, Mute, device dropdown and Settings only on the left", () => {
+  const sidebar = readFileSync(new URL("../../src/components/layout/Sidebar.svelte", import.meta.url), "utf8");
+  const controls = readFileSync(new URL("../../src/components/layout/SidebarUserControls.svelte", import.meta.url), "utf8");
+  assert.match(sidebar, /<SidebarUserControls/);
+  assert.match(controls, /aria-label="Choose Voice Actor"/);
+  assert.match(controls, /aria-label=\{meetingMuted \? "Unmute TranslateIT output" : "Mute TranslateIT output"\}/);
+  assert.match(controls, /aria-label="Choose audio input and meeting sound devices"/);
+  assert.match(controls, /aria-label="Open Settings"/);
+  assert.doesNotMatch(controls, /Deafen|Undeafen|Headphones/);
+  assert.match(controls, /myVoiceBuildApi\.getStatus\(\)/);
+  assert.match(controls, /myVoiceBuildApi\.selectBuiltin\(id, confirmed\)/);
+  assert.match(controls, /result\.state === "approval_required"/);
+  assert.match(controls, /resourcesLocked/);
+  assert.match(controls, /runtimeProductFacade\.selectProductAudioDevice\(kind, requestedId, settings\)/);
+  assert.match(controls, /unsafeDevice\(kind, candidate/);
+  assert.match(controls, /onOpenAudioSettings\(\)/);
+});
+
+test("Meeting footer has only compact Source, Stop and Captions, with native Stop ownership preserved", () => {
+  assert.match(meeting, /class="ti-call-source/);
+  assert.match(meeting, /ti-call-stop/);
+  assert.match(meeting, /aria-label="Open captions controls in Quick Access"/);
+  assert.match(meeting, /onclick=\{handlePrimary\}/);
+  assert.doesNotMatch(meeting, /onToggleMute|MicOff|Deafen|Undeafen/);
+  const source = meeting.indexOf('id="meeting-audio-source"');
+  const stop = meeting.indexOf("onclick={handlePrimary}", source);
+  const captions = meeting.indexOf('aria-label="Open captions controls', stop);
+  assert.ok(source > 0 && stop > source && captions > stop,
+    "Source and Captions flank the single Stop/Start primary action");
+  const app = readFileSync(new URL("../../src/App.svelte", import.meta.url), "utf8");
+  assert.match(app, /onToggleMute=\{toggleMeetingMute\}/);
+  assert.match(app, /onVoiceChanged=\{syncMeetingVoice\}/);
+  assert.match(app, /voiceSelectionRevision/);
 });

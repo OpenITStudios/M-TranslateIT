@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Hash, Mic, MicOff, Captions, PhoneOff, ArrowLeftRight } from "@lucide/svelte";
+  import { Hash, Mic, Captions, PhoneOff, ArrowLeftRight } from "@lucide/svelte";
   import { toggleQuickAccess } from "../app/runtime/quickAccessRuntime";
   import { runtimeApi, type MeetingCommittedTurnsSnapshot, type MeetingSessionStatus } from "../app/bridge/runtimeApi";
   import type { AppRoute } from "../app/shared/types";
@@ -13,12 +13,10 @@
 
   let {
     section = "live", snapshot, meetingStatus, meetingTurns, actionBusy = false,
-    muteBusy = false, onToggleMute, onMeetingAction, onRefresh, onNavigate,
+    onMeetingAction, onRefresh, onNavigate,
   }: {
     section?: "live" | "last" | "saved";
     snapshot: ProductRuntimeSnapshot;
-    muteBusy?: boolean;
-    onToggleMute: () => void | Promise<void>;
     meetingStatus: MeetingSessionStatus | null;
     meetingTurns: MeetingCommittedTurnsSnapshot | null;
     actionBusy?: boolean;
@@ -207,38 +205,35 @@
   {/if}
 
   {#if section === "live" || meeting.hasSession || meeting.canStop}
-    <footer class="ti-call-dock flex min-h-[78px] shrink-0 flex-wrap items-center justify-center gap-2 px-5 py-3 sm:gap-3"
+    <footer class="ti-call-dock flex min-h-[66px] shrink-0 items-center justify-center gap-3 px-5 py-3"
       aria-label="Meeting main action">
-      {#if sourceChangeAllowed && meetingStatus}
-        <label class="flex min-w-[210px] max-w-[260px] flex-1 flex-col gap-1">
-          <span class="ti-field-label flex items-center gap-1.5"><ArrowLeftRight size={13} aria-hidden="true"/> Audio sent to meeting</span>
-          <select id="meeting-audio-source" class="ti-field min-h-10 px-3"
-            aria-label="Audio sent to meeting"
-            value={currentSource} disabled={sourceChanging || actionBusy || !sourceChangeAllowed}
-            onchange={(event) => void selectSource(event.currentTarget.value === "original" ? "original" : "translateit")}>
-            <option value="translateit">{MEETING_SOURCE_LABELS.translateit}</option>
-            <option value="original">{MEETING_SOURCE_LABELS.original}</option>
-          </select>
-        </label>
-      {/if}
-      <button type="button" class={"ti-button ti-button-secondary min-h-11 " + (meetingStatus?.muted ? "border-[var(--ti-danger-border)] text-[var(--ti-danger)]" : "")}
-        disabled={!meeting.live || !meetingStatus || muteBusy}
-        aria-pressed={meeting.live && Boolean(meetingStatus?.muted)}
-        title="Mute silences TranslateIT virtual output, not your physical microphone"
-        onclick={() => void onToggleMute()}>
-        {#if meetingStatus?.muted}<MicOff size={18} aria-hidden="true"/> Unmute{:else}<Mic size={18} aria-hidden="true"/> Mute{/if}
-      </button>
-      <button type="button" class="ti-button ti-button-secondary min-h-11"
-        aria-label="Open captions controls in Quick Access"
-        onclick={() => void toggleQuickAccess().catch(() => onRefresh("Quick Access couldn't be opened."))}>
-        <Captions size={18} aria-hidden="true"/> Captions
-      </button>
-      <button type="button"
-        class={"ti-button min-h-11 min-w-[160px] " + (primaryControl.action === "stop" ? "ti-button-danger" : "")}
-        disabled={!actionEnabled} onclick={handlePrimary}>
-        {#if primaryControl.action === "stop"}<PhoneOff size={18} aria-hidden="true"/>{:else}<Mic size={18} aria-hidden="true"/>{/if}
-        {primaryLabel}
-      </button>
-    </footer>
+      <div class="flex min-w-0 max-w-full items-center justify-center gap-2.5">
+        {#if sourceChangeAllowed && meetingStatus}
+          <div class="ti-call-source flex min-w-0 items-center gap-2 rounded-[var(--ti-radius-sm)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] px-2">
+            <ArrowLeftRight size={17} class="shrink-0 text-[var(--ti-text-muted)]" aria-hidden="true"/>
+            <label for="meeting-audio-source" class="sr-only">Audio sent to meeting</label>
+            <select id="meeting-audio-source" class="ti-call-source-select min-h-10 min-w-0 max-w-[175px] bg-transparent text-[13px] font-medium"
+              aria-label="Audio sent to meeting"
+              title="Choose the voice sent to your call"
+              value={currentSource} disabled={sourceChanging || actionBusy || !sourceChangeAllowed}
+              onchange={(event) => void selectSource(event.currentTarget.value === "original" ? "original" : "translateit")}>
+              <option value="translateit">{MEETING_SOURCE_LABELS.translateit}</option>
+              <option value="original">{MEETING_SOURCE_LABELS.original}</option>
+            </select>
+          </div>
+        {/if}
+        <button type="button"
+          class={"ti-button min-h-11 min-w-[168px] " + (primaryControl.action === "stop" ? "ti-call-stop" : "")}
+          disabled={!actionEnabled} onclick={handlePrimary}>
+          {#if primaryControl.action === "stop"}<PhoneOff size={18} aria-hidden="true"/>{:else}<Mic size={18} aria-hidden="true"/>{/if}
+          {primaryLabel}
+        </button>
+        <button type="button" class="ti-button ti-button-secondary min-h-11 px-3 text-[13px]"
+          aria-label="Open captions controls in Quick Access"
+          onclick={() => void toggleQuickAccess().catch(() => onRefresh("Quick Access couldn't be opened."))}>
+          <Captions size={17} aria-hidden="true"/> Captions
+        </button>
+      </div>
+    </footer>ter>
   {/if}
 </section>

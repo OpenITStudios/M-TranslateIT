@@ -47,6 +47,12 @@ test("F2 mounts production Svelte components in their own real viewport", () => 
 test("native, updater, network and app interactions stay isolated from preview fixture", () => {
   assert.match(frame, /\sinert\s/);
   assert.match(frame, /showUpdateAction=\{false\}/);
+  assert.match(frame, /previewReadOnly=\{true\}/);
+  const sidebarControls = src("src/components/layout/SidebarUserControls.svelte");
+  assert.match(sidebarControls, /if \(!previewReadOnly\) void readVoice\(\)/);
+  assert.match(sidebarControls, /if \(previewReadOnly\) return false/);
+  assert.match(sidebarControls, /if \(previewReadOnly\) return;/);
+  assert.match(sidebarControls, /disabled=\{previewReadOnly\}/);
   assert.match(header, /showUpdateAction = true/);
   assert.match(header, /\{#if showUpdateAction\}/);
   assert.match(frame, /function noOperation\(\): void/);

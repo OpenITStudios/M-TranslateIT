@@ -29,8 +29,13 @@
   <Sidebar active="meeting" {presence} meetingSection="live" settingsTab="meeting"
     meetingLive={fixture.snapshot.meeting.live}
     meetingMuted={fixture.meetingStatus.muted}
+    settings={fixture.snapshot.settings}
+    resourcesLocked={fixture.snapshot.resources.audio_locked}
+    voiceSelectionLocked={true} previewReadOnly={true}
     onNavigate={noNavigation} onMeetingSection={noOperation}
-    onSettingsTab={noOperation} onToggleMute={noOperation} onNotice={noOperation}/>
+    onSettingsTab={noOperation} onToggleMute={noOperation}
+    onSettingsChange={noOperation} onRefresh={noOperation}
+    onVoiceChanged={noOperation} onNotice={noOperation}/>
   <main class="flex min-w-0 flex-1 flex-col overflow-hidden">
     <AppHeader snapshot={fixture.snapshot} route="meeting" meetingSection="live"
       {notice} myVoiceRecording={false} showUpdateAction={false}
@@ -38,7 +43,7 @@
     <div class="min-h-0 flex-1 overflow-hidden">
       <Meeting section="live" snapshot={fixture.snapshot}
         meetingStatus={fixture.meetingStatus} meetingTurns={fixture.turns}
-        onToggleMute={noOperation} onMeetingAction={noOperation}
+        onMeetingAction={noOperation}
         onRefresh={noOperation} onNavigate={noNavigation}/>
     </div>
   </main>

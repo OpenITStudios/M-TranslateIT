@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { AudioLines, Captions, Clock3, FolderClosed, Hash, Mic, MicOff, Settings, Zap, ArrowLeft } from "@lucide/svelte";
+  import { AudioLines, Captions, Clock3, FolderClosed, Hash, Mic, Settings, ArrowLeft } from "@lucide/svelte";
   import type { AppRoute } from "../../app/shared/types";
-  import { toggleQuickAccess } from "../../app/runtime/quickAccessRuntime";
+  import type { RuntimeSettings } from "../../app/shared/types";
+  import SidebarUserControls from "./SidebarUserControls.svelte";
   import TranslateITMark from "../brand/TranslateITMark.svelte";
 
   type MeetingSection = "live" | "last" | "saved";
@@ -9,8 +10,10 @@
 
   let {
     active, presence, meetingSection, settingsTab, meetingLive = false,
-    meetingMuted = false, muteBusy = false, onNavigate,
-    onMeetingSection, onSettingsTab, onToggleMute, onNotice,
+    meetingMuted = false, muteBusy = false, voiceSelectionRevision = 0, settings, resourcesLocked = false,
+    voiceSelectionLocked = false, previewReadOnly = false, onNavigate,
+    onMeetingSection, onSettingsTab, onToggleMute, onSettingsChange,
+    onRefresh, onVoiceChanged, onNotice,
   }: {
     active: AppRoute;
     presence: string;
@@ -19,10 +22,18 @@
     meetingLive?: boolean;
     meetingMuted?: boolean;
     muteBusy?: boolean;
+    voiceSelectionRevision?: number;
+    settings: RuntimeSettings;
+    resourcesLocked?: boolean;
+    voiceSelectionLocked?: boolean;
+    previewReadOnly?: boolean;
     onNavigate: (route: AppRoute) => void;
     onMeetingSection: (section: MeetingSection) => void;
     onSettingsTab: (tab: SettingsTab) => void;
     onToggleMute: () => void | Promise<void>;
+    onSettingsChange: (next: RuntimeSettings) => void | Promise<void>;
+    onRefresh: (message?: string) => void | Promise<void>;
+    onVoiceChanged: (message?: string) => void | Promise<void>;
     onNotice: (message: string) => void;
   } = $props();
 
@@ -37,34 +48,6 @@
     { id: "advanced" as const, label: "Help & Diagnostics", icon: Settings },
   ];
 
-  function presenceDot(): string {
-    if (presence === "Live" || presence === "Ready") return "bg-[var(--ti-success)]";
-    if (presence === "Unavailable") return "bg-[var(--ti-danger)]";
-    if (presence === "Setup Needed" || presence === "Stop Needed") return "bg-[var(--ti-warning)]";
-    return "bg-[var(--ti-text-soft)]";
-  }
-
-  function presenceLabel(): string {
-    if (presence === "Live") return "Meeting is live";
-    if (presence === "Ready") return "Ready to translate";
-    if (presence === "Setup Needed") return "Setup needed";
-    if (presence === "Unavailable") return "Unavailable";
-    if (presence === "Stop Needed") return "Meeting cleanup needed";
-    if (presence === "Starting") return "Starting translation";
-    if (presence === "Stopping") return "Stopping translation";
-    if (presence === "Active") return "Meeting needs attention";
-    if (presence === "Check Status") return "Meeting status unknown";
-    if (presence === "In Use") return "Audio in use";
-    return "Checking";
-  }
-
-  async function openQuickAccess(): Promise<void> {
-    try {
-      await toggleQuickAccess();
-    } catch {
-      onNotice("Quick Access couldn't be opened.");
-    }
-  }
 </script>
 
 <aside class="ti-sidebar flex h-screen min-h-0 w-[var(--ti-sidebar-width)] shrink-0 flex-col bg-[var(--ti-sidebar)]" aria-label="TranslateIT navigation">
@@ -119,25 +102,10 @@
     {/if}
   </nav>
 
-  <footer class="ti-sidebar-footer shrink-0 border-t border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-2.5 py-3">
-    <div class="mb-2 flex items-center gap-2 px-2" role="status" aria-live="polite" aria-atomic="true">
-      <span class={"size-2 shrink-0 rounded-full " + presenceDot()} aria-hidden="true"></span>
-      <span class="min-w-0 flex-1 truncate text-[12px] font-medium text-[var(--ti-text-muted)]">{presenceLabel()}</span>
-    </div>
-    <div class="flex items-center justify-between gap-1.5">
-      <button type="button" class="ti-sidebar-icon-button"
-        disabled={!meetingLive || muteBusy}
-        aria-label={meetingMuted ? "Unmute TranslateIT output" : "Mute TranslateIT output"}
-        title={meetingLive ? meetingMuted ? "Unmute TranslateIT output" : "Mute TranslateIT output" : "Mute is available during Meeting"}
-        aria-pressed={meetingLive && meetingMuted}
-        onclick={() => void onToggleMute()}>
-        {#if meetingMuted}<MicOff size={19}/>{:else}<Mic size={19}/>{/if}
-      </button>
-      <button type="button" class="ti-sidebar-icon-button" aria-label="Open Quick Access" title="Quick Access (Ctrl+K)"
-        onclick={() => void openQuickAccess()}><Zap size={19}/></button>
-      <button type="button" class={"ti-sidebar-icon-button " + (active === "settings" ? "is-active" : "")}
-        aria-label="Open Settings" aria-current={active === "settings" ? "page" : undefined}
-        title="User Settings" onclick={() => onNavigate("settings")}><Settings size={19}/></button>
-    </div>
-  </footer>
+  <SidebarUserControls {active} {presence} {meetingLive} {meetingMuted}
+    {muteBusy} {voiceSelectionRevision} {settings} {resourcesLocked} {voiceSelectionLocked}
+    {previewReadOnly} {onNavigate} {onToggleMute} {onSettingsChange}
+    {onRefresh} {onVoiceChanged}
+    onOpenAudioSettings={() => { onSettingsTab("meeting"); onNavigate("settings"); }}
+    {onNotice} />
 </aside>
