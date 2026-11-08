@@ -12,6 +12,7 @@
     meetingSection,
     notice,
     myVoiceRecording,
+    showUpdateAction = true,
     onNavigate,
     onNotice,
   }: {
@@ -20,6 +21,7 @@
     meetingSection: "live" | "last" | "saved";
     notice: AppNotice;
     myVoiceRecording: boolean;
+    showUpdateAction?: boolean;
     onNavigate: (route: AppRoute) => void;
     onNotice: (message: string) => void;
   } = $props();
@@ -73,13 +75,15 @@
       Quick Access
       <span class="ml-1 hidden rounded bg-[var(--ti-surface-soft)] px-1 py-0.5 text-[11px] text-[var(--ti-text-muted)] xl:inline" aria-hidden="true">Ctrl+K</span>
     </button>
-    <UpdateAction
-      audioLocked={snapshot.resources.audio_locked}
-      audioOwnerKind={snapshot.resources.owner_kind}
-      voiceBuildActive={snapshot.voiceBuildActive}
-      {myVoiceRecording}
-      {onNotice}
-    />
+    {#if showUpdateAction}
+      <UpdateAction
+        audioLocked={snapshot.resources.audio_locked}
+        audioOwnerKind={snapshot.resources.owner_kind}
+        voiceBuildActive={snapshot.voiceBuildActive}
+        {myVoiceRecording}
+        {onNotice}
+      />
+    {/if}
     {#if snapshot.meeting.applicationOwned && snapshot.meeting.hasSession || meetingNeedsAttention}
       <button
         type="button"

@@ -312,6 +312,55 @@
       "expectedScope": null,
       "requiresBrief": false,
       "kind": "pressure"
+    },
+    {
+      "id": "ui-preview-source-first-id",
+      "prompt": "Implementasikan preview UI Svelte berbasis komponen asli dan fixture sintetis, tanpa generated image, backend audio, atau CI.",
+      "expectedMode": "standard-development",
+      "expectedSpecialist": "desktop-ui-design-development",
+      "forbiddenSpecialists": [
+        "windows-audio-runtime-development"
+      ],
+      "expectedScope": "desktop-ui-design-development",
+      "requiresBrief": false,
+      "kind": "positive"
+    },
+    {
+      "id": "ui-preview-runtime-collision-en",
+      "prompt": "Improve UI preview visual and allow trying mock controls, but keep all real Tauri audio commands and application mutations out of preview.",
+      "expectedMode": "standard-development",
+      "expectedSpecialist": "desktop-ui-design-development",
+      "forbiddenSpecialists": [
+        "desktop-runtime-development",
+        "windows-audio-runtime-development"
+      ],
+      "expectedScope": "desktop-ui-design-development",
+      "requiresBrief": false,
+      "kind": "collision"
+    },
+    {
+      "id": "ui-preview-readonly-en",
+      "prompt": "Inspect the current UI preview skill and describe its fidelity limitations only; do not edit source or execute tests.",
+      "expectedMode": "context-recovery",
+      "expectedSpecialist": null,
+      "forbiddenSpecialists": [
+        "desktop-ui-design-development"
+      ],
+      "expectedScope": null,
+      "requiresBrief": false,
+      "kind": "no-skill"
+    },
+    {
+      "id": "ui-preview-native-proof-pressure-id",
+      "prompt": "Amati apakah screenshot mockup sudah membuktikan UI dan audio Windows lulus; jangan jalankan runtime atau edit file.",
+      "expectedMode": "context-recovery",
+      "expectedSpecialist": null,
+      "forbiddenSpecialists": [
+        "windows-audio-runtime-development"
+      ],
+      "expectedScope": null,
+      "requiresBrief": false,
+      "kind": "pressure"
     }
   ]
 }

@@ -1,6 +1,6 @@
 ---
 name: desktop-ui-design-development
-description: TranslateIT specialist for current Svelte desktop visual/UI design: hierarchy, layout, spacing, typography, tokens, component states, accessibility, motion, responsive composition and rendered visual acceptance. Do not use for runtime truth, AI/audio/package behavior or architecture migration.
+description: TranslateIT Svelte UI specialist for source-first ChatGPT preview, visual layout, tokens, spacing, typography, component states, accessibility, responsive composition and rendered acceptance. Do not use for native Windows/audio truth, AI/runtime/package behavior or architecture migration.
 ---
 
 # Desktop UI Design Development
@@ -51,6 +51,18 @@ A screenshot is evidence, not automatic policy.
 Prioritize task/state hierarchy before decoration. Reject generic AI gradients/glow, gratuitous glassmorphism, unnecessary card grids, component inflation, animation without a job and large UI-library adoption without a current need.
 
 Material states should cover only states that can actually occur: default, focus, active/selected, checking/loading, ready/success, degraded/setup-needed/error, disabled/unavailable.
+
+## ChatGPT UI Preview — bounded, source-first workflow
+
+When asked to preview UI, follow [the UI preview protocol](references/ui-preview-protocol.md) before making a new image, mockup, or HTML artifact. This is a **procedure within this specialist**, not a seventh Skill, a Tauri feature, or a hosted build service.
+
+- **PIN:** Identify the exact repository/ref/HEAD and smallest page/component dependency closure. Never silently combine files from different SHAs or reuse preview assets whose source identity is unknown.
+- **CAPABILITY:** F0 source inspection, F1 clearly labeled reconstructed inline preview, F2 actual frontend components rendered with synthetic fixture in a browser, F3 exact native Windows UI. Choose the strongest legitimately available evidence, not the most impressive label. F2/F3 require real execution in the appropriate context; GitHub-only is F0, optionally an explicitly labeled F1.
+- **FAST PATH:** One requested page, one scenario, one desktop viewport, one main preview. Reuse the repository's existing `scripts/ui-preview` entry and its typed scenarios when a matching exact-SHA checkout and frontend toolchain are available. Do not reproduce production Svelte markup by hand when that entrypoint can render it.
+- **ISOLATION:** Use synthetic, deterministic data; no personal transcripts/audio, real device discovery, updater checks, mutation, cloud inference, auto-install, Tauri commands, or runtime service. Preview-only controls are not proof of Meeting or audio behavior.
+- **GUARDS:** Pin asset/style imports; verify source coverage, stable viewport, synthetic badge, absence of native side effects, accessible visible Stop/Retry Stop, long-text containment, and actionable errors. Cache is valid only for matching SHA + dependency scope + scenario + viewport + render environment; do not presume cache survives chats.
+- **DELIVERY:** Present inline when supported; otherwise use a browser screenshot of the actual preview (F2), or an F1 reconstruction with an explicit warning. Keep the entire response readable without the visual. One narrow fallback attempt; do not invent a successful screenshot, browser run, native validation, or sandbox file.
+- **PROOF:** Tag each assertion F0/F1/F2/F3; never infer target-Windows correctness or audio delivery from F2. Emit a concise per-run receipt, not a second permanent status ledger. For a source-only session, executable and native checks remain `NOT_EXECUTED`.
 
 ## Procedure
 
