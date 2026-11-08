@@ -82,7 +82,23 @@ pub(super) fn reject_unsafe_realtime_item(
                 _ => Err("codex_realtime:item_added_unadmitted"),
             }
         }
-        "thread/realtime/item/started" | "thread/realtime/item/completed"
+        "thread/realtime/item/started" => {
+            // Upstream ThreadRealtimeItemContent has three non-agent types.
+            // Refuse unknown/agent work at JSONL ingress, not only after the
+            // observer sees a completed item. This is still post-upstream.
+            let item = params.get("item").and_then(Value::as_object)
+                .ok_or("codex_realtime:started_item_invalid")?;
+            match item.get("type").and_then(Value::as_str) {
+                Some("realtimeSessionStarted" | "transcriptSegment" | "realtimeSessionClosed") =>
+                    Ok(()),
+                Some("bemItemPromoted") =>
+                    Err("codex_realtime:agent_item_promoted"),
+                Some("handoff_request" | "function_call") =>
+                    Err("codex_realtime:agent_handoff_observed"),
+                _ => Err("codex_realtime:started_item_unadmitted"),
+            }
+        }
+        "thread/realtime/item/completed"
             if params.pointer("/item/type").and_then(Value::as_str) == Some("bemItemPromoted") =>
                 Err("codex_realtime:agent_item_promoted"),
         _ => Ok(()),
@@ -231,14 +247,9 @@ impl RealtimeObserver {
             }
             // Flat transcript/done has no item ID or verified source pairing.
             // Item/delta is likewise provisional and MUST NOT feed TTS.
-            "thread/realtime/item/started" => {
-                let item = params.get("item").and_then(Value::as_object)
-                    .ok_or("codex_realtime:started_item_invalid")?;
-                if item.get("type").and_then(Value::as_str) == Some("bemItemPromoted") {
-                    return Err("codex_realtime:agent_item_promoted");
-                }
-                Ok(Observation::Ignored)
-            }
+            // Shared ingress validation has already classified this as
+            // non-agent metadata; started items cannot authorize TTS.
+            "thread/realtime/item/started" => Ok(Observation::Ignored),
             "thread/realtime/transcript/delta"
             | "thread/realtime/item/transcript/delta"
             | "thread/realtime/itemAdded"
@@ -644,6 +655,69 @@ mod tests {
             started.observe("thread/realtime/item/started", &promoted),
             Err("codex_realtime:agent_item_promoted")
         );
+    }
+
+    #[test]
+    fn started_realtime_items_fail_closed_on_agent_unknown_and_missing_types() {
+        for (kind, blocker) in [
+            ("handoff_request", "codex_realtime:agent_handoff_observed"),
+            ("function_call", "codex_realtime:agent_handoff_observed"),
+            ("bemItemPromoted", "codex_realtime:agent_item_promoted"),
+            ("commandExecution", "codex_realtime:started_item_unadmitted"),
+            ("message", "codex_realtime:started_item_unadmitted"),
+        ] {
+            let mut o = observer();
+            let payload = json!({"threadId":"thr_a", "item":{
+                "id":"unsafe_1", "realtimeSessionId":"sess_a", "type":kind
+            }});
+            assert_eq!(
+                o.observe("thread/realtime/item/started", &payload),
+                Err(blocker)
+            );
+            assert_eq!(
+                o.observe("thread/realtime/item/completed",
+                    &item("late","sess_a","assistant","Late text")),
+                Err("codex_realtime:session_revoked")
+            );
+        }
+
+        for malformed in [
+            json!({"threadId":"thr_a"}),
+            json!({"threadId":"thr_a","item":null}),
+        ] {
+            let mut o = observer();
+            assert_eq!(
+                o.observe("thread/realtime/item/started", &malformed),
+                Err("codex_realtime:started_item_invalid")
+            );
+        }
+        let mut missing_type = observer();
+        assert_eq!(
+            missing_type.observe("thread/realtime/item/started",
+                &json!({"threadId":"thr_a","item":{"id":"item_1"}})),
+            Err("codex_realtime:started_item_unadmitted")
+        );
+    }
+
+    #[test]
+    fn started_realtime_items_allow_only_canonical_non_agent_metadata() {
+        for kind in ["realtimeSessionStarted", "transcriptSegment", "realtimeSessionClosed"] {
+            let mut o = observer();
+            let payload = json!({"threadId":"thr_a", "item":{
+                "id":"metadata_1", "realtimeSessionId":"sess_a", "type":kind
+            }});
+            assert_eq!(
+                o.observe("thread/realtime/item/started", &payload),
+                Ok(Observation::Ignored)
+            );
+            assert_eq!(
+                o.observe("thread/realtime/item/completed",
+                    &item("source_1","sess_a","user","Source")),
+                Ok(Observation::SourceTranscript {
+                    item_id: "source_1".into(), text: "Source".into()
+                })
+            );
+        }
     }
 
     #[test]

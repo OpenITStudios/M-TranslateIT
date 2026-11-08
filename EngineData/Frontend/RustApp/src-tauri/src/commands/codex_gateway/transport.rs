@@ -1022,6 +1022,32 @@ mod tests {
     }
 
     #[test]
+    fn owned_voice_reader_rejects_agent_or_unknown_started_items_before_observation() {
+        for (kind, blocker) in [
+            ("handoff_request", "codex_realtime:agent_handoff_observed"),
+            ("function_call", "codex_realtime:agent_handoff_observed"),
+            ("bemItemPromoted", "codex_realtime:agent_item_promoted"),
+            ("commandExecution", "codex_realtime:started_item_unadmitted"),
+        ] {
+            let event = Inbound::Notification {
+                method: "thread/realtime/item/started".into(),
+                params: serde_json::json!({"threadId":"thread_1","item":{
+                    "id":"item_1", "realtimeSessionId":"sess_1", "type":kind
+                }}),
+            };
+            assert_eq!(owned_realtime_inbound_allowed(&event, 10), Err(blocker));
+        }
+        let benign = Inbound::Notification {
+            method: "thread/realtime/item/started".into(),
+            params: serde_json::json!({"threadId":"thread_1","item":{
+                "id":"item_2", "realtimeSessionId":"sess_1", "type":"transcriptSegment",
+                "role":"user", "text":"source only"
+            }}),
+        };
+        assert_eq!(owned_realtime_inbound_allowed(&benign, 10), Ok(()));
+    }
+
+    #[test]
     fn notification_dispatch_retains_only_account_changes_and_denies_voice() {
         assert_eq!(account_notification("account/updated"), Ok(true));
         assert_eq!(account_notification("account/rateLimits/updated"), Ok(true));
