@@ -41,7 +41,7 @@
       {notice} myVoiceRecording={false} showUpdateAction={false}
       onNavigate={noNavigation} onNotice={noOperation}/>
     <div class="min-h-0 flex-1 overflow-hidden">
-      <Meeting section="live" snapshot={fixture.snapshot}
+      <Meeting section="live" snapshot={fixture.snapshot} previewReadOnly={true}
         meetingStatus={fixture.meetingStatus} meetingTurns={fixture.turns}
         onMeetingAction={noOperation}
         onRefresh={noOperation} onNavigate={noNavigation}/>

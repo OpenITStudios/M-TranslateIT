@@ -40,6 +40,8 @@
   } = $props();
 
   let host = $state<HTMLDivElement>();
+  let voicePopup = $state<HTMLElement>();
+  let devicePopup = $state<HTMLElement>();
   let voiceTrigger = $state<HTMLButtonElement>();
   let devicesTrigger = $state<HTMLButtonElement>();
   let popup = $state<Popup>(null);
@@ -144,6 +146,13 @@
     }
   }
 
+  async function focusPopup(target: Exclude<Popup, null>): Promise<void> {
+    await tick();
+    if (popup !== target) return;
+    const element = target === "voice" ? voicePopup : devicePopup;
+    element?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+  }
+
   function togglePopup(target: Exclude<Popup, null>): void {
     if (popup === target) { popup = null; pendingVoice = null; return; }
     popup = target;
@@ -151,6 +160,7 @@
     popupMessage = "";
     if (target === "voice") void readVoice();
     if (target === "devices") void readDevices();
+    void focusPopup(target);
   }
 
   function closePopup(): void { popup = null; pendingVoice = null; popupMessage = ""; }
@@ -284,7 +294,7 @@
 
 <div class="ti-user-controls relative w-full" bind:this={host}>
   {#if popup === "voice"}
-    <section id="ti-voice-actor-menu" class="ti-user-popover absolute bottom-full left-0 z-30 mb-2 w-[min(332px,calc(100vw-18px))]"
+    <section bind:this={voicePopup} id="ti-voice-actor-menu" class="ti-user-popover absolute bottom-full left-0 z-30 mb-2 w-[min(332px,calc(100vw-18px))]"
       role="dialog" aria-label="Choose Voice Actor">
       <header class="ti-user-popover-heading">
         <strong class="text-sm">Voice Actor</strong>
@@ -335,7 +345,7 @@
       <button type="button" class="ti-user-menu-footer" onclick={() => navigateTo("my-voice")}>Open My Voice settings</button>
     </section>
   {:else if popup === "devices"}
-    <section id="ti-audio-device-menu" class="ti-user-popover absolute bottom-full left-0 z-30 mb-2 w-[min(352px,calc(100vw-18px))]"
+    <section bind:this={devicePopup} id="ti-audio-device-menu" class="ti-user-popover absolute bottom-full left-0 z-30 mb-2 w-[min(352px,calc(100vw-18px))]"
       role="dialog" aria-label="Choose Audio Devices">
       <header class="ti-user-popover-heading">
         <strong class="text-sm">Voice &amp; Audio</strong>
@@ -346,9 +356,9 @@
           <p class="px-2 py-3 text-xs text-[var(--ti-text-muted)]" role="status">Checking Windows audio devices...</p>
         {:else}
           {#each deviceGroups as group (group.kind)}
-            <div class="mb-3" role="radiogroup" aria-label={group.label}>
+            <div class="mb-3" role="group" aria-label={group.label}>
               <p class="ti-user-menu-heading">{group.label}</p>
-              <button type="button" role="radio" class="ti-user-menu-option" aria-checked={group.selected === null}
+              <button type="button" class="ti-user-menu-option" aria-pressed={group.selected === null}
                 disabled={!canChangeDevice || group.selected === null}
                 onclick={() => void selectDevice(group.kind, null)}>
                 <span class="min-w-0 flex-1 text-left">Windows Default</span>
@@ -356,7 +366,7 @@
               </button>
               {#each group.items as device (deviceId(device))}
                 {@const selected = group.selected === deviceId(device)}
-                <button type="button" role="radio" class="ti-user-menu-option" aria-checked={selected}
+                <button type="button" class="ti-user-menu-option" aria-pressed={selected}
                   disabled={!canChangeDevice || selected || unsafeDevice(group.kind, device, group.ambiguous)}
                   title={unsafeDevice(group.kind, device, group.ambiguous) ? "Virtual or ambiguous device cannot be selected here" : device.name}
                   onclick={() => void selectDevice(group.kind, deviceId(device))}>

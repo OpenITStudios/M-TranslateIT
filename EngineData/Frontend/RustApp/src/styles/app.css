@@ -553,6 +553,43 @@
     overflow-wrap: anywhere;
   }
 
+  .ti-chat-bubble-header {
+    margin-bottom: 12px;
+  }
+
+  .ti-chat-bubble .ti-chat-divider {
+    margin-top: 12px;
+    padding-top: 10px;
+  }
+
+  .ti-chat-bubble-compact {
+    padding: 9px 12px;
+    border-radius: 8px;
+  }
+
+  .ti-chat-bubble-compact .ti-chat-bubble-header {
+    margin-bottom: 6px;
+  }
+
+  .ti-chat-bubble-compact .ti-chat-divider {
+    margin-top: 7px;
+    padding-top: 6px;
+  }
+
+  .ti-chat-bubble-compact .ti-chat-text {
+    line-height: 1.5;
+  }
+
+  .ti-chat-timestamp-hover {
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+
+  .ti-chat-bubble:hover .ti-chat-timestamp-hover,
+  .ti-chat-bubble:focus-within .ti-chat-timestamp-hover {
+    opacity: 1;
+  }
+
   .ti-chat-bubble-incoming {
     background: var(--ti-surface-raised);
     border-color: var(--ti-border-strong);
@@ -603,7 +640,7 @@
   }
 
   @media (hover: none) {
-    .ti-chat-copy-button { opacity: 1; }
+    .ti-chat-copy-button, .ti-chat-timestamp-hover { opacity: 1; }
   }
 
   .ti-settings-panel {

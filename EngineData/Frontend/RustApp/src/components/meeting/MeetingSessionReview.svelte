@@ -1,8 +1,13 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { Check, Copy, Search } from "@lucide/svelte";
   import { runtimeApi, type MeetingCommittedTurn, type MeetingCommittedTurnsSnapshot } from "../../app/bridge/runtimeApi";
   import { languageName } from "../../app/shared/state";
   import MeetingTurnBubble from "./MeetingTurnBubble.svelte";
+  import {
+    DEFAULT_TRANSCRIPT_PREFERENCES, readTranscriptPreferences, subscribeTranscriptPreferences,
+    type TranscriptPreferences,
+  } from "./transcriptPreferences";
   import { meetingFirstRecordedTime, meetingSessionTitle, meetingSpeakerLabel, meetingTime, meetingTranslationDisplay } from "../../app/runtime/meetingTranscriptPresentation";
 
   let {
@@ -16,6 +21,11 @@
   } = $props();
 
   let snapshot = $state<MeetingCommittedTurnsSnapshot | null>(null);
+  let appearance = $state<TranscriptPreferences>({ ...DEFAULT_TRANSCRIPT_PREFERENCES });
+  onMount(() => {
+    appearance = readTranscriptPreferences();
+    return subscribeTranscriptPreferences((next) => { appearance = next; });
+  });
   let query = $state("");
   let copied = $state(false);
   let reviewOpen = $state(false);
@@ -91,7 +101,7 @@
       <div class="max-h-[360px] overflow-y-auto divide-y divide-[var(--ti-border)]" role="region" aria-label="Last Meeting conversation" tabindex="0">
         {#each visibleTurns as turn (turn.sequence)}
           <div class="px-4 py-3">
-            <MeetingTurnBubble {turn} />
+            <MeetingTurnBubble {turn} preferences={appearance} />
           </div>
         {/each}
         {#if visibleTurns.length === 0}

@@ -93,7 +93,8 @@ test("Live transcript stays minimal while preserving reading position and copy e
   const bubble = readFileSync(new URL("../../src/components/meeting/MeetingTurnBubble.svelte", import.meta.url), "utf8");
   assert.match(live, /<MeetingTurnBubble \{turn\}/);
   assert.match(bubble, /languageName\(turn\.source_language\)/);
-  assert.match(bubble, /lang=\{turn\.translation_state === "translated" \? turn\.target_language : undefined\}/);
+  assert.match(bubble, /lang=\{block\.kind === "original" \? turn\.source_language/);
+  assert.match(bubble, /turn\.translation_state === "translated" \? turn\.target_language : undefined/);
 });
 
 test("global notices expose full text without noninteractive keyboard tabindex", () => {
@@ -245,7 +246,7 @@ test("Settings categories separate saved caption controls from read-only appeara
   assert.match(sidebar, /Help & Diagnostics/);
   assert.match(app, /settingsTab = \$state<"meeting" \| "translation" \| "appearance" \| "advanced">/);
   assert.match(settings, /Transcript Appearance/);
-  assert.match(settings, /not editable settings/);
+  assert.match(settings, /<TranscriptAppearanceSettings \{onNotice\}/);
   assert.match(settings, /\{:else if tab === "appearance"\}/);
   assert.match(settings, /<FloatingCaptionPreferences \{onNotice\}/);
 });
@@ -266,4 +267,20 @@ test("Sidebar popup ARIA controls only reference menus while mounted", () => {
   assert.match(controls, /aria-controls=\{popup === "devices" \? "ti-audio-device-menu" : undefined\}/);
   assert.match(controls, /if \(popup && event\.key === "Escape"\)/);
   assert.match(controls, /openAudioSettings\(\)/);
+});
+
+test("Bilingual transcript appearance has editable persistent controls, without duplicating global theme", () => {
+  const settings = readFileSync(new URL("../../src/components/meeting/TranscriptAppearanceSettings.svelte", import.meta.url), "utf8");
+  const policy = readFileSync(new URL("../../src/components/meeting/transcriptPreferences.ts", import.meta.url), "utf8");
+  assert.match(settings, /Message density/);
+  assert.match(settings, /Text order/);
+  assert.match(settings, /Timestamps/);
+  assert.match(settings, /Show speaker icons/);
+  assert.match(settings, /Follow latest message/);
+  assert.match(settings, /Show local playback status/);
+  assert.match(settings, /Restore defaults/);
+  assert.match(settings, /result\.ok/);
+  assert.match(policy, /normalizeTranscriptPreferences/);
+  assert.match(policy, /localStorage/);
+  assert.doesNotMatch(policy, /source_text|transcript_body|recording|mic_audio/);
 });

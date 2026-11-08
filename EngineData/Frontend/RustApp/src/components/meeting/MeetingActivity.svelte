@@ -1,24 +1,38 @@
 <script lang="ts">
-  import { tick } from "svelte";
+  import { onMount, tick } from "svelte";
 
   import type { MeetingCommittedTurn, MeetingCommittedTurnsSnapshot, MeetingSessionStatus } from "../../app/bridge/runtimeApi";
   import { mapProductMeetingState } from "../../app/bridge/productMeetingState";
   import { languageName } from "../../app/shared/state";
   import { meetingSessionTitle, meetingSpeakerLabel, meetingTime, meetingTranslationDisplay } from "../../app/runtime/meetingTranscriptPresentation";
   import MeetingTurnBubble from "./MeetingTurnBubble.svelte";
+  import {
+    DEFAULT_TRANSCRIPT_PREFERENCES, readTranscriptPreferences, subscribeTranscriptPreferences,
+    type TranscriptPreferences,
+  } from "./transcriptPreferences";
 
   let {
     status,
     turns,
+    previewReadOnly = false,
   }: {
     status: MeetingSessionStatus;
     turns: MeetingCommittedTurnsSnapshot | null;
+    previewReadOnly?: boolean;
   } = $props();
 
   let copiedSequence = $state<number | null>(null);
   let copyFailedSequence = $state<number | null>(null);
   let followingLatest = $state(true);
   let transcriptScroller = $state<HTMLDivElement>();
+  let appearance = $state<TranscriptPreferences>({ ...DEFAULT_TRANSCRIPT_PREFERENCES });
+
+  onMount(() => {
+    // Browser preview fixtures stay deterministic and never read saved preferences.
+    if (previewReadOnly) return;
+    appearance = readTranscriptPreferences();
+    return subscribeTranscriptPreferences((next) => { appearance = next; });
+  });
 
   const meeting = $derived(mapProductMeetingState(status));
   const orderedTurns = $derived(
@@ -62,10 +76,16 @@
   $effect(() => {
     const sessionId = status.session_id;
     const sequence = latestSequence;
-    if (!sequence || !followingLatest) return;
+    const autoFollow = appearance.followLatest;
+    const atLatest = followingLatest;
+    if (!sequence) return;
     void tick().then(() => {
-      if (status.session_id !== sessionId || !followingLatest || !transcriptScroller) return;
-      transcriptScroller.scrollTop = transcriptScroller.scrollHeight;
+      if (status.session_id !== sessionId || !transcriptScroller) return;
+      if (autoFollow && atLatest && followingLatest) {
+        transcriptScroller.scrollTop = transcriptScroller.scrollHeight;
+      } else {
+        updateScrollPosition();
+      }
     });
   });
 
@@ -173,9 +193,12 @@
         <div bind:this={transcriptScroller} onscroll={updateScrollPosition}
           class="min-h-0 flex-1 overflow-y-auto pr-1" role="log" aria-label="Meeting conversation" aria-live="off" tabindex="0">
           {#each orderedTurns as turn, index (turn.sequence)}
-            <div class={"ti-chat-message pb-2 last:pb-0 " +
-              (index > 0 && orderedTurns[index - 1]?.lane !== turn.lane ? "pt-3" : "pt-1")}>
-              <MeetingTurnBubble {turn} statusLabel={turn.lane === "you" ? deliveryLabel(turn) : ""}
+            <div class={"ti-chat-message last:pb-0 " +
+              (appearance.density === "compact" ? "pb-1 " : "pb-2 ") +
+              (index > 0 && orderedTurns[index - 1]?.lane !== turn.lane
+                ? appearance.density === "compact" ? "pt-2" : "pt-3" : "pt-1")}>
+              <MeetingTurnBubble {turn} preferences={appearance}
+                statusLabel={turn.lane === "you" ? deliveryLabel(turn) : ""}
                 onCopy={() => void copyTurn(turn)} copied={copiedSequence === turn.sequence} />
               {#if copyFailedSequence === turn.sequence}
                 <p class="m-0 mt-1 text-[13px] text-[var(--ti-warning)]" role="alert">Couldn't copy this phrase. Try again.</p>

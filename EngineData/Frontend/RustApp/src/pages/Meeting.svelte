@@ -12,7 +12,7 @@
   import { MEETING_SOURCE_LABELS } from "../components/ui/meetingSourceLabels";
 
   let {
-    section = "live", snapshot, meetingStatus, meetingTurns, actionBusy = false,
+    section = "live", snapshot, meetingStatus, meetingTurns, actionBusy = false, previewReadOnly = false,
     onMeetingAction, onRefresh, onNavigate,
   }: {
     section?: "live" | "last" | "saved";
@@ -20,6 +20,7 @@
     meetingStatus: MeetingSessionStatus | null;
     meetingTurns: MeetingCommittedTurnsSnapshot | null;
     actionBusy?: boolean;
+    previewReadOnly?: boolean;
     onMeetingAction: (source?: "original" | "translateit") => void | Promise<void>;
     onRefresh: (preferredNotice?: string) => void | Promise<void>;
     onNavigate: (route: AppRoute) => void;
@@ -197,7 +198,7 @@
     </div>
     <div class="min-h-0 flex-1 overflow-hidden px-5 py-4 sm:px-7" role="region" aria-label="Live Meeting transcript and status">
       {#if activityVisible && meetingStatus && meetingStatus.audio_source !== "original"}
-        <MeetingActivity status={meetingStatus} turns={meetingTurns} />
+        <MeetingActivity status={meetingStatus} turns={meetingTurns} {previewReadOnly} />
       {:else}
         <div class="flex min-h-[280px] flex-col items-center justify-center gap-3 text-center">
           <Hash size={28} class="text-[var(--ti-text-soft)]" aria-hidden="true"/>

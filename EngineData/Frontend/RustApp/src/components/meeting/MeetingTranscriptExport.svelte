@@ -1,9 +1,14 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { Check, Copy, Download, ExternalLink, FolderOpen, RefreshCw, Trash2 } from "@lucide/svelte";
   import { runtimeApi, type MeetingCommittedTurn, type MeetingCommittedTurnsSnapshot, type SavedMeetingSessions } from "../../app/bridge/runtimeApi";
   import { languageName } from "../../app/shared/state";
   import { meetingSpeakerLabel, meetingTime } from "../../app/runtime/meetingTranscriptPresentation";
   import MeetingTurnBubble from "./MeetingTurnBubble.svelte";
+  import {
+    DEFAULT_TRANSCRIPT_PREFERENCES, readTranscriptPreferences, subscribeTranscriptPreferences,
+    type TranscriptPreferences,
+  } from "./transcriptPreferences";
 
   let { hasSession = false, onNotice, onDeleted }: {
     hasSession?: boolean;
@@ -11,6 +16,11 @@
     onDeleted?: () => void;
   } = $props();
   let history = $state<SavedMeetingSessions | null>(null);
+  let appearance = $state<TranscriptPreferences>({ ...DEFAULT_TRANSCRIPT_PREFERENCES });
+  onMount(() => {
+    appearance = readTranscriptPreferences();
+    return subscribeTranscriptPreferences((next) => { appearance = next; });
+  });
   let expanded = $state<string | null>(null);
   let preview = $state<MeetingCommittedTurnsSnapshot | null>(null);
   let previewLoading = $state(false);
@@ -325,7 +335,7 @@
                   {#each preview.turns as turn (turn.sequence)}
                     <div class="py-3 first:pt-0 last:pb-0">
                       {#if language === "bilingual"}
-                        <MeetingTurnBubble {turn} />
+                        <MeetingTurnBubble {turn} preferences={appearance} />
                       {:else}
                         {@const selected = textFor(turn, language)}
                         <div class={"flex w-full " + (turn.lane === "you" ? "justify-end" : "justify-start")}>

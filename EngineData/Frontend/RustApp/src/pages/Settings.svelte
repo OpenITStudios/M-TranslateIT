@@ -13,6 +13,7 @@
   import MeetingNoiseSuppression from "../components/settings/MeetingNoiseSuppression.svelte";
   import MeetingTranslationEngine from "../components/settings/MeetingTranslationEngine.svelte";
   import FloatingCaptionPreferences from "../components/settings/FloatingCaptionPreferences.svelte";
+  import TranscriptAppearanceSettings from "../components/meeting/TranscriptAppearanceSettings.svelte";
   import TranslationFeedbackReview from "../components/settings/TranslationFeedbackReview.svelte";
   import SettingsDiagnostics from "../components/settings/SettingsDiagnostics.svelte";
   import StatusBadge from "../components/ui/StatusBadge.svelte";
@@ -355,35 +356,11 @@
         <section aria-labelledby="transcript-appearance-heading">
           <h3 id="transcript-appearance-heading" class="m-0 text-[16px] font-semibold">Transcript Appearance</h3>
           <p class="mb-4 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">
-            The Live, Last Meeting and Saved Transcripts channels share the same bilingual message style.
+            Configure bilingual chat bubbles across Live Meeting, Last Meeting and Saved Transcripts.
           </p>
-          <dl class="grid grid-cols-1 gap-x-6 gap-y-4 border-y border-[var(--ti-border)] py-4 sm:grid-cols-2">
-            <div class="min-w-0">
-              <dt class="text-[12px] text-[var(--ti-text-muted)]">Layout</dt>
-              <dd class="m-0 mt-1 text-[13px] font-medium">Meeting audio left · You right</dd>
-            </div>
-            <div class="min-w-0">
-              <dt class="text-[12px] text-[var(--ti-text-muted)]">Text order</dt>
-              <dd class="m-0 mt-1 text-[13px] font-medium">Original then translation</dd>
-            </div>
-            <div class="min-w-0">
-              <dt class="text-[12px] text-[var(--ti-text-muted)]">Timestamps</dt>
-              <dd class="m-0 mt-1 text-[13px] font-medium">Always shown · HH:mm:ss</dd>
-            </div>
-            <div class="min-w-0">
-              <dt class="text-[12px] text-[var(--ti-text-muted)]">Reading position</dt>
-              <dd class="m-0 mt-1 text-[13px] font-medium">Follow latest; pause when scrolling up</dd>
-            </div>
-          </dl>
-          <p class="mb-0 mt-3 text-[12px] leading-5 text-[var(--ti-text-muted)]">
-            These are current display defaults, not editable settings. Customization will require verified preference storage.
-          </p>
+          <TranscriptAppearanceSettings {onNotice} />
         </section>
-        <section aria-labelledby="floating-captions-heading" class="border-t border-[var(--ti-border)] pt-5">
-          <h3 id="floating-captions-heading" class="m-0 text-[16px] font-semibold">Floating Captions</h3>
-          <p class="mb-4 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">
-            Captions display separately from the main transcript. Available options below use the existing saved caption preferences.
-          </p>
+        <section aria-label="Floating captions settings" class="border-t border-[var(--ti-border)] pt-5">
           <FloatingCaptionPreferences {onNotice} />
         </section>
       </div>
@@ -410,7 +387,7 @@
         </dl>
         <p class="m-0 text-[13px] leading-6 text-[var(--ti-text-muted)]">
           These are the current visual defaults. There are no appearance switches that silently reset or change only this screen.
-          Global themes and font-size controls will be added only with real preference persistence and responsive validation.
+          Customize message bubbles in Meeting & Transcript. Global themes and font-size controls remain unavailable until they have verified persistence and responsive validation.
         </p>
       </section>
     {:else if !diagnosticsOpen}
