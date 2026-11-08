@@ -184,11 +184,14 @@ def _continuation(
         raise RuntimeError("translation:output_completion_unverifiable")
     ids = [int(value) for value in raw_ids]
     pad_ids = set(host["generation_pad_token_ids"](tokenizer, model))
+    eos_ids = set(host["generation_eos_token_ids"](tokenizer, model))
+    # Causal tokenizers may alias PAD to EOS. Never remove a terminal EOS
+    # while trimming padding: it is the evidence of a completed translation.
+    pad_ids.difference_update(eos_ids)
     while ids and ids[-1] in pad_ids:
         ids.pop()
     if not ids:
         raise RuntimeError("translation:empty_generation_sequence")
-    eos_ids = set(host["generation_eos_token_ids"](tokenizer, model))
     if not eos_ids:
         raise RuntimeError("translation:eos_token_unavailable")
     finished = ids[-1] in eos_ids

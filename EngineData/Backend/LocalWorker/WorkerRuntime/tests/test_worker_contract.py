@@ -196,6 +196,45 @@ def test_milmmt_generate_options_are_greedy_deterministic_and_have_no_forced_bos
     assert "forced_bos_token_id" not in captured
 
 
+@pytest.mark.parametrize(
+    ("pad_equals_eos", "generated_sequence", "expected_complete"),
+    [
+        (True, [5, 6, 7, 9, 2], True),
+        (False, [5, 6, 7, 9, 2, 1, 1], True),
+        (True, [5, 6, 7, 9, 9], False),
+        (False, [5, 6, 7, 9, 9, 1], False),
+    ],
+)
+def test_milmmt_eos_completion_survives_pad_alias_without_accepting_incomplete_output(
+    monkeypatch, pad_equals_eos, generated_sequence, expected_complete
+) -> None:
+    worker = load_worker_module()
+    monkeypatch.setitem(
+        sys.modules, "torch", types.SimpleNamespace(inference_mode=_FakeInferenceMode)
+    )
+    monkeypatch.setattr(worker, "translation_model_ready", lambda _path: True)
+    _install_fake_generate_runtime(worker, [generated_sequence])
+    if pad_equals_eos:
+        runtime = worker.TRANSLATION_RUNTIME["id->en"]
+        runtime["tokenizer"].pad_token_id = 2
+        runtime["model"].pad_token_id = 2
+
+    result = worker.handle_translate(
+        {"text": "halo", "source_language": "id", "target_language": "en"}
+    )
+
+    assert result["ok"] is expected_complete
+    assert result["complete"] is expected_complete
+    assert result["finished_with_eos"] is expected_complete
+    assert result["generated_tokens"] == 2
+    if expected_complete:
+        assert result["translated_text"] == "halo dunia"
+        assert result["blocker"] == ""
+    else:
+        assert result.get("translated_text", "") == ""
+        assert result["blocker"] == "translation:output_ended_without_eos"
+
+
 def test_milmmt_standalone_source_limit_bounds_target_expansion() -> None:
     worker = load_worker_module()
     assert worker.translation_input_token_limit(object(), object()) == 96
