@@ -201,3 +201,8 @@ test("Mute and source changes broadcast one native snapshot to all active window
   assert.match(appRuntime, /fn notify_meeting_control_change\(app: &tauri::AppHandle, reason: &str\)/);
   assert.match(appRuntime, /events::emit_application_snapshot\(app, reason, &snapshot\)/);
 });
+
+test("Quick Access caption recovery points to the renamed Meeting & Transcript category", () => {
+  assert.match(popup, /Open TranslateIT → Settings → Meeting & Transcript/);
+  assert.doesNotMatch(popup, /Settings → Meeting Captions/);
+});

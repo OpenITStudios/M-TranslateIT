@@ -233,3 +233,21 @@ test("Settings categories separate saved caption controls from read-only appeara
   assert.match(settings, /\{:else if tab === "appearance"\}/);
   assert.match(settings, /<FloatingCaptionPreferences \{onNotice\}/);
 });
+
+test("Settings device discovery is lazy and only runs in Voice & Audio", () => {
+  const settings = readFileSync(new URL("../../src/pages/Settings.svelte", import.meta.url), "utf8");
+  assert.match(settings, /import \{ tick, untrack \} from "svelte"/);
+  assert.match(settings, /if \(tab !== "meeting"\) return;/);
+  assert.match(settings, /untrack\(\(\) => \{/);
+  assert.match(settings, /void loadDevices\(\)/);
+  assert.match(settings, /void loadRouteStatus\(\)/);
+  assert.doesNotMatch(settings, /onMount\(\(\) => \{\s*void loadDevices/);
+});
+
+test("Sidebar popup ARIA controls only reference menus while mounted", () => {
+  const controls = readFileSync(new URL("../../src/components/layout/SidebarUserControls.svelte", import.meta.url), "utf8");
+  assert.match(controls, /aria-controls=\{popup === "voice" \? "ti-voice-actor-menu" : undefined\}/);
+  assert.match(controls, /aria-controls=\{popup === "devices" \? "ti-audio-device-menu" : undefined\}/);
+  assert.match(controls, /if \(popup && event\.key === "Escape"\)/);
+  assert.match(controls, /openAudioSettings\(\)/);
+});

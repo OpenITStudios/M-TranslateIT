@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import { classifyVirtualMicRoute } from "../app/bridge/virtualMicRoutePresentation";
   import { runtimeApi, type VirtualMicRouteContractStatus } from "../app/bridge/runtimeApi";
   import {
@@ -202,9 +202,15 @@
     }
   }
 
-  onMount(() => {
-    void loadDevices();
-    void loadRouteStatus();
+  // Only Voice & Audio needs device discovery. Avoid probing Windows audio
+  // when opening Appearance, transcript preferences, or diagnostics summaries.
+  // untrack prevents the async loaders' own busy flags from retriggering this effect.
+  $effect(() => {
+    if (tab !== "meeting") return;
+    untrack(() => {
+      void loadDevices();
+      void loadRouteStatus();
+    });
   });
 </script>
 

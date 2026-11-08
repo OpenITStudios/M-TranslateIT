@@ -75,7 +75,7 @@
   const recoveryInstruction = $derived(
     errorArea === "source" ? "Open TranslateIT → Meeting to check the selected audio source before retrying."
       : errorArea === "mute" ? "Open TranslateIT → Meeting to check the microphone mute state before retrying."
-      : errorArea === "captions" ? "Open TranslateIT → Settings → Meeting Captions to check caption visibility before retrying."
+      : errorArea === "captions" ? "Open TranslateIT → Settings → Meeting & Transcript to check caption visibility before retrying."
       : errorArea === "window" ? "Try opening TranslateIT again. Your Meeting action was not changed by this attempt."
       : "Open TranslateIT → Meeting to check whether the microphone is live or stopping before retrying.",
   );

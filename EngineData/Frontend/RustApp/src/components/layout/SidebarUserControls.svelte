@@ -383,7 +383,7 @@
 
   <div class="flex min-h-[62px] items-center gap-1.5 border-t border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-2 py-2.5">
     <button bind:this={voiceTrigger} type="button" class="ti-actor-trigger group flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left"
-      aria-label="Choose Voice Actor" aria-controls="ti-voice-actor-menu" aria-expanded={popup === "voice"}
+      aria-label="Choose Voice Actor" aria-controls={popup === "voice" ? "ti-voice-actor-menu" : undefined} aria-expanded={popup === "voice"}
       title={previewReadOnly ? "Synthetic preview: voice selection not connected" : "Choose Voice Actor"}
       disabled={previewReadOnly} onclick={() => togglePopup("voice")}>
       <span class="relative grid size-8 shrink-0 place-items-center rounded-full bg-[var(--ti-brand)] text-white">
@@ -407,7 +407,7 @@
       </button>
       <button bind:this={devicesTrigger} type="button" class="ti-user-action ti-user-chevron"
         aria-label="Choose audio input and meeting sound devices"
-        aria-controls="ti-audio-device-menu" aria-expanded={popup === "devices"}
+        aria-controls={popup === "devices" ? "ti-audio-device-menu" : undefined} aria-expanded={popup === "devices"}
         title="Audio device menu" disabled={previewReadOnly}
         onclick={() => togglePopup("devices")}><ChevronDown size={14}/></button>
     </div>
