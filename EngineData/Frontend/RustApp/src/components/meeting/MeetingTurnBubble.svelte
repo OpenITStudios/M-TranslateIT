@@ -27,8 +27,11 @@
     title: `${languageName(turn.target_language)} · Translation`,
     text: meetingTranslationDisplay(turn),
   });
-  const blocks = $derived(preferences.textOrder === "translation-first"
-    ? [translation, original] : [original, translation]);
+  const blocks = $derived(preferences.textMode === "translation-only"
+    ? turn.translation_state === "translated" && translation.text !== "Translation unavailable"
+      ? [translation] : [original, translation]
+    : preferences.textOrder === "translation-first"
+      ? [translation, original] : [original, translation]);
   // A user's display preference must never conceal a failed translation/output.
   const criticalStatus = $derived(turn.translation_state === "failed"
     || turn.delivery_state === "output_failed" || turn.delivery_state === "interrupted");

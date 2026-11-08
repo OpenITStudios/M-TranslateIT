@@ -694,7 +694,12 @@ pub fn delete_saved_session(session_id: String) -> ArchiveActionResult {
     match fs::remove_dir_all(dir) {
         Ok(()) => {
             super::committed_turns::forget_ended_saved_session(&session_id);
-            ArchiveActionResult { ok: true, message: "Saved transcript deleted from this device.".to_string() }
+            match super::meeting_catalog::forget_deleted_session(&session_id) {
+                Ok(()) => ArchiveActionResult { ok: true, message: "Saved Meeting deleted from this device.".to_string() },
+                Err(_) => ArchiveActionResult {
+                    ok: false, message: "Meeting transcript was deleted, but its library metadata cleanup could not be verified. Refresh the library.".to_string(),
+                },
+            }
         },
         Err(_) => ArchiveActionResult { ok: false, message: "Saved transcript could not be deleted.".to_string() },
     }

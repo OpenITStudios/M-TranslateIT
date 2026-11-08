@@ -39,7 +39,8 @@
   <main class="flex min-w-0 flex-1 flex-col overflow-hidden">
     <AppHeader snapshot={fixture.snapshot} route="meeting" meetingSection="live"
       {notice} myVoiceRecording={false} showUpdateAction={false}
-      onNavigate={noNavigation} onNotice={noOperation}/>
+      onNavigate={noNavigation} onNotice={noOperation} onRefresh={noOperation}
+      previewReadOnly={true}/>
     <div class="min-h-0 flex-1 overflow-hidden">
       <Meeting section="live" snapshot={fixture.snapshot} previewReadOnly={true}
         meetingStatus={fixture.meetingStatus} meetingTurns={fixture.turns}

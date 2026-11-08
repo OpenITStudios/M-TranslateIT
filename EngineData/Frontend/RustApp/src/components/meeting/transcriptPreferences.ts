@@ -4,11 +4,13 @@
  * Mirrors the existing floating-caption preference persistence boundary.
  */
 export type TranscriptDensity = "cozy" | "compact";
+export type TranscriptTextMode = "both" | "translation-only";
 export type TranscriptTextOrder = "original-first" | "translation-first";
 export type TranscriptTimestamp = "always" | "hover";
 
 export type TranscriptPreferences = {
   density: TranscriptDensity;
+  textMode: TranscriptTextMode;
   textOrder: TranscriptTextOrder;
   timestamps: TranscriptTimestamp;
   showSpeakerIcons: boolean;
@@ -18,6 +20,7 @@ export type TranscriptPreferences = {
 
 export const DEFAULT_TRANSCRIPT_PREFERENCES: Readonly<TranscriptPreferences> = Object.freeze({
   density: "cozy",
+  textMode: "both",
   textOrder: "original-first",
   timestamps: "always",
   showSpeakerIcons: true,
@@ -40,6 +43,7 @@ export function normalizeTranscriptPreferences(value: unknown): TranscriptPrefer
     : {};
   return {
     density: raw.density === "compact" ? "compact" : "cozy",
+    textMode: raw.textMode === "translation-only" ? "translation-only" : "both",
     textOrder: raw.textOrder === "translation-first" ? "translation-first" : "original-first",
     timestamps: raw.timestamps === "hover" ? "hover" : "always",
     showSpeakerIcons: raw.showSpeakerIcons !== false,

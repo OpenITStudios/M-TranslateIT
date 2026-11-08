@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { Check, Copy, Download, ExternalLink, FolderOpen, RefreshCw, Trash2 } from "@lucide/svelte";
-  import { runtimeApi, type MeetingCommittedTurn, type MeetingCommittedTurnsSnapshot, type SavedMeetingSessions } from "../../app/bridge/runtimeApi";
+  import { runtimeApi, type MeetingCommittedTurn, type MeetingCommittedTurnsSnapshot, type MeetingLibrary } from "../../app/bridge/runtimeApi";
   import { languageName } from "../../app/shared/state";
   import { meetingSpeakerLabel, meetingTime } from "../../app/runtime/meetingTranscriptPresentation";
   import MeetingTurnBubble from "./MeetingTurnBubble.svelte";
@@ -15,7 +15,7 @@
     onNotice: (message: string) => void;
     onDeleted?: () => void;
   } = $props();
-  let history = $state<SavedMeetingSessions | null>(null);
+  let history = $state<MeetingLibrary | null>(null);
   let appearance = $state<TranscriptPreferences>({ ...DEFAULT_TRANSCRIPT_PREFERENCES });
   onMount(() => {
     appearance = readTranscriptPreferences();
@@ -41,6 +41,8 @@
   let previousActive = $state<boolean | null>(null);
 
   function sessionLabel(id: string): string {
+    const savedName = history?.sessions.find(session => session.session_id === id)?.display_name;
+    if (savedName) return savedName;
     const ms = Number(id.split("_")[1]);
     const date = new Date(ms);
     return Number.isSafeInteger(ms) && ms > 0 && !Number.isNaN(date.getTime())
@@ -58,7 +60,7 @@
     if (loading) return;
     loading = true;
     try {
-      history = await runtimeApi.listSavedMeetingTranscripts();
+      history = await runtimeApi.listMeetingLibrary();
       notice = history.ok ? "" : history.message;
       if (!history.ok) {
         expanded = null;
@@ -177,7 +179,7 @@
       if (receipt?.sessionId === sessionId) receipt = null;
       confirming = null;
       onDeleted?.();
-      onNotice("Saved transcript deleted.");
+      onNotice("Saved Meeting deleted.");
       await refresh();
     } catch { notice = "Saved transcript could not be deleted."; }
     finally { busy = false; }
@@ -207,7 +209,7 @@
 <section class="ti-panel mt-4 overflow-hidden" aria-label="Saved Meeting transcripts">
   <header class="flex flex-wrap items-start justify-between gap-3 px-5 py-4">
     <div class="grid gap-1">
-      <h3 class="m-0 text-[15px] font-semibold">Saved Transcripts</h3>
+      <h3 class="m-0 text-[15px] font-semibold">Saved Meeting</h3>
       <p class="m-0 max-w-xl text-[13px] leading-5 text-[var(--ti-text-muted)]">
         Conversations stay on this device until you delete them. Exporting HTML does not delete saved entries.
       </p>
@@ -215,6 +217,9 @@
     <button type="button" class="ti-button ti-button-secondary min-h-10 text-[13px]" disabled={loading || busy}
       onclick={() => void refresh()}><RefreshCw size={14}/>{loading ? "Checking..." : "Refresh"}</button>
   </header>
+  {#if history && !history.ok}
+    <p class="mx-5 mb-3 text-[13px] leading-5 text-[var(--ti-warning)]" role="alert">{history.message}</p>
+  {/if}
   {#if notice && history?.ok}
     <p class="mx-5 mb-3 break-words text-[13px] leading-5 text-[var(--ti-warning)]" role="alert">{notice}</p>
   {/if}
@@ -226,12 +231,12 @@
   {#if !history && (!historyChecked || loading)}
     <p class="m-0 border-t border-[var(--ti-border)] px-5 py-5 text-[13px] text-[var(--ti-text-muted)]"
       role="status" aria-live="polite">Checking saved transcripts...</p>
-  {:else if !history || !history.ok}
+  {:else if !history || (!history.ok && history.sessions.length === 0)}
     <p class="m-0 border-t border-[var(--ti-border)] px-5 py-5 text-[13px] leading-5 text-[var(--ti-warning)]"
-      role="status">Saved transcript list could not be verified. Select Refresh to check again; existing files were not changed by this check.</p>
+      role="status">Saved Meeting library could not be verified. Select Refresh; existing files were not changed.</p>
   {:else if history.sessions.length === 0}
     <p class="m-0 border-t border-[var(--ti-border)] px-5 py-6 text-sm text-[var(--ti-text-muted)]">
-      No conversation entries have been saved yet.
+      No Meeting archives have been saved yet.
     </p>
   {:else}
     <div class="divide-y divide-[var(--ti-border)] border-t border-[var(--ti-border)]">
@@ -282,7 +287,7 @@
               </p>
               <div class="mt-3 flex flex-wrap gap-2">
                 <button type="button" class="ti-button ti-button-danger min-h-10"
-                  onclick={() => void deleteArchive(session.session_id)} disabled={busy}>Delete saved transcript</button>
+                  onclick={() => void deleteArchive(session.session_id)} disabled={busy}>Delete Meeting</button>
                 <button type="button" class="ti-button ti-button-secondary min-h-10"
                   onclick={() => confirming = null}>Cancel</button>
               </div>

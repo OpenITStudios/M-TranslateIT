@@ -36,6 +36,8 @@ pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wr
         crate::commands::meeting_session::get_meeting_committed_turns,
         crate::commands::meeting_session::get_recent_meeting_transcript,
         crate::commands::meeting_session::list_saved_meeting_transcripts,
+        crate::commands::meeting_session::list_meeting_library,
+        crate::commands::meeting_session::update_meeting_library,
         crate::commands::meeting_session::get_saved_meeting_transcript_preview,
         crate::commands::meeting_session::delete_saved_meeting_transcript,
         crate::commands::meeting_session::export_saved_meeting_transcript_html,

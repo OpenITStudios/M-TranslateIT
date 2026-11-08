@@ -349,6 +349,98 @@
   }
 
   /* Compact Discord-style bottom user controls; no separate deafen/headset action. */
+  /* Channel navigation inherits the existing Discord-like sidebar tokens. */
+  .ti-library-channel {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    gap: 3px;
+    padding-right: 3px;
+  }
+
+  .ti-library-channel .ti-channel-item {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .ti-library-more {
+    display: grid;
+    width: 29px;
+    height: 32px;
+    flex-shrink: 0;
+    place-items: center;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ti-text-soft);
+  }
+
+  .ti-library-more:hover,
+  .ti-library-more[aria-expanded="true"] {
+    background: var(--ti-surface-hover);
+    color: var(--ti-text);
+  }
+
+  .ti-library-menu {
+    display: grid;
+    margin: 3px 7px 7px;
+    padding: 5px;
+    border: 1px solid var(--ti-border);
+    border-radius: 8px;
+    background: var(--ti-surface-soft);
+  }
+
+  .ti-library-menu button {
+    display: flex;
+    min-height: 34px;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 9px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ti-text-muted);
+    text-align: left;
+    font-size: 12px;
+  }
+
+  .ti-library-menu button:hover {
+    background: var(--ti-surface-hover);
+    color: var(--ti-text);
+  }
+
+  .ti-library-editor {
+    display: grid;
+    gap: 8px;
+    margin: 7px 7px 12px;
+    padding: 10px;
+    border: 1px solid var(--ti-border-strong);
+    border-radius: 8px;
+    background: var(--ti-surface-soft);
+  }
+
+  .ti-library-small {
+    min-height: 32px;
+    border: 1px solid var(--ti-border);
+    border-radius: 6px;
+    background: var(--ti-surface-raised);
+    color: var(--ti-text);
+    padding: 0 10px;
+    font-size: 12px;
+  }
+
+  .ti-library-primary { background: var(--ti-accent); color: white; }
+  .ti-library-danger { background: var(--ti-danger-surface); color: var(--ti-danger); }
+
+  .ti-appbar select {
+    color: var(--ti-text);
+    cursor: pointer;
+  }
+  .ti-appbar select option {
+    background: var(--ti-sidebar);
+    color: var(--ti-text);
+  }
+
   .ti-actor-trigger {
     color: var(--ti-text);
     transition: background-color 120ms ease;

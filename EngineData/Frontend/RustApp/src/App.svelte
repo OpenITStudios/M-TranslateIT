@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { toggleQuickAccess } from "./app/runtime/quickAccessRuntime";
   import { appUpdateApi } from "./app/update/appUpdateApi";
-  import { runtimeApi, type MeetingSessionStatus } from "./app/bridge/runtimeApi";
+  import { runtimeApi, type MeetingSessionStatus, type MeetingLibrary, type MeetingLibraryChange } from "./app/bridge/runtimeApi";
   import {
     applicationRuntimeApi,
     type ApplicationSnapshot,
@@ -53,7 +53,10 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
 
   let booting = $state(true);
   let route=$state<AppRoute>("meeting");
-  let meetingSection = $state<"live" | "last" | "saved">("live");
+  let meetingSection = $state<"live" | "last" | "saved" | "session">("live");
+  let selectedSessionId = $state<string | null>(null);
+  let library = $state<MeetingLibrary | null>(null);
+  let libraryBusy = $state(false);
   let settingsTab = $state<"meeting" | "translation" | "appearance" | "advanced">("meeting");
   let muteBusy = $state(false);
   let voiceSelectionRevision = $state(0);
@@ -121,17 +124,93 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
       setKnownNotice("Stop the current My Voice recording before leaving My Voice.", "attention");
       return;
     }
-    if (next === "meeting") meetingSection = "live";
+    if (next === "meeting" && snapshot?.meeting.live) {
+      // Global Live/Stop Needed return always opens the native active owner.
+      meetingSection = "live";
+      selectedSessionId = meetingStatus?.session_id ?? null;
+    }
     route = next;
   }
 
-  function openMeetingSection(next: "live" | "last" | "saved"): void {
+  function openMeetingSession(id: string): void {
     if (voiceRecordingLock && route !== "meeting") {
-      navigate("meeting");
+      setKnownNotice("Stop the current My Voice recording before leaving My Voice.", "attention");
+      return;
+    }
+    // A running session is always rendered from the native Live owner.
+    if (snapshot?.meeting.live && meetingStatus?.session_id === id) {
+      selectedSessionId = id;
+      meetingSection = "live";
+    } else if (library?.sessions.some(s => s.session_id === id)) {
+      selectedSessionId = id;
+      meetingSection = "session";
+    }
+    route = "meeting";
+  }
+
+  function openMeetingSection(next: "live" | "last" | "saved" | "session"): void {
+    if (voiceRecordingLock && route !== "meeting") {
+      setKnownNotice("Stop the current My Voice recording before leaving My Voice.", "attention");
+      return;
+    }
+    if (next === "last" && (library?.sessions.length ?? 0) > 0) {
+      openMeetingSession(library.sessions[0].session_id);
       return;
     }
     meetingSection = next;
+    if (next !== "session") selectedSessionId = next === "live" ? meetingStatus?.session_id ?? null : null;
     route = "meeting";
+  }
+
+  async function refreshMeetingLibrary(): Promise<void> {
+    const result = await runtimeApi.listMeetingLibrary();
+    library = result;
+  }
+
+  async function changeMeetingLibrary(change: Omit<MeetingLibraryChange, "expectedRevision">): Promise<boolean> {
+    if (libraryBusy || !library?.ok) {
+      setKnownNotice("Meeting library is unavailable. Refresh Saved Meeting before editing.", "attention");
+      return false;
+    }
+    libraryBusy = true;
+    try {
+      const result = await runtimeApi.updateMeetingLibrary({ ...change, expectedRevision: library.revision });
+      if (!result.ok) {
+        setKnownNotice(result.message || "Could not verify Meeting changes.", "attention");
+        await refreshMeetingLibrary();
+        return false;
+      }
+      library = result;
+      setNotice("Meeting library updated.");
+      return true;
+    } catch {
+      setKnownNotice("Meeting changes could not be verified. Refresh before retrying.", "unverified");
+      await refreshMeetingLibrary();
+      return false;
+    } finally { libraryBusy = false; }
+  }
+
+  async function deleteMeetingChannel(id: string): Promise<boolean> {
+    if (libraryBusy || !library?.ok || !library.sessions.some(s => s.session_id === id)) return false;
+    libraryBusy = true;
+    try {
+      const result = await runtimeApi.deleteSavedMeetingTranscript(id);
+      await refreshMeetingLibrary();
+      if (!result.ok) {
+        setKnownNotice(result.message, "attention");
+        return false;
+      }
+      if (selectedSessionId === id) {
+        selectedSessionId = null;
+        meetingSection = "saved";
+      }
+      setNotice("Saved Meeting deleted.");
+      return true;
+    } catch {
+      setKnownNotice("Deletion was not confirmed. Check Saved Meeting.", "unverified");
+      await refreshMeetingLibrary();
+      return false;
+    } finally { libraryBusy = false; }
   }
 
   async function toggleMeetingMute(): Promise<void> {
@@ -178,6 +257,14 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
 
     const next = result.snapshot;
     if (!next) return;
+    if (result.previousSessionId !== result.nextSessionId) {
+      // Quick Access and native notifications can Start/Stop outside this view.
+      // Reconcile the saved channel list only on an ownership transition.
+      void refreshMeetingLibrary();
+      if (route === "meeting" && meetingSection === "live" && next.meeting.live) {
+        selectedSessionId = next.meetingSession?.session_id ?? null;
+      }
+    }
     if (!next.meeting.hasSession || result.previousSessionId !== result.nextSessionId) {
       meetingViewState = meetingLiveController.reset();
     }
@@ -268,6 +355,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     }
     const action = startOriginal ? "start" : control.action;
     if (!action) return;
+    const previousSessionId = meetingStatus?.session_id ?? null;
 
     // Fence an in-flight Meeting-only poll before this action changes native
     // ownership. Application events may still reconcile a newer state first.
@@ -302,6 +390,17 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
             || (action === "stop" && !result.meeting.hasSession && result.meeting.lifecycle === "idle"))
             ? "success" : result.ok ? "info" : "attention";
       applyMeetingStatus(result.status, resultNotice, kind);
+      if (result.ok && action === "start" && result.meeting.live && result.status.session_id) {
+        selectedSessionId = result.status.session_id;
+        meetingSection = "live";
+        route = "meeting";
+      } else if (result.ok && action === "stop" && result.meeting.lifecycle === "idle"
+        && !result.meeting.hasSession && previousSessionId) {
+        selectedSessionId = previousSessionId;
+        meetingSection = "session";
+        route = "meeting";
+      }
+      void refreshMeetingLibrary();
       if (!result.status.has_session || action === "start") {
         meetingViewState = meetingLiveController.reset();
       }
@@ -469,6 +568,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
       } finally {
         if (disposed) return;
         booting = false;
+        void refreshMeetingLibrary();
         // The initial page is no longer gated by Python worker readiness.
         // Only a truly not-started worker gets one automatic start attempt.
         // A blocked or failed worker requires the existing explicit recovery.
@@ -585,6 +685,10 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
       voiceSelectionLocked={voiceRecordingLock || snapshot.voiceBuildActive || snapshot.resources.audio_locked}
       onNavigate={navigate}
       onMeetingSection={openMeetingSection}
+      {library} {selectedSessionId}
+      onOpenSession={openMeetingSession}
+      onLibraryChange={changeMeetingLibrary}
+      onDeleteSession={deleteMeetingChannel}
       onSettingsTab={(tab) => { settingsTab = tab; }}
       onToggleMute={toggleMeetingMute}
       onSettingsChange={applySettings}
@@ -598,16 +702,20 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
         {snapshot}
         {route}
         {meetingSection}
+        selectedSessionName={library?.sessions.find(s => s.session_id === selectedSessionId)?.display_name ?? null}
         notice={displayedNotice}
         myVoiceRecording={voiceRecordingLock}
         onNavigate={navigate}
         onNotice={setNotice}
+        onRefresh={refreshSnapshot}
       />
 
       <div class={"min-h-0 flex-1 " + (route === "meeting" ? "overflow-hidden" : "overflow-y-auto")}>
         {#if route === "meeting"}
           <Meeting
             section={meetingSection}
+            selectedSession={library?.sessions.find(s => s.session_id === selectedSessionId) ?? null}
+            onLibraryRefresh={refreshMeetingLibrary}
             {snapshot}
             {meetingStatus}
             meetingTurns={meetingViewState.turns}

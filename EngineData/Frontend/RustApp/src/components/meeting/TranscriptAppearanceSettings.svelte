@@ -7,6 +7,7 @@
     updateTranscriptPreferences,
     type TranscriptPreferences,
     type TranscriptDensity,
+    type TranscriptTextMode,
     type TranscriptTextOrder,
     type TranscriptTimestamp,
   } from "./transcriptPreferences";
@@ -37,6 +38,15 @@
 
 <div class="grid min-w-0 gap-5" aria-label="Transcript appearance preferences">
   <div class="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
+    <label class="grid min-w-0 gap-2">
+      <span class="ti-field-label">Transcript display</span>
+      <select class="ti-field min-h-10 px-3" value={preferences.textMode}
+        onchange={(event) => update({ textMode: event.currentTarget.value as TranscriptTextMode })}>
+        <option value="both">Original + Translation</option>
+        <option value="translation-only">Translation only</option>
+      </select>
+      <small class="text-[12px] leading-5 text-[var(--ti-text-muted)]">Original remains available when translation fails.</small>
+    </label>
     <label class="grid min-w-0 gap-2">
       <span class="ti-field-label">Message density</span>
       <select class="ti-field min-h-10 px-3" value={preferences.density}

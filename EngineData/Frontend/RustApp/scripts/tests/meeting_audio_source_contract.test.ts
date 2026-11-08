@@ -9,14 +9,15 @@ const read = (path: string) => readFileSync(resolve(projectRoot, path), "utf8");
 
 test("Meeting source uses one native selector and existing audio owners", () => {
   const meeting = read("src/pages/Meeting.svelte");
+  const header = read("src/components/layout/AppHeader.svelte");
   const bridge = read("src/app/bridge/runtimeApi.ts");
   const registry = read("src-tauri/src/commands/registry.rs");
   const labels = read("src/components/ui/meetingSourceLabels.ts");
   assert.match(labels, /original: "Original Microphone"/);
   assert.match(labels, /translateit: "TranslateIT Audio"/);
-  assert.match(meeting, /<option value="original">\{MEETING_SOURCE_LABELS\.original\}/);
-  assert.match(meeting, /<option value="translateit">\{MEETING_SOURCE_LABELS\.translateit\}/);
-  assert.match(meeting, /runtimeApi\.selectMeetingAudioSource\(source\)/);
+  assert.match(header, /<option value="original">\{MEETING_SOURCE_LABELS\.original\}/);
+  assert.match(header, /<option value="translateit">\{MEETING_SOURCE_LABELS\.translateit\}/);
+  assert.match(header, /runtimeApi\.selectMeetingAudioSource\(source\)/);
   assert.match(bridge, /set_meeting_audio_source/);
   assert.match(registry, /meeting_session::set_meeting_audio_source/);
 });
@@ -44,13 +45,14 @@ test("Original mode starts under existing Meeting ownership without AI", () => {
   const intents = read("src-tauri/src/commands/application_runtime/intents.rs");
   const facade = read("src/app/bridge/runtimeProductFacade.ts");
   const meeting = read("src/pages/Meeting.svelte");
+  const header = read("src/components/layout/AppHeader.svelte");
   const sources = read("src-tauri/src/commands/meeting_session/audio_source.rs");
   assert.match(lifecycle, /start_meeting_original_impl/);
   assert.match(lifecycle, /if original_requested \{/);
   assert.match(lifecycle, /start_original_voice_output\(output_device, generation, 2\)/);
   assert.match(intents, /"start_original_meeting"/);
   assert.match(facade, /source === "original" \? "start_original_meeting"/);
-  assert.match(meeting, /selectMeetingPreferredAudioSource\(source\)/);
+  assert.match(header, /selectMeetingPreferredAudioSource\(source\)/);
   assert.match(meeting, /Start Original Microphone/);
   assert.match(sources, /prepare_required_outbound_ai_runtime\(generation\)/);
 });

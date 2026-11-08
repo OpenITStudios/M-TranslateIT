@@ -39,8 +39,8 @@ test("Quick Access is meeting-first and old command palette is gone", () => {
   assert.match(sourceLabels, /translateit: "TranslateIT Audio"/);
   assert.match(popup, /MEETING_SOURCE_LABELS\.original/);
   assert.match(popup, /MEETING_SOURCE_LABELS\.translateit/);
-  assert.match(meetingPage, /MEETING_SOURCE_LABELS\.original/);
-  assert.match(meetingPage, /MEETING_SOURCE_LABELS\.translateit/);
+  assert.match(header, /MEETING_SOURCE_LABELS\.original/);
+  assert.match(header, /MEETING_SOURCE_LABELS\.translateit/);
   assert.match(popup, /Floating Captions/);
   assert.match(popup, /Confirm Stop Meeting/);
   assert.doesNotMatch(popup, /Search tools and settings|Favorites|My Voice|Text Translation/);
@@ -58,8 +58,8 @@ test("Meeting and Quick Access present native-derived ready, live, mute and reco
   assert.match(popup, /Audio sent to meeting/);
   assert.match(popup, /\{sourceSummary\}/);
   assert.match(meetingPage, /readyForSelectedSource/);
-  assert.match(meetingPage, /meeting\.live && meetingStatus\?\.muted \? "Muted"/);
-  assert.match(meetingPage, /aria-label="Audio sent to meeting"/);
+  assert.match(app, /meetingStatus\?\.muted/);
+  assert.match(header, /aria-label="Audio sent to meeting"/);
 });
 
 test("Dismissing Quick Access does not end Meeting; app exit destroys its window", () => {
@@ -159,7 +159,7 @@ test("Pre-Start preferred voice source has one Rust owner across Meeting and Qui
   assert.match(native, /static PREFER_ORIGINAL: AtomicBool/);
   assert.match(native, /fn set_preferred_source\(source: &str\)/);
   assert.match(status, /super::audio_source::preferred_source\(\)/);
-  assert.match(meetingPage, /selectMeetingPreferredAudioSource\(source\)/);
+  assert.match(header, /selectMeetingPreferredAudioSource\(source\)/);
   assert.match(popup, /selectMeetingPreferredAudioSource\(requested\)/);
   assert.match(registry, /set_meeting_preferred_audio_source/);
   assert.match(popup, /next\.meeting\.lifecycle === "idle"/);

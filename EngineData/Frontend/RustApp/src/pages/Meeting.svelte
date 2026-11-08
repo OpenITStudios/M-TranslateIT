@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { Hash, Mic, Captions, PhoneOff, ArrowLeftRight } from "@lucide/svelte";
-  import { toggleQuickAccess } from "../app/runtime/quickAccessRuntime";
+  import { Hash, Mic, PhoneOff } from "@lucide/svelte";
   import { runtimeApi, type MeetingCommittedTurnsSnapshot, type MeetingSessionStatus } from "../app/bridge/runtimeApi";
   import type { AppRoute } from "../app/shared/types";
   import type { ProductRuntimeSnapshot } from "../app/bridge/runtimeProductFacade";
@@ -8,14 +7,16 @@
   import MeetingActivity from "../components/meeting/MeetingActivity.svelte";
   import MeetingSessionReview from "../components/meeting/MeetingSessionReview.svelte";
   import MeetingTranscriptExport from "../components/meeting/MeetingTranscriptExport.svelte";
-  import StatusBadge from "../components/ui/StatusBadge.svelte";
-  import { MEETING_SOURCE_LABELS } from "../components/ui/meetingSourceLabels";
+  import MeetingChannel from "../components/meeting/MeetingChannel.svelte";
+  import type { MeetingLibrarySession } from "../app/bridge/runtimeApi";
 
   let {
     section = "live", snapshot, meetingStatus, meetingTurns, actionBusy = false, previewReadOnly = false,
-    onMeetingAction, onRefresh, onNavigate,
+    selectedSession = null, onLibraryRefresh, onMeetingAction, onRefresh, onNavigate,
   }: {
-    section?: "live" | "last" | "saved";
+    section?: "live" | "last" | "saved" | "session";
+    selectedSession?: MeetingLibrarySession | null;
+    onLibraryRefresh?: () => void | Promise<void>;
     snapshot: ProductRuntimeSnapshot;
     meetingStatus: MeetingSessionStatus | null;
     meetingTurns: MeetingCommittedTurnsSnapshot | null;
@@ -28,37 +29,13 @@
 
   let savedDeletionRevision = $state(0);
   let resumeBusy = $state(false);
-  let sourceChanging = $state(false);
   let currentSource = $state<"original" | "translateit">("translateit");
   $effect(() => {
-    // Both Meeting and Quick Access show the same Rust-owned pre-Start choice
-    // and the same confirmed Live selection.
-    if (!sourceChanging && meetingStatus) {
+    if (meetingStatus) {
       currentSource = meetingStatus.audio_source === "original" ? "original" : "translateit";
     }
   });
-  async function selectSource(source: "original" | "translateit"): Promise<void> {
-    // Keep Stop/Retry Stop as the only control while cleanup is pending.
-    if (sourceChanging || currentSource === source || !sourceChangeAllowed) return;
-    sourceChanging = true;
-    try {
-      const result = meeting.live
-        ? await runtimeApi.selectMeetingAudioSource(source)
-        : !meeting.hasSession && meeting.lifecycle === "idle"
-          ? await runtimeApi.selectMeetingPreferredAudioSource(source)
-          : null;
-      if (result?.ok) {
-        currentSource = result.source;
-        await onRefresh(result.message);
-      } else {
-        await onRefresh(result?.message ?? "Could not change microphone source. Check Meeting status.");
-      }
-    } catch {
-      await onRefresh("Could not change microphone source. Your previous selection was kept.");
-    } finally { sourceChanging = false; }
-  }
   const meeting = $derived(snapshot.meeting);
-  const sourceChangeAllowed = $derived(meeting.live || (!meeting.hasSession && meeting.lifecycle === "idle"));
   const needsSetup = $derived(!meeting.hasSession && !meeting.canStop
     && ["new", "deferred"].includes(snapshot.settings.meeting_setup_state));
   const needsVoice = $derived(!needsSetup && !meeting.hasSession && !meeting.canStop
@@ -105,14 +82,10 @@
     && snapshot.readiness.microphoneReady === true
     && snapshot.readiness.meetingRouteReady === true
   );
-  const readyForSelectedSource = $derived(!meeting.hasSession && meeting.lifecycle === "idle"
-    && (currentSource === "original" ? originalAvailable : meeting.canStart && !needsSetup && !needsVoice));
-  // Stop/Retry Stop must remain available even if a source-switch command is
-  // still pending. Only Start and setup actions wait for that operation.
+  // Native action admission still owns Start/Stop. Header source selection is
+  // asynchronous; Stop remains visible when the source control is updating.
   const actionEnabled = $derived(!resumeBusy && !meeting.busy && !actionBusy
-    && (primaryControl.action === "stop"
-      ? primaryControl.enabled
-      : !sourceChanging && (primaryControl.enabled || originalAvailable || needsSetup || needsVoice || needsSettings)));
+    && (primaryControl.enabled || originalAvailable || needsSetup || needsVoice || needsSettings));
   const activityVisible = $derived(Boolean(meetingStatus && meeting.applicationOwned && meeting.live));
   const primaryLabel = $derived(
     primaryControl.action === "stop"
@@ -151,51 +124,9 @@
       ? "Ready to translate. Start when your call is open."
       : "Checking translation readiness. If this persists, open Help in Settings."
   );
-  const statusLabel = $derived(
-    meeting.live && meetingStatus?.muted ? "Muted"
-      : readyForSelectedSource ? "Ready" : meeting.label
-  );
-  const statusTone = $derived<"good" | "warning" | "danger" | "neutral">(
-    meeting.lifecycle === "cleanup_incomplete" ? "warning"
-      : meeting.live && meetingStatus?.muted ? "neutral"
-      : meeting.live || readyForSelectedSource ? "good"
-      : meeting.lifecycle === "unavailable" || snapshot.readiness.level === "unavailable" ? "danger"
-      : needsSetup || needsVoice || needsSettings ? "warning" : "neutral"
-  );
 </script>
 <section class="flex h-full min-h-0 flex-col bg-[var(--ti-bg)]" aria-label="Meeting workspace">
   {#if section === "live"}
-    <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--ti-border)] px-5 py-3 sm:px-7"
-      aria-label="Live Meeting toolbar">
-      <div class="flex min-w-0 items-center gap-3">
-        <p class="m-0 text-[13px] text-[var(--ti-text-muted)]">Indonesian speech → English voice</p>
-        <StatusBadge label={statusLabel} tone={statusTone} />
-      </div>
-      <div class="flex min-w-0 flex-wrap items-center justify-end gap-2">
-        {#if sourceChangeAllowed && meetingStatus}
-          <label class="ti-meeting-source flex min-h-10 min-w-0 items-center gap-2 rounded-[var(--ti-radius-sm)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] px-3">
-            <ArrowLeftRight size={16} class="shrink-0 text-[var(--ti-text-muted)]" aria-hidden="true"/>
-            <span class="hidden shrink-0 text-[12px] text-[var(--ti-text-muted)] md:inline">Audio sent</span>
-            <select id="meeting-audio-source" class="min-h-9 min-w-0 max-w-[170px] bg-transparent text-[13px] font-medium text-[var(--ti-text)]"
-              aria-label="Audio sent to meeting" title="Choose the audio sent through TranslateIT's virtual microphone"
-              value={currentSource} disabled={sourceChanging || actionBusy || !sourceChangeAllowed}
-              onchange={(event) => void selectSource(event.currentTarget.value === "original" ? "original" : "translateit")}>
-              <option value="translateit">{MEETING_SOURCE_LABELS.translateit}</option>
-              <option value="original">{MEETING_SOURCE_LABELS.original}</option>
-            </select>
-          </label>
-        {:else if meetingStatus}
-          <span class="text-[12px] text-[var(--ti-text-muted)]" title="The current audio mode cannot be changed during cleanup">
-            Audio sent: {meetingStatus.audio_source === "original" ? MEETING_SOURCE_LABELS.original : MEETING_SOURCE_LABELS.translateit}
-          </span>
-        {/if}
-        <button type="button" class="ti-button ti-button-secondary min-h-10 px-3 text-[13px]"
-          aria-label="Open captions controls in Quick Access" title="Floating captions settings"
-          onclick={() => void toggleQuickAccess().catch(() => onRefresh("Quick Access couldn't be opened."))}>
-          <Captions size={17} aria-hidden="true"/> Captions
-        </button>
-      </div>
-    </div>
     <div class="min-h-0 flex-1 overflow-hidden px-5 py-4 sm:px-7" role="region" aria-label="Live Meeting transcript and status">
       {#if activityVisible && meetingStatus && meetingStatus.audio_source !== "original"}
         <MeetingActivity status={meetingStatus} turns={meetingTurns} {previewReadOnly} />
@@ -210,6 +141,14 @@
         </div>
       {/if}
     </div>
+  {:else if section === "session"}
+    {#if selectedSession}
+      <MeetingChannel session={selectedSession} onNotice={(message) => void onRefresh(message)} {previewReadOnly}/>
+    {:else}
+      <div class="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-[13px] text-[var(--ti-text-muted)]">
+        This Meeting is no longer in the saved library. Open Saved Meeting to refresh the list.
+      </div>
+    {/if}
   {:else if section === "last"}
     <p class="m-0 shrink-0 border-b border-[var(--ti-border)] px-6 py-3 text-[13px] text-[var(--ti-text-muted)]">
       Read your last recognized conversation after the session ends.
@@ -232,7 +171,7 @@
     <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-7">
       <MeetingTranscriptExport hasSession={meeting.hasSession}
         onNotice={(message) => void onRefresh(message)}
-        onDeleted={() => { savedDeletionRevision += 1; }} />
+        onDeleted={() => { savedDeletionRevision += 1; void onLibraryRefresh?.(); }} />
     </div>
   {/if}
 

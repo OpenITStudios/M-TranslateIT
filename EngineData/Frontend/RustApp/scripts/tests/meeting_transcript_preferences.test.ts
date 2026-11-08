@@ -44,13 +44,13 @@ test("transcript preferences accept only enumerated display fields", () => {
 test("transcript choices roundtrip in local UI storage without conversation data", () => {
   withStorage((items) => {
     const result = updateTranscriptPreferences({
-      density: "compact", textOrder: "translation-first", timestamps: "hover",
+      textMode: "translation-only", density: "compact", textOrder: "translation-first", timestamps: "hover",
       showSpeakerIcons: false, followLatest: false, showPlaybackStatus: false,
     });
     assert.equal(result.ok, true);
     assert.deepEqual(readTranscriptPreferences(), result.preferences);
     const raw = items.get(TRANSCRIPT_PREFERENCES_KEY) ?? "";
-    assert.equal(Object.keys(JSON.parse(raw) as object).length, 6);
+    assert.equal(Object.keys(JSON.parse(raw) as object).length, 7);
     assert.equal(raw.includes("source_text"), false);
     assert.equal(raw.includes("meeting audio"), false);
   });
@@ -91,6 +91,7 @@ test("all transcript readers share settings; F2 remains read-only", () => {
   assert.match(activity, /if \(previewReadOnly\) return;/);
   assert.match(frame, /previewReadOnly=\{true\}/);
   assert.match(bubble, /preferences\.textOrder/);
+  assert.match(bubble, /preferences\.textMode/);
   assert.match(bubble, /preferences\.timestamps/);
   assert.match(bubble, /preferences\.showSpeakerIcons/);
   assert.match(bubble, /preferences\.showPlaybackStatus \|\| criticalStatus/);

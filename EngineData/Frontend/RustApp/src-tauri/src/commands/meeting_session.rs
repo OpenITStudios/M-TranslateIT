@@ -23,6 +23,7 @@ mod incoming_pipeline;
 #[cfg(test)]
 mod interpreter_policy;
 mod lifecycle;
+mod meeting_catalog;
 mod outbound_pipeline;
 mod playback_runtime;
 mod preflight;
@@ -506,6 +507,30 @@ pub fn get_recent_meeting_transcript() -> MeetingCommittedTurnsSnapshot {
         note: "No recently ended Meeting transcript is retained.".to_string(),
         runtime_claim: "meeting_recent_transcript_source_contract_not_rendered_runtime_proof".to_string(),
     }
+}
+
+// Local, versioned display metadata for stored Meeting channels and categories.
+// The existing transcript_archive remains the sole owner of the conversation.
+#[tauri::command]
+pub async fn list_meeting_library() -> meeting_catalog::MeetingLibrary {
+    tauri::async_runtime::spawn_blocking(meeting_catalog::list)
+        .await
+        .unwrap_or_else(|_| meeting_catalog::MeetingLibrary {
+            ok: false, revision: 0, active_write_errors: 0, projects: vec![], sessions: vec![],
+            message: "Meeting library listing was interrupted.".to_string(),
+        })
+}
+
+#[tauri::command]
+pub async fn update_meeting_library(change: meeting_catalog::MeetingLibraryChange)
+    -> meeting_catalog::MeetingLibrary
+{
+    tauri::async_runtime::spawn_blocking(move || meeting_catalog::mutate(change))
+        .await
+        .unwrap_or_else(|_| meeting_catalog::MeetingLibrary {
+            ok: false, revision: 0, active_write_errors: 0, projects: vec![], sessions: vec![],
+            message: "Meeting library change was interrupted. Refresh before retrying.".to_string(),
+        })
 }
 
 // Persistent Meeting archives are separate from temporary Live/last-session

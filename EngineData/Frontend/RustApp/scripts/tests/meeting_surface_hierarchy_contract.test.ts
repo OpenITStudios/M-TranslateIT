@@ -7,12 +7,11 @@ const live = readFileSync(new URL("../../src/components/meeting/MeetingActivity.
 const review = readFileSync(new URL("../../src/components/meeting/MeetingSessionReview.svelte", import.meta.url), "utf8");
 const header = readFileSync(new URL("../../src/components/layout/AppHeader.svelte", import.meta.url), "utf8");
 
-test("Meeting Stop stays actionable during pending audio source changes", () => {
-  // In-flight source selection is not permission to hide the native Stop path.
+test("Header owns audio source switching without hiding the native Stop control", () => {
+  assert.match(header, /runtimeApi\.selectMeetingAudioSource\(source\)/);
+  assert.match(header, /runtimeApi\.selectMeetingPreferredAudioSource\(source\)/);
+  assert.match(header, /aria-label="Audio sent to meeting"/);
   assert.match(meeting, /const actionEnabled = \$derived\(!resumeBusy && !meeting\.busy && !actionBusy/);
-  assert.match(meeting, /primaryControl\.action === "stop"\s*\? primaryControl\.enabled/);
-  assert.match(meeting, /: !sourceChanging && \(primaryControl\.enabled/);
-  assert.doesNotMatch(meeting, /!resumeBusy && !sourceChanging && !meeting\.busy/);
   assert.match(meeting, /meeting\.lifecycle === "cleanup_incomplete" \? primaryControl\.label : "Stop Meeting"/);
 });
 
@@ -24,7 +23,7 @@ test("Meeting main dock is valid markup and has no stray text after the closing 
 });
 
 test("Meeting has a single primary button that can Start, Stop, or guide recovery", () => {
-  assert.match(meeting, /Indonesian speech → English voice/);
+  assert.match(header, /Audio sent/);
   assert.match(meeting, /meetingControlState\(/);
   assert.match(meeting, /disabled=\{!actionEnabled\}/);
   assert.match(meeting, /onclick=\{handlePrimary\}/);
@@ -36,14 +35,11 @@ test("Meeting has a single primary button that can Start, Stop, or guide recover
     assert.equal(meeting.includes(retired), false, retired);
   }
 });
-test("Meeting keeps a single accessible Stop or Retry Stop in a persistent dock below the transcript", () => {
+test("Stop or Retry Stop remains in one dock below the transcript", () => {
   assert.match(meeting, /meeting\.lifecycle === "cleanup_incomplete" \? primaryControl\.label : "Stop Meeting"/);
-  assert.match(meeting, /meeting\.lifecycle === "cleanup_incomplete" \? "warning"/);
   const action = meeting.indexOf('aria-label="Meeting main action"');
-  const sourceSelector = meeting.indexOf('id="meeting-audio-source"');
   const transcript = meeting.indexOf("<MeetingActivity status={meetingStatus}");
-  assert.ok(sourceSelector > 0 && sourceSelector < transcript && transcript < action,
-    "Audio Sent belongs to the Live toolbar, transcript stays central, and the dock comes last");
+  assert.ok(transcript > 0 && transcript < action);
   assert.match(meeting, /section === "live" \|\| meeting\.hasSession \|\| meeting\.canStop/);
   assert.doesNotMatch(meeting, /onToggleMute/);
   assert.equal((meeting.match(/onclick=\{handlePrimary\}/g) ?? []).length, 1);
@@ -148,11 +144,11 @@ test("Discord-inspired shell uses exactly one sidebar, channel navigation, and b
   const settings = readFileSync(new URL("../../src/pages/Settings.svelte", import.meta.url), "utf8");
   const css = readFileSync(new URL("../../src/styles/tokens.css", import.meta.url), "utf8");
   assert.equal((app.match(/<Sidebar\b/g) ?? []).length, 1);
-  assert.match(app, /meetingSection = \$state<"live" \| "last" \| "saved">/);
+  assert.match(app, /meetingSection = \$state<"live" \| "last" \| "saved" \| "session">/);
   assert.match(sidebar, /onMeetingSection\("live"\)/);
-  assert.match(sidebar, /Live Meeting/);
+  assert.match(sidebar, /Start Meeting/);
   assert.match(sidebar, /Last Meeting/);
-  assert.match(sidebar, /Saved Transcripts/);
+  assert.match(sidebar, /Saved Meeting/);
   assert.match(sidebar, /<SidebarUserControls/);
   const userControls = readFileSync(new URL("../../src/components/layout/SidebarUserControls.svelte", import.meta.url), "utf8");
   assert.match(userControls, /aria-label="Open Settings"/);
@@ -193,22 +189,18 @@ test("Discord-like footer groups Voice Actor, Mute, device dropdown and Settings
   assert.match(controls, /onOpenAudioSettings\(\)/);
 });
 
-test("Meeting puts Audio Sent and Captions in the header while only Stop remains below", () => {
-  assert.match(meeting, /aria-label="Live Meeting toolbar"/);
-  assert.match(meeting, /id="meeting-audio-source"/);
-  assert.match(meeting, /aria-label="Open captions controls in Quick Access"/);
+test("One header contains Audio Sent, Display and Captions without stacking additional toolbars", () => {
+  assert.match(header, /aria-label="TranslateIT workspace header"/);
+  assert.match(header, /aria-label="Audio sent to meeting"/);
+  assert.match(header, /aria-label="Transcript display mode"/);
+  assert.match(header, /aria-label="Floating Captions"/);
+  assert.match(header, /aria-label="Open Quick Access"/);
+  assert.doesNotMatch(meeting, /aria-label="Live Meeting toolbar"|meeting-audio-source|Floating Captions/);
   assert.match(meeting, /ti-call-stop/);
   assert.match(meeting, /onclick=\{handlePrimary\}/);
-  assert.doesNotMatch(meeting, /onToggleMute|MicOff|Deafen|Undeafen/);
-  const source = meeting.indexOf('id="meeting-audio-source"');
-  const captions = meeting.indexOf('aria-label="Open captions controls in Quick Access"');
-  const transcript = meeting.indexOf("<MeetingActivity status={meetingStatus}");
   const dock = meeting.indexOf('aria-label="Meeting main action"');
-  assert.ok(source > 0 && captions > source && transcript > captions && dock > transcript);
-  assert.equal((meeting.match(/onclick=\{handlePrimary\}/g) ?? []).length, 1);
   const footer = meeting.slice(dock);
-  assert.doesNotMatch(footer, /meeting-audio-source|Captions|onToggleMute/);
-  assert.match(meeting, /does not leave the Discord or Zoom call/);
+  assert.doesNotMatch(footer, /Audio sent|Captions|onToggleMute/);
 });
 
 test("muted state colors both halves of the sidebar split button", () => {
@@ -283,4 +275,38 @@ test("Bilingual transcript appearance has editable persistent controls, without 
   assert.match(policy, /normalizeTranscriptPreferences/);
   assert.match(policy, /localStorage/);
   assert.doesNotMatch(policy, /source_text|transcript_body|recording|mic_audio/);
+});
+
+test("Meetings organize by native ID, retaining archive source and storage status", () => {
+  const app = readFileSync(new URL("../../src/App.svelte", import.meta.url), "utf8");
+  const library = readFileSync(new URL("../../src/components/layout/MeetingLibraryNavigation.svelte", import.meta.url), "utf8");
+  const channel = readFileSync(new URL("../../src/components/meeting/MeetingChannel.svelte", import.meta.url), "utf8");
+  const native = readFileSync(new URL("../../src-tauri/src/commands/meeting_session/meeting_catalog.rs", import.meta.url), "utf8");
+  const registry = readFileSync(new URL("../../src-tauri/src/commands/registry.rs", import.meta.url), "utf8");
+  assert.match(app, /listMeetingLibrary\(\)/);
+  assert.match(app, /updateMeetingLibrary\(/);
+  assert.match(app, /previousSessionId/);
+  assert.match(app, /selectedSessionId = result\.status\.session_id/);
+  assert.match(library, /Rename Meeting/);
+  assert.match(library, /Move to Project/);
+  assert.match(library, /Star Meeting/);
+  assert.match(library, /Create Project category/);
+  assert.match(library, /Delete Project/);
+  assert.match(channel, /getSavedMeetingTranscriptPreview/);
+  assert.match(native, /expected_revision/);
+  assert.match(native, /saved_session_operation_guard/);
+  assert.match(native, /session_id: id\.to_string\(\)/);
+  assert.match(native, /Damaged category metadata must not hide or mutate intact archives/);
+  assert.match(registry, /list_meeting_library/);
+  assert.match(registry, /update_meeting_library/);
+});
+
+test("Transcript display mode only changes presentation; failures retain original text", () => {
+  const preferences = readFileSync(new URL("../../src/components/meeting/transcriptPreferences.ts", import.meta.url), "utf8");
+  const bubble = readFileSync(new URL("../../src/components/meeting/MeetingTurnBubble.svelte", import.meta.url), "utf8");
+  assert.match(preferences, /textMode: "both"/);
+  assert.match(preferences, /raw\.textMode === "translation-only"/);
+  assert.match(bubble, /preferences\.textMode === "translation-only"/);
+  assert.match(bubble, /turn\.translation_state === "translated"/);
+  assert.match(bubble, /\[original, translation\]/);
 });

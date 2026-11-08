@@ -201,6 +201,29 @@ export type SavedMeetingSession = {
   complete: boolean;
   storage_warning: boolean;
 };
+export type MeetingLibraryProject = { project_id: string; name: string };
+export type MeetingLibrarySession = SavedMeetingSession & {
+  display_name: string;
+  project_id: string | null;
+  starred: boolean;
+};
+export type MeetingLibrary = {
+  ok: boolean;
+  revision: number;
+  projects: MeetingLibraryProject[];
+  sessions: MeetingLibrarySession[];
+  message: string;
+  active_write_errors: number;
+};
+export type MeetingLibraryChange = {
+  action: "create_project" | "rename_project" | "delete_project"
+    | "rename_meeting" | "star_meeting" | "move_meeting";
+  expectedRevision: number;
+  sessionId?: string | null;
+  projectId?: string | null;
+  name?: string | null;
+  starred?: boolean | null;
+};
 export type SavedMeetingSessions = {
   ok: boolean;
   sessions: SavedMeetingSession[];
@@ -400,6 +423,22 @@ export const runtimeApi = {
       "get_meeting_session_status",
       undefined,
       meetingSessionStatusFallback("Meeting session status is unavailable because the frontend bridge could not call Tauri."),
+    );
+  },
+
+  async listMeetingLibrary(): Promise<MeetingLibrary> {
+    return invokeOr<MeetingLibrary>(
+      "list_meeting_library", undefined,
+      { ok: false, revision: 0, projects: [], sessions: [], active_write_errors: 0,
+        message: "Meeting library is unavailable. No names or categories were changed." },
+    );
+  },
+
+  async updateMeetingLibrary(change: MeetingLibraryChange): Promise<MeetingLibrary> {
+    return invokeOr<MeetingLibrary>(
+      "update_meeting_library", { change },
+      { ok: false, revision: 0, projects: [], sessions: [], active_write_errors: 0,
+        message: "Meeting library change could not be verified. Refresh before retrying." },
     );
   },
 
