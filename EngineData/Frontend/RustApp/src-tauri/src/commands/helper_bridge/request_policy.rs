@@ -106,15 +106,19 @@ pub(super) fn clear_meeting_outbound_pipeline_for_session(session_id: &str) {
 }
 
 pub(super) fn incoming_session_is_eligible(session_id: &str) -> bool {
+    incoming_session_generation(session_id).is_some()
+}
+
+pub(super) fn incoming_session_generation(session_id: &str) -> Option<u64> {
     latest_runtime_session_state()
         .snapshot
-        .map(|snapshot| {
+        .filter(|snapshot| {
             snapshot.owner_id == APPLICATION_MEETING_OWNER_ID
                 && snapshot.session_id == session_id
                 && snapshot.authority_active
                 && snapshot.phase == "live"
         })
-        .unwrap_or(false)
+        .map(|snapshot| snapshot.generation)
 }
 
 pub(super) fn task_priority(task: &str, payload: &Value) -> HelperTaskPriority {

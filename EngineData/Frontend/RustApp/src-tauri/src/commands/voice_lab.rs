@@ -677,8 +677,11 @@ mod tests {
         write_wav(&sidecar, 1_200);
         let canonical_bytes = fs::read(&accepted).expect("read canonical source");
         let native_bytes = fs::read(&sidecar).expect("read native source");
+        let manifest = dataset();
+        archive_guided_take(&storage, 1, &manifest.takes[0].exact_text, &accepted, Some(&sidecar))
+            .expect("archive exact accepted pair");
 
-        prepare_guided_dataset_at(&storage, &dataset()).expect("freeze dataset");
+        prepare_guided_dataset_at(&storage, &manifest).expect("freeze dataset");
         let frozen_canonical = storage.build_dataset_dir.join(&filename);
         let frozen_native = storage.build_dataset_dir.join("NativeRate").join(&filename);
         assert_eq!(fs::read(&frozen_canonical).unwrap(), canonical_bytes);
@@ -691,7 +694,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_native_rate_sidecar_does_not_block_legacy_training() {
+    fn malformed_native_rate_sidecar_blocks_replacement_of_frozen_dataset() {
         let root = test_root("invalid-native");
         let storage = VoiceLabStoragePaths::from_roots(&root.join("cache"), &root.join("saved"));
         let filename = canonical_take_file_name(1);
@@ -700,9 +703,14 @@ mod tests {
         fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
         fs::write(&sidecar, b"invalid").unwrap();
 
-        prepare_guided_dataset_at(&storage, &dataset()).expect("freeze canonical");
-        assert!(storage.build_dataset_dir.join(&filename).is_file());
-        assert!(!storage.build_dataset_dir.join("NativeRate").exists());
+        let frozen = storage.build_dataset_dir.join(&filename);
+        write_wav(&frozen, 1_400);
+        let frozen_bytes = fs::read(&frozen).unwrap();
+        assert_eq!(
+            prepare_guided_dataset_at(&storage, &dataset()).unwrap_err(),
+            "voice_lab:accepted_native_file_untrusted",
+        );
+        assert_eq!(fs::read(&frozen).unwrap(), frozen_bytes);
         let _ = fs::remove_dir_all(root);
     }
 

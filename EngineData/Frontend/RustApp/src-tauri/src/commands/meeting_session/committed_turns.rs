@@ -924,6 +924,9 @@ mod tests {
             asr_scheduler_wait_ms: None,
             translation_scheduler_wait_ms: None,
             tts_scheduler_wait_ms: None,
+            asr_worker_attempt_timing: None,
+            translation_worker_attempt_timing: None,
+            tts_worker_attempt_timing: None,
             output_stream_build_ms: None,
             output_stream_start_to_first_audio_ms: None,
         }

@@ -7,7 +7,8 @@ use super::functional_readiness::{
     failed_required_outbound_task_invalidates_cache, invalidate_required_outbound_ai_readiness,
 };
 use super::request_policy::{
-    clear_meeting_outbound_pipeline, incoming_session_is_eligible, inject_request_metadata,
+    clear_meeting_outbound_pipeline, incoming_session_generation, incoming_session_is_eligible,
+    inject_request_metadata,
     live_outbound_generation_is_authoritative, live_outbound_stage_retry_safe,
     mark_meeting_outbound_pipeline, meeting_generation, meeting_lane,
     meeting_outbound_pipeline_active, meeting_session_id, task_priority,
@@ -200,18 +201,15 @@ fn recover_incoming_transport_failure_before_permit_release(
     if !helper_transport_failure(&response) {
         return response;
     }
-    if session_id
-        .filter(|value| incoming_session_is_eligible(value))
-        .is_none()
-    {
+    let Some(generation) = session_id.and_then(incoming_session_generation) else {
         return response;
-    }
+    };
 
     // This runs while the failed MeetingIncoming request still owns the scheduler
     // permit. Restoring the one shared worker before that permit is released prevents
     // a concurrently waiting required outbound request from observing the worker as
     // stopped. The stale incoming event itself is never retried.
-    let recovery = start_helper_bridge_internal(false);
+    let recovery = start_helper_bridge_internal(false, Some(generation));
     response.state = recovery.state.clone();
     response.generation_token = recovery.generation_token;
     if recovery.ok {

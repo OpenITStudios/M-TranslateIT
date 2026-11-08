@@ -259,7 +259,7 @@ mod tests {
         offline_turn_start("thread-1", "id", "en", "Jangan hapus a.txt.").unwrap()
     }
 
-    fn gate() -> FinalTurnEvidence {
+    fn new_evidence_gate() -> FinalTurnEvidence {
         FinalTurnEvidence::new(lease(), "thread-1", "turn-1", &request()).unwrap()
     }
 
@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn exact_one_shot_final_or_explicit_failure_never_admits_tools() {
-        let mut gate = gate();
+        let mut gate = new_evidence_gate();
         let result = gate.take_completed("turn/completed", &completed(r#"{"translation":"Do not delete a.txt."}"#)).unwrap();
         assert_eq!(result.source, lease());
         assert_eq!(result.text, "Do not delete a.txt.");
@@ -321,13 +321,13 @@ mod tests {
         assert_eq!(gate.take_completed("turn/completed", &completed(r#"{"translation":"Late"}"#)).unwrap_err(),
             "codex_text:already_consumed");
 
-        let mut gate = gate();
+        let mut gate = new_evidence_gate();
         let mut tool = completed(r#"{"translation":"Safe"}"#);
         tool["turn"]["items"].as_array_mut().unwrap()
             .push(json!({"type": "commandExecution", "id": "tool-1"}));
         assert_eq!(gate.take_completed("turn/completed", &tool).unwrap_err(), "codex_text:tool_or_unknown_item");
 
-        let mut gate = gate();
+        let mut gate = new_evidence_gate();
         assert_eq!(
             gate.take_completed("turn/started", &completed(r#"{"translation":"Early"}"#)).unwrap_err(),
             "codex_text:not_completed_event"
@@ -337,7 +337,7 @@ mod tests {
             "codex_text:already_consumed"
         );
 
-        let mut gate = gate();
+        let mut gate = new_evidence_gate();
         gate.revoke();
         assert!(gate.take_completed("turn/completed", &completed(r#"{"translation":"Late"}"#)).is_err());
     }
@@ -349,14 +349,14 @@ mod tests {
             offline_turn_start("thread-1", "en", "id", "Do not delete a.txt.")
                 .unwrap()["params"]["input"][0]["text"].clone();
         assert_eq!(
-            gate().take_completed("turn/completed", &changed).unwrap_err(),
+            new_evidence_gate().take_completed("turn/completed", &changed).unwrap_err(),
             "codex_text:source_mismatch"
         );
 
         let mut missing = completed(r#"{"translation":"No source"}"#);
         missing["turn"]["items"].as_array_mut().unwrap().remove(0);
         assert_eq!(
-            gate().take_completed("turn/completed", &missing).unwrap_err(),
+            new_evidence_gate().take_completed("turn/completed", &missing).unwrap_err(),
             "codex_text:assistant_before_source"
         );
 
@@ -364,7 +364,7 @@ mod tests {
         let user = duplicate["turn"]["items"][0].clone();
         duplicate["turn"]["items"].as_array_mut().unwrap().push(user);
         assert_eq!(
-            gate().take_completed("turn/completed", &duplicate).unwrap_err(),
+            new_evidence_gate().take_completed("turn/completed", &duplicate).unwrap_err(),
             "codex_text:duplicate_source"
         );
 
@@ -386,25 +386,25 @@ mod tests {
             "text": r#"{"translation":"Hello"}"#
         }]);
         assert_eq!(
-            gate().take_completed("turn/completed", &summary).unwrap_err(),
+            new_evidence_gate().take_completed("turn/completed", &summary).unwrap_err(),
             "codex_text:completion_summary_unverified"
         );
     }
 
     #[test]
     fn rejected_turn_cannot_become_a_result_on_later_events() {
-        let mut gate = gate();
+        let mut gate = new_evidence_gate();
         let mut bad = completed(r#"{"translation":"Hi"}"#);
         bad["threadId"] = json!("other-thread");
         assert_eq!(gate.take_completed("turn/completed", &bad).unwrap_err(), "codex_text:foreign_thread");
         assert!(gate.take_completed("turn/completed", &completed(r#"{"translation":"Hi"}"#)).is_err());
 
         for raw in ["hello", r#"{"translation":""}"#, r#"{"translation":"Hi","extra":1}"#] {
-            let mut gate = gate();
+            let mut gate = new_evidence_gate();
             assert!(gate.take_completed("turn/completed", &completed(raw)).is_err());
         }
 
-        let mut gate = gate();
+        let mut gate = new_evidence_gate();
         let mut partial = completed(r#"{"translation":"Hi"}"#);
         partial["turn"]["itemsView"] = json!("notLoaded");
         partial["turn"]["items"] = json!([]);

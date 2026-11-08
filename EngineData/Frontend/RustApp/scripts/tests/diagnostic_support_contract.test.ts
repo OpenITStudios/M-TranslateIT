@@ -34,7 +34,8 @@ test("support bundle snapshot does not mutate incident history while observing g
 });
 
 test("support bundle records only numeric stage timing, not private speech timestamps", () => {
-  assert.match(support, /"timing_ms": meeting\.outbound\.timing\.as_ref\(\)/);
+  assert.match(support, /let outbound_timing = meeting\.outbound\.timing\.as_ref\(\)\.map/);
+  assert.match(support, /"timing_ms": outbound_timing/);
   for (const field of ["speech_boundary", "finalization", "queue", "audio_prepare",
     "asr", "translation", "tts", "playback_queue", "delivery", "outbound_latency",
     "estimated_speech_onset_to_first_audio", "estimated_speech_end_to_first_audio",
