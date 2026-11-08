@@ -7,6 +7,22 @@ const live = readFileSync(new URL("../../src/components/meeting/MeetingActivity.
 const review = readFileSync(new URL("../../src/components/meeting/MeetingSessionReview.svelte", import.meta.url), "utf8");
 const header = readFileSync(new URL("../../src/components/layout/AppHeader.svelte", import.meta.url), "utf8");
 
+test("Meeting Stop stays actionable during pending audio source changes", () => {
+  // In-flight source selection is not permission to hide the native Stop path.
+  assert.match(meeting, /const actionEnabled = \$derived\(!resumeBusy && !meeting\.busy && !actionBusy/);
+  assert.match(meeting, /primaryControl\.action === "stop"\s*\? primaryControl\.enabled/);
+  assert.match(meeting, /: !sourceChanging && \(primaryControl\.enabled/);
+  assert.doesNotMatch(meeting, /!resumeBusy && !sourceChanging && !meeting\.busy/);
+  assert.match(meeting, /meeting\.lifecycle === "cleanup_incomplete" \? primaryControl\.label : "Stop Meeting"/);
+});
+
+test("Meeting main dock is valid markup and has no stray text after the closing footer", () => {
+  assert.equal((meeting.match(/<footer\b/g) ?? []).length, 1);
+  assert.equal((meeting.match(/<\/footer>/g) ?? []).length, 1);
+  assert.match(meeting, /<\/footer>\s*\{\/if\}\s*<\/section>/);
+  assert.doesNotMatch(meeting, /<\/footer>ter>/);
+});
+
 test("Meeting has a single primary button that can Start, Stop, or guide recovery", () => {
   assert.match(meeting, /Indonesian speech → English voice/);
   assert.match(meeting, /meetingControlState\(/);

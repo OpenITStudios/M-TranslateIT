@@ -106,8 +106,12 @@
   );
   const readyForSelectedSource = $derived(!meeting.hasSession && meeting.lifecycle === "idle"
     && (currentSource === "original" ? originalAvailable : meeting.canStart && !needsSetup && !needsVoice));
-  const actionEnabled = $derived(!resumeBusy && !sourceChanging && !meeting.busy && !actionBusy
-    && (primaryControl.enabled || originalAvailable || needsSetup || needsVoice || needsSettings));
+  // Stop/Retry Stop must remain available even if a source-switch command is
+  // still pending. Only Start and setup actions wait for that operation.
+  const actionEnabled = $derived(!resumeBusy && !meeting.busy && !actionBusy
+    && (primaryControl.action === "stop"
+      ? primaryControl.enabled
+      : !sourceChanging && (primaryControl.enabled || originalAvailable || needsSetup || needsVoice || needsSettings)));
   const activityVisible = $derived(Boolean(meetingStatus && meeting.applicationOwned && meeting.live));
   const primaryLabel = $derived(
     primaryControl.action === "stop"
@@ -241,6 +245,6 @@
         {#if primaryControl.action === "stop"}<PhoneOff size={18} aria-hidden="true"/>{:else}<Mic size={18} aria-hidden="true"/>{/if}
         {primaryLabel}
       </button>
-    </footer>ter>
+    </footer>
   {/if}
 </section>
