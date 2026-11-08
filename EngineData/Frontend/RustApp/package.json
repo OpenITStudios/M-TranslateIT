@@ -6,6 +6,8 @@
   "scripts": {
     "dev:frontend": "vite --host 127.0.0.1 --port 1420 --strictPort",
     "dev:app": "tauri dev",
+    "preview:typecheck": "node scripts/ui-preview/typecheck.mjs",
+    "preview:render": "node scripts/ui-preview/render.mjs",
     "build:frontend": "vite build",
     "typecheck": "node scripts/run_svelte_check_strict.mjs",
     "test:frontend-runtime": "node --experimental-strip-types --test \"scripts/tests/*.test.ts\"",

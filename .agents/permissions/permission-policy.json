@@ -63,7 +63,9 @@
     "desktop-ui-design-development": [
       "EngineData/Frontend/RustApp/src/components/**",
       "EngineData/Frontend/RustApp/src/pages/**",
-      "EngineData/Frontend/RustApp/src/styles/**"
+      "EngineData/Frontend/RustApp/src/styles/**",
+      "EngineData/Frontend/RustApp/scripts/ui-preview/**",
+      "EngineData/Frontend/RustApp/scripts/tests/ui_preview_contract.test.ts"
     ],
     "local-ai-runtime-development": [
       "EngineData/Backend/LocalWorker/WorkerRuntime/**",

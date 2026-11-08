@@ -332,6 +332,36 @@
         "scope": "governance"
       },
       "expected": "deny"
+    },
+    {
+      "id": "preview-ui-harness-scope",
+      "request": {
+        "mode": "standard-development",
+        "action": "write",
+        "scope": "desktop-ui-design-development",
+        "path": "EngineData/Frontend/RustApp/scripts/ui-preview/render.mjs"
+      },
+      "expected": "allow"
+    },
+    {
+      "id": "preview-ui-contract-scope",
+      "request": {
+        "mode": "standard-development",
+        "action": "write",
+        "scope": "desktop-ui-design-development",
+        "path": "EngineData/Frontend/RustApp/scripts/tests/ui_preview_contract.test.ts"
+      },
+      "expected": "allow"
+    },
+    {
+      "id": "preview-unrelated-script-needs-approval",
+      "request": {
+        "mode": "standard-development",
+        "action": "write",
+        "scope": "desktop-ui-design-development",
+        "path": "EngineData/Frontend/RustApp/scripts/validate_bridge_contract.mjs"
+      },
+      "expected": "ask"
     }
   ]
 }
