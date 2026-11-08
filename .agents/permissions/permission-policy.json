@@ -54,6 +54,9 @@
     "desktop-runtime-development": [
       "EngineData/Frontend/RustApp/src/app/**",
       "EngineData/Frontend/RustApp/src-tauri/src/commands/application_runtime/**",
+      "EngineData/Frontend/RustApp/src-tauri/src/commands/codex_gateway.rs",
+      "EngineData/Frontend/RustApp/src-tauri/src/commands/codex_gateway/**",
+      "EngineData/Frontend/RustApp/scripts/tests/codex_gateway_contract.test.ts",
       "EngineData/Frontend/RustApp/src-tauri/src/engine/runtime_state.rs",
       "EngineData/Frontend/RustApp/scripts/validate_application_runtime_architecture.mjs"
     ],

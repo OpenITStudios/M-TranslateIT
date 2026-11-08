@@ -61,6 +61,66 @@
       "expected": "allow"
     },
     {
+      "id": "codex-diagnostics-runtime-owner",
+      "request": {
+        "mode": "bounded-maintenance",
+        "action": "write",
+        "scope": "desktop-runtime-development",
+        "path": "EngineData/Frontend/RustApp/src-tauri/src/commands/codex_gateway.rs"
+      },
+      "expected": "allow"
+    },
+    {
+      "id": "codex-realtime-gate-runtime-owner",
+      "request": {
+        "mode": "bounded-maintenance",
+        "action": "write",
+        "scope": "desktop-runtime-development",
+        "path": "EngineData/Frontend/RustApp/src-tauri/src/commands/codex_gateway/realtime.rs"
+      },
+      "expected": "allow"
+    },
+    {
+      "id": "codex-gateway-regression-contract-owner",
+      "request": {
+        "mode": "bounded-maintenance",
+        "action": "write",
+        "scope": "desktop-runtime-development",
+        "path": "EngineData/Frontend/RustApp/scripts/tests/codex_gateway_contract.test.ts"
+      },
+      "expected": "allow"
+    },
+    {
+      "id": "codex-gateway-not-meeting-session",
+      "request": {
+        "mode": "bounded-maintenance",
+        "action": "write",
+        "scope": "desktop-runtime-development",
+        "path": "EngineData/Frontend/RustApp/src-tauri/src/commands/meeting_session/outbound_pipeline.rs"
+      },
+      "expected": "ask"
+    },
+    {
+      "id": "codex-gateway-not-native-audio",
+      "request": {
+        "mode": "bounded-maintenance",
+        "action": "write",
+        "scope": "desktop-runtime-development",
+        "path": "EngineData/Frontend/RustApp/src-tauri/src/engine/audio/native_capture_transport.rs"
+      },
+      "expected": "ask"
+    },
+    {
+      "id": "codex-observe-is-still-read-only",
+      "request": {
+        "mode": "context-recovery",
+        "action": "write",
+        "scope": "desktop-runtime-development",
+        "path": "EngineData/Frontend/RustApp/src-tauri/src/commands/codex_gateway.rs"
+      },
+      "expected": "deny"
+    },
+    {
       "id": "ui-vs-backend",
       "request": {
         "mode": "standard-development",
