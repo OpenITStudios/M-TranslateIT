@@ -1,9 +1,10 @@
 // Explicit LOCAL_CODE-only F2 renderer. Never install packages, run Tauri or dispatch CI.
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -101,9 +102,23 @@ async function main() {
       reducedMotion: "reduce",
       deviceScaleFactor: 1,
       serviceWorkers: "block",
+      acceptDownloads: false,
     });
     const denied = [];
     const errors = [];
+    // A page-level HTTP interceptor alone does not prevent outbound WebSockets.
+    // Playwright routeWebSocket (v1.48+) is required for network-isolated F2.
+    if (typeof context.routeWebSocket !== "function")
+      fail("Playwright lacks WebSocket routing; cannot establish a network-isolated F2 proof.");
+    await context.routeWebSocket("**/*", (socket) => {
+      const url = new URL(socket.url());
+      if (url.protocol === "ws:" && url.hostname === "127.0.0.1" && url.port === String(port)) {
+        socket.connectToServer();
+        return;
+      }
+      denied.push(url.origin);
+      socket.close({ code: 1008, reason: "External websocket blocked in UI preview" });
+    });
     await context.route("**/*", (route) => {
       const url = new URL(route.request().url());
       if (url.protocol === "http:" && url.hostname === "127.0.0.1" && url.port === String(port))
@@ -112,6 +127,8 @@ async function main() {
       return route.abort("blockedbyclient");
     });
     const page = await context.newPage();
+    page.setDefaultTimeout(20_000);
+    page.setDefaultNavigationTimeout(20_000);
     page.on("pageerror", (error) => errors.push(String(error.message)));
     page.on("console", (message) => {
       if (message.type() === "error") errors.push(message.text());
@@ -156,7 +173,16 @@ async function main() {
     const dock = frame.locator('footer[aria-label="Meeting main action"]');
     const dockGeometry = await dock.evaluate((element) => {
       const rect = element.getBoundingClientRect();
-      return { top: rect.top, bottom: rect.bottom, width: rect.width };
+      const controls = [...element.querySelectorAll("button, select")]
+        .filter((control) => getComputedStyle(control).display !== "none")
+        .map((control) => control.getBoundingClientRect());
+      return {
+        top: rect.top, bottom: rect.bottom, width: rect.width,
+        controlsUnclipped: controls.length > 0 && controls.every((c) =>
+          c.width > 0 && c.height > 0
+          && c.left >= 0 && c.right <= innerWidth + 1
+          && c.top >= 0 && c.bottom <= innerHeight + 1),
+      };
     });
     const assetAndCss = await sidebar.evaluate((element) => {
       const mark = element.querySelector("img");
@@ -176,6 +202,7 @@ async function main() {
       meeting_workspace_present: await frame.locator('section[aria-label="Meeting workspace"]').count() === 1,
       call_dock_visible: await dock.isVisible(),
       call_dock_not_clipped: dockGeometry.top >= 0 && dockGeometry.bottom <= internal.height + 1,
+      dock_controls_not_clipped: dockGeometry.controlsUnclipped,
       no_remote_requests: denied.length === 0,
       no_browser_errors: errors.length === 0,
     };
@@ -201,14 +228,17 @@ async function main() {
     if (input.scenario === "long-transcript")
       checks.long_transcript_rendered = await frame.locator('article[aria-label="You"], article[aria-label="Meeting audio"]').count() >= 30;
 
-    // A concurrent source edit during rendering invalidates the screenshot identity.
-    checks.source_unchanged_during_render =
-      git("rev-parse", "HEAD") === head
-      && git("status", "--porcelain", "--untracked-files=all", "--", ...tracked) === "";
     const dir = await mkdtemp(join(tmpdir(), "translateit-ui-preview-"));
     const png = join(dir, `meeting-${input.scenario}-${input.viewport}.png`);
     const json = join(dir, "receipt.json");
     await page.locator("[data-preview-canvas]").screenshot({ path: png, animations: "disabled" });
+    const screenshotSha256 = createHash("sha256").update(await readFile(png)).digest("hex");
+    // Recheck *after* screenshot: screenshot work itself can trigger loads or source edits.
+    checks.source_unchanged_during_render =
+      git("rev-parse", "HEAD") === head
+      && git("status", "--porcelain", "--untracked-files=all", "--", ...tracked) === "";
+    checks.no_remote_requests = denied.length === 0;
+    checks.no_browser_errors = errors.length === 0;
     const success = Object.values(checks).every(Boolean);
     const full = {
       ...receipt,
@@ -225,6 +255,7 @@ async function main() {
       deniedRequests: denied.length,
       browserErrors: errors.slice(0, 5),
       screenshot: png,
+      screenshotSha256,
     };
     await writeFile(json, JSON.stringify(full, null, 2) + "\n", "utf8");
     console.log(JSON.stringify({ ...full, receipt: json }, null, 2));

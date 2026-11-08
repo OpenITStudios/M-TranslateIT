@@ -103,6 +103,10 @@ test("renderer defaults to plan-only, pins exact clean Local and blocks remote h
   assert.match(renderer, /import\("playwright"\)/);
   assert.match(renderer, /"127\.0\.0\.1"/);
   assert.match(renderer, /return route\.abort\("blockedbyclient"\)/);
+  assert.match(renderer, /context\.routeWebSocket\(/);
+  assert.match(renderer, /socket\.close\(\{ code: 1008/);
+  assert.match(renderer, /serviceWorkers: "block"/);
+  assert.match(renderer, /acceptDownloads: false/);
   assert.match(renderer, /data-preview-frame-root/);
   assert.match(renderer, /footer\[aria-label="Meeting main action"\]/);
   assert.match(renderer, /F2_RENDERED_CHECKS_FAILED/);
@@ -110,13 +114,31 @@ test("renderer defaults to plan-only, pins exact clean Local and blocks remote h
   assert.match(renderer, /approved_logo_asset_loaded/);
   assert.match(renderer, /stylesheet_applied/);
   assert.match(renderer, /call_dock_not_clipped/);
+  assert.match(renderer, /dock_controls_not_clipped/);
   assert.match(renderer, /lanes_distinct/);
   assert.match(renderer, /timestamp_to_seconds/);
   assert.match(renderer, /elapsedMs/);
+  assert.match(renderer, /screenshotSha256/);
+  assert.match(renderer, /createHash\("sha256"\)/);
+  assert.match(renderer, /readFile\(png\)/);
   assert.match(renderer, /source_unchanged_during_render/);
+  const screenshot = renderer.indexOf('.screenshot({ path: png');
+  const sourceCheck = renderer.indexOf('checks.source_unchanged_during_render =');
+  const networkCheck = renderer.lastIndexOf('checks.no_remote_requests = denied.length === 0');
+  assert.ok(screenshot > 0 && sourceCheck > screenshot && networkCheck > screenshot,
+    "A screenshot must not pass with post-render source or network errors");
   assert.match(renderer, /document\.fonts\.ready/);
   assert.match(renderer, /native_windows: "NOT_EXECUTED"/);
   assert.doesNotMatch(renderer + typecheck, /npm install|npx|ci-dispatch|cargo run/);
+});
+
+test("render request is explicit, local-only and cannot silently install Playwright", () => {
+  const executionGate = renderer.indexOf("if (!input.execute)");
+  const launch = renderer.indexOf('playwright.chromium.launch(');
+  assert.ok(executionGate > 0 && launch > executionGate);
+  assert.match(renderer, /LOCAL_CODE-only F2 renderer/);
+  assert.match(renderer, /Playwright is not already available/);
+  assert.doesNotMatch(renderer, /npm (?:ci|install)|npx|pnpm add|yarn add|curl -/);
 });
 
 test("two short package commands reuse existing tools without new dependencies", () => {
