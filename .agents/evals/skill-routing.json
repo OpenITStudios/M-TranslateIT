@@ -361,6 +361,30 @@
       "expectedScope": null,
       "requiresBrief": false,
       "kind": "pressure"
+    },
+    {
+      "id": "ui-preview-design-discussion-no-image-id",
+      "prompt": "Mari kita bahas layout dan rancang ulang tampilan; jangan generate image dan jangan preview dulu.",
+      "expectedMode": "plan",
+      "expectedSpecialist": null,
+      "forbiddenSpecialists": [
+        "desktop-ui-design-development"
+      ],
+      "expectedScope": null,
+      "requiresBrief": false,
+      "kind": "no-skill"
+    },
+    {
+      "id": "ui-preview-image-generation-pressure-en",
+      "prompt": "We are still discussing UI architecture. Do not create any visual, screenshot, or generative image; just continue the written design plan.",
+      "expectedMode": "plan",
+      "expectedSpecialist": null,
+      "forbiddenSpecialists": [
+        "desktop-ui-design-development"
+      ],
+      "expectedScope": null,
+      "requiresBrief": false,
+      "kind": "pressure"
     }
   ]
 }

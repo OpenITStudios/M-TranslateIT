@@ -52,12 +52,20 @@ Prioritize task/state hierarchy before decoration. Reject generic AI gradients/g
 
 Material states should cover only states that can actually occur: default, focus, active/selected, checking/loading, ready/success, degraded/setup-needed/error, disabled/unavailable.
 
+## Absolute image and phase gate — required before every preview decision
+
+**NEVER use generative-image tools (including `image_gen`) to create, edit, restyle, synthesize or approximate a UI/UX image, wireframe, screenshot, prototype, reference, mockup, Before/After or preview.** This applies even when the user supplies screenshots or says "make it look like Discord". A user-provided screenshot is evidence for analysis, not permission to generate a replacement. Never use generative imagery as an easier fallback for inaccessible source.
+
+**Design discussion is text-only by default.** Requests to "rancang dulu", "mari bahas", "diskusi", "evaluasi" or ordinary "lanjutkan" within that design stage authorize discussion/specification only: do not call image tools, render HTML, build a mockup, take a screenshot or preview automatically. Do not advance from PLAN/DISCUSS to PREVIEW or DEVELOPMENT without an explicit user request for that next output.
+
+**Explicit preview is separate.** When the user specifically requests a preview, prefer source-grounded real frontend/browser render (F2), or actual native capture (F3) if available and authorized. If unavailable, explain the F0 source-only ceiling. A labeled F1 code/HTML reconstruction is allowed **only when the user explicitly requests a conceptual reconstruction**, never as automatic fallback. No image generation in any branch.
+
 ## ChatGPT UI Preview — bounded, source-first workflow
 
-When asked to preview UI, follow [the UI preview protocol](references/ui-preview-protocol.md) before making a new image, mockup, or HTML artifact. This is a **procedure within this specialist**, not a seventh Skill, a Tauri feature, or a hosted build service.
+When explicitly asked to preview UI, follow [the UI preview protocol](references/ui-preview-protocol.md) before attempting any non-generative visual artifact. In discussion/design mode, remain text-only. This is a **procedure within this specialist**, not a seventh Skill, a Tauri feature, or a hosted build service.
 
 - **PIN:** Identify the exact repository/ref/HEAD and smallest page/component dependency closure. Never silently combine files from different SHAs or reuse preview assets whose source identity is unknown.
-- **CAPABILITY:** F0 source inspection, F1 clearly labeled reconstructed inline preview, F2 actual frontend components rendered with synthetic fixture in a browser, F3 exact native Windows UI. Choose the strongest legitimately available evidence, not the most impressive label. F2/F3 require real execution in the appropriate context; GitHub-only is F0, optionally an explicitly labeled F1.
+- **CAPABILITY:** F0 source inspection, F1 reconstruction only when explicitly requested, F2 actual frontend components rendered with synthetic fixture in a browser, F3 exact native Windows UI. Choose the strongest legitimately available evidence, not the most impressive label. F2/F3 require real execution in the appropriate context; GitHub-only is F0, optionally an explicitly labeled F1.
 - **FAST PATH:** One requested page, one scenario, one desktop viewport, one main preview. Reuse the repository's `scripts/ui-preview` entry and typed scenarios when an exact-SHA checkout and frontend toolchain exist. The preview uses an isolated **iframe viewport** so `100vh` and responsive CSS reflect the requested dimensions. Do not reconstruct production Svelte markup by hand when this path is available.
 - **ISOLATION:** Use synthetic, deterministic data; no personal transcripts/audio, real device discovery, updater checks, mutation, cloud inference, auto-install, Tauri commands, or runtime service. Preview-only controls are not proof of Meeting or audio behavior.
 - **ONE-COMMAND PREVIEW:** For an existing approved Local checkout with all dependencies available, `npm run preview:quick` explicitly renders the default Live Meeting. `npm run preview:plan` reports identity without rendering. No manual SHA copy is needed: `--current-local` pins the existing selected branch without checkout changes; the runner still verifies cleanliness before/after. This does not install a plugin or make F2 available directly from a GitHub-only ChatGPT session.

@@ -166,6 +166,18 @@ test("existing typecheck is strict and never installs dependencies", () => {
   assert.match(typecheck, /NOT_EXECUTED/);
 });
 
+test("the skill prohibits image generation and unsolicited visuals in design discussion", () => {
+  assert.match(skill, /NEVER use generative-image tools/);
+  assert.match(skill, /including `image_gen`/);
+  assert.match(skill, /Design discussion is text-only by default/);
+  assert.match(skill, /do not advance from PLAN\/DISCUSS to PREVIEW/i);
+  assert.match(protocol, /No UI image generation, ever/);
+  assert.match(protocol, /PLAN\/DISCUSS = text only/);
+  assert.match(protocol, /PREVIEW requires an explicit preview request/);
+  assert.match(protocol, /F1 HTML\/code reconstruction needs explicit conceptual-mockup permission/);
+  assert.match(protocol, /Never use image generation as fallback/);
+});
+
 test("Preview remains inside existing specialist with explicit fidelity boundaries", () => {
   assert.equal(registry.skills.length, 6);
   assert.equal(registry.skills.filter((item: { id: string }) => item.id === "desktop-ui-design-development").length, 1);

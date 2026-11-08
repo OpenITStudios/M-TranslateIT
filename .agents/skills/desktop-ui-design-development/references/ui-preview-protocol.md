@@ -2,13 +2,23 @@
 
 This is the operating procedure for `desktop-ui-design-development`. It does not activate an agent, install a plugin, grant write permission, or create a second frontend runtime. Root `AGENTS.md`, `GITHUB_RULES.md`, user-selected branch and product privacy policy take precedence.
 
+## Mandatory phase and image prohibition
+
+**No UI image generation, ever, in this workflow.** Do not invoke generative image tools (including `image_gen`) for UI design, previews, mockups, wireframes, screenshot edits, Before/After images or suggested replacement screenshots. This prohibition also applies to reference images supplied by the user. Use source inspection, code rendering or actual captures only where the phase permits them.
+
+**PLAN/DISCUSS = text only.** When the user says "rancang dulu", "mari bahas", "diskusi", "jangan preview", or says "lanjutkan" while in a design discussion, supply a written plan/specification, and **do not** produce screenshots, HTML/CSS mockups, inline illustrations, interactive reconstructions or new image assets. No implicit transition to preview, rendering, repository mutation or production UI changes.
+
+**PREVIEW requires an explicit preview request.** Default to exact source-based browser capture (F2) or authorized real native capture (F3), otherwise F0 source audit with a candid limitation. **F1 HTML/code reconstruction needs explicit conceptual-mockup permission** and an unmistakable reconstructed/not-source-rendered label. Never use image generation as fallback, even after tool errors.
+
+If a request mixes design and preview, follow the user's explicit ordering: complete the discussion first; do not preview until the user separately asks to proceed with a visual. Treat design feedback on a previous preview as PLAN/DISCUSS, not an automatic new preview request.
+
 ## Purpose and invariants
 
 **Request:** "preview UI", "preview Meeting", "show actual layout", "compare before and after", "check responsive" or similar.
 
 **Output contract:** the smallest useful preview for the request, clearly marked by fidelity and source SHA. A preview is never automatically a screenshot of an installed application.
 
-1. **No generative-image tool** for source-based UI previews. Avoid invented layouts as source claims.
+1. **Absolute ban on image generation** for all UI/UX planning, design, mockups and previews. Source screenshots are to be inspected, not generatively edited or replaced.
 2. **One identity:** repository, exact commit SHA, component closure, scenario revision, viewport, theme, locale, timezone, renderer version. If any source changed mid-run, discard the mixed evidence and re-pin once; do not claim fresh proof from stale artifacts.
 3. **One source:** real production Svelte/Tailwind tokens and approved SVG are authoritative. Never maintain hand-copied frontend clones as a parallel UI owner.
 4. **One boundary:** no Tauri/native calls, real microphone, cloud model, updater, external audio, hidden user data, network fonts/assets or persistent app mutations inside the preview. Never bypass the native gate.
@@ -23,7 +33,7 @@ This is the operating procedure for `desktop-ui-design-development`. It does not
 | `F2_BROWSER_COMPONENT` | Exact-revision production Svelte components rendered by the existing Vite stack with typed synthetic fixture and browser screenshot | Frontend visual composition for this fixture/browser/viewport; not Tauri/Windows/audio |
 | `F3_TARGET_WINDOWS` | Exact installed Tauri/Windows target observation | Native UI at inspected resolution and state; audio/device outcomes require their own tests |
 
-Do not call a standalone mockup or recreated HTML `F2`. GitHub `Local` access without an actual compatible checkout and an executable frontend toolchain is `F0`; optional `F1` is explicitly marked. Do not dispatch paused CI or ask users for incremental PC tests.
+Do not call a standalone mockup or recreated HTML `F2`. GitHub `Local` access without an actual compatible checkout and an executable frontend toolchain is `F0`; a labeled `F1` is only allowed after the user explicitly requests a conceptual reconstruction. Do not dispatch paused CI or ask users for incremental PC tests.
 
 ## Automatic routing — least work first
 
@@ -33,7 +43,7 @@ Do not call a standalone mockup or recreated HTML `F2`. GitHub `Local` access wi
 - "Responsive": 1280×760, 1600×940 and 1920×1080, with no layout rewriting between screenshots.
 - "Bug/overflow": add one discriminating synthetic edge scenario and inspect geometry, visibility, clipping and keyboard focus if the preview interaction allows it.
 - "Full review": batch relevant pages/states; do not render everything by default.
-- "Preview without a real frontend toolchain": report F0 or F1 without inventing F2.
+- "Preview without a real frontend toolchain": report F0 and the limitation; offer F1 only if the user explicitly requests a conceptual reconstruction. Never substitute image generation.
 
 ## TranslateIT browser fixture — source contract
 
