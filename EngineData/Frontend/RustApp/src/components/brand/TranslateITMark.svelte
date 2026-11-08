@@ -1,5 +1,5 @@
 <script lang="ts">
-  import markUrl from "./translateit-mark.svg";
+  import markUrl from "./translateit-ti-approved.svg";
 
   let { size = 36 }: { size?: number } = $props();
 </script>

@@ -10,7 +10,7 @@ lifecycle: ACTIVE
 # TranslateIT — Product Requirements
 
 **Status:** Active Policy  
-**Updated:** 2026-09-07  
+**Updated:** 2026-11-08  
 **Scope:** Windows local-first Indonesian ↔ English translator; built-in Meeting voices + optional My Voice
 
 This file contains **current law only**. Superseded choices belong in `docs/knowledge/decisions/history-legacy.md`, not as competing active requirements here.
@@ -30,6 +30,13 @@ This file contains **current law only**. Superseded choices belong in `docs/know
 **MUST:** Normal top-level product remain `Meeting | My Voice | Settings`.
 
 **NOT CURRENT CORE:** Document Translation, general History/Saved UI, Audio Studio, Push to Talk, Pause/Resume, Realtime/Quality user modes, Auto/Casual tone styles, additional languages, partial translated subtitles, incoming Indonesian TTS, imported-audio/quick-clone My Voice, multiple normal voice engines/providers. Style selectors, Spoken Terms, Preferred Words, Meeting Presets and Text floating captions are retired from active product behavior.
+
+### PR-005 — Visual identity and desktop hierarchy
+**MUST:** TranslateIT use the approved white custom "Ti" monogram on a flat cobalt-blue `#2453D8` rounded square. The canonical vector is `EngineData/Frontend/RustApp/src/components/brand/translateit-ti-approved.svg`. App surfaces, Quick Access, and shipped icon variants must express that same mark; the older speech-bubble and geometric T variants are retired.
+
+**SHOULD:** Desktop UX use familiar, Discord-like navigation principles without copying Discord identity: a compact, explicitly labeled primary rail for `Meeting | My Voice | Settings`, distinct Settings categories, concise routine status, and task-first controls. Device choices, calling-app microphone instructions, and recovery actions must be grouped by purpose; experimental or infrequent audio options should be progressively disclosed.
+
+**MUST:** Preserve actionable runtime warnings, uncertain device/save states, Meeting Stop/Retry Stop, and audio resource locks. Visual simplification must not falsely report readiness, suppress important blockers, or change native behavior.
 
 ## 2. Platform and runtime
 

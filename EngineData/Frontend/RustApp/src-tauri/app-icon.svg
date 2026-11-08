@@ -1,5 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#101827"/>
-  <path d="M112 132h288v64H288v184h-64V196H112z" fill="#f8fafc"/>
-  <path d="M326 250h74v64h-74z" fill="#38bdf8"/>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 128 128" width="128" height="128" role="img" aria-labelledby="title desc">
+  <title id="title">TranslateIT — Ti icon concept</title>
+  <desc id="desc">White custom Ti monogram on a flat cobalt blue rounded square.</desc>
+  <rect width="128" height="128" rx="28" fill="#2453D8"/>
+  <!-- Custom uppercase T: 53-wide cap, 16-wide vertical, restrained corners -->
+  <path fill="#FFFFFF" d="M30 33H73C75.8 33 78 35.2 78 38V42C78 44.8 75.8 47 73 47H59V91C59 93.6 57.4 95 55 95H47C44.6 95 43 93.6 43 91V47H30C27.2 47 25 44.8 25 42V38C25 35.2 27.2 33 30 33Z"/>
+  <!-- Custom lowercase i: one dot and one stem, same visual weight -->
+  <rect x="85" y="33" width="14" height="14" rx="5" fill="#FFFFFF"/>
+  <rect x="85" y="56" width="14" height="39" rx="4" fill="#FFFFFF"/>
 </svg>

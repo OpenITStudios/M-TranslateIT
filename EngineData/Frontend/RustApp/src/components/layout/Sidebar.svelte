@@ -16,7 +16,7 @@
   const items = [
     { route: "meeting" as const, label: "Meeting", description: "Translate your voice in calls", icon: Mic },
     { route: "my-voice" as const, label: "My Voice", description: "Choose or create the voice others hear", icon: AudioLines },
-    { route: "settings" as const, label: "Settings", description: "Microphone, translation, and help", icon: Settings },
+    { route: "settings" as const, label: "Settings", description: "Microphone, captions, and help", icon: Settings },
   ];
 
   function presenceDot(): string {
@@ -39,38 +39,45 @@
     if (presence === "In Use") return "Audio in use";
     return "Checking";
   }
+
+  function shortPresence(): string {
+    if (presence === "Setup Needed") return "Setup";
+    if (presence === "Stop Needed") return "Stop needed";
+    if (presence === "Unavailable") return "Unavailable";
+    if (presence === "Check Status") return "Check status";
+    return presence;
+  }
 </script>
 
-<aside class="ti-sidebar flex min-h-screen w-[var(--ti-sidebar-width)] shrink-0 flex-col border-r border-[var(--ti-border)] bg-[var(--ti-sidebar)] px-3 py-4">
-  <header class="ti-sidebar-brand flex items-center gap-2.5 px-2 py-1">
-    <TranslateITMark size={36} />
-    <div class="ti-sidebar-brand-copy min-w-0">
-      <h1 class="m-0 truncate text-[14px] font-bold tracking-[-0.02em]">TranslateIT</h1>
-      <p class="mt-0.5 truncate text-[12px] text-[var(--ti-text-soft)]">Indonesian ↔ English</p>
-    </div>
+<aside class="ti-sidebar flex h-screen min-h-0 w-[var(--ti-sidebar-width)] shrink-0 flex-col border-r border-[var(--ti-border)] bg-[var(--ti-sidebar)] px-2.5 py-4">
+  <header class="ti-sidebar-brand flex items-center justify-center py-1" title="TranslateIT">
+    <TranslateITMark size={48} />
+    <span class="sr-only">TranslateIT</span>
   </header>
 
-  <nav class="mt-7 grid gap-1" aria-label="Primary navigation">
+  <nav class="ti-primary-navigation mt-6 grid gap-1.5" aria-label="Primary navigation">
     {#each items as item}
       {@const Icon = item.icon}
       <button
         type="button"
-        class={`ti-nav-item group grid min-h-11 grid-cols-[20px_1fr] items-center gap-2.5 rounded-[var(--ti-radius-md)] border px-3 text-left transition-colors ${active === item.route ? "is-active border-[var(--ti-border)] bg-[var(--ti-surface-raised)] text-[var(--ti-text)]" : "border-transparent text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)] hover:text-[var(--ti-text)]"}`}
+        class={"ti-nav-item group flex min-h-[70px] min-w-0 flex-col items-center justify-center gap-1 rounded-[var(--ti-radius-md)] border px-1 py-2 text-center transition-colors " + (active === item.route
+          ? "is-active border-[var(--ti-border-strong)] bg-[var(--ti-surface-raised)] text-[var(--ti-text)]"
+          : "border-transparent text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-hover)] hover:text-[var(--ti-text)]")}
         aria-current={active === item.route ? "page" : undefined}
         aria-label={item.label}
         title={item.description}
         onclick={() => onNavigate(item.route)}
       >
-        <Icon size={17} strokeWidth={1.8} />
-        <strong class="ti-nav-label truncate text-[13px] font-semibold">{item.label}</strong>
+        <Icon size={22} strokeWidth={1.8} aria-hidden="true" />
+        <strong class="ti-nav-label text-[11px] font-semibold leading-4">{item.label}</strong>
       </button>
     {/each}
   </nav>
 
-  <div class="ti-sidebar-presence mt-auto border-t border-[var(--ti-border)] px-2 pt-3">
-    <div class="flex items-center gap-2" role="status" aria-live="polite" aria-atomic="true">
-      <span class={`size-1.5 rounded-full ${presenceDot()}`} aria-hidden="true"></span>
-      <strong class="ti-presence-label truncate text-[12px] font-semibold text-[var(--ti-text-muted)]">{presenceLabel()}</strong>
+  <div class="ti-sidebar-presence mt-auto border-t border-[var(--ti-border)] px-1 pt-3">
+    <div class="flex min-h-11 flex-col items-center justify-center gap-1 text-center" role="status" aria-live="polite" aria-atomic="true" aria-label={presenceLabel()} title={presenceLabel()}>
+      <span class={"size-2 rounded-full " + presenceDot()} aria-hidden="true"></span>
+      <span class="ti-presence-label block max-w-full truncate text-[10px] font-semibold text-[var(--ti-text-muted)]" aria-hidden="true">{shortPresence()}</span>
     </div>
   </div>
 </aside>

@@ -212,22 +212,22 @@
     <header class="ti-page-header">
       <div>
         <h2 class="ti-page-title">Settings</h2>
-        <p class="ti-page-copy">Manage your microphone, captions, and meeting setup.</p>
+        <p class="ti-page-copy">Manage audio devices, captions, and meeting support.</p>
       </div>
     </header>
-    <div class="grid min-w-0 grid-cols-1 gap-3 lg:grid-cols-[190px_minmax(0,1fr)] lg:gap-5">
-      <div class="flex w-full min-w-0 flex-nowrap gap-1 self-start overflow-x-auto rounded-[var(--ti-radius-md)] bg-[var(--ti-surface-soft)] p-2 lg:w-auto lg:flex-col lg:overflow-visible lg:p-2.5" role="group" aria-label="Settings categories">
-        <p class="hidden px-3 pb-1 pt-2 text-[12px] font-semibold text-[var(--ti-text-muted)] lg:block">Settings</p>
+    <div class="grid min-w-0 grid-cols-1 gap-3 lg:grid-cols-[186px_minmax(0,1fr)] lg:gap-5">
+      <div class="flex w-full min-w-0 flex-nowrap gap-1 self-start overflow-x-auto rounded-[var(--ti-radius-lg)] border border-[var(--ti-border)] bg-[var(--ti-sidebar)] p-2 lg:w-auto lg:flex-col lg:overflow-visible lg:p-2.5" role="group" aria-label="Settings categories">
+        <p class="hidden px-3 pb-1 pt-2 text-[12px] font-semibold text-[var(--ti-text-muted)] lg:block">PREFERENCES</p>
         <button type="button" class={"flex min-h-11 shrink-0 items-center whitespace-nowrap rounded-[var(--ti-radius-sm)] border-b-2 px-3 text-left text-[13px] transition-colors lg:min-h-10 lg:whitespace-normal lg:border-b-0 lg:border-l-2 " + (tab === "meeting" ? "border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] font-semibold text-[var(--ti-text)]" : "border-transparent text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)] hover:text-[var(--ti-text)]")}
           aria-pressed={tab === "meeting"} aria-controls="settings-category-panel"
           onclick={() => { tab = "meeting"; diagnosticsOpen = false; }}>Voice &amp; Audio</button>
         <button type="button" class={"flex min-h-11 shrink-0 items-center whitespace-nowrap rounded-[var(--ti-radius-sm)] border-b-2 px-3 text-left text-[13px] transition-colors lg:min-h-10 lg:whitespace-normal lg:border-b-0 lg:border-l-2 " + (tab === "translation" ? "border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] font-semibold text-[var(--ti-text)]" : "border-transparent text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)] hover:text-[var(--ti-text)]")}
           aria-pressed={tab === "translation"} aria-controls="settings-category-panel"
           onclick={() => { tab = "translation"; diagnosticsOpen = false; }}>Meeting Captions</button>
-        <p class="mt-3 hidden px-3 pb-1 text-[12px] font-semibold text-[var(--ti-text-muted)] lg:block">Support</p>
+        <p class="mt-3 hidden px-3 pb-1 text-[12px] font-semibold text-[var(--ti-text-muted)] lg:block">SUPPORT</p>
         <button type="button" class={"flex min-h-11 shrink-0 items-center whitespace-nowrap rounded-[var(--ti-radius-sm)] border-b-2 px-3 text-left text-[13px] transition-colors lg:min-h-10 lg:whitespace-normal lg:border-b-0 lg:border-l-2 " + (tab === "advanced" ? "border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] font-semibold text-[var(--ti-text)]" : "border-transparent text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-raised)] hover:text-[var(--ti-text)]")}
           aria-pressed={tab === "advanced"} aria-controls="settings-category-panel"
-          onclick={() => { tab = "advanced"; diagnosticsOpen = false; }}>Help</button>
+          onclick={() => { tab = "advanced"; diagnosticsOpen = false; }}>Help &amp; Diagnostics</button>
       </div>
       <div id="settings-category-panel" class="min-w-0" role="region"
         aria-label={tab === "meeting" ? "Voice & Audio settings" : tab === "translation" ? "Meeting Captions settings" : "Help and diagnostics"}>
@@ -235,8 +235,8 @@
       <article class="ti-panel overflow-hidden">
         <header class="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-4">
           <div class="min-w-0 flex-1">
-            <h3 class="m-0 text-[16px] font-semibold tracking-[-0.015em]">Voice &amp; Audio</h3>
-            <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">Choose your audio devices here. Changes are saved only after Windows confirms them.</p>
+            <h3 class="m-0 text-[16px] font-semibold tracking-[-0.015em]">Audio devices</h3>
+            <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">Choose the microphone and speakers used in your calls. TranslateIT verifies each change before saving.</p>
           </div>
           {#if meetingResourcesLocked}
             <StatusBadge label="In Use" tone="neutral" />
@@ -248,7 +248,14 @@
           {/if}
         </header>
 
-        <div class="grid grid-cols-1 gap-5 p-5 2xl:grid-cols-2" aria-busy={devicesLoading || deviceSaving}>
+        <div class="flex items-center justify-end border-b border-[var(--ti-border)] px-5 py-2.5">
+          <button type="button" class="ti-button ti-button-secondary min-h-9 px-3 text-[12px]"
+            disabled={devicesLoading || deviceSaving} onclick={() => void loadDevices()}>
+            {devicesLoading ? "Checking devices..." : "Refresh devices"}
+          </button>
+        </div>
+
+        <div class="grid grid-cols-1 gap-5 p-5 lg:grid-cols-2" aria-busy={devicesLoading || deviceSaving}>
           <label class="grid min-w-0 gap-2">
             <span class="ti-field-label">Microphone</span>
             <select class="ti-field min-h-10 px-3" disabled={meetingResourcesLocked || devicesLoading || deviceSaving || !devices?.ok} value={currentDevice("microphone")} onchange={(event) => void changeDevice("microphone", selectValue(event))}>
@@ -274,7 +281,7 @@
                 <option value={currentDevice("meeting-sound")}>{currentDevice("meeting-sound")} · unavailable</option>
               {/if}
             </select>
-            <small class="text-[13px] leading-5 text-[var(--ti-text-muted)]">Optional for incoming captions. Select the headphones or speakers used by your call. This does not change the calling app’s audio settings.</small>
+            <small class="text-[13px] leading-5 text-[var(--ti-text-muted)]">Optional for incoming captions. Use the headphones or speakers for your call. Your calling app's settings stay unchanged.</small>
           </label>
         </div>
 
@@ -284,24 +291,9 @@
           </p>
         {/if}
 
-        <MeetingTranslationEngine
-          {settings}
-          needsReconfirmation={snapshot.meetingSession?.preflight?.blockers?.includes("meeting_session:settings_unverified") === true}
-          locked={meetingResourcesLocked}
-          onSettingsChange={onSettingsChange}
-          onNotice={onNotice}
-        />
-
-        <MeetingNoiseSuppression
-          {settings}
-          locked={meetingResourcesLocked}
-          onSettingsChange={onSettingsChange}
-          onNotice={onNotice}
-        />
-
         <div class="flex flex-wrap items-start justify-between gap-4 border-t border-[var(--ti-border)] px-5 py-4" aria-busy={routeLoading}>
           <div class="min-w-0">
-            <span class="ti-field-label">Microphone to select in your calling app</span>
+            <span class="ti-field-label">Microphone to use in your calling app</span>
             <strong class="mt-1.5 block break-words text-[13px] font-semibold leading-5">{meetingMicrophoneDevice}</strong>
             <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]" role={routeCheck === "unavailable" ? "alert" : "status"}>
               {routeCheck === "unavailable" ? "Couldn't check this Windows audio device. Select Check route."
@@ -317,24 +309,52 @@
               tone={routeCheck === "unavailable" ? "danger" : routeCheck === "setup_needed" ? "warning" : "neutral"}
             />
           {/if}
-        </div>
-
-        <footer class="flex flex-wrap items-center justify-between gap-4 border-t border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-4">
-          <p class="m-0 min-w-0 flex-1 break-words text-[13px] leading-5 text-[var(--ti-text-muted)]" aria-live="polite" aria-atomic="true">{meetingResourcesLocked ? meetingResourceLockMessage : deviceMessage}</p>
           <div class="ti-action-row shrink-0">
-            <!-- Device list refresh remains mounted: a failed read has an actionable, stable retry. -->
-            <button type="button" class="ti-button ti-button-secondary"
-              disabled={devicesLoading || deviceSaving} onclick={() => void loadDevices()}>
-              {devicesLoading ? "Checking devices..." : "Refresh devices"}
-            </button>
-            <button type="button" class="ti-button ti-button-secondary"
+            <button type="button" class="ti-button ti-button-secondary min-h-9 px-3 text-[12px]"
               bind:this={routeCheckButton} aria-busy={routeLoading}
               disabled={routeLoading || deviceSaving || setupBusy} onclick={() => void recheckRouteFromButton()}>
               {routeLoading ? "Checking route..." : "Check route"}
             </button>
-            <button type="button" class="ti-button ti-button-secondary" disabled={micTestBlockedByMeeting || micTestBusy || setupBusy || deviceSaving} onclick={() => void onMicTest()}>{micTestBusy ? "Working..." : snapshot.readiness.recording || micTestOwnsResources ? "Stop Mic Test" : "Mic Test"}</button>
-            <button type="button" class="ti-button ti-button-secondary" disabled={meetingResourcesLocked || setupBusy || deviceSaving} onclick={() => void runSetupRepair()}>{setupBusy ? "Fixing..." : "Repair Setup"}</button>
+            <button type="button"
+              class={routeCheck === "setup_needed" ? "ti-button min-h-9 px-3 text-[12px]" : "ti-button ti-button-secondary min-h-9 px-3 text-[12px]"}
+              disabled={meetingResourcesLocked || setupBusy || deviceSaving} onclick={() => void runSetupRepair()}>
+              {setupBusy ? "Repairing..." : "Repair Setup"}
+            </button>
           </div>
+        </div>
+
+        <details class="group border-t border-[var(--ti-border)]" open={settings.translation_engine === "codex" || snapshot.meetingSession?.preflight?.blockers?.includes("meeting_session:settings_unverified") === true}>
+          <summary class="flex min-h-12 cursor-pointer items-center gap-2 px-5 py-3 text-[13px] font-semibold text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-hover)]">
+            <span aria-hidden="true" class="inline-block text-[11px] transition-transform group-open:rotate-90">▸</span> Advanced audio options
+            <span class="ml-auto text-[12px] font-normal">Engine &amp; noise</span>
+          </summary>
+          <div class="border-t border-[var(--ti-border)]">
+            <MeetingTranslationEngine
+              {settings}
+              needsReconfirmation={snapshot.meetingSession?.preflight?.blockers?.includes("meeting_session:settings_unverified") === true}
+              locked={meetingResourcesLocked}
+              onSettingsChange={onSettingsChange}
+              onNotice={onNotice}
+            />
+
+            <MeetingNoiseSuppression
+              {settings}
+              locked={meetingResourcesLocked}
+              onSettingsChange={onSettingsChange}
+              onNotice={onNotice}
+            />
+
+          </div>
+        </details>
+
+        <footer class="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-3">
+          <p class="m-0 min-w-0 flex-1 break-words text-[12px] leading-5 text-[var(--ti-text-muted)]" aria-live="polite" aria-atomic="true">
+            {meetingResourcesLocked ? meetingResourceLockMessage : deviceMessage}
+          </p>
+          <button type="button" class="ti-button ti-button-secondary min-h-9 shrink-0 px-3 text-[12px]"
+            disabled={micTestBlockedByMeeting || micTestBusy || setupBusy || deviceSaving} onclick={() => void onMicTest()}>
+            {micTestBusy ? "Working..." : snapshot.readiness.recording || micTestOwnsResources ? "Stop Mic Test" : "Test microphone"}
+          </button>
         </footer>
       </article>
     {:else if tab === "translation"}
