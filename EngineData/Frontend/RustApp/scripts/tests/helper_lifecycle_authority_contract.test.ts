@@ -6,6 +6,10 @@ const intents = readFileSync(
   new URL("../../src-tauri/src/commands/application_runtime/intents.rs", import.meta.url),
   "utf8",
 );
+const facade = readFileSync(
+  new URL("../../src/app/bridge/runtimeProductFacade.ts", import.meta.url),
+  "utf8",
+);
 
 test("ApplicationRuntime owns helper bootstrap and recovery eligibility", () => {
   assert.match(intents, /fn helper_state_allows_start\(state: &str\)/);
@@ -15,5 +19,6 @@ test("ApplicationRuntime owns helper bootstrap and recovery eligibility", () => 
 });
 
 test("helper lifecycle policy is not duplicated in frontend state helpers", () => {
-  assert.doesNotMatch(intents, /frontend/);
+  assert.match(facade, /applicationRuntimeApi\.dispatchIntent\("ensure_runtime_ready"\)/);
+  assert.doesNotMatch(facade, /(?:start|stop|restart)_helper_bridge|helperBridge(?:Start|Stop|Restart)/);
 });

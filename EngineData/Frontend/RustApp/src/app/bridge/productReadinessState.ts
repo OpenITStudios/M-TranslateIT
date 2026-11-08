@@ -1,18 +1,18 @@
 import type { ApplicationInputStatus } from "./applicationRuntimeApi";
 import type { MeetingSessionStatus } from "./runtimeApi";
-import { resolveMeetingVoiceGate } from "../runtime/meetingVoiceGate";
-import { compact } from "../shared/state";
+import { resolveMeetingVoiceGate } from "../runtime/meetingVoiceGate.ts";
+import { compact } from "../shared/state.ts";
 import type {
   HelperBridgeStatus,
   HelperBridgeWorkerResponse,
 } from "../shared/types";
-import { parseWorkerCapabilities } from "./workerCapabilities";
+import { parseWorkerCapabilities } from "./workerCapabilities.ts";
 import {
   mapProductMeetingState,
   meetingBridgeUnavailable,
   meetingPreflight,
   type MeetingPreflightSnapshot,
-} from "./productMeetingState";
+} from "./productMeetingState.ts";
 import type {
   ProductReadiness,
   ProductReadinessLevel,

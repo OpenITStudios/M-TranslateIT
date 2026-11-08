@@ -1,4 +1,4 @@
-import { compact } from "../shared/state";
+import { compact } from "../shared/state.ts";
 import type { HelperBridgeWorkerResponse } from "../shared/types";
 import type { WorkerCapabilitySnapshot } from "./runtimeProductTypes";
 

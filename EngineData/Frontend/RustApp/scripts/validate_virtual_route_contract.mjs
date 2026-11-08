@@ -39,6 +39,7 @@ const files = {
   nativeCaptureFormat: resolve(root, "src-tauri/windows/virtual-audio/Source/Filters/micarraywavtable.h"),
   meetingOutput: resolve(root, "src-tauri/src/engine/audio/meeting_output.rs"),
   meetingOutputRuntime: resolve(root, "src-tauri/src/engine/audio/meeting_output_runtime.rs"),
+  meetingOutputAudioFormat: resolve(root, "src-tauri/src/engine/audio/meeting_output_runtime/audio_format.rs"),
   audioMod: resolve(root, "src-tauri/src/engine/audio/mod.rs"),
   commandsMod: resolve(root, "src-tauri/src/commands/mod.rs"),
   registry: resolve(root, "src-tauri/src/commands/registry.rs"),
@@ -95,7 +96,7 @@ requireMarkers(source.outboundPipeline, "Meeting outbound AI preparation ownersh
 requireMarkers(source.playbackRuntime, "Meeting bounded playback ownership", [
   "PLAYBACK_QUEUE_CAPACITY",
   "mpsc::sync_channel::<PreparedPlaybackJob>(PLAYBACK_QUEUE_CAPACITY)",
-  "deliver_meeting_output_wav",
+  "let route = deliver_meeting_output_open_wav_for_source(",
   "get_bound_virtual_mic_output_device",
 ]);
 forbidMarkers(`${source.meeting}\n${source.meetingLifecycle}\n${source.outboundPipeline}\n${source.playbackRuntime}`, "retired Python route ownership", [
@@ -104,22 +105,30 @@ forbidMarkers(`${source.meeting}\n${source.meetingLifecycle}\n${source.outboundP
   "prepare_meeting_virtual_audio_route_provider",
   "route_execution_guard_ready",
 ]);
-requireMarkers(source.meetingOutput, "guarded Meeting output facade", [
+requireMarkers(source.meetingOutput, "Meeting output facade", [
   "mod runtime;",
-  "pub fn deliver_meeting_output_wav(",
-  "validate_source_riff_boundary",
-  "meeting_output:wav_riff_size_mismatch",
-  "runtime::deliver_meeting_output_wav",
+  "pub use runtime::{",
+  "deliver_meeting_output_wav,",
+  "pub(crate) use runtime::{",
+  "deliver_meeting_output_open_wav_for_source,",
 ]);
 requireMarkers(source.meetingOutputRuntime, "native Meeting output runtime", [
   "pub fn prepare_meeting_output_device(",
   "pub fn deliver_meeting_output_wav(",
+  "pub(crate) fn deliver_meeting_output_open_wav_for_source(",
+  "MeetingWavInput::Opened(source_audio_file)",
+  "let wav = match decode_meeting_wav_input(input)",
   "pub fn cancel_meeting_output_for_generation(",
   ".build_output_stream(",
   "runtime_generation_is_authoritative",
   "meeting_output:delivery_deadline_exceeded",
   "decode_wav_bytes",
   "prepare_output_samples",
+]);
+requireMarkers(source.meetingOutputAudioFormat, "Meeting WAV RIFF boundary", [
+  "fn decode_wav_bytes(",
+  "if riff_end < bytes.len()",
+  "meeting_output:wav_riff_size_mismatch",
 ]);
 requireMarkers(source.route, "one lifecycle owner and extracted pure selector", [
   "pub fn prepare_current_virtual_mic_route_for_meeting()",
@@ -236,7 +245,7 @@ requireMarkers(source.nativeControl, "privileged control admission and cleanup",
   "TI_CAPTURE_IOCTL_WRITE",
   "TranslateITCaptureCloseWriter(stack->FileObject)",
   "PcDispatchIrp(device, irp)", "input != sizeof(TI_CAPTURE_BEGIN)",
-  "openedEpoch != currentEpoch",
+  "if (!openedEpoch) return finish(irp, STATUS_DEVICE_NOT_READY);",
 ]);
 forbidMarkers(source.nativeControl, "publicly writable driver surface", [
   "(A;;GRGW;;;WD)", "(A;;GRGW;;;IU)", "FILE_ANY_ACCESS",

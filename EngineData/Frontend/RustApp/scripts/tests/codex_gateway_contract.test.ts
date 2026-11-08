@@ -400,7 +400,7 @@ test("Codex TTS-only hook does not route through Local ASR/MT", () => {
 
 test("P25 joins WebView SDP exchange to the sealed Rust AppServer source seam", () => {
   const peer = readFileSync(
-    new URL("../../src/app/bridge/codexRealtimePeer.ts", import.meta.url), "utf8",
+    new URL("./fixtures/codexRealtimePeer.ts", import.meta.url), "utf8",
   );
   assert.match(peer, /async negotiate\(/);
   assert.match(peer, /this\.bounded\(/);

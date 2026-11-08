@@ -762,6 +762,7 @@
           Lower WER means fewer words differed from the local recognizer's transcription; speaker similarity is a relative cosine, not proof of identity or naturalness.
         </p>
         {#if build.evaluation_comparison?.length}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users need focus to scroll this table horizontally.) -->
           <div class="mt-3 overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ti-accent)]"
             role="region" aria-label="Checkpoint comparison metrics, scroll horizontally" tabindex="0">
             <table class="w-full min-w-[620px] border-collapse text-left text-[13px]">

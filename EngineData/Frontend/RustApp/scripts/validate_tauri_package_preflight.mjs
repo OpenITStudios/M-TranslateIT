@@ -33,6 +33,7 @@ const bridgePathsPath = join(tauriRoot, "src", "commands", "bridge_paths.rs");
 const helperBridgePath = join(tauriRoot, "src", "commands", "helper_bridge.rs");
 const meetingOutputPath = join(tauriRoot, "src", "engine", "audio", "meeting_output.rs");
 const meetingOutputRuntimePath = join(tauriRoot, "src", "engine", "audio", "meeting_output_runtime.rs");
+const meetingOutputAudioFormatPath = join(tauriRoot, "src", "engine", "audio", "meeting_output_runtime", "audio_format.rs");
 const runtimeInventoryPath = join(tauriRoot, "src", "commands", "runtime_inventory.rs");
 const workerEntrypointPath = join(workerRoot, "realtime_local_worker.py");
 const workerCommonPath = join(workerRoot, "worker_runtime_common.py");
@@ -70,6 +71,7 @@ for (const path of [
   helperBridgePath,
   meetingOutputPath,
   meetingOutputRuntimePath,
+  meetingOutputAudioFormatPath,
   runtimeInventoryPath,
   workerEntrypointPath,
   workerCommonPath,
@@ -185,19 +187,28 @@ forbidMarkers(helperBridgeRs, "legacy helper Python selection", [
 
 const meetingOutputRs = readText(meetingOutputPath);
 const meetingOutputRuntimeRs = readText(meetingOutputRuntimePath);
-requireMarkers(meetingOutputRs, "guarded Rust Meeting audio delivery facade", [
+const meetingOutputAudioFormatRs = readText(meetingOutputAudioFormatPath);
+requireMarkers(meetingOutputRs, "Rust Meeting audio delivery facade", [
   '#[path = "meeting_output_runtime.rs"]',
-  "pub fn deliver_meeting_output_wav(",
-  "validate_source_riff_boundary",
-  "meeting_output:wav_riff_size_mismatch",
-  "runtime::deliver_meeting_output_wav",
+  "pub use runtime::{",
+  "deliver_meeting_output_wav,",
+  "pub(crate) use runtime::{",
+  "deliver_meeting_output_open_wav_for_source,",
 ]);
 requireMarkers(meetingOutputRuntimeRs, "native Rust Meeting audio delivery runtime", [
   "pub fn prepare_meeting_output_device(",
   "pub fn deliver_meeting_output_wav(",
+  "pub(crate) fn deliver_meeting_output_open_wav_for_source(",
+  "MeetingWavInput::Opened(source_audio_file)",
+  "let wav = match decode_meeting_wav_input(input)",
   "pub fn cancel_meeting_output_for_generation(",
   ".build_output_stream(",
   "runtime_generation_is_authoritative",
+]);
+requireMarkers(meetingOutputAudioFormatRs, "Rust Meeting WAV RIFF boundary", [
+  "fn decode_wav_bytes(",
+  "if riff_end < bytes.len()",
+  "meeting_output:wav_riff_size_mismatch",
 ]);
 
 const workerPyproject = readText(workerPyprojectPath);

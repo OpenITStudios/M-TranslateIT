@@ -49,7 +49,7 @@
   let message = $state("");
   let selectedMicrophone = $state((() => String(settings.audio.input_device_id ?? ""))());
   let builtinPendingId = $state<BuiltinVoiceId | null>(null);
-  let checkMicrophoneSelectionButton: HTMLButtonElement | undefined;
+  let checkMicrophoneSelectionButton = $state<HTMLButtonElement>();
 
   const meetingVoiceReady = $derived(snapshot?.readiness.approvedVoiceReady ?? null);
   const engineSettingsUnverified = $derived(

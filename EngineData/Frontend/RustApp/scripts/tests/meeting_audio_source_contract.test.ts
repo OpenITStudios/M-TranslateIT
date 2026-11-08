@@ -11,9 +11,12 @@ test("Meeting source uses one native selector and existing audio owners", () => 
   const meeting = read("src/pages/Meeting.svelte");
   const bridge = read("src/app/bridge/runtimeApi.ts");
   const registry = read("src-tauri/src/commands/registry.rs");
-  assert.match(meeting, /Original Microphone/);
-  assert.match(meeting, /TranslateIT Audio/);
-  assert.match(meeting, /selectMeetingAudioSource/);
+  const labels = read("src/components/ui/meetingSourceLabels.ts");
+  assert.match(labels, /original: "Original Microphone"/);
+  assert.match(labels, /translateit: "TranslateIT Audio"/);
+  assert.match(meeting, /<option value="original">\{MEETING_SOURCE_LABELS\.original\}/);
+  assert.match(meeting, /<option value="translateit">\{MEETING_SOURCE_LABELS\.translateit\}/);
+  assert.match(meeting, /runtimeApi\.selectMeetingAudioSource\(source\)/);
   assert.match(bridge, /set_meeting_audio_source/);
   assert.match(registry, /meeting_session::set_meeting_audio_source/);
 });

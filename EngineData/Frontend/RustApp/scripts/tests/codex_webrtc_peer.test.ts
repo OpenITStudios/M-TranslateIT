@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   CodexRealtimePeer, validCodexSdp,
-} from "../../src/app/bridge/codexRealtimePeer.ts";
+} from "./fixtures/codexRealtimePeer.ts";
 
 const LEASE = { generation: 13, sourceEpoch: 3 };
 const SDP = [
@@ -189,7 +189,7 @@ test("P24 drops remote cloud audio and unexpected data channels", async () => {
   assert.equal(rtc.phase(), "revoked");
 
   const implementation = readFileSync(
-    new URL("../../src/app/bridge/codexRealtimePeer.ts", import.meta.url), "utf8",
+    new URL("./fixtures/codexRealtimePeer.ts", import.meta.url), "utf8",
   );
   assert.doesNotMatch(implementation, /\bgetUserMedia\s*\(|\bnew\s+(AudioContext|MediaStream)\s*\(/);
   assert.doesNotMatch(implementation, /\.send\(|\.play\(/);

@@ -50,10 +50,10 @@ test("Quick Access is meeting-first and old command palette is gone", () => {
 
 test("Meeting and Quick Access present native-derived ready, live, mute and recovery truth", () => {
   assert.match(popup, /statusPresentation = \$derived\.by/);
-  for (const state of ['label: "Ready"', 'label: "Live"', 'label: "Muted"', 'label: "Setup Needed"', 'label: "Stop Needed"', 'label: "Unavailable"']) {
+  for (const state of ['label: "Ready"', 'label: "Setup Needed"', 'label: "Stop Needed"', 'label: "Unavailable"']) {
     assert.ok(popup.includes(state), state);
   }
-  assert.match(popup, /meeting\.muted \? "Muted" : "Live"/);
+  assert.match(popup, /if \(live\) return \{ label: meeting\.muted \? "Muted" : "Live"/);
   assert.match(popup, /canStart\) return \{ label: "Ready"/);
   assert.match(popup, /Audio sent to meeting/);
   assert.match(popup, /\{sourceSummary\}/);

@@ -1,7 +1,7 @@
 /**
  * WebView2 WebRTC *signalling peer* for a future owned Codex V3 session.
  *
- * No Tauri command or production Meeting path imports this module yet.
+ * This prototype is exercised by tests outside the production entry point.
  * It does not request microphone permissions, create a second capture
  * source, send audio, play server speech, or grant Voice entitlement.
  *

@@ -15,7 +15,7 @@
   let preview = $state<MeetingCommittedTurnsSnapshot | null>(null);
   let previewLoading = $state(false);
   let previewError = $state("");
-  let previewPanel: HTMLDivElement | undefined;
+  let previewPanel = $state<HTMLDivElement>();
   // Ignore older reads after the reader closes or changes sessions.
   let previewRevision = 0;
   let language = $state<"bilingual" | "id" | "en">("bilingual");
@@ -320,6 +320,7 @@
               {:else if !preview}
                 <p class="m-0 text-[13px] text-[var(--ti-text-muted)]">Preview is unavailable. Select Read to close and try again.</p>
               {:else}
+                <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users need focus to scroll this named region.) -->
                 <div class="max-h-[360px] divide-y divide-[var(--ti-border)] overflow-y-auto" role="region" aria-label="Saved conversation" tabindex="0">
                   {#each preview.turns as turn (turn.sequence)}
                     <div class="py-3 first:pt-0 last:pb-0">

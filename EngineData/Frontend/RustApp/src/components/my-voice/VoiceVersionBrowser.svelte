@@ -24,7 +24,7 @@
   let pendingId = $state<string | null>(null);
   let disposed = false;
   let disclosureButton: HTMLButtonElement | undefined;
-  let confirmationPanel: HTMLDivElement | undefined;
+  let confirmationPanel = $state<HTMLDivElement>();
 
   async function load(more = false): Promise<void> {
     if (busy || (more && !versions?.next_cursor)) return;

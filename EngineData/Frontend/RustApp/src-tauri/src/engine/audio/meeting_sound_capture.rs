@@ -951,7 +951,7 @@ mod isolation_tests {
         live.phase = "stopping".to_string();
         assert!(!super::capture_start_owner_matches(Some(&live), "new-meeting"));
         live.phase = "live".to_string();
-        live.owner_id = "translateit_mic_test".to_string();
+        live.owner_id = crate::engine::runtime_state::MIC_TEST_OWNER_ID.to_string();
         assert!(!super::capture_start_owner_matches(Some(&live), "new-meeting"));
 
         let state = Mutex::new(Some("new-meeting".to_string()));

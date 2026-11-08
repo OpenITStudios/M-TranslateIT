@@ -169,6 +169,7 @@
       {#if orderedTurns.length === 0}
         <p class="m-0 py-7 text-sm leading-6 text-[var(--ti-text-muted)]">Recognized phrases from your microphone and meeting audio will appear here.</p>
       {:else}
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users need focus to scroll this named region.) -->
         <div bind:this={transcriptScroller} onscroll={updateScrollPosition}
           class="max-h-[54vh] min-h-[160px] overflow-y-auto" role="log" aria-label="Meeting conversation" aria-live="off" tabindex="0">
           {#each orderedTurns as turn (turn.sequence)}

@@ -49,7 +49,8 @@ test("My Voice polling and audio reads cannot resume after view disposal", () =>
   assert.match(build, /disposed = true;\s*if \(timer\) clearTimeout\(timer\);/);
   assert.match(build, /if \(disposed \|\| reviewId !== build\.evaluation_review_id \|\| requestVersion !== audioRequestVersion\) return;/);
   assert.ok(page.includes("if (disposed) return;"));
-  assert.match(page, /disposed = true;\s*selectedVoiceReadVersion \+= 1;\s*stopReplay\(\);/);
+  assert.match(page, /disposed = true;\s*selectedVoiceReadVersion \+= 1;\s*recordingReadVersion \+= 1;\s*stopAllMyVoiceAudio\(\);/);
+  assert.match(page, /function stopAllMyVoiceAudio\(\): void \{\s*stopReplay\(\);\s*buildPlaybackOwner\?\.stopPlayback\(\);/);
 });
 
 test("approved My Voice distinguishes selected actor from separately saved copy and preserves archive warnings", () => {
@@ -84,7 +85,8 @@ test("approved My Voice cannot replace the selected actor during an active Meeti
 
   const ui = readFileSync(new URL("../../src/components/my-voice/MyVoiceBuild.svelte", import.meta.url), "utf8");
   const parent = readFileSync(new URL("../../src/pages/MyVoice.svelte", import.meta.url), "utf8");
-  assert.match(parent, /<MyVoiceBuild \{onNotice\}\s*voiceChangesLocked=\{voiceChangesLocked \|\| recordingStatusUnknown \|\| isRecording \|\| pendingLineId !== null\}/);
+  const buildProps = parent.slice(parent.indexOf("<MyVoiceBuild "), parent.indexOf("refreshRevision={buildRefreshRevision} />"));
+  assert.match(buildProps, /voiceChangesLocked=\{voiceChangesLocked \|\| recordingStatusUnknown \|\| isRecording \|\| pendingLineId !== null\}/);
   assert.match(ui, /voiceChangesLocked\?: boolean/);
   assert.match(ui, /async function approve\(\): Promise<void> \{\s*if \(busy \|\| statusCheckUnavailable \|\| voiceChangesLocked/);
   assert.match(ui, /disabled=\{busy \|\| statusCheckUnavailable \|\| voiceChangesLocked \|\| !evaluationReviewComplete \|\| !qualityConfirmed\}/);

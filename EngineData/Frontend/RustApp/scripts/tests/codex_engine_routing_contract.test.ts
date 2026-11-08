@@ -130,7 +130,7 @@ test("P11 protects worker, final transcript and native playback without a second
   }
   assert.match(committed, /delivery_state != "interrupted" && !super::local_translated_meeting_route_admitted\(\)/);
   assert.match(playback, /"meeting_playback:codex_voice_not_admitted"/);
-  assert.match(playback, /deliver_meeting_output_wav_for_source/);
+  assert.match(playback, /let route = deliver_meeting_output_open_wav_for_source\(/);
   assert.match(playback, /begin_committed_playback\(/);
   assert.doesNotMatch(consumer, /codex_gateway::/);
 });
@@ -192,12 +192,20 @@ test("P12 guards alternate native setup intents from hidden Local worker bootstr
   assert.match(nativeIntents, /"retry_blocked_worker" => retry_blocked_worker\(\)/);
 });
 
-test("P12 preserves Original Microphone and the independent incoming caption lane", () => {
+test("P12 preserves Original Microphone and limits incoming AI to the admitted Local engine", () => {
   assert.match(lifecycle, /if !original_requested && !super::local_translated_meeting_route_admitted\(\)/);
   assert.match(lifecycle, /let original_eligible = preflight.microphone_ready && preflight.meeting_route_ready/);
   assert.match(meetingPage, /currentSource === "original" && !meeting.hasSession/);
   assert.match(quickAccess, /choice === "original" \|\| meeting.preflight.start_eligible/);
-  assert.doesNotMatch(incoming, /local_translated_meeting_route_admitted/);
+  for (const [owner, task] of [
+    ["process_incoming_wav_with_direction", "transcribe"],
+    ["translate_and_commit_incoming_transcript", "translate"],
+  ]) {
+    const start = incoming.indexOf(`fn ${owner}(`);
+    const guard = incoming.indexOf("!super::local_translated_meeting_route_admitted()", start);
+    const dispatch = incoming.indexOf(`send_helper_worker_task(\n        "${task}"`, start);
+    assert.ok(start >= 0 && guard > start && dispatch > guard, `${task} requires Local admission`);
+  }
   assert.match(committed, /if lane == "you" && !super::local_translated_meeting_route_admitted\(\)/);
   assert.match(incoming, /session_id, event_sequence, None, utterance_id, "incoming"/);
 });

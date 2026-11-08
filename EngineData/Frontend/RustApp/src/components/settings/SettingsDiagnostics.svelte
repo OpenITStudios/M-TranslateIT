@@ -97,6 +97,7 @@
       </div>
       <span class="ti-pill">{commandErrors.length} recent</span>
     </div>
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users need focus to scroll this named region.) -->
     <div class="mt-4 grid max-h-[320px] gap-2 overflow-y-auto pr-1" role="region" aria-label="Recent technical errors" tabindex={commandErrors.length > 0 ? 0 : undefined}>
       {#if commandErrors.length === 0}
         <p class="m-0 text-[13px] text-[var(--ti-text-muted)]">No recent technical errors.</p>

@@ -59,9 +59,11 @@ test("interrupted current-take Accept blocks new training before frozen dataset 
   const freeze = source.indexOf("for (take, native_is_required) in manifest.takes.iter().zip(native_required)", entry);
   assert.ok(gate >= 0 && entry > gate && checked > entry && deletion > checked && freeze > deletion,
     "read-only Take-source admission must happen before destructive dataset replacement");
-  assert.match(source.slice(gate, entry), /accepted_take_interrupted_save_recovery_required/);
-  assert.match(source.slice(gate, entry), /canonical\.with_extension\("wav\.previous"\)/);
-  assert.match(source.slice(gate, entry), /native\.with_extension\("wav\.previous"\)/);
+  const backupGuard = source.indexOf("fn ensure_accepted_take_backup_absent(");
+  assert.ok(backupGuard >= 0 && backupGuard < gate);
+  assert.match(source.slice(backupGuard, gate), /fs::symlink_metadata\(path\)[\s\S]*?accepted_take_interrupted_save_recovery_required/);
+  assert.match(source.slice(gate, entry), /ensure_accepted_take_backup_absent\(&canonical\.with_extension\("wav\.previous"\)\)\?/);
+  assert.match(source.slice(gate, entry), /ensure_accepted_take_backup_absent\(&native\.with_extension\("wav\.previous"\)\)\?/);
   assert.match(source.slice(gate, entry), /recording_archive::guided_take_is_archived/);
   assert.match(source.slice(freeze), /voice_lab:frozen_native_pair_archive_unverified/);
   assert.match(source, /mod interrupted_accepted_dataset_admission_tests/);

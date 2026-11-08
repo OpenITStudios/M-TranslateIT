@@ -248,9 +248,13 @@
     }
   }
 
+  function isVoiceReviewActive(): boolean {
+    return activeStage === "review";
+  }
+
   async function playSavedRecording(id: string): Promise<void> {
     if (busy || replaying || savedPlayingId || voiceChangesLocked
-      || recordingStatusUnknown || isRecording || activeStage === "review"
+      || recordingStatusUnknown || isRecording || isVoiceReviewActive()
       || buildSnapshot?.active || buildSnapshot?.preview_active) return;
     stopAllMyVoiceAudio();
     const requestRevision = replayRevision;
@@ -259,7 +263,7 @@
       const bytes = await myVoiceApi.getSavedRecordingAudio(id);
       if (disposed || requestRevision !== replayRevision || savedPlayingId !== id
         || isRecording || recordingStatusUnknown || voiceChangesLocked
-        || activeStage === "review") return;
+        || isVoiceReviewActive()) return;
       if (!bytes) {
         stopReplay();
         onNotice("Couldn't verify this saved recording. The file may need attention.");
@@ -1378,6 +1382,7 @@
                 </label>
               </div>
               <p class="mt-3 text-[13px] text-[var(--ti-text-muted)]">{browseFiltered.length} matching lines · up to {browsePageSize} per page</p>
+              <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users need focus to scroll this named region.) -->
               <div class="max-h-[320px] overflow-y-auto" role="region" aria-label="Recording lines" tabindex="0">
                 {#each browseVisible as line (line.line_id)}
                   <button type="button"

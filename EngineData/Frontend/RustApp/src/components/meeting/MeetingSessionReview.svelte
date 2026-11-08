@@ -81,6 +81,7 @@
           <input class="ti-field min-h-10 w-full pl-9 pr-3 text-sm" bind:value={query} placeholder="Search last session..." aria-label="Search last session" />
         </label>
       </div>
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users need focus to scroll this named region.) -->
       <div class="max-h-[360px] overflow-y-auto divide-y divide-[var(--ti-border)]" role="region" aria-label="Last Meeting conversation" tabindex="0">
         {#each visibleTurns as turn (turn.sequence)}
           <div class="px-4 py-3">

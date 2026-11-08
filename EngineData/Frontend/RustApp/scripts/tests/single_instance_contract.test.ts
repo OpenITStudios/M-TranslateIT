@@ -11,8 +11,8 @@ test("Windows single-instance admission precedes every Tauri setup/runtime owner
   const builder = main.indexOf("tauri::Builder::default()");
   assert.ok(admission > 0 && builder > admission);
   assert.match(main, /let _single_instance = match app_bootstrap::single_instance::acquire\(\)/);
-  assert.match(main, /InstanceAdmission::Primary\(guard\) => guard/);
-  assert.match(main, /InstanceAdmission::Existing => return/);
+  assert.match(main, /Ok\(app_bootstrap::single_instance::InstanceAdmission::Primary\(guard\)\) => guard/);
+  assert.match(main, /Ok\(app_bootstrap::single_instance::InstanceAdmission::Existing\) => return/);
   assert.match(main, /show_startup_error\(&error\)/);
   assert.ok(main.indexOf("app.run(") > builder, "guard must live through event loop");
   assert.match(bootstrap, /#\[cfg\(target_os = "windows"\)\]\s*pub\(crate\) mod single_instance;/);

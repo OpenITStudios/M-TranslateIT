@@ -64,7 +64,7 @@ test("My Voice UI has one collapsible voice selector and a stage-aware recording
   assert.match(recordingUi, /const activeStage = \$derived/);
   assert.match(recordingUi, /hidden={!showRecordPanel}/);
   assert.match(recordingUi, /hidden={!showBuildPanel}/);
-  assert.match(recordingUi, /<MyVoiceBuild \{onNotice\}/);
+  assert.match(recordingUi, /<MyVoiceBuild bind:this=\{buildPlaybackOwner\} \{onNotice\}/);
   assert.match(ui, /onBuildStatus\?\.\(next\)/);
   assert.match(recordingUi, /Browse lines/);
   // The recording catalog contains 600 prompts, but a single build still
@@ -103,7 +103,7 @@ test("native Stop and Retry remain visible when recording and creation status di
   assert.match(page, /if \(busy \|\| voiceChangesLocked \|\| buildStatusUnavailable \|\| buildSnapshot\?\.active/);
   assert.match(page, /async function acceptTake\(\): Promise<void> \{\s*if \(busy \|\| buildStatusUnavailable \|\| buildSnapshot\?\.active/);
   assert.match(page, /disabled=\{busy \|\| voiceChangesLocked \|\| buildStatusUnavailable \|\| buildSnapshot\?\.active === true/);
-  assert.match(page, /<MyVoiceBuild \{onNotice\}/);
+  assert.match(page, /<MyVoiceBuild bind:this=\{buildPlaybackOwner\} \{onNotice\}/);
 });
 
 test("completed evaluations take priority over Create and unknown status locks mutations", () => {
@@ -240,7 +240,8 @@ test("guided take recording environment hints are advisory and do not rewrite th
   assert.match(guidedAudio, /voice_lab:review:possible_room_sound/);
   assert.match(recordingUi, /voice_lab:review:long_edge_pause/);
   assert.match(recordingUi, /voice_lab:review:possible_room_sound/);
-  assert.match(guidedAudio, /recording_environment_hints\(&samples_mono, &mut review_advice\)/);
+  assert.match(guidedAudio, /review_guided_samples\(take\.line_id, &samples_mono\)/);
+  assert.match(guidedAudio, /if quality_blocker\.is_empty\(\) \{\s*recording_environment_hints\(samples, &mut review_advice, duration_ms, &mut timeline\)/);
   assert.match(guidedAudio, /return; \/\/ No comparable quiet context/);
   assert.match(guidedAudio, /samples_mono: Vec<f32>/);
   assert.match(guidedAudio, /quality_blocker = guided_take_quality_blocker/);
@@ -311,14 +312,13 @@ test("My Voice puts the compact current Meeting voice above an accessible three-
   assert.doesNotMatch(versions, /created_at|createdAt|last_used_at/,
     "do not invent dates or provenance which the version API cannot supply");
 
-  const nav = page.slice(page.indexOf('<nav class="mt-4'),
-    page.indexOf("hidden={!showRecordPanel}"));
-  assert.match(nav, /<nav class=/);
+  const nav = page.match(/<nav\b[^>]*aria-label="My Voice creation stages"[^>]*>[\s\S]*?<\/nav>/)?.[0];
+  assert.ok(nav, "the creation stage navigation must be labelled");
   assert.match(nav, /aria-current=\{activeStage === "review" \? "step"/);
   assert.match(nav, /disabled=\{busy \|\| recordingStatusUnknown \|\| buildStatusUnavailable/);
-  assert.match(nav, /onclick=\{\(\) => \{ selectedPane = "record"; \}\}/);
-  assert.match(nav, /onclick=\{\(\) => \{ selectedPane = "create"; \}\}/);
-  assert.match(nav, /onclick=\{\(\) => \{ selectedPane = "review"; \}\}/);
+  for (const stage of ["record", "create", "review"]) {
+    assert.ok(nav.includes(`onclick={() => openCreationStage("${stage}")}`), stage);
+  }
   assert.match(page, /\{#if buildSnapshot\.evaluation_ready && !isRecording && pendingLineId === null\}/);
   assert.match(page, /Return to Review/);
   assert.match(page, /let selectedPane = \$state<"auto" \| "record" \| "create" \| "review">/);

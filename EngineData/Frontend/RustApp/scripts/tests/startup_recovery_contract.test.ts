@@ -80,7 +80,7 @@ test("active previous process prevents destructive stale cleanup without trustin
 test("clean app exit remains fail-closed and clears the marker after helper shutdown", () => {
   assert.match(main, /application_runtime::prepare_for_app_exit\(\)/);
   assert.match(shutdown, /if !result\.ok \|\| result\.status\.has_session/);
-  assert.match(shutdown, /finish_app_exit\(\s*&latest_runtime_session_state\(\),\s*super::super::meeting_session::meeting_stop_cleanup_pending\(\),\s*super::super::helper_bridge::shutdown_helper_bridge_for_app_exit,\s*super::super::startup_recovery::mark_clean_shutdown,\s*\)/);
+  assert.match(shutdown, /finish_app_exit\(\s*&latest_runtime_session_state\(\),\s*super::super::meeting_session::meeting_stop_cleanup_pending\(\),\s*\|\| \{\s*let codex_released = super::super::codex_gateway::shutdown_for_app_exit\(\);\s*let helper_released = super::super::helper_bridge::shutdown_helper_bridge_for_app_exit\(\);\s*codex_released && helper_released\s*\},\s*super::super::startup_recovery::mark_clean_shutdown,\s*\)/);
   assert.match(shutdown, /shutdown_helper\(\) && mark_clean\(\)/);
   assert.ok(shutdown.indexOf("mark_clean_shutdown") > shutdown.indexOf("shutdown_helper_bridge_for_app_exit"));
 });

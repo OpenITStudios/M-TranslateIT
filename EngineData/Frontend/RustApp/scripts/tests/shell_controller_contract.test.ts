@@ -50,12 +50,13 @@ test("returning startup renders the native shell before cold worker initializati
   assert.match(boot, /await applicationRuntimeApi\.getSnapshot\(\)/);
   assert.match(boot, /applicationController\.refreshFromApplication\(\s*initialSnapshot,\s*"initial_shell",\s*loadedSettings/);
   assert.doesNotMatch(boot, /await refreshSnapshot\(/);
-  assert.ok(boot.indexOf("booting = false;") < boot.indexOf('dispatchIntent("ensure_runtime_ready")'));
+  const shellReady = boot.indexOf("booting = false;");
+  assert.ok(shellReady >= 0 && shellReady < boot.indexOf('dispatchIntent("ensure_runtime_ready")'));
   assert.match(boot, /initialSnapshot\?\.helper\.state === "not_started"/);
   assert.match(boot, /applicationController\.read\(\)\.snapshot\?\.helper\?\.state === "not_started"/);
   assert.match(boot, /if \(outcome\.snapshot\.revision > 0 && outcome\.snapshot\.lifecycle !== "unavailable"\)/);
   assert.match(boot, /refreshFromApplicationEvent\(outcome\.snapshot, "startup_worker_result"\)/);
-  assert.match(boot, /if \(!outcome\.ok\) \{\s*setNotice\(outcome\.message\)/);
+  assert.match(boot, /if \(!outcome\.ok\) \{\s*setKnownNotice\(outcome\.message, "attention"\)/);
   assert.doesNotMatch(boot, /setInterval|setTimeout|retry_blocked_worker/);
 });
 

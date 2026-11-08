@@ -79,9 +79,12 @@ test("Live transcript stays minimal while preserving reading position and copy e
 });
 
 test("global notices expose full text without noninteractive keyboard tabindex", () => {
-  assert.doesNotMatch(header, /flex-1 truncate text-right/);
-  assert.match(header, /max-h-16 flex-1 overflow-y-auto break-words/);
-  assert.match(header, /role="status" aria-live="polite" title=\{notice\}/);
+  const notice = header.slice(header.indexOf('<div class={`ti-notice-bar'));
+  assert.match(notice, /flex-1 break-words/);
+  assert.match(notice, /role="alert" aria-atomic="true"/);
+  assert.match(notice, /role="status" aria-live="polite" aria-atomic="true"/);
+  assert.match(notice, /\{notice\.message\}/);
+  assert.doesNotMatch(notice, /\b(?:tabindex|truncate|line-clamp-\d+)\b/);
 });
 
 test("Last-session transcript is private-by-default and export remains explicit", () => {
@@ -116,5 +119,6 @@ test("failed Meeting translation retains source and cannot look completed", () =
   assert.match(display, /Translation unavailable/);
   assert.match(native, /fn finish_translation_at\(/);
   assert.match(native, /translation_state = "failed"/);
-  assert.match(native, /session\.phase != "live"/);
+  assert.match(native, /fn live_turn_owner_matches\([\s\S]*?session\.authority_active\s*&& session\.phase == "live"/);
+  assert.match(native, /pub\(super\) fn finish_meeting_turn_translation\([\s\S]*?if !live_turn_owner_matches\(current\.snapshot\.as_ref\(\), session_id, generation\) \{\s*return false;/);
 });

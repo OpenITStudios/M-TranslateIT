@@ -53,10 +53,10 @@ test("failed My Voice recording bridge calls preserve authoritative state and na
   const stateApply = voice.indexOf("applyState(result.recording)", start);
   const guard = voice.indexOf('result.state === "frontend_bridge_error" || !result.recording', start);
   assert.ok(guard > start && stateApply > guard, "unverified recording must never become a synthetic stopped state");
-  assert.match(voice, /recordingStatusUnknown = true;\s*onRecordingChange\(true\);/);
-  assert.match(voice, /if \(!next\) \{\s*recordingStatusUnknown = true;\s*onRecordingChange\(true\);/);
-  assert.match(voice, /Retry status<\/button>/);
-  assert.match(voice, /disabled=\{busy\} onclick=\{\(\) => void refresh\(\)\}>Retry status<\/button>/);
+  const uncertain = voice.slice(voice.indexOf("async function reconcileUncertainRecordingAction("), start);
+  assert.match(uncertain, /recordingStatusUnknown = true;\s*stopAllMyVoiceAudio\(\);\s*onRecordingChange\(true\);/);
+  assert.match(voice, /if \(!next\) \{\s*recordingStatusUnknown = true;\s*stopAllMyVoiceAudio\(\);\s*onRecordingChange\(true\);/);
+  assert.match(voice, /disabled=\{busy \|\| recordingRetrying\} onclick=\{\(\) => void retryRecordingStatus\(\)\}>\{recordingRetrying \? "Checking\.\.\." : "Retry status"\}/);
   assert.match(app, /myVoiceRecording \|\| snapshot\?\.resources\.owner_kind === "voice_recording"/);
   assert.match(app, /if \(voiceRecordingLock && next !== "my-voice"\)/);
   assert.match(app, /myVoiceRecording=\{voiceRecordingLock\}/);

@@ -56,6 +56,7 @@
   {#if entries.length === 0}
     <p class="m-0 px-5 py-5 text-[13px] leading-5 text-[var(--ti-text-muted)]">No translation issues have been reported.</p>
   {:else}
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users need focus to scroll this named region.) -->
     <div class="max-h-[260px] divide-y divide-[var(--ti-border)] overflow-y-auto" role="region" aria-label="Saved translation issue reports" tabindex="0">
       {#each entries as entry (entry.id)}
         <div class="grid min-w-0 gap-1.5 px-5 py-3.5">

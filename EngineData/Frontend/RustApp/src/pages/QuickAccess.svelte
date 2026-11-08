@@ -22,8 +22,8 @@
   let errorMessage = $state("");
   let errorArea = $state<ErrorArea>("meeting");
   let resultMessage = $state("");
-  let confirmStopButton: HTMLButtonElement | undefined;
-  let primaryActionButton: HTMLButtonElement | undefined;
+  let confirmStopButton = $state<HTMLButtonElement>();
+  let primaryActionButton = $state<HTMLButtonElement>();
   let feedbackRegion: HTMLDivElement | undefined;
   let disposed = false;
   let actionRevision = 0;
@@ -404,6 +404,7 @@
       </button>
     </div>
 
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users need focus to scroll this named region.) -->
     <div bind:this={feedbackRegion} class="min-h-0 flex-1 overflow-y-auto px-4 py-2" role="region" aria-label="Quick Access status and recovery" tabindex="0">
       {#if errorMessage}
         <div class="grid min-w-0 gap-1.5" role="alert">
