@@ -13,17 +13,20 @@ const git = (...args) => execFileSync("git", args, { cwd: repoRoot, encoding: "u
 const fail = (message) => { throw new Error(message); };
 
 function options(argv) {
-  const result = { execute: false, expectedSha: "", scenario: "live", viewport: "desktop" };
+  const result = { execute: false, currentLocal: false, expectedSha: "", scenario: "live", viewport: "desktop" };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--execute") result.execute = true;
+    else if (arg === "--current-local") result.currentLocal = true;
     else if (arg === "--expected-sha") result.expectedSha = argv[++i] ?? "";
     else if (arg === "--scenario") result.scenario = argv[++i] ?? "";
     else if (arg === "--viewport") result.viewport = argv[++i] ?? "";
     else fail("Unrecognized preview argument: " + arg);
   }
-  if (!/^[0-9a-f]{40}$/.test(result.expectedSha))
-    fail("Specify the full pinned Local commit with --expected-sha <40-hex SHA>.");
+  if (result.currentLocal === Boolean(result.expectedSha))
+    fail("Provide exactly one of --current-local or --expected-sha <40-hex SHA>.");
+  if (result.expectedSha && !/^[0-9a-f]{40}$/.test(result.expectedSha))
+    fail("The --expected-sha value must be the full 40-character pinned commit SHA.");
   if (!/^[a-z][a-z-]{0,48}$/.test(result.scenario))
     fail("Invalid scenario name.");
   if (!/^[a-z][a-z-]{0,32}$/.test(result.viewport))
@@ -35,9 +38,10 @@ async function main() {
   const startedMs = performance.now();
   const input = options(process.argv.slice(2));
   const head = git("rev-parse", "HEAD");
-  if (head !== input.expectedSha) fail("HEAD does not equal the requested source SHA; no screenshot was made.");
   const branch = git("branch", "--show-current");
   if (branch !== "Local") fail("Preview source must be on the user-selected Local branch.");
+  if (input.currentLocal) input.expectedSha = head;
+  if (head !== input.expectedSha) fail("HEAD does not equal the requested source SHA; no screenshot was made.");
   const tracked = [
     "EngineData/Frontend/RustApp/src",
     "EngineData/Frontend/RustApp/scripts/ui-preview",

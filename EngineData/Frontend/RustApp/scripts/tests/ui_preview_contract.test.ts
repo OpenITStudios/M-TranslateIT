@@ -141,6 +141,17 @@ test("render request is explicit, local-only and cannot silently install Playwri
   assert.doesNotMatch(renderer, /npm (?:ci|install)|npx|pnpm add|yarn add|curl -/);
 });
 
+test("quick preview pins the current Local HEAD without requiring a copied SHA", () => {
+  assert.match(renderer, /--current-local/);
+  assert.match(renderer, /result\.currentLocal === Boolean\(result\.expectedSha\)/);
+  const branchGate = renderer.indexOf('if (branch !== "Local")');
+  const pin = renderer.indexOf('if (input.currentLocal) input.expectedSha = head;');
+  const shaGate = renderer.indexOf('if (head !== input.expectedSha)');
+  assert.ok(branchGate >= 0 && pin > branchGate && shaGate > pin);
+  assert.equal(packageJson.scripts["preview:quick"], "node scripts/ui-preview/render.mjs --execute --current-local");
+  assert.equal(packageJson.scripts["preview:plan"], "node scripts/ui-preview/render.mjs --current-local");
+});
+
 test("two short package commands reuse existing tools without new dependencies", () => {
   assert.equal(packageJson.scripts["preview:typecheck"], "node scripts/ui-preview/typecheck.mjs");
   assert.equal(packageJson.scripts["preview:render"], "node scripts/ui-preview/render.mjs");

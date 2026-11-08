@@ -26,7 +26,9 @@
     "validate:runtime-api-usage": "node scripts/validate_runtime_api_usage.mjs",
     "validate:test-references": "node scripts/validate_test_reference_reachability.mjs",
     "validate:tauri-command-args": "node scripts/validate_tauri_command_args.mjs",
-    "validate:test-ci-routing": "node scripts/validate_test_ci_routing.mjs"
+    "validate:test-ci-routing": "node scripts/validate_test_ci_routing.mjs",
+    "preview:quick": "node scripts/ui-preview/render.mjs --execute --current-local",
+    "preview:plan": "node scripts/ui-preview/render.mjs --current-local"
   },
   "dependencies": {
     "@lucide/svelte": "^1.61.0",
