@@ -113,7 +113,18 @@ pub(super) fn reject_unsafe_realtime_item(
                 _ => Err("codex_realtime:item_type_unrecognized"),
             }
         }
-        _ => Ok(()),
+        // Canonical upstream app-server notifications for this thread.
+        // A new/misspelled method must be reviewed before Voice can consume it.
+        // The observer still owns identity, content and session validation.
+        "thread/realtime/started"
+        | "thread/realtime/sdp"
+        | "thread/realtime/transcript/delta"
+        | "thread/realtime/item/transcript/delta"
+        | "thread/realtime/transcript/done"
+        | "thread/realtime/outputAudio/delta"
+        | "thread/realtime/closed"
+        | "thread/realtime/error" => Ok(()),
+        _ => Err("codex_realtime:unrecognized_event"),
     }
 }
 
@@ -857,6 +868,46 @@ mod tests {
             o.observe("thread/realtime/itemAdded", &json!({"threadId":"thr_a"})),
             Err("codex_realtime:item_added_invalid")
         );
+    }
+
+    #[test]
+    fn realtime_ingress_allows_only_source_reviewed_notification_names() {
+        for name in [
+            "thread/realtime/started",
+            "thread/realtime/sdp",
+            "thread/realtime/transcript/delta",
+            "thread/realtime/item/transcript/delta",
+            "thread/realtime/transcript/done",
+            "thread/realtime/outputAudio/delta",
+            "thread/realtime/closed",
+            "thread/realtime/error",
+        ] {
+            assert_eq!(reject_unsafe_realtime_item(name, &json!({})), Ok(()));
+        }
+        for unexpected in [
+            "thread/realtime/appendAudio",
+            "thread/realtime/appendSpeech",
+            "thread/realtime/appendText",
+            "thread/realtime/start",
+            "thread/realtime/item/removed",
+            "thread/realtime/item/startedExtra",
+            "thread/realtime/unrecognized",
+        ] {
+            assert_eq!(
+                reject_unsafe_realtime_item(unexpected, &json!({})),
+                Err("codex_realtime:unrecognized_event")
+            );
+            let mut o = observer();
+            assert_eq!(
+                o.observe(unexpected, &json!({"threadId":"thr_a"})),
+                Err("codex_realtime:unrecognized_event")
+            );
+            assert_eq!(
+                o.observe("thread/realtime/item/completed",
+                    &item("late","sess_a","assistant","Late")),
+                Err("codex_realtime:session_revoked")
+            );
+        }
     }
 
     #[test]

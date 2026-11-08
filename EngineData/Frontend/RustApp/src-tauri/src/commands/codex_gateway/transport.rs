@@ -1101,6 +1101,31 @@ mod tests {
     }
 
     #[test]
+    fn owned_voice_jsonl_ingress_refuses_unknown_realtime_methods() {
+        for method in [
+            "thread/realtime/appendAudio",
+            "thread/realtime/start",
+            "thread/realtime/item/removed",
+            "thread/realtime/unrecognized",
+        ] {
+            let event = Inbound::Notification {
+                method: method.into(),
+                params: serde_json::json!({"threadId":"thread_1"}),
+            };
+            assert_eq!(
+                owned_realtime_inbound_allowed(&event, 10),
+                Err("codex_realtime:unrecognized_event")
+            );
+        }
+        let legitimate = Inbound::Notification {
+            method: "thread/realtime/transcript/delta".into(),
+            params: serde_json::json!({"threadId":"thread_1","role":"user","delta":"synthetic"}),
+        };
+        // Name admission is not authorization to speak or deliver media.
+        assert_eq!(owned_realtime_inbound_allowed(&legitimate, 10), Ok(()));
+    }
+
+    #[test]
     fn notification_dispatch_retains_only_account_changes_and_denies_voice() {
         assert_eq!(account_notification("account/updated"), Ok(true));
         assert_eq!(account_notification("account/rateLimits/updated"), Ok(true));
