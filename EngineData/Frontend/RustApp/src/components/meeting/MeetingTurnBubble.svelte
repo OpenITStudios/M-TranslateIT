@@ -33,7 +33,7 @@
         {#if onCopy}
           <button type="button" class="ti-chat-copy-button grid size-8 place-items-center rounded-md text-[var(--ti-text-muted)]"
             aria-label={`Copy bilingual phrase ${turn.sequence}`}
-            title="Copy source and translation" onclick={() => void onCopy()}>
+            title="Copy source and translation" onclick={() => void onCopy?.()}>
             {#if copied}<Check size={15}/>{:else}<Copy size={15}/>{/if}
           </button>
         {/if}

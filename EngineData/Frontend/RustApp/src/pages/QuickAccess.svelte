@@ -192,7 +192,7 @@
     cancelAutoClose();
     busy = true;
     errorMessage = "";
-    resultMessage = stop ? "Stopping microphone..." : "Starting microphone...";
+    resultMessage = stop ? "Stopping Meeting..." : "Starting microphone...";
     try {
       const result = await applicationRuntimeApi.dispatchIntent(
         stop ? "stop_meeting" : choice === "original" ? "start_original_meeting" : "start_meeting",
@@ -206,7 +206,7 @@
         errorMessage = result.message || "Meeting state was not confirmed. Try again.";
         resultMessage = "";
       } else {
-        resultMessage = stop ? "Microphone stopped." : "Microphone is live.";
+        resultMessage = stop ? "TranslateIT Meeting stopped." : "Microphone is live.";
         closeAfterSuccess();
       }
     } catch {
@@ -437,15 +437,15 @@
           <button type="button" class="ti-button ti-button-secondary min-h-10 px-2 text-[13px]"
             onclick={() => void cancelStopConfirmation()}>Cancel</button>
           <button type="button" class="ti-button ti-button-danger min-h-10 px-2 text-[13px]"
-            bind:this={confirmStopButton} disabled={busy} onclick={() => void meetingAction()}>{needsStop ? "Confirm Retry Stop" : "Confirm Stop"}</button>
+            bind:this={confirmStopButton} disabled={busy} onclick={() => void meetingAction()}>{needsStop ? "Confirm Retry Stop" : "Confirm Stop Meeting"}</button>
         </div>
       {:else}
         <button type="button" class={"ti-button min-h-10 px-3 text-[13px] " + (canStop ? "ti-button-danger" : "")}
           bind:this={primaryActionButton}
-          aria-label={canStop ? needsStop ? "Retry Stop" : "Stop microphone" : choice === "original" ? "Start Original Microphone" : "Start Translation"}
+          aria-label={canStop ? needsStop ? "Retry Stop" : "Stop Meeting" : choice === "original" ? "Start Original Microphone" : "Start Translation"}
           disabled={busy || (!canStart && !canStop)}
           onclick={() => void meetingAction()}>
-          {#if canStop}<Square size={13} aria-hidden="true" /> {needsStop ? "Retry Stop" : "Stop"}
+          {#if canStop}<Square size={13} aria-hidden="true" /> {needsStop ? "Retry Stop" : "Stop Meeting"}
           {:else}<Play size={13} aria-hidden="true" /> Start{/if}
         </button>
       {/if}

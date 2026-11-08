@@ -42,7 +42,7 @@ test("Quick Access is meeting-first and old command palette is gone", () => {
   assert.match(meetingPage, /MEETING_SOURCE_LABELS\.original/);
   assert.match(meetingPage, /MEETING_SOURCE_LABELS\.translateit/);
   assert.match(popup, /Floating Captions/);
-  assert.match(popup, /Confirm Stop/);
+  assert.match(popup, /Confirm Stop Meeting/);
   assert.doesNotMatch(popup, /Search tools and settings|Favorites|My Voice|Text Translation/);
   assert.match(popup, /runtimeApi\.selectMeetingAudioSource/);
   assert.match(popup, /applicationRuntimeApi\.dispatchIntent/);
@@ -123,6 +123,14 @@ test("Popup success from a hidden operation cannot dismiss a later invocation", 
 });
 
 
+test("Quick Access uses user-facing Stop Meeting without changing the Rust-owned stop command", () => {
+  assert.match(popup, /"Stop Meeting"/);
+  assert.match(popup, /Confirm Stop Meeting/);
+  assert.match(popup, /"Stopping Meeting\.\.\."/);
+  assert.match(popup, /stop \? "stop_meeting"/);
+  assert.doesNotMatch(popup, /Stop microphone|Stopping microphone/);
+});
+
 test("Quick Access includes a single native mute button independent of source selection", () => {
   const registry = source("src-tauri/src/commands/registry.rs");
   const nativeSource = source("src-tauri/src/commands/meeting_session/audio_source.rs");
@@ -180,7 +188,7 @@ test("Mute fits into the one bounded Quick Access popup without hiding Stop", ()
   const css = source("src/styles/quick-access.css");
   assert.match(css, /qa-panel/);
   assert.match(popup, /Microphone Mute/);
-  assert.match(popup, /Confirm Stop/);
+  assert.match(popup, /Confirm Stop Meeting/);
 });
 
 

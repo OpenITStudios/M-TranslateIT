@@ -210,6 +210,7 @@ test("bilingual bubble keeps statuses truthful, source and translation together,
   assert.match(bubble, /meetingTranslationDisplay\(turn\)/);
   assert.match(bubble, /meetingTime\(turn\.created_unix_ms\)/);
   assert.match(bubble, /\{#if onCopy\}/);
+  assert.match(bubble, /onCopy\?\.\(\)/);
   assert.match(bubble, /statusLabel/);
   assert.match(live, /onCopy=\{\(\) => void copyTurn\(turn\)\}/);
   assert.match(live, /followingLatest/);
