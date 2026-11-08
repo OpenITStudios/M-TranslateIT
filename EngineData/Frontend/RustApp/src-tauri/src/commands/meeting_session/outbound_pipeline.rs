@@ -437,6 +437,36 @@ pub(super) fn process_outbound_wav(
         };
     }
     let transcript = transcript.unwrap_or_default();
+    process_outbound_transcript(
+        generation,
+        session_id,
+        event_sequence,
+        utterance_id,
+        source_epoch,
+        speech_duration_ms,
+        &transcript,
+        timing,
+    )
+}
+
+fn process_outbound_transcript(
+    generation: u64,
+    session_id: &str,
+    event_sequence: u64,
+    utterance_id: u64,
+    source_epoch: u64,
+    speech_duration_ms: u64,
+    transcript: &str,
+    mut timing: OutboundTimingContext,
+) -> MeetingOutboundProcessResult {
+    if !super::local_translated_meeting_route_admitted() {
+        return unadmitted_outbound_result(generation, session_id, event_sequence, utterance_id);
+    }
+    if !generation_is_live(generation)
+        || !original_voice_pcm::translated_epoch_matches(generation, source_epoch)
+    {
+        return stale_outbound_result(generation, session_id, event_sequence, utterance_id);
+    }
     // Record recognized speech before requesting a translation. A failed model
     // must not erase what was already recognized from the Meeting transcript.
     let recorded = commit_meeting_turn(
@@ -447,7 +477,7 @@ pub(super) fn process_outbound_wav(
         "you",
         "id",
         "en",
-        &transcript,
+        transcript,
         "",
         Some("translating"),
         Some(timing.metrics.clone()),
@@ -489,7 +519,7 @@ pub(super) fn process_outbound_wav(
     let translation = send_helper_worker_task(
         "translate",
         json!({
-            "text": transcript.clone(),
+            "text": transcript,
             "source_language": "id",
             "target_language": "en",
             "max_new_tokens": 96,
@@ -614,7 +644,7 @@ pub(super) fn process_outbound_wav(
         "voice_actor_synthesize",
         json!({
             "text": translated_text.clone(),
-            "source_text": transcript.clone(),
+            "source_text": transcript,
             "source_speech_duration_ms": speech_duration_ms,
             "output_path": requested_tts_path,
             "expected_actor_token": actor_token,

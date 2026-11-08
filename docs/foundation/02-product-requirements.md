@@ -237,13 +237,19 @@ Physical microphone, incoming Meeting Sound and calling-app microphone/speaker r
 **MUST:** When `TranslateIT Audio` is selected, output only translated English speech from the selected Meeting voice. Raw physical microphone speech must never be an automatic fallback for a failed translation. When `Original Microphone` is explicitly selected, send raw mic PCM directly to the same virtual microphone without AI, ASR, translation, TTS or discretionary processing. The two sources must not be mixed.
 
 ### PR-071 — Physical microphone
-**MUST:** Physical microphone remain outbound ASR capture source.
+**MUST:** Physical microphone remain the outbound ASR capture source for the local microphone route. A Meeting explicitly started with Dictate Text receives its outbound source as text under PR-072B.
 
 ### PR-072 — Meeting Microphone
 **MUST:** Provide a supported Windows microphone endpoint for the calling application. The native product target is one branded capture endpoint; until that target passes native acceptance, the supported VB-CABLE recording endpoint satisfies this capability without being renamed as TranslateIT.
 
 ### PR-072A — Simple outbound source selection
 **MUST:** One virtual Meeting microphone remain selected in the calling application while users choose between `Original Microphone` and `TranslateIT Audio` inside TranslateIT. Original must be able to Start with only an available physical mic and supported virtual route, without loading translation models. Translation requires its existing AI and selected voice verification. Changing sources during a Live session must reject stale queued speech and release the previous source safely; a failed translation never silently sends Original audio. The selector is not a general audio mixer, device picker, speech effect, or separate Meeting session owner.
+
+### PR-072B — Dictate Text into Meeting
+
+**MUST:** Require the user to select Dictate Text in TranslateIT before Start and to review and submit the Indonesian Dictate transcript in Codex. A local MCP tool may then hand off that transcript as text. TranslateIT performs Indonesian-to-English translation and speech synthesis locally and delivers the result through the active Meeting output. The Dictate Text source does not open TranslateIT's outbound microphone capture and cannot change to or from microphone input while Live.
+
+**MUST:** Admit only a bounded, non-empty transcript from a locally paired sender bound to that Meeting generation and source epoch. Reject duplicate submission identifiers and stale or muted submissions. Stop revokes pairing and interrupts pending work before acknowledging completion. The receiver must not expose a standalone translation, session control, arbitrary execution, or raw-audio operation. Text submitted through Codex follows its existing usage and privacy controls. TranslateIT does not send audio, transcripts, or archives to Codex and requires no API key or billing integration for this source.
 
 ### PR-073 — Missing route
 **MUST:** Missing route block required outbound Start/delivery with clear Setup Needed recovery; stale queued speech is not dumped after recovery.

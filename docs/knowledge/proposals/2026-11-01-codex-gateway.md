@@ -1234,3 +1234,72 @@ Codex diagnostics-only acceptance. Native Windows/audio/install proof
 remains UNKNOWN until that separately authorized integrated phase runs.
 Do not dispatch paused CI, request incremental PC tests, activate
 Codex Voice or use paid inference.
+
+## Direct audio route research — 2026-11-08 (STATIC_SOURCE)
+
+The required flow starts from TranslateIT and returns final text for the existing
+Meeting voice without opening or operating Codex UI. The pinned Codex source
+exposes an experimental `[realtime] type = "transcription"` setting. Its native
+WebSocket path resolves an API key, while WebRTC rejects transcription mode and
+requires a conversational V1 or V3 session. V3 defaults to `gpt-live-1-codex`.
+An OpenAI contributor confirmed that model for conversational ChatGPT-authenticated
+WebRTC in [#40140](https://github.com/openai/codex/issues/40140). That path can
+route a speech handoff into an agent before emitting the event to the client.
+A local patch could prevent that local dispatch, but would leave backend mode
+support, subscription access, and final transcript attribution unverified.
+[Transport and mode checks](https://github.com/openai/codex/blob/748ab55ca7de0b647d9a7a9d9a8e70e00f28666d/codex-rs/core/src/realtime_conversation.rs#L1480-L1637)
+· [Handoff ordering and key resolution](https://github.com/openai/codex/blob/748ab55ca7de0b647d9a7a9d9a8e70e00f28666d/codex-rs/core/src/realtime_conversation.rs#L1947-L2100).
+
+The official third-party Sign in with ChatGPT preview documents text inference
+and excludes audio input and transcription. Desktop Dictate produces a composer
+draft. The generated request schema for installed Codex CLI 0.167.0-alpha.3.2
+listed 180 methods with experimental methods included, with no Dictate request.
+[#59723](https://github.com/openai/codex/issues/59723) and
+[#57124](https://github.com/openai/codex/issues/57124) are open reports and
+feature requests. They do not establish a supported release or account
+entitlement. [Sign-in preview limits](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
+· [Desktop Dictate](https://learn.chatgpt.com/docs/prompting#use-voice-dictation).
+
+If the requirement is zero **additional charges** and the engine may change,
+eligible ChatGPT Pro or Business owners can claim subscription-included credits
+for a linked API organization. The dedicated Realtime Translation or
+Transcription API requires a project API key. Codex API-key usage is excluded
+from the credit benefit. A candidate with zero purchased credits and Auto
+Recharge disabled should stop at `429 credit_balance_exhausted`. Account
+eligibility, balance, and endpoint access need confirmation. This is a separate
+engine and a change to the current cloud-inference policy. The existing Local
+pipeline remains the offline option if the engine requirement changes.
+[Credit coverage and exhaustion](https://developers.openai.com/api/docs/guides/chatgpt-api-credits#what-the-credits-cover)
+· [Realtime Translation](https://developers.openai.com/api/docs/guides/realtime-translation)
+· [Realtime Transcription](https://developers.openai.com/api/docs/guides/realtime-transcription).
+
+The owner permits only ordinary Codex usage included in the ChatGPT plan.
+API Platform credits, API keys, purchased Codex credits and automatic top-ups
+are outside scope. If ordinary usage cannot be verified or is exhausted, the
+Codex route must stop without switching billing sources.
+
+The pinned App Server account schema exposes `ordinaryUsageAllowed` on
+`account/rateLimits/read`. The existing gateway accepts only an explicit
+`true` as evidence of account-level permission. A future audio session also
+needs a server-enforced included-usage boundary for its entire lifetime.
+An account snapshot or remaining percentage cannot establish how a Voice
+session will be charged if the allowance runs out mid-session.
+[Account rate-limit schema](https://github.com/openai/codex/blob/748ab55ca7de0b647d9a7a9d9a8e70e00f28666d/codex-rs/app-server-protocol/src/protocol/v2/account.rs#L361-L375).
+
+For a credit-funded candidate that keeps local GPT-SoVITS, prefer
+`gpt-live-transcribe`: the existing speech boundary commits the utterance,
+matches the completed transcript by provider `item_id`, and sends that final
+text to a bounded translation stage before TTS. The public Realtime Translation
+events expose streaming transcript deltas with optional alignment metadata,
+without a documented final transcript event for each utterance. Feeding those
+deltas to the current final-turn TTS would need a separately proven finalization
+contract. [Committed transcription events](https://developers.openai.com/api/docs/guides/realtime-transcription#handle-transcript-events)
+· [Realtime Translation server events](https://developers.openai.com/api/reference/resources/realtime/translation-server-events).
+
+Keep Codex audio sealed. The shortest acceptance for a future supported Codex
+transcription mode is one authorized run using two public Indonesian utterances,
+each returning one distinct final transcript without agent execution or UI
+interaction, then a Stop test during an in-flight utterance. Verify account
+entitlement before sending audio. Only after that proof should the existing
+translation, TTS, and independent Meeting receiver acceptance run. No live
+account, microphone, UI automation, or receiver checks were executed here.
