@@ -249,7 +249,8 @@
           </button>
         </div>
 
-        <div class="grid grid-cols-1 gap-3 px-5 pb-5 lg:grid-cols-2" aria-busy={devicesLoading || deviceSaving}>
+        <div class="grid grid-cols-1 gap-3 px-5 pb-5 lg:grid-cols-2" aria-busy={devicesLoading || deviceSaving}
+          role="group" aria-label="Microphone input and incoming meeting sound device selection">
           <label class="grid min-w-0 content-start gap-2 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] p-4">
             <span class="ti-field-label">Microphone Input</span>
             <select class="ti-field min-h-10 px-3" disabled={meetingResourcesLocked || devicesLoading || deviceSaving || !devices?.ok} value={currentDevice("microphone")} onchange={(event) => void changeDevice("microphone", selectValue(event))}>
@@ -285,7 +286,8 @@
           </p>
         {/if}
 
-        <div class="mx-5 mb-5 flex flex-wrap items-start justify-between gap-4 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] p-4" aria-busy={routeLoading}>
+        <div class="mx-5 mb-5 flex flex-wrap items-start justify-between gap-4 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] p-4" aria-busy={routeLoading}
+          role="group" aria-label="Virtual microphone and calling app routing">
           <div class="min-w-0">
             <span class="ti-field-label">Virtual Microphone / Call Routing</span>
             <strong class="mt-1.5 block break-words text-[13px] font-semibold leading-5">{meetingMicrophoneDevice}</strong>
