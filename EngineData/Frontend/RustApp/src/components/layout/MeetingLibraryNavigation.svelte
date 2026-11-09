@@ -6,15 +6,13 @@
 
   let {
     library, selectedSessionId, liveSessionId = null, selectedSurface = "recent",
-    viewAllSelected = false, onOpenSession, onViewAll, onChange, onDeleteSession,
+    onOpenSession, onChange, onDeleteSession,
   }: {
     library: MeetingLibrary | null;
     selectedSessionId: string | null;
     liveSessionId?: string | null;
     selectedSurface?: "recent" | "project";
-    viewAllSelected?: boolean;
     onOpenSession: (sessionId: string, surface: "recent" | "project") => void;
-    onViewAll: () => void;
     onChange: (change: Omit<MeetingLibraryChange, "expectedRevision">) => Promise<boolean>;
     onDeleteSession: (sessionId: string) => Promise<boolean>;
   } = $props();
