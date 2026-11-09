@@ -26,6 +26,8 @@
   let confirmingDelete = $state<string | null>(null);
   let busy = $state(false);
   let collapsed = $state<Record<string, boolean>>({});
+  let actionSurface = $state<"recent" | "project">("recent");
+  const deletingProject = $derived(Boolean(confirmingDelete && library?.projects.some(project => project.project_id === confirmingDelete)));
 
   // The native archive list is newest-first. Show ALL pins plus five ordinary
   // recent sessions; never let the pin quota hide an ordinary recent meeting.
@@ -55,17 +57,20 @@
     clearMenus();
     collapsed = { ...collapsed, [projectId]: !collapsed[projectId] };
   }
-  function openMove(sessionId: string): void {
+  function openMove(sessionId: string, surface: "recent" | "project"): void {
     clearMenus();
     moving = sessionId;
+    actionSurface = surface;
   }
-  function requestDelete(id: string): void {
+  function requestDelete(id: string, surface: "recent" | "project" = "recent"): void {
     clearMenus();
     confirmingDelete = id;
+    actionSurface = surface;
   }
-  function openEdit(kind: Edit["kind"], id: string, previous = ""): void {
+  function openEdit(kind: Edit["kind"], id: string, previous = "", surface: "recent" | "project" = "recent"): void {
     clearMenus();
     edit = { kind, id };
+    actionSurface = surface;
     value = previous;
   }
   function handleEscape(event: KeyboardEvent): void {
@@ -97,7 +102,7 @@
     if (busy || confirmingDelete !== id) return;
     busy = true;
     try {
-      const ok = id.startsWith("project_")
+      const ok = library?.projects.some(project => project.project_id === id)
         ? await onChange({ action: "delete_project", projectId: id })
         : await onDeleteSession(id);
       if (ok) clearMenus();
@@ -109,7 +114,7 @@
 </script>
 
 {@snippet actionEditor(target: string)}
-  {#if edit && (edit.kind === "create_project" ? target === "create_project" : edit.kind === "rename_project" ? target === "project:" + edit.id : target === "meeting:" + edit.id)}
+  {#if edit && (edit.kind === "create_project" ? target === "create_project" : edit.kind === "rename_project" ? target === "project:" + edit.id : target === actionSurface + ":" + edit.id)}
     <form class="ti-library-editor" onsubmit={(event) => { event.preventDefault(); void commitEdit(); }}>
       <label for="ti-library-edit-name" class="text-[12px] font-semibold">
         {edit.kind === "create_project" ? "New Project" : edit.kind === "rename_project" ? "Rename Project" : "Rename Meeting"}
@@ -122,7 +127,7 @@
       </div>
     </form>
   {/if}
-  {#if moving && target === "meeting:" + moving}
+  {#if moving && target === actionSurface + ":" + moving}
     <div class="ti-library-editor" role="group" aria-label="Move Meeting to Project">
       <p class="m-0 text-[12px] font-semibold">Move Meeting to Project</p>
       <button class="ti-library-small w-full text-left" disabled={busy}
@@ -134,11 +139,11 @@
       <button class="ti-library-small w-full text-left" onclick={() => moving = null}>Cancel</button>
     </div>
   {/if}
-  {#if confirmingDelete && target === (confirmingDelete.startsWith("project_") ? "project:" : "meeting:") + confirmingDelete}
+  {#if confirmingDelete && target === (deletingProject ? "project:" : actionSurface + ":") + confirmingDelete}
     <div class="ti-library-editor border-[var(--ti-danger-border)]" role="group" aria-label="Confirm deletion">
       <p class="m-0 text-[12px] font-semibold text-[var(--ti-danger)]">Confirm deletion</p>
       <p class="m-0 text-[12px] leading-5 text-[var(--ti-danger)]">
-        {confirmingDelete.startsWith("project_")
+        {deletingProject
           ? "Delete this category? Meetings will become Uncategorized."
           : "Delete this Meeting's local transcript? Exported HTML files remain."}
       </p>
@@ -197,11 +202,11 @@
             <button onclick={() => void modify({ action: "pin_meeting", sessionId: session.session_id, pinned: !session.pinned })}>
               {#if session.pinned}<PinOff size={14}/>{:else}<Pin size={14}/>{/if} {session.pinned ? "Unpin Meeting" : "Pin Meeting"}
             </button>
-            <button onclick={() => openMove(session.session_id)}><FolderInput size={14}/> Move to Project</button>
-            <button onclick={() => requestDelete(session.session_id)}><Trash2 size={14}/> Delete Meeting</button>
+            <button onclick={() => openMove(session.session_id, "recent")}><FolderInput size={14}/> Move to Project</button>
+            <button onclick={() => requestDelete(session.session_id, "recent")}><Trash2 size={14}/> Delete Meeting</button>
           </div>
         {/if}
-        {@render actionEditor("meeting:" + session.session_id)}
+        {@render actionEditor("recent:" + session.session_id)}
       {/each}
     {/if}
   </div>
@@ -267,22 +272,22 @@
         </div>
         {#if menu === "project:" + session.session_id && library.ok}
           <div class="ti-library-menu ml-5">
-            <button type="button" onclick={() => openEdit("rename_meeting", session.session_id, session.display_name)}>
+            <button type="button" onclick={() => openEdit("rename_meeting", session.session_id, session.display_name, "project")}>
               <Pencil size={14}/> Rename
             </button>
             <button type="button" onclick={() => void modify({ action: "pin_meeting", sessionId: session.session_id, pinned: !session.pinned })}>
               {#if session.pinned}<PinOff size={14}/>{:else}<Pin size={14}/>{/if}
               {session.pinned ? "Unpin Meeting" : "Pin Meeting"}
             </button>
-            <button type="button" onclick={() => openMove(session.session_id)}>
+            <button type="button" onclick={() => openMove(session.session_id, "project")}>
               <FolderInput size={14}/> Move to Project
             </button>
-            <button type="button" onclick={() => requestDelete(session.session_id)}>
+            <button type="button" onclick={() => requestDelete(session.session_id, "project")}>
               <Trash2 size={14}/> Delete Meeting
             </button>
           </div>
         {/if}
-        {@render actionEditor("meeting:" + session.session_id)}
+        {@render actionEditor("project:" + session.session_id)}
       {/each}
     {/if}
   {/each}
