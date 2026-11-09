@@ -12,11 +12,12 @@
 
   let {
     section = "live", snapshot, meetingStatus, meetingTurns, actionBusy = false, previewReadOnly = false,
-    selectedSession = null, onLibraryRefresh, onMeetingAction, onRefresh, onNavigate,
+    selectedSession = null, onLibraryRefresh, onOpenSession, onMeetingAction, onRefresh, onNavigate,
   }: {
     section?: "live" | "last" | "saved" | "session";
     selectedSession?: MeetingLibrarySession | null;
     onLibraryRefresh?: () => void | Promise<void>;
+    onOpenSession?: (id: string) => void;
     snapshot: ProductRuntimeSnapshot;
     meetingStatus: MeetingSessionStatus | null;
     meetingTurns: MeetingCommittedTurnsSnapshot | null;
@@ -188,7 +189,7 @@
       Choose a saved meeting to read, export, or delete its local archive.
     </p>
     <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-7">
-      <MeetingTranscriptExport hasSession={meeting.hasSession}
+      <MeetingTranscriptExport hasSession={meeting.hasSession} {onOpenSession}
         onNotice={(message) => void onRefresh(message)}
         onDeleted={() => { savedDeletionRevision += 1; void onLibraryRefresh?.(); }} />
     </div>
