@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { Check, Copy, Download, Eye, MoreHorizontal, RefreshCw, AlertTriangle, Hash, Search } from "@lucide/svelte";
   import { runtimeApi, type MeetingCommittedTurnsSnapshot, type MeetingLibrarySession } from "../../app/bridge/runtimeApi";
   import { languageName } from "../../app/shared/state";
@@ -25,6 +25,9 @@
   let htmlPreviewRevision = 0;
   let previewBusy = $state(false);
   let actionsOpen = $state(false);
+  let actionsPosition = $state("visibility:hidden");
+  let actionsTrigger = $state<HTMLButtonElement | null>(null);
+  let actionsPanel = $state<HTMLDivElement | null>(null);
   let htmlPreview = $state<{ html: string; count: number } | null>(null);
   let exportResult = $state<{ path: string; count: number; incomplete: boolean } | null>(null);
   let query = $state("");
@@ -35,6 +38,58 @@
   let appearance = $state<TranscriptPreferences>({ ...DEFAULT_TRANSCRIPT_PREFERENCES });
   let readRevision = 0;
 
+  function closeActions(restoreFocus = false): void {
+    if (!actionsOpen) return;
+    actionsOpen = false;
+    actionsPosition = "visibility:hidden";
+    if (restoreFocus) void tick().then(() => actionsTrigger?.focus());
+  }
+  async function toggleActions(): Promise<void> {
+    if (actionsOpen) { closeActions(true); return; }
+    actionsOpen = true;
+    actionsPosition = "visibility:hidden";
+    await tick();
+    if (!actionsOpen || !actionsTrigger || !actionsPanel) return;
+    const rect = actionsTrigger.getBoundingClientRect();
+    const height = actionsPanel.getBoundingClientRect().height;
+    const width = Math.min(220, Math.max(160, window.innerWidth - 16));
+    const usableHeight = Math.max(0, window.innerHeight - 16);
+    const shownHeight = Math.min(height, usableHeight);
+    const above = rect.top - 8;
+    const below = window.innerHeight - rect.bottom - 8;
+    const preferAbove = below < shownHeight && above > below;
+    const proposedTop = preferAbove ? rect.top - shownHeight - 6 : rect.bottom + 6;
+    const top = Math.max(8, Math.min(window.innerHeight - shownHeight - 8, proposedTop));
+    const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width));
+    actionsPosition = `top:${Math.round(top)}px;left:${Math.round(left)}px;width:${width}px;max-height:${Math.round(usableHeight)}px;overflow-y:auto`;
+    await tick();
+    if (actionsOpen) actionsPanel?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+  }
+  onMount(() => {
+    function onKey(event: KeyboardEvent): void {
+      if (event.key === "Escape" && actionsOpen) {
+        event.preventDefault();
+        closeActions(true);
+      }
+    }
+    function onPointer(event: PointerEvent): void {
+      if (!actionsOpen || !(event.target instanceof Node)) return;
+      if (actionsTrigger?.contains(event.target) || actionsPanel?.contains(event.target)) return;
+      closeActions();
+    }
+    function onScroll(): void { closeActions(); }
+    function onResize(): void { closeActions(); }
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("pointerdown", onPointer, true);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("pointerdown", onPointer, true);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onResize);
+    };
+  });
   onMount(() => {
     if (previewReadOnly) return;
     appearance = readTranscriptPreferences();
@@ -52,6 +107,7 @@
     htmlPreview = null;
     previewBusy = false;
     actionsOpen = false;
+    actionsPosition = "visibility:hidden";
     exporting = false;
     if (!previewReadOnly) void load(id);
   });
@@ -154,13 +210,15 @@
           <Search size={16} class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ti-text-soft)]" aria-hidden="true"/>
           <input class="ti-field min-h-9 w-full pl-10 pr-3 text-[13px]" bind:value={query} aria-label="Search this Meeting transcript" placeholder="Search conversation..."/>
         </label>
-        <details class="relative shrink-0" bind:open={actionsOpen}>
-          <summary class="ti-button ti-button-secondary flex min-h-9 cursor-pointer list-none items-center gap-2 px-3 text-[12px]"
-            aria-label="More conversation actions" aria-expanded={actionsOpen}>
+        <div class="relative shrink-0">
+          <button type="button" bind:this={actionsTrigger} class="ti-button ti-button-secondary flex min-h-9 items-center gap-2 px-3 text-[12px]"
+            aria-label="More conversation actions" aria-haspopup="true" aria-expanded={actionsOpen}
+            onclick={() => void toggleActions()}>
             <MoreHorizontal size={16} aria-hidden="true"/> More
-          </summary>
-          <div class="absolute right-0 top-full z-30 mt-2 grid w-[min(220px,75vw)] gap-1 rounded-[var(--ti-radius-md)] border border-[var(--ti-border-strong)] bg-[var(--ti-sidebar)] p-1 shadow-lg"
-            role="group" aria-label="Saved conversation actions">
+          </button>
+          {#if actionsOpen}
+          <div bind:this={actionsPanel} class="fixed z-50 grid gap-1 rounded-[var(--ti-radius-md)] border border-[var(--ti-border-strong)] bg-[var(--ti-sidebar)] p-1 shadow-lg"
+            style={actionsPosition} role="group" aria-label="Saved conversation actions">
             <button type="button" class="ti-button ti-button-secondary min-h-9 w-full justify-start px-3 text-[12px]"
               disabled={loading} onclick={() => { actionsOpen = false; void load(session.session_id); }} aria-label="Refresh saved Meeting">
               <RefreshCw size={14} aria-hidden="true"/> Refresh
@@ -180,7 +238,8 @@
               <Download size={14} aria-hidden="true"/> {exporting ? "Exporting..." : "Export HTML"}
             </button>
           </div>
-        </details>
+          {/if}
+        </div>
       </div>
     </div>
     {#if htmlPreview}
