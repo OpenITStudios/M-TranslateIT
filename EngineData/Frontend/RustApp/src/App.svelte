@@ -175,7 +175,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     // Project category deletion / moving to Uncategorized must not leave
     // an active highlight in a Project that no longer owns this session.
     if (current.ok && selectedSurface === "project" && selectedSessionId
-      && !current.sessions.some(s => s.session_id === selectedSessionId && s.project_id !== null)) {
+      && !current.sessions.some(s => s.session_id === selectedSessionId)) {
       selectedSurface = "recent";
     }
   }
