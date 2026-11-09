@@ -127,7 +127,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
       setKnownNotice("Stop the current My Voice recording before leaving My Voice.", "attention");
       return;
     }
-    if (next === "meeting" && snapshot?.meeting.live) {
+    if (next === "meeting" && (snapshot?.meeting.live || snapshot?.meeting.canStop || snapshot?.meeting.hasSession || snapshot?.meeting.lifecycle === "cleanup_incomplete")) {
       // Global Live/Stop Needed return always opens the native active owner.
       meetingSection = "live";
       selectedSessionId = meetingStatus?.session_id ?? null;
