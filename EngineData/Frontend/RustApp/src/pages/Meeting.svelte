@@ -185,7 +185,7 @@
   {/if}
 
   {#if section === "live" || meeting.hasSession || meeting.canStop}
-    <footer class="ti-call-dock flex min-h-[70px] shrink-0 items-center justify-center px-5 py-3"
+    <footer class="ti-call-dock flex h-[var(--ti-bottom-dock-height)] min-h-[var(--ti-bottom-dock-height)] shrink-0 items-center justify-center px-5 py-3"
       aria-label="Meeting main action">
       <button type="button"
         class={"ti-button min-h-11 min-w-[172px] px-5 " + (primaryControl.action === "stop" ? "ti-call-stop" : "")}
