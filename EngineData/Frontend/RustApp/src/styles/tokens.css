@@ -47,6 +47,8 @@
 
   /* Desktop composition */
   --ti-sidebar-width: 248px;
+  /* Shared sidebar footer and Meeting action dock seam. */
+  --ti-bottom-dock-height: 70px;
   --ti-content-width: 1020px;
   --ti-page-padding-x: clamp(20px, 2.2vw, 32px);
   --ti-page-padding-y: 32px;
