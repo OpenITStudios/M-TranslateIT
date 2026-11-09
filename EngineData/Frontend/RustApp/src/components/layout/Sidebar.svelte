@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AudioLines, Captions, Mic, Settings, Palette, ArrowLeft, Play } from "@lucide/svelte";
+  import { AudioLines, Captions, Mic, Settings, Palette, ArrowLeft, Hash } from "@lucide/svelte";
   import type { AppRoute } from "../../app/shared/types";
   import type { RuntimeSettings } from "../../app/shared/types";
   import SidebarUserControls from "./SidebarUserControls.svelte";
@@ -68,7 +68,7 @@
   <button
     type="button"
     class="ti-sidebar-brand flex min-h-[66px] w-full items-center gap-3 border-b border-[var(--ti-border)] px-4 text-left hover:bg-[var(--ti-surface-hover)]"
-    title="Back to Translate"
+    title="Open Live Meeting"
     onclick={() => onMeetingSection("live")}
   >
     <TranslateITMark size={38} />
@@ -95,9 +95,9 @@
       <p class="ti-channel-heading">HOME</p>
       <button type="button" class={"ti-channel-item w-full " + (startSelected ? "is-active" : "")}
         aria-current={startSelected ? "page" : undefined}
-        aria-label="Start Meeting" onclick={() => onMeetingSection("live")}>
-        <Play size={18} strokeWidth={1.8} aria-hidden="true"/>
-        <span>Start Meeting</span>
+        aria-label="Live Meeting workspace" onclick={() => onMeetingSection("live")}>
+        <Hash size={18} strokeWidth={1.8} aria-hidden="true"/>
+        <span>Live Meeting</span>
       </button>
       <button type="button" class={"ti-channel-item w-full " + (active === "my-voice" ? "is-active" : "")}
         aria-current={active === "my-voice" ? "page" : undefined}
