@@ -34,8 +34,9 @@
     onNotice: (message: string) => void;
   } = $props();
 
-  const meetingNeedsAttention = $derived(snapshot.meeting.hasSession && !snapshot.meeting.live
+  const meetingNeedsAttention = $derived((snapshot.meeting.hasSession && !snapshot.meeting.live && !snapshot.meeting.busy)
     || snapshot.meeting.lifecycle === "cleanup_incomplete");
+  const meetingStopNeeded = $derived(snapshot.meeting.lifecycle === "cleanup_incomplete");
 
   const noticeSurface = $derived(
     notice.kind === "error"
@@ -205,7 +206,7 @@
     {#if meetingNeedsAttention || (snapshot.meeting.live && !(route === "meeting" && meetingSection === "live"))}
       <button type="button" class="flex min-h-9 shrink-0 items-center gap-2 rounded-[var(--ti-radius-md)] border border-[var(--ti-warning-border)] px-3 text-[12px] text-[var(--ti-warning)]"
         title="Return to active Meeting or Retry Stop" onclick={() => onNavigate("meeting")}>
-        {meetingNeedsAttention ? "Stop Needed" : "Live Meeting"}
+        {meetingStopNeeded ? "Stop Needed" : meetingNeedsAttention ? "Check Meeting" : "Live Meeting"}
       </button>
     {/if}
   </div>
