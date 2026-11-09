@@ -55,6 +55,9 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
   let route=$state<AppRoute>("meeting");
   let meetingSection = $state<"live" | "last" | "saved" | "session">("live");
   let selectedSessionId = $state<string | null>(null);
+  // The same archive may appear under Recent and a Project. Highlight only
+  // the location the user actually opened, not both copies of its ID.
+  let selectedSurface = $state<"recent" | "project">("recent");
   let library = $state<MeetingLibrary | null>(null);
   let libraryBusy = $state(false);
   let settingsTab = $state<"meeting" | "translation" | "appearance" | "advanced">("meeting");
@@ -128,11 +131,12 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
       // Global Live/Stop Needed return always opens the native active owner.
       meetingSection = "live";
       selectedSessionId = meetingStatus?.session_id ?? null;
+      selectedSurface = "recent";
     }
     route = next;
   }
 
-  function openMeetingSession(id: string): void {
+  function openMeetingSession(id: string, source: "recent" | "project" = "recent"): void {
     if (voiceRecordingLock && route !== "meeting") {
       setKnownNotice("Stop the current My Voice recording before leaving My Voice.", "attention");
       return;
@@ -140,9 +144,11 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     // A running session is always rendered from the native Live owner.
     if (snapshot?.meeting.live && meetingStatus?.session_id === id) {
       selectedSessionId = id;
+      selectedSurface = source;
       meetingSection = "live";
     } else if (library?.sessions.some(s => s.session_id === id)) {
       selectedSessionId = id;
+      selectedSurface = source;
       meetingSection = "session";
     }
     route = "meeting";
@@ -158,13 +164,26 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
       return;
     }
     meetingSection = next;
-    if (next !== "session") selectedSessionId = next === "live" ? meetingStatus?.session_id ?? null : null;
+    if (next !== "session") {
+      selectedSessionId = next === "live" ? meetingStatus?.session_id ?? null : null;
+      selectedSurface = "recent";
+    }
     route = "meeting";
+  }
+
+  function reconcileSelectedMeetingLocation(current: MeetingLibrary): void {
+    // Project category deletion / moving to Uncategorized must not leave
+    // an active highlight in a Project that no longer owns this session.
+    if (current.ok && selectedSurface === "project" && selectedSessionId
+      && !current.sessions.some(s => s.session_id === selectedSessionId && s.project_id !== null)) {
+      selectedSurface = "recent";
+    }
   }
 
   async function refreshMeetingLibrary(): Promise<void> {
     const result = await runtimeApi.listMeetingLibrary();
     library = result;
+    reconcileSelectedMeetingLocation(result);
   }
 
   async function changeMeetingLibrary(change: Omit<MeetingLibraryChange, "expectedRevision">): Promise<boolean> {
@@ -181,6 +200,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
         return false;
       }
       library = result;
+      reconcileSelectedMeetingLocation(result);
       setNotice("Meeting library updated.");
       return true;
     } catch {
@@ -202,6 +222,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
       }
       if (selectedSessionId === id) {
         selectedSessionId = null;
+        selectedSurface = "recent";
         meetingSection = "saved";
       }
       setNotice("Saved Meeting deleted.");
@@ -263,6 +284,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
       void refreshMeetingLibrary();
       if (route === "meeting" && meetingSection === "live" && next.meeting.live) {
         selectedSessionId = next.meetingSession?.session_id ?? null;
+        selectedSurface = "recent";
       }
     }
     if (!next.meeting.hasSession || result.previousSessionId !== result.nextSessionId) {
@@ -392,11 +414,13 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
       applyMeetingStatus(result.status, resultNotice, kind);
       if (result.ok && action === "start" && result.meeting.live && result.status.session_id) {
         selectedSessionId = result.status.session_id;
+        selectedSurface = "recent";
         meetingSection = "live";
         route = "meeting";
       } else if (result.ok && action === "stop" && result.meeting.lifecycle === "idle"
         && !result.meeting.hasSession && previousSessionId) {
         selectedSessionId = previousSessionId;
+        selectedSurface = "recent";
         meetingSection = "session";
         route = "meeting";
       }
@@ -685,7 +709,8 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
       voiceSelectionLocked={voiceRecordingLock || snapshot.voiceBuildActive || snapshot.resources.audio_locked}
       onNavigate={navigate}
       onMeetingSection={openMeetingSection}
-      {library} {selectedSessionId}
+      {library} {selectedSessionId} {selectedSurface}
+      liveSessionId={snapshot.meeting.live ? meetingStatus?.session_id ?? null : null}
       onOpenSession={openMeetingSession}
       onLibraryChange={changeMeetingLibrary}
       onDeleteSession={deleteMeetingChannel}

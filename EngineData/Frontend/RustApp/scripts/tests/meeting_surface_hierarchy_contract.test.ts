@@ -150,10 +150,12 @@ test("Discord-inspired shell uses exactly one sidebar, channel navigation, and b
   assert.equal((app.match(/<Sidebar\b/g) ?? []).length, 1);
   assert.match(app, /meetingSection = \$state<"live" \| "last" \| "saved" \| "session">/);
   assert.match(sidebar, /onMeetingSection\("live"\)/);
-  assert.match(sidebar, /<p class="ti-channel-heading">TRANSLATE<\/p>/);
-  assert.match(sidebar, /label: "Start"/);
-  assert.match(sidebar, /Last Meeting/);
-  assert.match(sidebar, /Saved Meeting/);
+  assert.match(sidebar, /<p class="ti-channel-heading">HOME<\/p>/);
+  assert.match(sidebar, /aria-label="Start Meeting"/);
+  assert.match(sidebar, /<span>My Voice<\/span>/);
+  assert.doesNotMatch(sidebar, /<p class="ti-channel-heading">VOICE<\/p>/);
+  assert.doesNotMatch(sidebar, /label: "Last Meeting"|label: "Saved Meeting"/);
+  assert.match(sidebar, /onViewAll=\{\(\) => onMeetingSection\("saved"\)\}/);
   assert.match(sidebar, /<SidebarUserControls/);
   const userControls = readFileSync(new URL("../../src/components/layout/SidebarUserControls.svelte", import.meta.url), "utf8");
   assert.match(userControls, /aria-label="Open Settings"/);
@@ -329,6 +331,39 @@ test("Ready state uses one Start action and a concise call setup instruction", (
   assert.equal((meeting.match(/onclick=\{handlePrimary\}/g) ?? []).length, 1);
   assert.doesNotMatch(live, /Meeting audio capture active · speakers not identified/);
   assert.doesNotMatch(live, /Meeting audio is combined; individual speakers are not identified/);
+});
+
+test("HOME only shows Start Meeting and My Voice, with Recent and Projects below", () => {
+  const sidebar = readFileSync(new URL("../../src/components/layout/Sidebar.svelte", import.meta.url), "utf8");
+  const navigation = readFileSync(new URL("../../src/components/layout/MeetingLibraryNavigation.svelte", import.meta.url), "utf8");
+  const app = readFileSync(new URL("../../src/App.svelte", import.meta.url), "utf8");
+  assert.match(sidebar, /<p class="ti-channel-heading">HOME<\/p>/);
+  assert.match(sidebar, /aria-label="Start Meeting"/);
+  assert.match(sidebar, /<span>My Voice<\/span>/);
+  assert.doesNotMatch(sidebar, /<p class="ti-channel-heading">VOICE<\/p>/);
+  assert.match(navigation, /RECENT MEETINGS/);
+  assert.match(navigation, /PROJECTS/);
+  assert.match(navigation, /View All/);
+  assert.match(navigation, /recentMeetings\(library\?\.sessions \?\? \[\]\)/);
+  assert.match(navigation, /pinnedFirst\(projectSessions\)/);
+  assert.match(sidebar, /onViewAll=\{\(\) => onMeetingSection\("saved"\)\}/);
+  assert.match(app, /liveSessionId=\{snapshot\.meeting\.live \? meetingStatus\?\.session_id \?\? null : null\}/);
+});
+
+test("A Meeting only highlights the Recent or Project row that opened it", () => {
+  const app = readFileSync(new URL("../../src/App.svelte", import.meta.url), "utf8");
+  const navigation = readFileSync(new URL("../../src/components/layout/MeetingLibraryNavigation.svelte", import.meta.url), "utf8");
+  assert.match(app, /selectedSurface = \$state<"recent" \| "project">\("recent"\)/);
+  assert.match(app, /function openMeetingSession\(id: string, source: "recent" \| "project" = "recent"\)/);
+  assert.match(app, /selectedSurface = source/);
+  assert.match(navigation, /selectedIn\(session, "recent"\)/);
+  assert.match(navigation, /selectedIn\(session, "project"\)/);
+  assert.match(navigation, /liveSessionId === session\.session_id/);
+  assert.match(navigation, /"recent:" \+ session\.session_id/);
+  assert.match(navigation, /"project:" \+ session\.session_id/);
+  assert.match(navigation, /"category:" \+ project\.project_id/);
+  assert.match(navigation, /onOpenSession\(session\.session_id, "recent"\)/);
+  assert.match(navigation, /onOpenSession\(session\.session_id, "project"\)/);
 });
 
 test("Transcript display mode only changes presentation; failures retain original text", () => {

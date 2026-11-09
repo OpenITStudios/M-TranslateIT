@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AudioLines, Captions, Clock3, FolderClosed, Mic, Settings, Palette, ArrowLeft, Play } from "@lucide/svelte";
+  import { AudioLines, Captions, Mic, Settings, Palette, ArrowLeft, Play } from "@lucide/svelte";
   import type { AppRoute } from "../../app/shared/types";
   import type { RuntimeSettings } from "../../app/shared/types";
   import SidebarUserControls from "./SidebarUserControls.svelte";
@@ -16,7 +16,8 @@
     voiceSelectionLocked = false, previewReadOnly = false, onNavigate,
     onMeetingSection, onSettingsTab, onToggleMute, onSettingsChange,
     onRefresh, onVoiceChanged, onNotice,
-    library = null, selectedSessionId = null, onOpenSession, onLibraryChange, onDeleteSession,
+    library = null, selectedSessionId = null, liveSessionId = null, selectedSurface = "recent",
+    onOpenSession, onLibraryChange, onDeleteSession,
   }: {
     active: AppRoute;
     presence: string;
@@ -40,22 +41,26 @@
     onNotice: (message: string) => void;
     library?: MeetingLibrary | null;
     selectedSessionId?: string | null;
-    onOpenSession?: (id: string) => void;
+    liveSessionId?: string | null;
+    selectedSurface?: "recent" | "project";
+    onOpenSession?: (id: string, surface: "recent" | "project") => void;
     onLibraryChange?: (change: Omit<MeetingLibraryChange, "expectedRevision">) => Promise<boolean>;
     onDeleteSession?: (id: string) => Promise<boolean>;
   } = $props();
 
-  const meetingItems = [
-    { id: "live" as const, label: "Start", icon: Play },
-    { id: "last" as const, label: "Last Meeting", icon: Clock3 },
-    { id: "saved" as const, label: "Saved Meeting", icon: FolderClosed },
-  ];
   const settingItems = [
     { id: "meeting" as const, label: "Voice & Audio", icon: Mic },
     { id: "translation" as const, label: "Meeting & Transcript", icon: Captions },
     { id: "appearance" as const, label: "Appearance", icon: Palette },
     { id: "advanced" as const, label: "Help & Diagnostics", icon: Settings },
   ];
+
+  const startSelected = $derived(active === "meeting" && meetingSection === "live"
+    && !(meetingLive && selectedSessionId
+      && library?.sessions.some(session => session.session_id === selectedSessionId)));
+  const navigationSessionId = $derived(active === "meeting" &&
+    (meetingSection === "session" || (meetingSection === "live" && meetingLive))
+      ? selectedSessionId : null);
 
 </script>
 
@@ -87,29 +92,28 @@
         </button>
       {/each}
     {:else}
-      <p class="ti-channel-heading">TRANSLATE</p>
-      {#each meetingItems as item}
-        {@const Icon = item.icon}
-        <button type="button" class={"ti-channel-item w-full " + (active === "meeting" && meetingSection === item.id && !(item.id === "live" && meetingLive && selectedSessionId) ? "is-active" : "")}
-          aria-current={active === "meeting" && meetingSection === item.id ? "page" : undefined}
-          aria-label={item.label} onclick={() => onMeetingSection(item.id)}>
-          <Icon size={18} strokeWidth={1.8} aria-hidden="true"/>
-          <span class="truncate">{item.label}</span>
-        </button>
-      {/each}
-
-      {#if onOpenSession && onLibraryChange && onDeleteSession}
-        <MeetingLibraryNavigation {library} {selectedSessionId} {meetingLive}
-          {onOpenSession} onChange={onLibraryChange} {onDeleteSession}/>
-      {/if}
-
-      <p class="ti-channel-heading mt-6">VOICE</p>
+      <p class="ti-channel-heading">HOME</p>
+      <button type="button" class={"ti-channel-item w-full " + (startSelected ? "is-active" : "")}
+        aria-current={startSelected ? "page" : undefined}
+        aria-label="Start Meeting" onclick={() => onMeetingSection("live")}>
+        <Play size={18} strokeWidth={1.8} aria-hidden="true"/>
+        <span>Start Meeting</span>
+      </button>
       <button type="button" class={"ti-channel-item w-full " + (active === "my-voice" ? "is-active" : "")}
         aria-current={active === "my-voice" ? "page" : undefined}
         onclick={() => onNavigate("my-voice")}>
         <AudioLines size={18} strokeWidth={1.8} aria-hidden="true"/>
         <span>My Voice</span>
       </button>
+
+      {#if onOpenSession && onLibraryChange && onDeleteSession}
+        <MeetingLibraryNavigation {library} selectedSessionId={navigationSessionId}
+          {liveSessionId} {selectedSurface}
+          viewAllSelected={active === "meeting" && meetingSection === "saved"}
+          {onOpenSession} onViewAll={() => onMeetingSection("saved")}
+          onChange={onLibraryChange} {onDeleteSession}/>
+      {/if}
+
     {/if}
   </nav>
 

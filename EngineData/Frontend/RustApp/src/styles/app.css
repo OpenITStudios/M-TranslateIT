@@ -381,6 +381,47 @@
     color: var(--ti-text);
   }
 
+  /* Recent/View All uses the existing sidebar color and spacing scale. */
+  .ti-library-view-all {
+    display: inline-flex;
+    min-height: 28px;
+    flex-shrink: 0;
+    align-items: center;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ti-text-muted);
+    padding: 0 7px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .ti-library-view-all:hover,
+  .ti-library-view-all[aria-current="page"] {
+    background: var(--ti-surface-hover);
+    color: var(--ti-text);
+  }
+
+  .ti-library-channel .ti-library-more {
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+
+  .ti-library-channel:hover .ti-library-more,
+  .ti-library-channel:focus-within .ti-library-more,
+  .ti-library-channel .ti-library-more[aria-expanded="true"] {
+    opacity: 1;
+  }
+
+  @media (hover: none) {
+    .ti-library-channel .ti-library-more { opacity: 1; }
+  }
+
+  .ti-library-more:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
   .ti-library-menu {
     display: grid;
     margin: 3px 7px 7px;
