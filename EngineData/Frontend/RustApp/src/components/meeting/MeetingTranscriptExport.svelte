@@ -10,10 +10,11 @@
     type TranscriptPreferences,
   } from "./transcriptPreferences";
 
-  let { hasSession = false, onNotice, onDeleted }: {
+  let { hasSession = false, onNotice, onDeleted, onOpenSession }: {
     hasSession?: boolean;
     onNotice: (message: string) => void;
     onDeleted?: () => void;
+    onOpenSession?: (id: string) => void;
   } = $props();
   let history = $state<MeetingLibrary | null>(null);
   // Pin is a presentation preference. The latest native archive order still
@@ -261,16 +262,19 @@
             </div>
             <div class="flex min-w-0 flex-wrap items-start gap-2">
               <button type="button" class="ti-button ti-button-secondary min-h-10 text-[13px] font-semibold"
-                aria-expanded={expanded === session.session_id} aria-label={`${expanded === session.session_id ? "Hide" : "Read"} saved transcript ${sessionLabel(session.session_id)}`}
+                aria-label={`Open saved Meeting channel ${sessionLabel(session.session_id)}`}
                 disabled={busy || session.entry_count === 0}
-                onclick={() => void togglePreview(session.session_id)}>
-                {expanded === session.session_id ? "Hide" : "Read"}
+                onclick={() => onOpenSession?.(session.session_id)}>
+                Open channel
               </button>
               <details class="min-w-[155px] max-w-full rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)]">
                 <summary class="min-h-10 cursor-pointer px-3 py-2.5 text-[13px] font-medium text-[var(--ti-text)] hover:bg-[var(--ti-surface-hover)]"
                   aria-label={`More actions for saved transcript ${sessionLabel(session.session_id)}`}>More options</summary>
                 <div class="grid gap-2 border-t border-[var(--ti-border)] p-2" role="group"
                   aria-label={`Transcript file actions for ${sessionLabel(session.session_id)}`}>
+                  <button type="button" class="ti-button ti-button-secondary min-h-10 w-full justify-start px-3 text-[13px]"
+                    aria-expanded={expanded === session.session_id} disabled={busy || session.entry_count === 0}
+                    onclick={() => void togglePreview(session.session_id)}>{expanded === session.session_id ? "Hide inline preview" : "Preview inline"}</button>
                   <button type="button" class="ti-button ti-button-secondary min-h-10 w-full justify-start px-3 text-[13px]"
                     disabled={busy || previewBusy || session.entry_count === 0} aria-expanded={htmlSample?.sessionId === session.session_id}
                     aria-label={`${htmlSample?.sessionId === session.session_id ? "Hide HTML preview" : "Preview HTML"} for saved transcript ${sessionLabel(session.session_id)}`}
