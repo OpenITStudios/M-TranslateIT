@@ -176,14 +176,19 @@
     }
   }
   async function copyAll(): Promise<void> {
-    if (!snapshot?.turns.length) return;
+    const id = session.session_id;
+    const turns = snapshot?.turns;
+    if (!turns?.length) return;
     try {
-      await navigator.clipboard.writeText(snapshot.turns.map(t =>
+      await navigator.clipboard.writeText(turns.map(t =>
         `${meetingSpeakerLabel(t.lane)} · ${meetingTime(t.created_unix_ms)}\n${languageName(t.source_language)}: ${t.source_text}\n${languageName(t.target_language)}: ${meetingTranslationDisplay(t)}`
       ).join("\n\n"));
+      if (session.session_id !== id) return;
       copied = true;
       onNotice("Displayed transcript entries copied (up to 240).");
-    } catch { onNotice("Could not copy saved Meeting entries."); }
+    } catch {
+      if (session.session_id === id) onNotice("Could not copy saved Meeting entries.");
+    }
   }
 </script>
 
