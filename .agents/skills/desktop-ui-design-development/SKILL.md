@@ -46,6 +46,10 @@ ADOPTED
 
 A screenshot is evidence, not automatic policy.
 
+## Canonical TranslateIT UI consistency contract
+
+Before changing sidebar/footer/header/dock alignment, shared layout tokens, SVG usage, or preparing a source-grounded HTML preview, read `docs/foundation/desktop-ui-consistency-standard.md`. This contract preserves TranslateIT's own visual language and adds cross-panel seam measurements, accessibility and evidence boundaries. Do not copy M-LazyDesigner-specific theme or Blockbench behavior.
+
 ## Rules
 
 Prioritize task/state hierarchy before decoration. Reject generic AI gradients/glow, gratuitous glassmorphism, unnecessary card grids, component inflation, animation without a job and large UI-library adoption without a current need.
