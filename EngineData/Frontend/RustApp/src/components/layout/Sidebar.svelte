@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AudioLines, Captions, Mic, Settings, Palette, ArrowLeft, Hash } from "@lucide/svelte";
+  import { AudioLines, Captions, Mic, Settings, Palette, HardDrive, ArrowLeft, Hash } from "@lucide/svelte";
   import type { AppRoute } from "../../app/shared/types";
   import type { RuntimeSettings } from "../../app/shared/types";
   import SidebarUserControls from "./SidebarUserControls.svelte";
@@ -8,7 +8,7 @@
   import TranslateITMark from "../brand/TranslateITMark.svelte";
 
   type MeetingSection = "live" | "last" | "session";
-  type SettingsTab = "meeting" | "translation" | "appearance" | "advanced";
+  type SettingsTab = "meeting" | "translation" | "saved-data" | "appearance" | "advanced";
 
   let {
     active, presence, meetingSection, settingsTab, meetingLive = false,
@@ -51,6 +51,7 @@
   const settingItems = [
     { id: "meeting" as const, label: "Voice & Audio", icon: Mic },
     { id: "translation" as const, label: "Meeting & Transcript", icon: Captions },
+    { id: "saved-data" as const, label: "Saved Data", icon: HardDrive },
     { id: "appearance" as const, label: "Appearance", icon: Palette },
     { id: "advanced" as const, label: "Help & Diagnostics", icon: Settings },
   ];
