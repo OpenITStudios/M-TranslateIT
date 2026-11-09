@@ -229,8 +229,8 @@
       <article class="ti-panel ti-settings-panel overflow-hidden" aria-label="Voice and audio configuration">
         <header class="flex flex-wrap items-start justify-between gap-3 px-5 pb-3 pt-5">
           <div class="min-w-0 flex-1">
-            <h3 class="m-0 text-[17px] font-semibold tracking-[-0.015em]">Audio devices</h3>
-            <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">Choose the microphone and speakers used in your calls. TranslateIT verifies each change before saving.</p>
+            <h3 class="m-0 text-[17px] font-semibold tracking-[-0.015em]">Microphone &amp; Meeting Sound</h3>
+            <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">Choose your spoken microphone and incoming meeting audio source. These are separate from the virtual microphone used by your calling app. TranslateIT verifies each change before saving.</p>
           </div>
           {#if meetingResourcesLocked}
             <StatusBadge label="In Use" tone="neutral" />
@@ -251,7 +251,7 @@
 
         <div class="grid grid-cols-1 gap-3 px-5 pb-5 lg:grid-cols-2" aria-busy={devicesLoading || deviceSaving}>
           <label class="grid min-w-0 content-start gap-2 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] p-4">
-            <span class="ti-field-label">Microphone input</span>
+            <span class="ti-field-label">Microphone Input</span>
             <select class="ti-field min-h-10 px-3" disabled={meetingResourcesLocked || devicesLoading || deviceSaving || !devices?.ok} value={currentDevice("microphone")} onchange={(event) => void changeDevice("microphone", selectValue(event))}>
               <option value="">Windows Default</option>
               {#each devices?.input_devices ?? [] as device (deviceId(device))}
@@ -265,7 +265,7 @@
           </label>
 
           <label class="grid min-w-0 content-start gap-2 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] p-4">
-            <span class="ti-field-label">Incoming meeting sound</span>
+            <span class="ti-field-label">Incoming Meeting Sound</span>
             <select class="ti-field min-h-10 px-3" disabled={meetingResourcesLocked || devicesLoading || deviceSaving || !devices?.ok} value={currentDevice("meeting-sound")} onchange={(event) => void changeDevice("meeting-sound", selectValue(event))}>
               <option value="">Windows Default</option>
               {#each devices?.output_devices ?? [] as device (deviceId(device))}
@@ -287,7 +287,7 @@
 
         <div class="mx-5 mb-5 flex flex-wrap items-start justify-between gap-4 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] p-4" aria-busy={routeLoading}>
           <div class="min-w-0">
-            <span class="ti-field-label">Send audio to your calling app</span>
+            <span class="ti-field-label">Virtual Microphone / Call Routing</span>
             <strong class="mt-1.5 block break-words text-[13px] font-semibold leading-5">{meetingMicrophoneDevice}</strong>
             <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]" role={routeCheck === "unavailable" ? "alert" : "status"}>
               {routeCheck === "unavailable" ? "Couldn't check this Windows audio device. Select Check route."
