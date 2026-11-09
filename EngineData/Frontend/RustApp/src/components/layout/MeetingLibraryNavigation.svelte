@@ -27,6 +27,7 @@
   let confirmingDelete = $state<string | null>(null);
   let busy = $state(false);
   let returnFocus = $state<HTMLButtonElement | null>(null);
+  let fallbackFocus = $state<HTMLButtonElement | null>(null);
   let editInput = $state<HTMLInputElement | null>(null);
   let collapsed = $state<Record<string, boolean>>({});
   let actionSurface = $state<"recent" | "project">("recent");
@@ -41,6 +42,7 @@
   async function restoreFocus(): Promise<void> {
     await tick();
     if (returnFocus?.isConnected) returnFocus.focus();
+    else if (fallbackFocus?.isConnected) fallbackFocus.focus();
     returnFocus = null;
   }
   function dismissActions(): void {
@@ -189,7 +191,7 @@
   <div class="mt-5">
     <div class="flex items-center justify-between gap-2 px-2">
       <p class="ti-channel-heading m-0">RECENT MEETINGS</p>
-      <button type="button" class="ti-library-view-all"
+      <button bind:this={fallbackFocus} type="button" class="ti-library-view-all"
         aria-label="View all saved Meetings" aria-current={viewAllSelected ? "page" : undefined}
         onclick={() => { if (!busy) { clearMenus(); onViewAll(); } }}>View All</button>
     </div>
