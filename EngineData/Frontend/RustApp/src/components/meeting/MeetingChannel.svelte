@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Check, Copy, Download, Eye, RefreshCw, AlertTriangle, Hash, Search } from "@lucide/svelte";
+  import { Check, Copy, Download, Eye, MoreHorizontal, RefreshCw, AlertTriangle, Hash, Search } from "@lucide/svelte";
   import { runtimeApi, type MeetingCommittedTurnsSnapshot, type MeetingLibrarySession } from "../../app/bridge/runtimeApi";
   import { languageName } from "../../app/shared/state";
   import { meetingSpeakerLabel, meetingTime, meetingTranslationDisplay } from "../../app/runtime/meetingTranscriptPresentation";
@@ -24,6 +24,7 @@
   let exportRevision = 0;
   let htmlPreviewRevision = 0;
   let previewBusy = $state(false);
+  let actionsOpen = $state(false);
   let htmlPreview = $state<{ html: string; count: number } | null>(null);
   let exportResult = $state<{ path: string; count: number; incomplete: boolean } | null>(null);
   let query = $state("");
@@ -50,6 +51,7 @@
     htmlPreviewRevision++;
     htmlPreview = null;
     previewBusy = false;
+    actionsOpen = false;
     exporting = false;
     if (!previewReadOnly) void load(id);
   });
@@ -152,24 +154,33 @@
           <Search size={16} class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ti-text-soft)]" aria-hidden="true"/>
           <input class="ti-field min-h-9 w-full pl-10 pr-3 text-[13px]" bind:value={query} aria-label="Search this Meeting transcript" placeholder="Search conversation..."/>
         </label>
-        <button type="button" class="ti-button ti-button-secondary min-h-9 px-3 text-[12px]"
-          disabled={loading} onclick={() => void load(session.session_id)} aria-label="Refresh saved Meeting">
-          <RefreshCw size={14} aria-hidden="true"/> Refresh
-        </button>
-        <button type="button" class="ti-button ti-button-secondary min-h-9 px-3 text-[12px]"
-          disabled={!snapshot?.turns.length} onclick={() => void copyAll()}>
-          {#if copied}<Check size={14}/>{:else}<Copy size={14}/>{/if} Copy all
-        </button>
-        <button type="button" class="ti-button ti-button-secondary min-h-9 px-3 text-[12px]"
-          disabled={previewBusy || previewReadOnly} onclick={() => void toggleHtmlPreview()}
-          aria-expanded={Boolean(htmlPreview)} aria-label="Preview exported HTML document">
-          <Eye size={14} aria-hidden="true"/> {previewBusy ? "Loading..." : htmlPreview ? "Hide preview" : "Preview HTML"}
-        </button>
-        <button type="button" class="ti-button ti-button-secondary min-h-9 px-3 text-[12px]"
-          disabled={exporting || previewReadOnly} onclick={() => void exportHtml()}
-          aria-label="Export complete saved Meeting as HTML">
-          <Download size={14} aria-hidden="true"/> {exporting ? "Exporting..." : "Export HTML"}
-        </button>
+        <details class="relative shrink-0" bind:open={actionsOpen}>
+          <summary class="ti-button ti-button-secondary flex min-h-9 cursor-pointer list-none items-center gap-2 px-3 text-[12px]"
+            aria-label="More conversation actions" aria-expanded={actionsOpen}>
+            <MoreHorizontal size={16} aria-hidden="true"/> More
+          </summary>
+          <div class="absolute right-0 top-full z-30 mt-2 grid w-[min(220px,75vw)] gap-1 rounded-[var(--ti-radius-md)] border border-[var(--ti-border-strong)] bg-[var(--ti-sidebar)] p-1 shadow-lg"
+            role="group" aria-label="Saved conversation actions">
+            <button type="button" class="ti-button ti-button-secondary min-h-9 w-full justify-start px-3 text-[12px]"
+              disabled={loading} onclick={() => { actionsOpen = false; void load(session.session_id); }} aria-label="Refresh saved Meeting">
+              <RefreshCw size={14} aria-hidden="true"/> Refresh
+            </button>
+            <button type="button" class="ti-button ti-button-secondary min-h-9 w-full justify-start px-3 text-[12px]"
+              disabled={!snapshot?.turns.length} onclick={() => { actionsOpen = false; void copyAll(); }}>
+              {#if copied}<Check size={14}/>{:else}<Copy size={14}/>{/if} Copy all
+            </button>
+            <button type="button" class="ti-button ti-button-secondary min-h-9 w-full justify-start px-3 text-[12px]"
+              disabled={previewBusy || previewReadOnly} onclick={() => { actionsOpen = false; void toggleHtmlPreview(); }}
+              aria-label="Preview exported HTML document">
+              <Eye size={14} aria-hidden="true"/> {previewBusy ? "Loading..." : htmlPreview ? "Hide preview" : "Preview HTML"}
+            </button>
+            <button type="button" class="ti-button ti-button-secondary min-h-9 w-full justify-start px-3 text-[12px]"
+              disabled={exporting || previewReadOnly} onclick={() => { actionsOpen = false; void exportHtml(); }}
+              aria-label="Export complete saved Meeting as HTML">
+              <Download size={14} aria-hidden="true"/> {exporting ? "Exporting..." : "Export HTML"}
+            </button>
+          </div>
+        </details>
       </div>
     </div>
     {#if htmlPreview}
