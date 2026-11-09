@@ -16,6 +16,7 @@
   import TranscriptAppearanceSettings from "../components/meeting/TranscriptAppearanceSettings.svelte";
   import TranslationFeedbackReview from "../components/settings/TranslationFeedbackReview.svelte";
   import SettingsDiagnostics from "../components/settings/SettingsDiagnostics.svelte";
+  import SavedDataInventory from "../components/settings/SavedDataInventory.svelte";
   import StatusBadge from "../components/ui/StatusBadge.svelte";
   import StatusRow from "../components/ui/StatusRow.svelte";
 
@@ -413,6 +414,7 @@
           <button type="button" class="ti-button ti-button-secondary" disabled={diagnosticsLoading} onclick={() => void refreshDiagnostics()}>{diagnosticsLoading ? "Opening..." : "Open Diagnostics"}</button>
         </footer>
       </article>
+      <SavedDataInventory />
       <details class="ti-panel mt-4">
         <summary class="min-h-11 cursor-pointer px-5 py-4 text-sm font-medium hover:bg-[var(--ti-surface-soft)]">Past translation issue reports</summary>
         <div class="border-t border-[var(--ti-border)] p-4">
