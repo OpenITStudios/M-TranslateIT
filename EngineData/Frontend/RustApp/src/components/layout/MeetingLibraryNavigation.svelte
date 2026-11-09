@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from "svelte";
+  import { onMount, tick } from "svelte";
   import { Folder, FolderPlus, Hash, MoreHorizontal, Pencil, Trash2, FolderInput, ChevronDown, Pin, PinOff } from "@lucide/svelte";
   import type { MeetingLibrary, MeetingLibraryChange, MeetingLibrarySession } from "../../app/bridge/runtimeApi";
   import { pinnedFirst, recentMeetings } from "./meetingNavigationOrder";
@@ -83,10 +83,33 @@
       ? rect.bottom + 5 : Math.max(8, rect.top - height - 5);
     const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width));
     menuStyle = `top:${Math.round(top)}px;left:${Math.round(left)}px;width:${width}px;max-height:calc(100vh - 16px);overflow-y:auto`;
+    await tick();
+    if (menu === next) popup.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
   }
   function closeMenuOnViewportChange(): void {
     if (menu !== null && !busy) { menu = null; menuStyle = "visibility:hidden"; }
   }
+  function handleOutsidePointer(event: PointerEvent): void {
+    if (menu === null || busy) return;
+    const target = event.target;
+    if (!(target instanceof Node)) return;
+    const trigger = returnFocus;
+    const popup = trigger?.closest(".ti-library-popup-anchor")?.querySelector(".ti-library-menu");
+    if (trigger?.contains(target) || popup?.contains(target)) return;
+    menu = null;
+    menuStyle = "visibility:hidden";
+  }
+  onMount(() => {
+    // Sidebar scroll is a nested scroll container; window's ordinary scroll
+    // event does not bubble from it. Capture scroll at the document level.
+    const onScroll = () => closeMenuOnViewportChange();
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("pointerdown", handleOutsidePointer, true);
+    return () => {
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("pointerdown", handleOutsidePointer, true);
+    };
+  });
   function openSession(sessionId: string, surface: "recent" | "project"): void {
     if (busy) return;
     clearMenus();
