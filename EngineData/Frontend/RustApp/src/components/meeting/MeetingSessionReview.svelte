@@ -29,6 +29,7 @@
   let query = $state("");
   let copied = $state(false);
   let loadedForInactive = false;
+  let readRevision = 0;
 
   const sessionLabel = $derived(meetingSessionTitle(meetingFirstRecordedTime(snapshot?.turns ?? [])));
   const visibleTurns = $derived.by(() => {
@@ -38,11 +39,13 @@
   });
 
   async function loadReview(): Promise<void> {
+    const revision = ++readRevision;
     try {
       const result = await runtimeApi.getRecentMeetingTranscript();
+      if (revision !== readRevision || sessionActive) return;
       snapshot = result.ok && result.turns.length > 0 ? result : null;
     } catch {
-      snapshot = null;
+      if (revision === readRevision && !sessionActive) snapshot = null;
     }
   }
 
@@ -63,7 +66,10 @@
 
   $effect(() => {
     if (sessionActive) {
+      readRevision++;
       loadedForInactive = false;
+      query = "";
+      copied = false;
       snapshot = null;
     } else if (!loadedForInactive) {
       loadedForInactive = true;
