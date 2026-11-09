@@ -49,7 +49,7 @@
 
   const routeTitle = $derived(
     route === "meeting"
-      ? meetingSection === "live" ? snapshot.meeting.live ? selectedSessionName ?? "Live Meeting" : "Translate"
+      ? meetingSection === "live" ? snapshot.meeting.live ? selectedSessionName ?? "Live Meeting" : "Live Meeting"
         : meetingSection === "session" ? selectedSessionName ?? "Meeting"
         : meetingSection === "last" ? "Last Meeting" : "Saved Meeting"
       : route === "my-voice" ? "My Voice" : "Settings",
@@ -150,8 +150,8 @@
       {#if sourceEditable}
         <label class="flex min-h-9 items-center gap-1.5 rounded-[var(--ti-radius-sm)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] px-2.5">
           <ArrowLeftRight size={15} class="text-[var(--ti-text-muted)]"/>
-          <span class="hidden text-[12px] text-[var(--ti-text-muted)] xl:inline">Audio sent</span>
-          <select aria-label="Audio sent to meeting" class="min-w-0 max-w-[150px] bg-transparent text-[12px] font-medium"
+          <span class="hidden text-[12px] text-[var(--ti-text-muted)] xl:inline">Send to call</span>
+          <select aria-label="Audio sent to the call: translated or original microphone" title="Choose translated audio or your original microphone for the call" class="min-w-0 max-w-[150px] bg-transparent text-[12px] font-medium"
             value={currentSource} disabled={sourceChanging || snapshot.meeting.busy || previewReadOnly}
             onchange={(event) => void selectSource(event.currentTarget.value === "original" ? "original" : "translateit")}>
             <option value="translateit">{MEETING_SOURCE_LABELS.translateit}</option>
@@ -160,14 +160,14 @@
         </label>
       {:else if snapshot.meetingSession}
         <span class="text-[12px] text-[var(--ti-text-muted)]">
-          Audio: {snapshot.meetingSession.audio_source === "original" ? "Original" : "TranslateIT"}
+          Sending: {snapshot.meetingSession.audio_source === "original" ? "Original Microphone" : "TranslateIT"}
         </span>
       {/if}
     {/if}
     <div class="relative shrink-0" bind:this={moreRoot}>
       <button type="button" bind:this={moreButton}
         class="ti-sidebar-icon-button"
-        aria-label="More meeting controls" title="More"
+        aria-label="More meeting controls" title="Meeting utilities"
         aria-haspopup="menu" aria-expanded={moreOpen}
         aria-controls={moreOpen ? "ti-meeting-more-menu" : undefined}
         onclick={() => void toggleMore()}>
