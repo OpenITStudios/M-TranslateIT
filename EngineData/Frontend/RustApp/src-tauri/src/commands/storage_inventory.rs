@@ -23,13 +23,15 @@ pub struct StorageInventory {
 
 const MAX_VISITS: usize = 250_000;
 
-fn measure(name: &'static str, root: &Path) -> StorageCategory {
+fn measure(name: &'static str, root: &Path, excluded: Option<&Path>) -> StorageCategory {
     let mut result = StorageCategory {
         name, bytes: Some(0), files: 0, directories: 0, complete: true, note: String::new(),
     };
     let mut stack = vec![root.to_path_buf()];
     let mut visited = 0usize;
     while let Some(path) = stack.pop() {
+        // Exclude an entire owned subtree before opening or counting it.
+        if excluded.is_some_and(|excluded| path == excluded) { continue; }
         visited += 1;
         if visited > MAX_VISITS {
             result.complete = false;
@@ -87,18 +89,18 @@ pub fn get_storage_inventory() -> StorageInventory {
     let paths = ProjectPaths::discover();
     let saved = PathBuf::from(paths.user_saved_dir);
     let cache = PathBuf::from(paths.user_cache_dir);
+    let sessions = saved.join("Transcripts").join("Sessions");
     let categories = vec![
-        measure("Meeting Transcripts", &saved.join("Transcripts").join("Sessions")),
-        measure("Other Saved Data (includes exports)", &saved),
-        measure("Cache Data", &cache),
+        measure("Meeting Transcripts", &sessions, None),
+        measure("Other Saved Data (includes exports)", &saved, Some(&sessions)),
+        measure("Cache Data", &cache, None),
     ];
-    // Other Saved Data is intentionally the whole saved root, and overlaps
-    // Meeting Transcripts. Never sum these categories as a grand total.
+    // Categories do not overlap. Unknown sizes must not be included in totals.
     let ok = categories.iter().all(|category| category.complete);
     StorageInventory {
         ok, categories,
         message: if ok {
-            "Read-only inventory. Saved Data includes transcript archives; do not sum overlapping categories.".into()
+            "Read-only inventory of non-overlapping categories; no files were modified.".into()
         } else {
             "Storage inventory is incomplete. Unknown sizes are not reported as zero.".into()
         },
@@ -111,15 +113,24 @@ mod tests {
     #[test]
     fn missing_root_is_empty() {
         let path = std::env::temp_dir().join(format!("translateit-missing-inventory-{}", std::process::id()));
-        let result = measure("missing", &path);
+        let result = measure("missing", &path, None);
         assert!(result.complete);
         assert_eq!(result.bytes, Some(0));
+    }
+    #[test]
+    fn excluded_root_is_not_counted() {
+        let path = std::env::temp_dir().join(format!("translateit-excluded-inventory-{}", std::process::id()));
+        fs::write(&path, b"abc").unwrap();
+        let result = measure("excluded", &path, Some(&path));
+        assert!(result.complete);
+        assert_eq!(result.bytes, Some(0));
+        let _ = fs::remove_file(path);
     }
     #[test]
     fn regular_file_is_counted() {
         let path = std::env::temp_dir().join(format!("translateit-inventory-file-{}", std::process::id()));
         fs::write(&path, b"abc").unwrap();
-        let result = measure("file", &path);
+        let result = measure("file", &path, None);
         assert!(result.complete);
         assert_eq!(result.bytes, Some(3));
         let _ = fs::remove_file(path);
