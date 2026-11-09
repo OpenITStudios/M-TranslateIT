@@ -1,18 +1,14 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { tick, untrack } from "svelte";
   import type { ProductRuntimeSnapshot } from "../../app/bridge/runtimeProductFacade";
   import type { AppRoute } from "../../app/shared/types";
-  import { Zap, Hash, Info, TriangleAlert, CircleAlert, Captions, ArrowLeftRight } from "@lucide/svelte";
+  import { Zap, Hash, Info, TriangleAlert, CircleAlert, Captions, ArrowLeftRight, MoreHorizontal } from "@lucide/svelte";
   import type { AppNotice } from "../../app/runtime/applicationNotice";
   import UpdateAction from "../runtime/UpdateAction.svelte";
   import { toggleQuickAccess } from "../../app/runtime/quickAccessRuntime";
+  import { toggleFloatingCaptions } from "../../app/runtime/translationOverlayRuntime";
   import { runtimeApi } from "../../app/bridge/runtimeApi";
   import { MEETING_SOURCE_LABELS } from "../ui/meetingSourceLabels";
-  import {
-    DEFAULT_TRANSCRIPT_PREFERENCES, readTranscriptPreferences,
-    subscribeTranscriptPreferences, updateTranscriptPreferences,
-    type TranscriptPreferences, type TranscriptTextMode,
-  } from "../meeting/transcriptPreferences";
 
   let {
     snapshot,
@@ -53,7 +49,7 @@
 
   const routeTitle = $derived(
     route === "meeting"
-      ? meetingSection === "live" ? snapshot.meeting.live ? selectedSessionName ?? "Live Meeting" : "Start Meeting"
+      ? meetingSection === "live" ? snapshot.meeting.live ? selectedSessionName ?? "Live Meeting" : "Translate"
         : meetingSection === "session" ? selectedSessionName ?? "Meeting"
         : meetingSection === "last" ? "Last Meeting" : "Saved Meeting"
       : route === "my-voice" ? "My Voice" : "Settings",
@@ -62,7 +58,10 @@
 
   let sourceChanging = $state(false);
   let currentSource = $state<"original" | "translateit">("translateit");
-  let appearance = $state<TranscriptPreferences>({ ...DEFAULT_TRANSCRIPT_PREFERENCES });
+  let moreOpen = $state(false);
+  let captionBusy = $state(false);
+  let moreRoot = $state<HTMLDivElement>();
+  let moreButton = $state<HTMLButtonElement>();
   const sourceEditable = $derived(Boolean(route === "meeting" && meetingSection === "live"
     && snapshot.meetingSession && (snapshot.meeting.live ||
       (!snapshot.meeting.hasSession && snapshot.meeting.lifecycle === "idle"))));
@@ -70,11 +69,6 @@
     if (!sourceChanging && snapshot.meetingSession) {
       currentSource = snapshot.meetingSession.audio_source === "original" ? "original" : "translateit";
     }
-  });
-  onMount(() => {
-    if (previewReadOnly) return;
-    appearance = readTranscriptPreferences();
-    return subscribeTranscriptPreferences((next) => { appearance = next; });
   });
   async function selectSource(source: "original" | "translateit"): Promise<void> {
     if (!sourceEditable || sourceChanging || currentSource === source || previewReadOnly) return;
@@ -93,12 +87,54 @@
       await onRefresh?.("Audio Sent selection could not be verified. The previous source was kept.");
     } finally { sourceChanging = false; }
   }
-  function changeDisplay(mode: TranscriptTextMode): void {
-    const result = updateTranscriptPreferences({ textMode: mode });
-    appearance = result.preferences;
-    onNotice(result.ok ? "Transcript display updated." : "Transcript display could not be saved.");
+  // The header persists between pages. A menu from the previous page must not
+  // remain open after navigation.
+  $effect(() => {
+    route;
+    meetingSection;
+    untrack(() => { moreOpen = false; });
+  });
+  function closeMore(): void { moreOpen = false; }
+  async function toggleMore(): Promise<void> {
+    moreOpen = !moreOpen;
+    if (moreOpen) {
+      await tick();
+      moreRoot?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    }
+  }
+  function handleGlobalClick(event: MouseEvent): void {
+    if (moreOpen && event.target instanceof Node && !moreRoot?.contains(event.target)) closeMore();
+  }
+  function handleGlobalKey(event: KeyboardEvent): void {
+    if (moreOpen && event.key === "Escape") {
+      event.preventDefault();
+      closeMore();
+      void tick().then(() => moreButton?.focus());
+    }
+  }
+  async function changeFloatingCaptions(): Promise<void> {
+    if (captionBusy || previewReadOnly) return;
+    captionBusy = true;
+    closeMore();
+    await tick();
+    moreButton?.focus();
+    try {
+      const result = await toggleFloatingCaptions();
+      onNotice(result === "shown" ? "Floating Captions shown."
+        : result === "hidden" ? "Floating Captions hidden."
+        : "Floating Captions state could not be verified.");
+    } catch {
+      onNotice("Floating Captions state could not be verified.");
+    } finally { captionBusy = false; }
+  }
+  function openQuickAccess(): void {
+    if (previewReadOnly) return;
+    closeMore();
+    void toggleQuickAccess().catch(() => onNotice("Quick Access couldn't be opened."));
   }
 </script>
+
+<svelte:window onclick={handleGlobalClick} onkeydown={handleGlobalKey} />
 
 <header class="ti-appbar flex min-h-[58px] shrink-0 items-center gap-3 border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-4 py-2" aria-label="TranslateIT workspace header">
   <div class="flex min-w-0 items-center gap-2">
@@ -127,26 +163,36 @@
           Audio: {snapshot.meetingSession.audio_source === "original" ? "Original" : "TranslateIT"}
         </span>
       {/if}
-      <label class="flex min-h-9 items-center gap-1 rounded-[var(--ti-radius-sm)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] px-2">
-        <span class="hidden text-[12px] text-[var(--ti-text-muted)] xl:inline">Display</span>
-        <select aria-label="Transcript display mode" class="max-w-[170px] bg-transparent text-[12px]"
-          value={appearance.textMode} disabled={previewReadOnly}
-          onchange={(event) => changeDisplay(event.currentTarget.value as TranscriptTextMode)}>
-          <option value="both">Original + Translation</option>
-          <option value="translation-only">Translation only</option>
-        </select>
-      </label>
-      <button type="button" class="ti-sidebar-icon-button" aria-label="Floating Captions"
-        title="Floating Captions in Quick Access"
-        onclick={() => void toggleQuickAccess().catch(() => onNotice("Quick Access couldn't be opened."))}>
-        <Captions size={18}/>
-      </button>
     {/if}
-    <button type="button" class="ti-sidebar-icon-button" aria-label="Open Quick Access"
-      title="Quick Access (Ctrl+K)"
-      onclick={() => void toggleQuickAccess().catch(() => onNotice("Quick Access couldn't be opened."))}>
-      <Zap size={18}/>
-    </button>
+    <div class="relative shrink-0" bind:this={moreRoot}>
+      <button type="button" bind:this={moreButton}
+        class="ti-sidebar-icon-button"
+        aria-label="More meeting controls" title="More"
+        aria-haspopup="menu" aria-expanded={moreOpen}
+        aria-controls={moreOpen ? "ti-meeting-more-menu" : undefined}
+        onclick={() => void toggleMore()}>
+        <MoreHorizontal size={18} aria-hidden="true"/>
+      </button>
+      {#if moreOpen}
+        <div id="ti-meeting-more-menu"
+          class="ti-user-popover absolute right-0 top-full z-40 mt-2 w-[224px] p-1"
+          role="menu" aria-label="Meeting utilities">
+          {#if route === "meeting"}
+            <button type="button" role="menuitem" class="ti-user-menu-option"
+              disabled={captionBusy || previewReadOnly} onclick={() => void changeFloatingCaptions()}>
+              <Captions size={16} aria-hidden="true"/>
+              <span class="min-w-0 flex-1 text-left">Floating Captions</span>
+            </button>
+          {/if}
+          <button type="button" role="menuitem" class="ti-user-menu-option"
+            disabled={previewReadOnly} onclick={openQuickAccess}>
+            <Zap size={16} aria-hidden="true"/>
+            <span class="min-w-0 flex-1 text-left">Quick Access</span>
+            <span class="text-[10px] text-[var(--ti-text-soft)]">Ctrl+K</span>
+          </button>
+        </div>
+      {/if}
+    </div>
     {#if showUpdateAction}
       <UpdateAction
         audioLocked={snapshot.resources.audio_locked}

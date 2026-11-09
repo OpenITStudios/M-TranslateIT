@@ -166,6 +166,24 @@ export async function hideTranslationOverlay(): Promise<void> {
   try { await emitPreferences(prefs); } catch { /* Hiding must not depend on event delivery. */ }
 }
 
+/** Main-window quick control. Returns only a native-confirmed visible state. */
+export async function toggleFloatingCaptions(): Promise<"shown" | "hidden" | "unavailable"> {
+  try {
+    const window = await overlayWindow();
+    if (!window) return "unavailable";
+    if (await window.isVisible()) {
+      await hideTranslationOverlay();
+      return await window.isVisible() ? "unavailable" : "hidden";
+    }
+    // Showing captions from the main window should also enable future meeting captions.
+    updateOverlayPreferences({ meetingEnabled: true });
+    if (!await showTranslationOverlay()) return "unavailable";
+    return await window.isVisible() ? "shown" : "unavailable";
+  } catch {
+    return "unavailable";
+  }
+}
+
 export async function destroyTranslationOverlay(): Promise<void> {
   latestPresented = null;
   pendingNativeVisibility = false;

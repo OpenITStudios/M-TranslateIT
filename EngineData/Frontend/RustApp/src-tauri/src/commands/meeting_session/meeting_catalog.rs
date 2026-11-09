@@ -29,7 +29,9 @@ struct MeetingLabel {
     session_id: String,
     display_name: String,
     project_id: Option<String>,
-    starred: bool,
+    // Existing catalogs used "starred"; retain those pins when reading v1.
+    #[serde(alias = "starred")]
+    pinned: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -50,7 +52,7 @@ pub struct MeetingLibrarySession {
     pub session_id: String,
     pub display_name: String,
     pub project_id: Option<String>,
-    pub starred: bool,
+    pub pinned: bool,
     pub entry_count: usize,
     pub complete: bool,
     pub storage_warning: bool,
@@ -74,7 +76,7 @@ pub struct MeetingLibraryChange {
     pub session_id: Option<String>,
     pub project_id: Option<String>,
     pub name: Option<String>,
-    pub starred: Option<bool>,
+    pub pinned: Option<bool>,
 }
 
 fn lock() -> &'static Mutex<()> { MUTATION.get_or_init(|| Mutex::new(())) }
@@ -220,7 +222,7 @@ fn view_saved(saved: SavedMeetingSession, c: &Catalog) -> MeetingLibrarySession 
         display_name: metadata.map(|m| m.display_name.clone())
             .unwrap_or_else(|| default_title(&saved.session_id)),
         project_id: metadata.and_then(|m| m.project_id.clone()),
-        starred: metadata.is_some_and(|m| m.starred),
+        pinned: metadata.is_some_and(|m| m.pinned),
         session_id: saved.session_id,
         entry_count: saved.entry_count, complete: saved.complete,
         storage_warning: saved.storage_warning,
@@ -286,7 +288,7 @@ fn apply(c: &mut Catalog, change: MeetingLibraryChange, archived: &[SavedMeeting
             c.projects.retain(|p| p.project_id != id);
             for item in &mut c.sessions { if item.project_id.as_deref() == Some(id) { item.project_id = None; } }
         }
-        "rename_meeting" | "star_meeting" | "move_meeting" => {
+        "rename_meeting" | "pin_meeting" | "move_meeting" => {
             let id = sid.filter(|s| valid_session_id(s)).ok_or("Invalid Meeting identity.")?;
             if !archived.iter().any(|s| s.session_id == id) {
                 return Err("Meeting archive is unavailable. Refresh the library.".into());
@@ -296,13 +298,13 @@ fn apply(c: &mut Catalog, change: MeetingLibraryChange, archived: &[SavedMeeting
                 if c.sessions.len() >= MAX_SESSIONS { return Err("Meeting library has reached its metadata limit.".into()); }
                 c.sessions.push(MeetingLabel {
                     session_id: id.to_string(), display_name: default_title(id),
-                    project_id: None, starred: false,
+                    project_id: None, pinned: false,
                 });
             }
             let item = c.sessions.iter_mut().find(|m| m.session_id == id).expect("session exists");
             match change.action.as_str() {
                 "rename_meeting" => item.display_name = name(change.name.as_deref())?,
-                "star_meeting" => item.starred = change.starred.ok_or("Choose a Starred state.")?,
+                "pin_meeting" => item.pinned = change.pinned.ok_or("Choose a Pinned state.")?,
                 _ => {
                     if let Some(id) = pid {
                         if !c.projects.iter().any(|p| p.project_id == id) {
@@ -364,7 +366,7 @@ mod tests {
         assert!(!valid_project_id("project_../private"));
     }
     #[test]
-    fn rename_move_and_star_preserve_immutable_archived_session_identity() {
+    fn rename_move_and_pin_preserve_immutable_archived_session_identity() {
         let id = "meeting_1760000000000_9";
         let archived = [SavedMeetingSession {
             session_id: id.into(), entry_count: 12, complete: true, storage_warning: false,
@@ -373,17 +375,29 @@ mod tests {
         apply(&mut c, MeetingLibraryChange {
             action: "rename_meeting".into(), expected_revision: 0,
             session_id: Some(id.into()), project_id: None,
-            name: Some("Planning discussion".into()), starred: None,
+            name: Some("Planning discussion".into()), pinned: None,
         }, &archived).unwrap();
         assert_eq!(c.sessions[0].session_id, id);
         assert_eq!(c.sessions[0].display_name, "Planning discussion");
         apply(&mut c, MeetingLibraryChange {
-            action: "star_meeting".into(), expected_revision: 0,
+            action: "pin_meeting".into(), expected_revision: 0,
             session_id: Some(id.into()), project_id: None,
-            name: None, starred: Some(true),
+            name: None, pinned: Some(true),
         }, &archived).unwrap();
-        assert!(c.sessions[0].starred);
+        assert!(c.sessions[0].pinned);
         assert_eq!(c.sessions[0].session_id, id);
+    }
+
+    #[test]
+    fn legacy_starred_catalog_entries_migrate_to_pinned_without_losing_state() {
+        let legacy = r#"{"schema_version":1,"revision":3,"projects":[],
+          "sessions":[{"session_id":"meeting_1760000000000_9",
+            "display_name":"Weekly Sync","project_id":null,"starred":true}]}"#;
+        let catalog: Catalog = serde_json::from_str(legacy).expect("read old saved catalog");
+        assert!(catalog.sessions[0].pinned);
+        let serialized = serde_json::to_string(&catalog).expect("serialize migrated catalog");
+        assert!(serialized.contains("\"pinned\":true"));
+        assert!(!serialized.contains("\"starred\""));
     }
 
     #[test]
@@ -391,12 +405,12 @@ mod tests {
         let mut c = Catalog::default();
         c.projects.push(MeetingProject { project_id:"project_test".into(), name:"Test".into() });
         c.sessions.push(MeetingLabel {session_id:"meeting_123".into(),display_name:"My call".into(),
-            project_id:Some("project_test".into()),starred:true});
+            project_id:Some("project_test".into()),pinned:true});
         apply(&mut c, MeetingLibraryChange {action:"delete_project".into(), expected_revision:0,
-            session_id:None,project_id:Some("project_test".into()),name:None,starred:None}, &[]).unwrap();
+            session_id:None,project_id:Some("project_test".into()),name:None,pinned:None}, &[]).unwrap();
         assert!(c.projects.is_empty());
         assert_eq!(c.sessions[0].project_id, None);
         assert_eq!(c.sessions[0].display_name, "My call");
-        assert!(c.sessions[0].starred);
+        assert!(c.sessions[0].pinned);
     }
 }

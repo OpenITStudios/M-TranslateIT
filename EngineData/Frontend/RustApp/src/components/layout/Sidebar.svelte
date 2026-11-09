@@ -46,7 +46,7 @@
   } = $props();
 
   const meetingItems = [
-    { id: "live" as const, label: "Start Meeting", icon: Play },
+    { id: "live" as const, label: "Start", icon: Play },
     { id: "last" as const, label: "Last Meeting", icon: Clock3 },
     { id: "saved" as const, label: "Saved Meeting", icon: FolderClosed },
   ];
@@ -63,7 +63,7 @@
   <button
     type="button"
     class="ti-sidebar-brand flex min-h-[66px] w-full items-center gap-3 border-b border-[var(--ti-border)] px-4 text-left hover:bg-[var(--ti-surface-hover)]"
-    title="Back to Live Meeting"
+    title="Back to Translate"
     onclick={() => onMeetingSection("live")}
   >
     <TranslateITMark size={38} />
@@ -87,7 +87,7 @@
         </button>
       {/each}
     {:else}
-      <p class="ti-channel-heading">MEETING</p>
+      <p class="ti-channel-heading">TRANSLATE</p>
       {#each meetingItems as item}
         {@const Icon = item.icon}
         <button type="button" class={"ti-channel-item w-full " + (active === "meeting" && meetingSection === item.id && !(item.id === "live" && meetingLive && selectedSessionId) ? "is-active" : "")}
@@ -95,9 +95,6 @@
           aria-label={item.label} onclick={() => onMeetingSection(item.id)}>
           <Icon size={18} strokeWidth={1.8} aria-hidden="true"/>
           <span class="truncate">{item.label}</span>
-          {#if item.id === "live" && meetingLive}
-            <span class="ml-auto size-2 rounded-full bg-[var(--ti-success)]" title="Meeting live"></span>
-          {/if}
         </button>
       {/each}
 

@@ -356,7 +356,7 @@
         <section aria-labelledby="transcript-appearance-heading">
           <h3 id="transcript-appearance-heading" class="m-0 text-[16px] font-semibold">Transcript Appearance</h3>
           <p class="mb-4 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">
-            Configure bilingual chat bubbles across Live Meeting, Last Meeting and Saved Transcripts.
+            Configure bilingual chat bubbles across Live Meeting, Last Meeting and Saved Meeting.
           </p>
           <TranscriptAppearanceSettings {onNotice} />
         </section>

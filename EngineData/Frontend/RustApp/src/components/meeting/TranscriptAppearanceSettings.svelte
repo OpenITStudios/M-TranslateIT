@@ -108,7 +108,7 @@
 
   <div class="flex flex-wrap items-center justify-between gap-3">
     <p class="m-0 max-w-[560px] text-[12px] leading-5 text-[var(--ti-text-muted)]">
-      These display settings apply to Live Meeting, Last Meeting and Saved Transcripts. No conversation or audio content is stored with these preferences.
+      These display settings apply to Live Meeting, Last Meeting and Saved Meeting. No conversation or audio content is stored with these preferences.
     </p>
     <button type="button" class="ti-button ti-button-secondary min-h-9 px-3 text-[12px]"
       onclick={reset}>Restore defaults</button>

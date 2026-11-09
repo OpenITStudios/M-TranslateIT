@@ -82,8 +82,7 @@
   <details bind:open={reviewOpen} class="ti-panel mt-4 overflow-hidden">
     <summary class="cursor-pointer px-5 py-4 hover:bg-[var(--ti-surface-soft)]">
       <strong class="block text-[15px] font-semibold">{sessionLabel} · Last session</strong>
-      <span class="mt-1 block text-sm text-[var(--ti-text-muted)]">Showing {snapshot.turns.length} recent phrase{snapshot.turns.length === 1 ? "" : "s"} · Meeting audio combines incoming sound; individual speakers are not identified.</span>
-      <span class="mt-1 block text-xs text-[var(--ti-warning)]">This is a quick view of the last Meeting. Saved Transcripts below keeps recorded sessions until you delete them.</span>
+      <span class="mt-1 block text-sm text-[var(--ti-text-muted)]">Showing {snapshot.turns.length} recent phrase{snapshot.turns.length === 1 ? "" : "s"}</span>
     </summary>
     <div class="border-t border-[var(--ti-border)]">
       <div class="flex flex-wrap items-center justify-end gap-2 px-5 py-3">
@@ -112,6 +111,6 @@
   </details>
 {:else if openByDefault}
   <p class="m-0 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-4 text-[13px] text-[var(--ti-text-muted)]" role="status">
-    No last Meeting transcript is currently available. Saved Transcripts may still contain earlier conversations.
+    No last Meeting transcript is available here. Earlier sessions may be in Saved Meeting.
   </p>
 {/if}

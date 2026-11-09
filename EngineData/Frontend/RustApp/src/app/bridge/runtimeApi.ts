@@ -205,7 +205,7 @@ export type MeetingLibraryProject = { project_id: string; name: string };
 export type MeetingLibrarySession = SavedMeetingSession & {
   display_name: string;
   project_id: string | null;
-  starred: boolean;
+  pinned: boolean;
 };
 export type MeetingLibrary = {
   ok: boolean;
@@ -217,12 +217,12 @@ export type MeetingLibrary = {
 };
 export type MeetingLibraryChange = {
   action: "create_project" | "rename_project" | "delete_project"
-    | "rename_meeting" | "star_meeting" | "move_meeting";
+    | "rename_meeting" | "pin_meeting" | "move_meeting";
   expectedRevision: number;
   sessionId?: string | null;
   projectId?: string | null;
   name?: string | null;
-  starred?: boolean | null;
+  pinned?: boolean | null;
 };
 export type SavedMeetingSessions = {
   ok: boolean;

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Folder, FolderPlus, Hash, MoreHorizontal, Pencil, Star, Trash2, FolderInput, ChevronDown } from "@lucide/svelte";
+  import { Folder, FolderPlus, Hash, MoreHorizontal, Pencil, Trash2, FolderInput, ChevronDown, Pin, PinOff } from "@lucide/svelte";
   import type { MeetingLibrary, MeetingLibraryChange, MeetingLibrarySession } from "../../app/bridge/runtimeApi";
 
   let {
@@ -22,7 +22,9 @@
   let busy = $state(false);
   let collapsed = $state<Record<string, boolean>>({});
 
-  const recent = $derived(library?.sessions.slice(0, 6) ?? []);
+  // Keep the latest archive order authoritative; Pin only affects presentation.
+  const recent = $derived([...(library?.sessions ?? [])]
+    .sort((a, b) => Number(b.pinned) - Number(a.pinned)).slice(0, 6));
   function clearMenus(): void { menu = null; edit = null; moving = null; confirmingDelete = null; }
   function openEdit(kind: Edit["kind"], id: string, previous = ""): void {
     menu = null; edit = { kind, id }; value = previous;
@@ -78,7 +80,7 @@
           <button type="button" class={"ti-channel-item min-w-0 flex-1 " + (selectedSessionId === session.session_id ? "is-active" : "")}
             aria-label={itemLabel(session)} aria-current={selectedSessionId === session.session_id ? "page" : undefined}
             title={itemLabel(session)} onclick={() => onOpenSession(session.session_id)}>
-            {#if session.starred}<Star size={16} class="shrink-0 text-[var(--ti-warning)]"/>{:else}<Hash size={16} class="shrink-0"/>{/if}
+            {#if session.pinned}<Pin size={16} class="shrink-0 text-[var(--ti-text-muted)]"/>{:else}<Hash size={16} class="shrink-0"/>{/if}
             <span class="min-w-0 flex-1 truncate">{itemLabel(session)}</span>
             {#if meetingLive && selectedSessionId === session.session_id}
               <span class="size-1.5 rounded-full bg-[var(--ti-success)]" title="Live"></span>
@@ -95,8 +97,8 @@
         {#if menu === session.session_id && library.ok}
           <div class="ti-library-menu">
             <button onclick={() => openEdit("rename_meeting", session.session_id, session.display_name)}><Pencil size={14}/> Rename</button>
-            <button onclick={() => void modify({ action: "star_meeting", sessionId: session.session_id, starred: !session.starred })}>
-              <Star size={14}/> {session.starred ? "Remove Star" : "Star Meeting"}
+            <button onclick={() => void modify({ action: "pin_meeting", sessionId: session.session_id, pinned: !session.pinned })}>
+              <PinOff size={14}/> {session.pinned ? "Unpin Meeting" : "Pin Meeting"}
             </button>
             <button onclick={() => { moving = session.session_id; menu = null; }}><FolderInput size={14}/> Move to Project</button>
             <button onclick={() => { confirmingDelete = session.session_id; menu = null; }}><Trash2 size={14}/> Delete</button>
@@ -135,10 +137,10 @@
       </div>
     {/if}
     {#if !collapsed[project.project_id]}
-      {#each library.sessions.filter(session => session.project_id === project.project_id) as session (session.session_id)}
+      {#each library.sessions.filter(session => session.project_id === project.project_id).sort((a, b) => Number(b.pinned) - Number(a.pinned)) as session (session.session_id)}
         <button type="button" class={"ti-channel-item ml-4 w-[calc(100%-1rem)] " + (selectedSessionId === session.session_id ? "is-active" : "")}
           title={session.display_name} onclick={() => onOpenSession(session.session_id)}>
-          <Hash size={15} class="shrink-0"/>
+          {#if session.pinned}<Pin size={15} class="shrink-0"/>{:else}<Hash size={15} class="shrink-0"/>{/if}
           <span class="min-w-0 truncate">{session.display_name}</span>
         </button>
       {/each}

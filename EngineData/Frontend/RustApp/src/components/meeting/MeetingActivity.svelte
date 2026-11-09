@@ -4,11 +4,11 @@
   import type { MeetingCommittedTurn, MeetingCommittedTurnsSnapshot, MeetingSessionStatus } from "../../app/bridge/runtimeApi";
   import { mapProductMeetingState } from "../../app/bridge/productMeetingState";
   import { languageName } from "../../app/shared/state";
-  import { meetingSessionTitle, meetingSpeakerLabel, meetingTime, meetingTranslationDisplay } from "../../app/runtime/meetingTranscriptPresentation";
+  import { meetingSpeakerLabel, meetingTime, meetingTranslationDisplay } from "../../app/runtime/meetingTranscriptPresentation";
   import MeetingTurnBubble from "./MeetingTurnBubble.svelte";
   import {
     DEFAULT_TRANSCRIPT_PREFERENCES, readTranscriptPreferences, subscribeTranscriptPreferences,
-    type TranscriptPreferences,
+    updateTranscriptPreferences, type TranscriptPreferences, type TranscriptTextMode,
   } from "./transcriptPreferences";
 
   let {
@@ -26,6 +26,7 @@
   let followingLatest = $state(true);
   let transcriptScroller = $state<HTMLDivElement>();
   let appearance = $state<TranscriptPreferences>({ ...DEFAULT_TRANSCRIPT_PREFERENCES });
+  let displayError = $state("");
 
   onMount(() => {
     // Browser preview fixtures stay deterministic and never read saved preferences.
@@ -89,6 +90,13 @@
     });
   });
 
+  function changeDisplay(mode: TranscriptTextMode): void {
+    if (previewReadOnly || mode === appearance.textMode) return;
+    const result = updateTranscriptPreferences({ textMode: mode });
+    appearance = result.preferences;
+    displayError = result.ok ? "" : "Display preference could not be saved; the previous selection was kept.";
+  }
+
   function updateScrollPosition(): void {
     if (!transcriptScroller) return;
     const distance = transcriptScroller.scrollHeight - transcriptScroller.scrollTop - transcriptScroller.clientHeight;
@@ -132,16 +140,6 @@
 </script>
 
 <section class="flex h-full min-h-0 flex-col gap-3">
-  <div class="flex flex-wrap items-center justify-between gap-3" role="status" aria-live="polite" aria-atomic="true">
-    <div class="flex items-center gap-3">
-      <span class={`size-2 shrink-0 rounded-full ${activity.warning ? "bg-[var(--ti-warning)]" : "bg-[var(--ti-success)]"}`} aria-hidden="true"></span>
-      <strong class="text-base font-semibold">{activity.label}</strong>
-    </div>
-    {#if status.incoming.capture_active && !status.incoming.degraded}
-      <span class="text-sm text-[var(--ti-text-muted)]">Meeting audio capture active · speakers not identified</span>
-    {/if}
-  </div>
-
   {#if activity.warning}
     <p class="m-0 text-sm leading-6 text-[var(--ti-warning)]">{activity.detail}</p>
   {/if}
@@ -168,15 +166,30 @@
 
   <section class="flex min-h-0 flex-1 flex-col border-t border-[var(--ti-border)] pt-3" aria-label="Translated conversation">
     <header class="flex shrink-0 flex-wrap items-center justify-between gap-3 pb-3">
-      <div class="flex items-baseline gap-3">
+      <div class="flex min-w-0 items-center gap-3">
         <h3 class="m-0 text-base font-semibold">Transcript</h3>
-        <span class="text-xs text-[var(--ti-text-muted)]">{meetingSessionTitle(status.started_unix_ms)}</span>
         {#if orderedTurns.length > 0}
-          <span class="text-sm text-[var(--ti-text-muted)]">{orderedTurns.length} phrase{orderedTurns.length === 1 ? "" : "s"}</span>
+          <span class="text-[12px] text-[var(--ti-text-muted)]">{orderedTurns.length} phrase{orderedTurns.length === 1 ? "" : "s"}</span>
+        {/if}
+        {#if activity.label !== "Listening" && !activity.warning}
+          <span class="text-[12px] text-[var(--ti-text-muted)]" role="status">{activity.label}</span>
         {/if}
       </div>
-      <span class="text-xs text-[var(--ti-text-muted)]">Meeting audio is combined; individual speakers are not identified.</span>
+      <div class="flex shrink-0 items-center gap-2">
+        <label for="ti-transcript-display" class="text-[12px] text-[var(--ti-text-muted)]">Display</label>
+        <select id="ti-transcript-display" class="min-h-9 rounded-[var(--ti-radius-sm)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] px-2.5 text-[12px] font-medium text-[var(--ti-text)]"
+          aria-label="Transcript display mode"
+          title="Show both original and translation, or translated result only"
+          value={appearance.textMode} disabled={previewReadOnly}
+          onchange={(event) => changeDisplay(event.currentTarget.value as TranscriptTextMode)}>
+          <option value="both">Both</option>
+          <option value="translation-only">Translation</option>
+        </select>
+      </div>
     </header>
+    {#if displayError}
+      <p class="m-0 pb-2 text-[12px] text-[var(--ti-warning)]" role="alert">{displayError}</p>
+    {/if}
 
     {#if !turns || !turns.ok || !turns.has_session || turns.session_id !== status.session_id}
       <p class="m-0 py-6 text-sm leading-6 text-[var(--ti-text-muted)]">Conversation is temporarily unavailable. You can still stop translation.</p>

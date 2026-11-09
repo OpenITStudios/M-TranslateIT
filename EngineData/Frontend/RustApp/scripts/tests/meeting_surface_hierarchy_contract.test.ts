@@ -106,7 +106,7 @@ test("Last-session transcript is private-by-default and export remains explicit"
   assert.match(review, /<details bind:open=\{reviewOpen\}/);
   assert.match(review, /reviewOpen = false/);
   assert.match(review, /getRecentMeetingTranscript\(\)/);
-  assert.match(review, /Saved Transcripts below keeps recorded sessions until you delete them/);
+  assert.match(review, /Earlier sessions may be in Saved Meeting/);
   assert.doesNotMatch(review, /<MeetingTranscriptExport/);
   assert.match(meeting, /<MeetingTranscriptExport hasSession=\{meeting\.hasSession\}/);
   assert.doesNotMatch(review, /\$effect\([\s\S]{0,250}exportMeetingTranscript\(/);
@@ -120,8 +120,12 @@ test("live and last-session transcript reuse one Discord-style bilingual lane-aw
   assert.match(bubble, /meetingSpeakerLabel\(turn\.lane\)/);
   assert.match(bubble, /turn\.created_unix_ms/);
   assert.match(bubble, /Original/);
-  assert.match(live, /Meeting audio is combined; individual speakers are not identified/);
-  assert.match(review, /Meeting audio combines incoming sound; individual speakers are not identified/);
+  // Speaker identity remains available in bubble accessibility metadata,
+  // without repeating technical explanations in the transcript toolbar.
+  assert.doesNotMatch(live, /Meeting audio is combined; individual speakers are not identified/);
+  const labels = readFileSync(new URL("../../src/app/runtime/meetingTranscriptPresentation.ts", import.meta.url), "utf8");
+  assert.match(labels, /Combined incoming audio; speakers are not identified/);
+  assert.doesNotMatch(review, /Meeting audio combines incoming sound; individual speakers are not identified/);
   assert.match(bubble, /Translation/);
   assert.doesNotMatch(bubble, /Person 2|speaker_id|diarizationResult/);
 });
@@ -146,7 +150,8 @@ test("Discord-inspired shell uses exactly one sidebar, channel navigation, and b
   assert.equal((app.match(/<Sidebar\b/g) ?? []).length, 1);
   assert.match(app, /meetingSection = \$state<"live" \| "last" \| "saved" \| "session">/);
   assert.match(sidebar, /onMeetingSection\("live"\)/);
-  assert.match(sidebar, /Start Meeting/);
+  assert.match(sidebar, /<p class="ti-channel-heading">TRANSLATE<\/p>/);
+  assert.match(sidebar, /label: "Start"/);
   assert.match(sidebar, /Last Meeting/);
   assert.match(sidebar, /Saved Meeting/);
   assert.match(sidebar, /<SidebarUserControls/);
@@ -189,12 +194,23 @@ test("Discord-like footer groups Voice Actor, Mute, device dropdown and Settings
   assert.match(controls, /onOpenAudioSettings\(\)/);
 });
 
-test("One header contains Audio Sent, Display and Captions without stacking additional toolbars", () => {
+test("One header contains Audio Sent and More, with Display in Transcript itself", () => {
+  const overlay = readFileSync(new URL("../../src/app/runtime/translationOverlayRuntime.ts", import.meta.url), "utf8");
   assert.match(header, /aria-label="TranslateIT workspace header"/);
   assert.match(header, /aria-label="Audio sent to meeting"/);
-  assert.match(header, /aria-label="Transcript display mode"/);
-  assert.match(header, /aria-label="Floating Captions"/);
-  assert.match(header, /aria-label="Open Quick Access"/);
+  assert.match(header, /aria-label="More meeting controls"/);
+  assert.match(header, /Floating Captions/);
+  assert.match(header, /Quick Access/);
+  assert.match(header, /toggleFloatingCaptions\(\)/);
+  assert.match(header, /aria-haspopup="menu"/);
+  assert.match(overlay, /export async function toggleFloatingCaptions\(/);
+  assert.match(overlay, /await window\.isVisible\(\)/);
+  assert.match(overlay, /updateOverlayPreferences\(\{ meetingEnabled: true \}\)/);
+  assert.match(live, /id="ti-transcript-display"/);
+  assert.match(live, /updateTranscriptPreferences\(\{ textMode: mode \}\)/);
+  assert.match(live, /<option value="both">Both<\/option>/);
+  assert.match(live, /<option value="translation-only">Translation<\/option>/);
+  assert.doesNotMatch(header, /aria-label="Transcript display mode"/);
   assert.doesNotMatch(meeting, /aria-label="Live Meeting toolbar"|meeting-audio-source|Floating Captions/);
   assert.match(meeting, /ti-call-stop/);
   assert.match(meeting, /onclick=\{handlePrimary\}/);
@@ -289,16 +305,30 @@ test("Meetings organize by native ID, retaining archive source and storage statu
   assert.match(app, /selectedSessionId = result\.status\.session_id/);
   assert.match(library, /Rename Meeting/);
   assert.match(library, /Move to Project/);
-  assert.match(library, /Star Meeting/);
+  assert.match(library, /Pin Meeting/);
+  assert.match(library, /Unpin Meeting/);
+  assert.doesNotMatch(library, /Star Meeting|Remove Star|<Star|star_meeting/);
   assert.match(library, /Create Project category/);
   assert.match(library, /Delete Project/);
   assert.match(channel, /getSavedMeetingTranscriptPreview/);
   assert.match(native, /expected_revision/);
   assert.match(native, /saved_session_operation_guard/);
+  assert.match(native, /alias = "starred"/);
+  assert.match(native, /"pin_meeting" => item\.pinned/);
+  assert.match(native, /legacy_starred_catalog_entries_migrate_to_pinned_without_losing_state/);
   assert.match(native, /session_id: id\.to_string\(\)/);
   assert.match(native, /Damaged category metadata must not hide or mutate intact archives/);
   assert.match(registry, /list_meeting_library/);
   assert.match(registry, /update_meeting_library/);
+});
+
+test("Ready state uses one Start action and a concise call setup instruction", () => {
+  assert.match(meeting, /Ready to Translate/);
+  assert.match(meeting, /Select TranslateIT as your microphone in Discord or Zoom, then select Start/);
+  assert.match(meeting, /: "Start"/);
+  assert.equal((meeting.match(/onclick=\{handlePrimary\}/g) ?? []).length, 1);
+  assert.doesNotMatch(live, /Meeting audio capture active · speakers not identified/);
+  assert.doesNotMatch(live, /Meeting audio is combined; individual speakers are not identified/);
 });
 
 test("Transcript display mode only changes presentation; failures retain original text", () => {

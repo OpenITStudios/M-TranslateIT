@@ -212,7 +212,7 @@ async function main() {
     };
     const primary = await frame.locator('footer[aria-label="Meeting main action"] button').last().textContent();
     const expectedPrimary = input.scenario === "cleanup" ? "Retry Stop"
-      : input.scenario === "ready" ? "Start Translation" : "Stop Meeting";
+      : input.scenario === "ready" ? "Start" : "Stop Meeting";
     checks.truthful_primary_action = (primary ?? "").includes(expectedPrimary);
     if (input.scenario !== "ready" && input.scenario !== "cleanup") {
       const incoming = frame.locator('article[aria-label="Meeting audio"]').first();

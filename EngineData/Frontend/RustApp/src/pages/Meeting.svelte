@@ -90,14 +90,14 @@
   const primaryLabel = $derived(
     primaryControl.action === "stop"
       ? meeting.lifecycle === "cleanup_incomplete" ? primaryControl.label : "Stop Meeting"
-      : currentSource === "original" && originalAvailable ? "Start Original Microphone"
+      : currentSource === "original" && originalAvailable ? "Start"
       : currentSource === "original" && !meeting.hasSession ? "Check Audio Setup"
       : meeting.busy || actionBusy ? primaryControl.label
       : resumeBusy ? "Opening setup..."
       : needsSetup ? "Finish Setup"
       : needsVoice ? "Choose Voice"
       : needsSettings ? "Open Settings"
-      : "Start Translation"
+      : "Start"
   );
   const statusMessage = $derived(
     meeting.canStop || meeting.hasSession
@@ -133,8 +133,14 @@
       {:else}
         <div class="flex min-h-[280px] flex-col items-center justify-center gap-3 text-center">
           <Hash size={28} class="text-[var(--ti-text-soft)]" aria-hidden="true"/>
-          <h3 class="m-0 text-[19px] font-semibold">{meeting.live ? "Original Microphone is live" : "Ready for your meeting"}</h3>
-          <p class="m-0 max-w-[520px] text-[13px] leading-6 text-[var(--ti-text-muted)]" role="status" aria-live="polite">{statusMessage}</p>
+          <h3 class="m-0 text-[19px] font-semibold">{meeting.live ? "Original Microphone is live" : "Ready to Translate"}</h3>
+          <p class="m-0 max-w-[520px] text-[13px] leading-6 text-[var(--ti-text-muted)]" role="status" aria-live="polite">
+            {meeting.live ? statusMessage
+              : originalAvailable ? "Original Microphone sends your voice without translation. Select Start to begin."
+              : snapshot.readiness.meetingReady && !needsSetup && !needsVoice
+                ? "Select TranslateIT as your microphone in Discord or Zoom, then select Start."
+                : statusMessage}
+          </p>
           {#if meeting.live && meetingStatus?.audio_source === "original"}
             <p class="m-0 text-[12px] text-[var(--ti-text-soft)]">Original Microphone bypasses translation; no translated transcript is generated for your outbound speech.</p>
           {/if}

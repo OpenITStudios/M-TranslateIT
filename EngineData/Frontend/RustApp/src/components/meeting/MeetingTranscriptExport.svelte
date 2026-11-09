@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Check, Copy, Download, ExternalLink, FolderOpen, RefreshCw, Trash2 } from "@lucide/svelte";
+  import { Check, Copy, Download, ExternalLink, FolderOpen, RefreshCw, Trash2, Pin } from "@lucide/svelte";
   import { runtimeApi, type MeetingCommittedTurn, type MeetingCommittedTurnsSnapshot, type MeetingLibrary } from "../../app/bridge/runtimeApi";
   import { languageName } from "../../app/shared/state";
   import { meetingSpeakerLabel, meetingTime } from "../../app/runtime/meetingTranscriptPresentation";
@@ -16,6 +16,10 @@
     onDeleted?: () => void;
   } = $props();
   let history = $state<MeetingLibrary | null>(null);
+  // Pin is a presentation preference. The latest native archive order still
+  // determines Last Meeting; this ordering is only for the Saved list.
+  const visibleSessions = $derived([...(history?.sessions ?? [])]
+    .sort((a, b) => Number(b.pinned) - Number(a.pinned)));
   let appearance = $state<TranscriptPreferences>({ ...DEFAULT_TRANSCRIPT_PREFERENCES });
   onMount(() => {
     appearance = readTranscriptPreferences();
@@ -240,11 +244,14 @@
     </p>
   {:else}
     <div class="divide-y divide-[var(--ti-border)] border-t border-[var(--ti-border)]">
-      {#each history.sessions as session (session.session_id)}
+      {#each visibleSessions as session (session.session_id)}
         <div class="grid gap-3 px-5 py-4">
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div class="min-w-0">
-              <strong class="block text-[13px] font-semibold">{sessionLabel(session.session_id)}</strong>
+              <strong class="flex items-center gap-2 text-[13px] font-semibold">
+                {#if session.pinned}<Pin size={14} class="shrink-0 text-[var(--ti-text-muted)]" aria-label="Pinned Meeting"/>{/if}
+                <span class="min-w-0 truncate">{sessionLabel(session.session_id)}</span>
+              </strong>
               <p class="m-0 mt-1 text-[13px] text-[var(--ti-text-muted)]">
                 {session.entry_count === 0 ? "No recognized entries" : `${session.entry_count} saved entries`} · {session.complete ? "Finalized (entry count checked)" : "Storage finalization unverified"}
               </p>
