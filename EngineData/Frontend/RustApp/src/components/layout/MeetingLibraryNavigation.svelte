@@ -21,6 +21,7 @@
 
   type Edit = { kind: "create_project" | "rename_project" | "rename_meeting"; id: string };
   let menu = $state<string | null>(null);
+  let menuStyle = $state("visibility:hidden");
   let edit = $state<Edit | null>(null);
   let value = $state("");
   let moving = $state<string | null>(null);
@@ -56,19 +57,35 @@
   }
   function clearMenus(): void {
     menu = null;
+    menuStyle = "visibility:hidden";
     edit = null;
     moving = null;
     confirmingDelete = null;
   }
   // One exclusive action surface across Recent, Project and category rows.
   // No independent menus may open for duplicate appearances of one session.
-  function toggleMenu(key: string, trigger: HTMLButtonElement): void {
+  async function toggleMenu(key: string, trigger: HTMLButtonElement): Promise<void> {
     if (busy) return;
     const next = menu === key ? null : key;
     if (next === null) { dismissActions(); return; }
     clearMenus();
     returnFocus = trigger;
+    menuStyle = "visibility:hidden";
     menu = next;
+    await tick();
+    if (menu !== next || !trigger.isConnected) return;
+    const popup = trigger.closest(".ti-library-popup-anchor")?.querySelector<HTMLElement>(".ti-library-menu");
+    if (!popup) return;
+    const rect = trigger.getBoundingClientRect();
+    const width = Math.min(216, Math.max(160, window.innerWidth - 16));
+    const height = popup.getBoundingClientRect().height;
+    const top = rect.bottom + 5 + height <= window.innerHeight - 8
+      ? rect.bottom + 5 : Math.max(8, rect.top - height - 5);
+    const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width));
+    menuStyle = `top:${Math.round(top)}px;left:${Math.round(left)}px;width:${width}px;max-height:calc(100vh - 16px);overflow-y:auto`;
+  }
+  function closeMenuOnViewportChange(): void {
+    if (menu !== null && !busy) { menu = null; menuStyle = "visibility:hidden"; }
   }
   function openSession(sessionId: string, surface: "recent" | "project"): void {
     if (busy) return;
@@ -183,7 +200,7 @@
   {/if}
 {/snippet}
 
-<svelte:window onkeydown={handleEscape} />
+<svelte:window onkeydown={handleEscape} onresize={closeMenuOnViewportChange} onscroll={closeMenuOnViewportChange} />
 
 {#if library === null}
   <p class="mx-3 my-3 text-[12px] text-[var(--ti-text-soft)]">Checking saved Meetings...</p>
@@ -226,7 +243,7 @@
           </button>
         </div>
         {#if menu === "recent:" + session.session_id && library.ok}
-          <div class="ti-library-menu">
+          <div class="ti-library-menu" style={menuStyle}>
             <button onclick={() => openEdit("rename_meeting", session.session_id, session.display_name)}><Pencil size={14}/> Rename</button>
             <button onclick={() => void modify({ action: "pin_meeting", sessionId: session.session_id, pinned: !session.pinned })}>
               {#if session.pinned}<PinOff size={14}/>{:else}<Pin size={14}/>{/if} {session.pinned ? "Unpin Meeting" : "Pin Meeting"}
@@ -274,7 +291,7 @@
           onclick={(event) => toggleMenu("project:" + session.session_id, event.currentTarget)}><MoreHorizontal size={16}/></button>
       </div>
       {#if menu === "project:" + session.session_id && library.ok}
-        <div class="ti-library-menu ml-5">
+        <div class="ti-library-menu" style={menuStyle}>
           <button type="button" onclick={() => openEdit("rename_meeting", session.session_id, session.display_name, "project")}><Pencil size={14}/> Rename</button>
           <button type="button" onclick={() => void modify({ action: "pin_meeting", sessionId: session.session_id, pinned: !session.pinned })}>
             {#if session.pinned}<PinOff size={14}/>{:else}<Pin size={14}/>{/if} {session.pinned ? "Unpin Meeting" : "Pin Meeting"}
@@ -308,7 +325,7 @@
       </button>
     </div>
     {#if menu === "category:" + project.project_id && library.ok}
-      <div class="ti-library-menu">
+      <div class="ti-library-menu" style={menuStyle}>
         <button onclick={() => openEdit("rename_project", project.project_id, project.name)}><Pencil size={14}/> Rename Project</button>
         <button onclick={() => requestDelete(project.project_id)}><Trash2 size={14}/> Delete Project</button>
       </div>
@@ -342,7 +359,7 @@
           </button>
         </div>
         {#if menu === "project:" + session.session_id && library.ok}
-          <div class="ti-library-menu ml-5">
+          <div class="ti-library-menu" style={menuStyle}>
             <button type="button" onclick={() => openEdit("rename_meeting", session.session_id, session.display_name, "project")}>
               <Pencil size={14}/> Rename
             </button>
