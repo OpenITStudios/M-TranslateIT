@@ -443,10 +443,11 @@
 
   .ti-library-menu button {
     display: flex;
-    min-height: 34px;
+    min-height: 36px;
+    width: 100%;
     align-items: center;
-    gap: 8px;
-    padding: 5px 9px;
+    gap: 9px;
+    padding: 6px 10px;
     border: 0;
     border-radius: 6px;
     background: transparent;
@@ -455,9 +456,18 @@
     font-size: 12px;
   }
 
-  .ti-library-menu button:hover {
+  .ti-library-menu button:hover,
+  .ti-library-menu button:focus-visible {
     background: var(--ti-surface-hover);
     color: var(--ti-text);
+  }
+  .ti-library-menu button:focus-visible {
+    outline: 2px solid var(--ti-accent);
+    outline-offset: -2px;
+  }
+  .ti-library-menu button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   .ti-library-editor {
