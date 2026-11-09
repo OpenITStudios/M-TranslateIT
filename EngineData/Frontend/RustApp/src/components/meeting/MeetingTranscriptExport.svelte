@@ -244,9 +244,9 @@
       No Meeting archives have been saved yet.
     </p>
   {:else}
-    <div class="divide-y divide-[var(--ti-border)] border-t border-[var(--ti-border)]">
+    <div class="grid gap-2 border-t border-[var(--ti-border)] px-3 py-3">
       {#each visibleSessions as session (session.session_id)}
-        <div class="grid gap-3 px-5 py-4">
+        <div class="grid gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] px-4 py-4">
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div class="min-w-0">
               <strong class="flex items-center gap-2 text-[13px] font-semibold">
@@ -267,14 +267,11 @@
                 onclick={() => onOpenSession?.(session.session_id)}>
                 Open channel
               </button>
-              <details class="min-w-[155px] max-w-full rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)]">
+              <details class="min-w-[125px] max-w-full rounded-[var(--ti-radius-sm)] border border-[var(--ti-border)] bg-[var(--ti-bg)]">
                 <summary class="min-h-10 cursor-pointer px-3 py-2.5 text-[13px] font-medium text-[var(--ti-text)] hover:bg-[var(--ti-surface-hover)]"
                   aria-label={`More actions for saved transcript ${sessionLabel(session.session_id)}`}>More options</summary>
                 <div class="grid gap-2 border-t border-[var(--ti-border)] p-2" role="group"
                   aria-label={`Transcript file actions for ${sessionLabel(session.session_id)}`}>
-                  <button type="button" class="ti-button ti-button-secondary min-h-10 w-full justify-start px-3 text-[13px]"
-                    aria-expanded={expanded === session.session_id} disabled={busy || session.entry_count === 0}
-                    onclick={() => void togglePreview(session.session_id)}>{expanded === session.session_id ? "Hide inline preview" : "Preview inline"}</button>
                   <button type="button" class="ti-button ti-button-secondary min-h-10 w-full justify-start px-3 text-[13px]"
                     disabled={busy || previewBusy || session.entry_count === 0} aria-expanded={htmlSample?.sessionId === session.session_id}
                     aria-label={`${htmlSample?.sessionId === session.session_id ? "Hide HTML preview" : "Preview HTML"} for saved transcript ${sessionLabel(session.session_id)}`}
