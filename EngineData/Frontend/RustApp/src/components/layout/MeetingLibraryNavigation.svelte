@@ -127,7 +127,7 @@
       <p class="m-0 text-[12px] font-semibold">Move Meeting to Project</p>
       <button class="ti-library-small w-full text-left" disabled={busy}
         onclick={() => void modify({ action: "move_meeting", sessionId: moving, projectId: null })}>Uncategorized</button>
-      {#each library.projects as project (project.project_id)}
+      {#each (library?.projects ?? []) as project (project.project_id)}
         <button class="ti-library-small w-full text-left" disabled={busy}
           onclick={() => void modify({ action: "move_meeting", sessionId: moving, projectId: project.project_id })}>{project.name}</button>
       {/each}
