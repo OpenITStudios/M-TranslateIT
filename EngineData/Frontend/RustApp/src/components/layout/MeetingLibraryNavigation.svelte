@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import { Folder, FolderPlus, Hash, MoreHorizontal, Pencil, Trash2, FolderInput, ChevronDown, Pin, PinOff } from "@lucide/svelte";
   import type { MeetingLibrary, MeetingLibraryChange, MeetingLibrarySession } from "../../app/bridge/runtimeApi";
   import { pinnedFirst, recentMeetings } from "./meetingNavigationOrder";
@@ -25,6 +26,7 @@
   let moving = $state<string | null>(null);
   let confirmingDelete = $state<string | null>(null);
   let busy = $state(false);
+  let returnFocus = $state<HTMLButtonElement | null>(null);
   let collapsed = $state<Record<string, boolean>>({});
   let actionSurface = $state<"recent" | "project">("recent");
   const deletingProject = $derived(Boolean(confirmingDelete && library?.projects.some(project => project.project_id === confirmingDelete)));
@@ -35,6 +37,15 @@
   function selectedIn(session: MeetingLibrarySession, surface: "recent" | "project"): boolean {
     return selectedSessionId === session.session_id && selectedSurface === surface;
   }
+  async function restoreFocus(): Promise<void> {
+    await tick();
+    if (returnFocus?.isConnected) returnFocus.focus();
+    returnFocus = null;
+  }
+  function dismissActions(): void {
+    clearMenus();
+    void restoreFocus();
+  }
   function clearMenus(): void {
     menu = null;
     edit = null;
@@ -43,10 +54,12 @@
   }
   // One exclusive action surface across Recent, Project and category rows.
   // No independent menus may open for duplicate appearances of one session.
-  function toggleMenu(key: string): void {
+  function toggleMenu(key: string, trigger: HTMLButtonElement): void {
     if (busy) return;
     const next = menu === key ? null : key;
+    if (next === null) { dismissActions(); return; }
     clearMenus();
+    returnFocus = trigger;
     menu = next;
   }
   function openSession(sessionId: string, surface: "recent" | "project"): void {
@@ -80,7 +93,7 @@
     if (event.key === "Escape" && (menu !== null || edit !== null ||
       moving !== null || confirmingDelete !== null)) {
       event.preventDefault();
-      clearMenus();
+      dismissActions();
     }
   }
   async function commitEdit(): Promise<void> {
@@ -92,13 +105,13 @@
         : edit.kind === "rename_project"
           ? { action: "rename_project", projectId: edit.id, name: value }
           : { action: "rename_meeting", sessionId: edit.id, name: value };
-      if (await onChange(action)) { edit = null; value = ""; }
+      if (await onChange(action)) { edit = null; value = ""; void restoreFocus(); }
     } finally { busy = false; }
   }
   async function modify(action: Omit<MeetingLibraryChange, "expectedRevision">): Promise<void> {
     if (busy) return;
     busy = true;
-    try { if (await onChange(action)) clearMenus(); }
+    try { if (await onChange(action)) dismissActions(); }
     finally { busy = false; }
   }
   async function deleteConfirmed(id: string): Promise<void> {
@@ -108,7 +121,7 @@
       const ok = library?.projects.some(project => project.project_id === id)
         ? await onChange({ action: "delete_project", projectId: id })
         : await onDeleteSession(id);
-      if (ok) clearMenus();
+      if (ok) dismissActions();
     } finally { busy = false; }
   }
   function itemLabel(session: MeetingLibrarySession): string {
@@ -125,7 +138,7 @@
       <input id="ti-library-edit-name" class="ti-field min-h-9 px-2 text-[13px]" maxlength="80" required
         bind:value={value} placeholder="Enter name"/>
       <div class="mt-2 flex justify-end gap-2">
-        <button type="button" class="ti-library-small" disabled={busy} onclick={() => edit = null}>Cancel</button>
+        <button type="button" class="ti-library-small" disabled={busy} onclick={dismissActions}>Cancel</button>
         <button type="submit" class="ti-library-small ti-library-primary" disabled={busy || !library.ok || !value.trim()}>Save</button>
       </div>
     </form>
@@ -139,7 +152,7 @@
         <button class="ti-library-small w-full text-left" disabled={busy}
           onclick={() => void modify({ action: "move_meeting", sessionId: moving, projectId: project.project_id })}>{project.name}</button>
       {/each}
-      <button class="ti-library-small w-full text-left" disabled={busy} onclick={() => moving = null}>Cancel</button>
+      <button class="ti-library-small w-full text-left" disabled={busy} onclick={dismissActions}>Cancel</button>
     </div>
   {/if}
   {#if confirmingDelete && target === (deletingProject ? "project:" : actionSurface + ":") + confirmingDelete}
@@ -151,7 +164,7 @@
           : "Delete this Meeting's local transcript? Exported HTML files remain."}
       </p>
       <div class="mt-2 flex justify-end gap-2">
-        <button class="ti-library-small" disabled={busy} onclick={() => confirmingDelete = null}>Cancel</button>
+        <button class="ti-library-small" disabled={busy} onclick={dismissActions}>Cancel</button>
         <button class="ti-library-small ti-library-danger" disabled={busy}
           onclick={() => { if (confirmingDelete) void deleteConfirmed(confirmingDelete); }}>Confirm Delete</button>
       </div>
@@ -195,7 +208,7 @@
           <button type="button" class="ti-library-more" aria-label={"Manage " + itemLabel(session)}
             aria-expanded={menu === "recent:" + session.session_id}
             disabled={!library.ok || busy}
-            onclick={() => toggleMenu("recent:" + session.session_id)}>
+            onclick={(event) => toggleMenu("recent:" + session.session_id, event.currentTarget)}>
             <MoreHorizontal size={16}/>
           </button>
         </div>
@@ -237,7 +250,7 @@
       <button type="button" class="ti-library-more" aria-label={"Manage Project " + project.name}
         aria-expanded={menu === "category:" + project.project_id}
         disabled={!library.ok || busy}
-        onclick={() => toggleMenu("category:" + project.project_id)}>
+        onclick={(event) => toggleMenu("category:" + project.project_id, event.currentTarget)}>
         <MoreHorizontal size={16}/>
       </button>
     </div>
@@ -269,7 +282,7 @@
             aria-label={"Manage " + session.display_name + " in Project"}
             aria-expanded={menu === "project:" + session.session_id}
             disabled={!library.ok || busy}
-            onclick={() => toggleMenu("project:" + session.session_id)}>
+            onclick={(event) => toggleMenu("project:" + session.session_id, event.currentTarget)}>
             <MoreHorizontal size={16}/>
           </button>
         </div>
