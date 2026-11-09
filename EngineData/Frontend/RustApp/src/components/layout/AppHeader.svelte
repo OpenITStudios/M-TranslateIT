@@ -142,7 +142,10 @@
     {#if route === "meeting"}<Hash size={19} class="shrink-0 text-[var(--ti-text-soft)]" aria-hidden="true"/>{/if}
     <strong class="min-w-0 max-w-[220px] truncate text-[15px] font-semibold" title={routeTitle}>{routeTitle}</strong>
     {#if route === "meeting" && meetingSection === "live" && snapshot.meeting.live}
-      <span class="ml-1 inline-flex min-h-6 items-center rounded-[6px] border border-[var(--ti-success-border)] bg-[var(--ti-success-surface)] px-2 text-[11px] font-semibold text-[var(--ti-success)]">Live</span>
+      <span class="ml-1 inline-flex min-h-6 items-center rounded-[6px] border border-[var(--ti-success-border)] bg-[var(--ti-success-surface)] px-2 text-[11px] font-semibold text-[var(--ti-success)]" title="Meeting session is active">Live</span>
+      {#if snapshot.meetingSession?.muted}
+        <span class="inline-flex min-h-6 items-center rounded-[6px] border border-[var(--ti-warning-border)] bg-[var(--ti-warning-surface)] px-2 text-[11px] font-semibold text-[var(--ti-warning)]" role="status" title="Audio sent to the meeting is muted">Muted</span>
+      {/if}
     {/if}
   </div>
 
