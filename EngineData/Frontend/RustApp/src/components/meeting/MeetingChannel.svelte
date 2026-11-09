@@ -36,6 +36,9 @@
   });
   $effect(() => {
     const id = session.session_id;
+    // A search belongs to the selected channel; never carry it into another archive.
+    query = "";
+    copied = false;
     if (!previewReadOnly) void load(id);
   });
   async function load(id: string): Promise<void> {
