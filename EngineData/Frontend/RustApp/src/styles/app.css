@@ -770,9 +770,7 @@
     border-bottom-left-radius: 4px;
   }
 
-  @media (max-width: 800px) {
-    .ti-chat-bubble { width: min(90%, 680px); }
-  }
+
 
   .ti-chat-meta {
     color: var(--ti-text-muted);
@@ -872,6 +870,12 @@
   .ti-appbar {
     padding-inline: 16px;
   }
+}
+
+/* Narrow viewport rule must come after the 1120px bubble rule.
+   Otherwise the later 1120px declaration overrides the intended 800px width. */
+@media (max-width: 800px) {
+  .ti-chat-bubble { width: min(90%, 680px); }
 }
 
 @media (prefers-reduced-motion: reduce) {
