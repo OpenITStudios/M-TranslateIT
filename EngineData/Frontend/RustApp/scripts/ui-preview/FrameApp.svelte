@@ -4,13 +4,18 @@
   import Sidebar from "../../src/components/layout/Sidebar.svelte";
   import AppHeader from "../../src/components/layout/AppHeader.svelte";
   import Meeting from "../../src/pages/Meeting.svelte";
-  import { makePreviewFixture, PREVIEW_SCENARIOS, type PreviewScenario } from "./fixtures";
+  import MyVoice from "../../src/pages/MyVoice.svelte";
+  import { makePreviewFixture, makeMyVoicePreviewFixture, isMyVoicePreviewScenario,
+    PREVIEW_SCENARIOS, type MeetingPreviewScenario, type PreviewScenario } from "./fixtures";
 
   const requested = new URLSearchParams(window.location.search).get("scenario");
   const scenario: PreviewScenario = PREVIEW_SCENARIOS.some((item) => item.id === requested)
     ? (requested as PreviewScenario)
     : "ready";
-  const fixture = makePreviewFixture(scenario);
+  const voiceScenario = isMyVoicePreviewScenario(scenario) ? scenario : null;
+  const meetingScenario: MeetingPreviewScenario = isMyVoicePreviewScenario(scenario) ? "ready" : scenario;
+  const fixture = makePreviewFixture(meetingScenario);
+  const voiceFixture = voiceScenario ? makeMyVoicePreviewFixture(voiceScenario) : null;
   const presence = fixture.snapshot.meeting.label;
   const notice = scenario === "cleanup"
     ? appNotice("Stop required: native cleanup is not verified in this synthetic scenario.", "attention")
@@ -26,7 +31,7 @@
 <!-- All app UI is inert. Only outer selector controls can alter which fixture is rendered. -->
 <div data-preview-frame-root data-preview-scenario={scenario} data-preview-synthetic="true"
   inert class="flex h-screen min-h-0 w-screen overflow-hidden bg-[var(--ti-bg)] text-[var(--ti-text)]">
-  <Sidebar active="meeting" {presence} meetingSection="live" settingsTab="meeting"
+  <Sidebar active={voiceFixture ? "my-voice" : "meeting"} {presence} meetingSection="live" settingsTab="meeting"
     meetingLive={fixture.snapshot.meeting.live}
     meetingMuted={fixture.meetingStatus.muted}
     settings={fixture.snapshot.settings}
@@ -37,15 +42,22 @@
     onSettingsChange={noOperation} onRefresh={noOperation}
     onVoiceChanged={noOperation} onNotice={noOperation}/>
   <main class="flex min-w-0 flex-1 flex-col overflow-hidden">
-    <AppHeader snapshot={fixture.snapshot} route="meeting" meetingSection="live"
+    <AppHeader snapshot={fixture.snapshot} route={voiceFixture ? "my-voice" : "meeting"} meetingSection="live"
       {notice} myVoiceRecording={false} showUpdateAction={false}
       onNavigate={noNavigation} onNotice={noOperation} onRefresh={noOperation}
       previewReadOnly={true}/>
-    <div class="min-h-0 flex-1 overflow-hidden">
-      <Meeting section="live" snapshot={fixture.snapshot} previewReadOnly={true}
-        meetingStatus={fixture.meetingStatus} meetingTurns={fixture.turns}
-        onMeetingAction={noOperation}
-        onRefresh={noOperation} onNavigate={noNavigation}/>
+    <div class={voiceFixture ? "min-h-0 flex-1 overflow-y-auto" : "min-h-0 flex-1 overflow-hidden"}>
+      {#if voiceFixture}
+        <MyVoice previewReadOnly={true} previewFixture={voiceFixture}
+          voiceChangesLocked={false}
+          onNotice={noOperation} onRecordingChange={noOperation}
+          onMeetingVoiceChanged={noOperation}/>
+      {:else}
+        <Meeting section="live" snapshot={fixture.snapshot} previewReadOnly={true}
+          meetingStatus={fixture.meetingStatus} meetingTurns={fixture.turns}
+          onMeetingAction={noOperation}
+          onRefresh={noOperation} onNavigate={noNavigation}/>
+      {/if}
     </div>
   </main>
 </div>

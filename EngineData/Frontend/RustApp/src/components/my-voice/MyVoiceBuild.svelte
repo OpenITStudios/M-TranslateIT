@@ -20,6 +20,8 @@
     voiceChangesLocked = false,
     playbackEnabled = true,
     onBeforePlayback,
+    previewReadOnly = false,
+    previewStatus = null,
   }: {
     onNotice: (message: string) => void;
     onMeetingVoiceChanged: (message?: string) => void | Promise<void>;
@@ -30,9 +32,11 @@
     voiceChangesLocked?: boolean;
     playbackEnabled?: boolean;
     onBeforePlayback?: () => void;
+    previewReadOnly?: boolean;
+    previewStatus?: MyVoiceBuildStatus | null;
   } = $props();
 
-  let build = $state<MyVoiceBuildStatus>({
+  let build = $state<MyVoiceBuildStatus>(previewReadOnly && previewStatus ? previewStatus : {
     active: false,
     preview_active: false,
     generation: null,
@@ -609,6 +613,7 @@
   }
 
   $effect(() => {
+    if (previewReadOnly) return; // Guard native status polling in synthetic preview.
     const revision = refreshRevision;
     // Parent advances this revision after accepting a new guided recording.
     // Never present the old reference's WAV as a preview of the new takes.
@@ -624,7 +629,7 @@
 
   onMount(() => {
     disposed = false;
-    void checkCompute();
+    if (!previewReadOnly) void checkCompute();
     return () => {
       disposed = true;
       if (timer) clearTimeout(timer);

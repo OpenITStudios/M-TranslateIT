@@ -4,14 +4,23 @@ import type { ProductReadiness, ProductRuntimeSnapshot } from "../../src/app/bri
 import type { MeetingCommittedTurn, MeetingCommittedTurnsSnapshot, MeetingSessionStatus } from "../../src/app/bridge/runtimeApi";
 import { defaultSettings } from "../../src/app/shared/state";
 import { APPLICATION_MEETING_OWNER_ID } from "../../src/app/shared/types";
+import type { GuidedRecordingState, GuidedLineStatus, SavedRecordingPage } from "../../src/app/bridge/myVoiceApi";
+import type { MyVoiceBuildStatus } from "../../src/app/bridge/myVoiceBuildApi";
 
-export type PreviewScenario =
+export type MeetingPreviewScenario =
   | "ready"
   | "live"
   | "muted"
   | "cleanup"
   | "translation-failed"
   | "long-transcript";
+
+export type MyVoicePreviewScenario =
+  | "my-voice-choose" | "my-voice-record" | "my-voice-take-review"
+  | "my-voice-train" | "my-voice-training" | "my-voice-review"
+  | "my-voice-library" | "my-voice-recovery";
+
+export type PreviewScenario = MeetingPreviewScenario | MyVoicePreviewScenario;
 
 export const PREVIEW_SCENARIOS: ReadonlyArray<{ id: PreviewScenario; label: string }> = [
   { id: "ready", label: "Ready (not started)" },
@@ -20,6 +29,14 @@ export const PREVIEW_SCENARIOS: ReadonlyArray<{ id: PreviewScenario; label: stri
   { id: "cleanup", label: "Stop needed" },
   { id: "translation-failed", label: "Translation failed" },
   { id: "long-transcript", label: "Long transcript" },
+  { id: "my-voice-choose", label: "My Voice · Choose" },
+  { id: "my-voice-record", label: "My Voice · Record" },
+  { id: "my-voice-take-review", label: "My Voice · Review take" },
+  { id: "my-voice-train", label: "My Voice · Train ready" },
+  { id: "my-voice-training", label: "My Voice · Training active" },
+  { id: "my-voice-review", label: "My Voice · Review voice" },
+  { id: "my-voice-library", label: "My Voice · Library" },
+  { id: "my-voice-recovery", label: "My Voice · Draft recovery" },
 ];
 
 export type PreviewViewport = "compact" | "desktop" | "large";
@@ -60,7 +77,7 @@ function sampleTurn(
   };
 }
 
-function conversation(scenario: PreviewScenario): MeetingCommittedTurn[] {
+function conversation(scenario: MeetingPreviewScenario): MeetingCommittedTurn[] {
   if (scenario === "long-transcript") {
     return Array.from({ length: 36 }, (_, i) => {
       const seq = i + 1;
@@ -93,7 +110,7 @@ export type PreviewFixture = {
   turns: MeetingCommittedTurnsSnapshot | null;
 };
 
-export function makePreviewFixture(scenario: PreviewScenario): PreviewFixture {
+export function makePreviewFixture(scenario: MeetingPreviewScenario): PreviewFixture {
   const isLive = scenario !== "ready" && scenario !== "cleanup";
   const cleanup = scenario === "cleanup";
   const muted = scenario === "muted";
@@ -209,4 +226,117 @@ export function makePreviewFixture(scenario: PreviewScenario): PreviewFixture {
     runtime_claim: CLAIM,
   } : null;
   return { snapshot, meetingStatus: status, turns };
+}
+
+export function isMyVoicePreviewScenario(scenario: PreviewScenario): scenario is MyVoicePreviewScenario {
+  return scenario.startsWith("my-voice-");
+}
+
+type MyVoiceFixture = {
+  workspace: "choose" | "create" | "library";
+  recording: GuidedRecordingState;
+  build: MyVoiceBuildStatus;
+  savedRecordings: SavedRecordingPage;
+};
+
+const VOICE_LINES: GuidedLineStatus[] = [
+  { line_id: 1, text: "Please share an update on the project when you're ready.", accepted: false,
+    level: "short", focus: "updates", coverage: "conversation" },
+  { line_id: 2, text: "I'd like to confirm the next meeting time with everyone.", accepted: false,
+    level: "short", focus: "scheduling", coverage: "intonation" },
+  { line_id: 3, text: "Our team is working on the final design proposal this week.", accepted: false,
+    level: "natural", focus: "work", coverage: "natural" },
+  { line_id: 4, text: "The latest version includes a more reliable recording process.", accepted: false,
+    level: "natural", focus: "technology", coverage: "details" },
+  { line_id: 5, text: "After considering the requirements, we decided to revise the implementation.", accepted: false,
+    level: "detailed", focus: "planning", coverage: "explanations" },
+  { line_id: 6, text: "Could you explain how we should handle the next important milestone?", accepted: false,
+    level: "detailed", focus: "planning", coverage: "conversation" },
+  { line_id: 7, text: "I appreciate your feedback on the updated plan.", accepted: false,
+    level: "natural", focus: "feedback", coverage: "intonation" },
+  { line_id: 8, text: "Thank you for taking the time to discuss these changes.", accepted: false,
+    level: "short", focus: "feedback", coverage: "natural" },
+];
+
+const HELD_OUT_LINES = [
+  "Thank you for joining the meeting today.",
+  "I will send the updated plan this afternoon.",
+  "Could you clarify the next steps, please?",
+  "We have reviewed all the remaining details.",
+  "Let me summarize the important changes.",
+  "Our team is preparing the next release.",
+  "Please let me know if you have questions.",
+  "Everything is ready for our next discussion.",
+];
+
+// Every element is synthetic; none describes measured audio/model quality.
+export function makeMyVoicePreviewFixture(scenario: MyVoicePreviewScenario): MyVoiceFixture {
+  const isRecordingStage = scenario === "my-voice-record" || scenario === "my-voice-take-review" ||
+    scenario === "my-voice-recovery";
+  const hasAccepted = !isRecordingStage && scenario !== "my-voice-choose";
+  const recording: GuidedRecordingState = {
+    recording_line_id: null,
+    pending_review: scenario === "my-voice-take-review"
+      ? { line_id: 1, duration_ms: 4500, quality_blocker: "", review_advice: [],
+          warning_intervals: [], warning_intervals_truncated: false }
+      : null,
+    pending_review_id: scenario === "my-voice-take-review" ? "synthetic-review-owner" : null,
+    orphaned_drafts: scenario === "my-voice-recovery"
+      ? [{ line_id: 1, pair_present: true, note: "Synthetic unfinished recording. No files were opened." }]
+      : [],
+    draft_recovery_error: null,
+    lines: VOICE_LINES.map((line) => ({ ...line, accepted: hasAccepted })),
+  };
+  const inTraining = scenario === "my-voice-training";
+  const inReview = scenario === "my-voice-review";
+  const accepted = hasAccepted ? VOICE_LINES.length : 0;
+  const build: MyVoiceBuildStatus = {
+    active: inTraining,
+    preview_active: false,
+    generation: inTraining ? 7 : null,
+    phase: inTraining ? "training" : inReview ? "evaluation_ready" : "idle",
+    message: inTraining
+      ? "Synthetic training stage. No GPU, model or audio task is running."
+      : "Synthetic My Voice layout data; no native status was queried.",
+    accepted_take_count: accepted,
+    accepted_duration_ms: hasAccepted ? 65_000 : 0,
+    minimum_duration_ms: 60_000,
+    missing_coverage: null,
+    recording_suggestions: [],
+    can_build: hasAccepted,
+    evaluation_ready: inReview,
+    evaluation_review_id: inReview ? "synthetic-held-out-review" : null,
+    evaluation_samples: inReview ? HELD_OUT_LINES.map((exact_text, index) => ({
+      line_id: 1001 + index,
+      exact_text,
+      wav_file: "synthetic-not-a-real-file",
+      sha256: "0".repeat(64),
+      speaker_similarity: 0.5,
+      intelligibility_text: exact_text,
+      intelligibility_wer: 0.15,
+      artifact_flags: [],
+    })) : [],
+    evaluation_comparison: [],
+    reference_selection: null,
+    approved_voice_ready: false,
+    selected_voice_kind: "built_in",
+    selected_builtin_voice_id: "MaleVoice",
+    saved_personal_voice_available: true,
+  };
+  const savedRecordings: SavedRecordingPage = {
+    items: VOICE_LINES.slice(0, 4).map((line) => ({
+      archive_id: "synthetic-archive-" + line.line_id,
+      line_id: line.line_id,
+      text: line.text,
+      duration_ms: 5700 + line.line_id * 300,
+      native_rate_available: true,
+    })),
+    next_cursor: null,
+    attention_entries: 0,
+  };
+  return {
+    workspace: scenario === "my-voice-choose" ? "choose"
+      : scenario === "my-voice-library" ? "library" : "create",
+    recording, build, savedRecordings,
+  };
 }

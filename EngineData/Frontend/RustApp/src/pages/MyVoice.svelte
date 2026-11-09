@@ -20,24 +20,37 @@
   import VoiceBackupRestore from "../components/my-voice/VoiceBackupRestore.svelte";
 
   type BuiltinVoiceId = "MaleVoice" | "FemaleVoice";
+  type VoiceWorkspace = "choose" | "create" | "library";
+  type MyVoicePreviewFixture = {
+    workspace: VoiceWorkspace;
+    recording: GuidedRecordingState;
+    build: MyVoiceBuildStatus;
+    savedRecordings: SavedRecordingPage;
+  };
 
   let {
     onNotice,
     onRecordingChange,
     onMeetingVoiceChanged,
     voiceChangesLocked = false,
+    previewReadOnly = false,
+    previewFixture = null,
   }: {
     onNotice: (message: string) => void;
     onRecordingChange: (recording: boolean) => void;
     onMeetingVoiceChanged: (message?: string) => void | Promise<void>;
     voiceChangesLocked?: boolean;
+    previewReadOnly?: boolean;
+    previewFixture?: MyVoicePreviewFixture | null;
   } = $props();
 
-  let recordingState = $state<GuidedRecordingState>({
+  // Explicit synthetic injection point. Normal app native behavior is unchanged.
+  const initialPreview = previewReadOnly ? previewFixture : null;
+  let recordingState = $state<GuidedRecordingState>(initialPreview?.recording ?? {
     recording_line_id: null, pending_review: null, pending_review_id: null, orphaned_drafts: [],
     draft_recovery_error: null, lines: [],
   });
-  let selectedLineId = $state<number | null>(null);
+  let selectedLineId = $state<number | null>(initialPreview?.recording.lines[0]?.line_id ?? null);
   let authorized = $state(false);
   let busy = $state(false);
   let replaying = $state(false);
@@ -55,10 +68,10 @@
   let builtinPendingId = $state<BuiltinVoiceId | null>(null);
   let builtinPreviewing = $state<BuiltinVoiceId | null>(null);
   let disposed = false;
-  let selectedVoiceKind = $state("unknown");
-  let selectedBuiltinVoiceId = $state<string | null>(null);
-  let savedPersonalVoiceAvailable = $state(false);
-  let selectedVoiceVerified = $state(false);
+  let selectedVoiceKind = $state(initialPreview?.build.selected_voice_kind ?? "unknown");
+  let selectedBuiltinVoiceId = $state<string | null>(initialPreview?.build.selected_builtin_voice_id ?? null);
+  let savedPersonalVoiceAvailable = $state(initialPreview?.build.saved_personal_voice_available ?? false);
+  let selectedVoiceVerified = $state(Boolean(initialPreview && initialPreview.build.selected_voice_kind !== "unknown"));
   let selectedVoiceReadVersion = 0;
   let recordingStatusUnknown = $state(false);
   let recordingRetrying = $state(false);
@@ -67,10 +80,10 @@
   let legacyProtection = $state<LegacyProtectionStatus | null>(null);
   let legacyProtectionUnknown = $state(false);
   let legacyProtectionBusy = $state(false);
-  let savedLibraryOpen = $state(false);
+  let savedLibraryOpen = $state(initialPreview?.workspace === "library");
   let savedLibraryBusy = $state(false);
   let savedLibraryError = $state(false);
-  let savedLibraryPage = $state<SavedRecordingPage | null>(null);
+  let savedLibraryPage = $state<SavedRecordingPage | null>(initialPreview?.savedRecordings ?? null);
   let savedPlayingId = $state<string | null>(null);
   // Read-only explicit inspection; this is presentation state, not a second
   // filesystem or recovery owner. Stale results are hidden for other lines.
@@ -84,12 +97,11 @@
   const improvementIds = $derived(Object.values(improvementTakes));
   let microphoneCheckMessage = $state("");
   // Presentation-only copy of the build owner's VERIFIED snapshot. No second polling loop.
-  let buildSnapshot = $state<MyVoiceBuildStatus | null>(null);
+  let buildSnapshot = $state<MyVoiceBuildStatus | null>(initialPreview?.build ?? null);
   let buildStatusUnavailable = $state(false);
   let selectedPane = $state<"auto" | "record" | "create" | "review">("auto");
   // Presentation-only workspace choice. Native recording/build/voice selection remain the sole owners.
-  type VoiceWorkspace = "choose" | "create" | "library";
-  let selectedWorkspace = $state<VoiceWorkspace>("choose");
+  let selectedWorkspace = $state<VoiceWorkspace>(initialPreview?.workspace ?? "choose");
   let browseLinesOpen = $state(false);
   let browseLevel = $state("all");
   let browseFocus = $state("all");
@@ -1081,6 +1093,8 @@
 
   onMount(() => {
     disposed = false;
+    // Preview never queries native recording, voice, storage or hardware status.
+    if (previewReadOnly) return;
     void refresh();
     void refreshVoiceSelection();
     void refreshLegacyProtection();
@@ -1572,6 +1586,7 @@
         </button>
       </div>
       <MyVoiceBuild bind:this={buildPlaybackOwner} {onNotice}
+        {previewReadOnly} previewStatus={initialPreview?.build ?? null}
         playbackEnabled={!showRecordPanel && !voiceChangesLocked && !recordingStatusUnknown}
         onBeforePlayback={() => stopReplay()}
         voiceChangesLocked={voiceChangesLocked || recordingStatusUnknown || isRecording || pendingLineId !== null}

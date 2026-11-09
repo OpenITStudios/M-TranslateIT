@@ -173,9 +173,10 @@ async function main() {
       rootInert: element.hasAttribute("inert"),
       fontFamily: getComputedStyle(document.body).fontFamily,
     }));
+    const isMyVoice = input.scenario.startsWith("my-voice-");
     const sidebar = frame.locator('aside[aria-label="TranslateIT navigation"]');
     const dock = frame.locator('footer[aria-label="Meeting main action"]');
-    const dockGeometry = await dock.evaluate((element) => {
+    const dockGeometry = isMyVoice ? null : await dock.evaluate((element) => {
       const rect = element.getBoundingClientRect();
       const controls = [...element.querySelectorAll("button, select")]
         .filter((control) => getComputedStyle(control).display !== "none")
@@ -203,13 +204,14 @@ async function main() {
       sidebar_present: await sidebar.count() === 1,
       approved_logo_asset_loaded: assetAndCss.logoLoaded,
       stylesheet_applied: assetAndCss.sidebarStyled,
-      meeting_workspace_present: await frame.locator('section[aria-label="Meeting workspace"]').count() === 1,
-      call_dock_visible: await dock.isVisible(),
-      call_dock_not_clipped: dockGeometry.top >= 0 && dockGeometry.bottom <= internal.height + 1,
-      dock_controls_not_clipped: dockGeometry.controlsUnclipped,
+      meeting_workspace_present: isMyVoice || await frame.locator('section[aria-label="Meeting workspace"]').count() === 1,
+      call_dock_visible: isMyVoice || await dock.isVisible(),
+      call_dock_not_clipped: isMyVoice || (dockGeometry.top >= 0 && dockGeometry.bottom <= internal.height + 1),
+      dock_controls_not_clipped: isMyVoice || dockGeometry.controlsUnclipped,
       no_remote_requests: denied.length === 0,
       no_browser_errors: errors.length === 0,
     };
+    if (!isMyVoice) {
     const primary = await frame.locator('footer[aria-label="Meeting main action"] button').last().textContent();
     const expectedPrimary = input.scenario === "cleanup" ? "Retry Stop"
       : input.scenario === "ready" ? "Start" : "Stop Meeting";
@@ -231,9 +233,42 @@ async function main() {
       checks.translation_failure_disclosed = (await frame.locator('[aria-label="Meeting conversation"]').textContent())?.includes("Translation unavailable") === true;
     if (input.scenario === "long-transcript")
       checks.long_transcript_rendered = await frame.locator('article[aria-label="You"], article[aria-label="Meeting audio"]').count() >= 30;
+    } else {
+      const pageVoice = frame.locator("section.ti-voice-page");
+      const choose = frame.locator("#my-voice-choose-workspace");
+      const create = frame.locator("#my-voice-create-view");
+      const library = frame.locator("#my-voice-library-workspace");
+      const expected = input.scenario === "my-voice-choose" ? "choose"
+        : input.scenario === "my-voice-library" ? "library" : "create";
+      checks.my_voice_production_page = await pageVoice.count() === 1;
+      checks.my_voice_three_workspaces = await choose.count() === 1 &&
+        await create.count() === 1 && await library.count() === 1;
+      checks.my_voice_focus_workspace = expected === "choose" ? await choose.isVisible()
+        : expected === "create" ? await create.isVisible() : await library.isVisible();
+      checks.my_voice_other_workspaces_hidden = expected === "choose"
+        ? !await create.isVisible() && !await library.isVisible()
+        : expected === "create" ? !await choose.isVisible() && !await library.isVisible()
+          : !await choose.isVisible() && !await create.isVisible();
+      checks.my_voice_active_nav = await frame.locator('nav[aria-label="My Voice workspaces"] button[aria-current="page"]').count() === 1;
+      checks.my_voice_single_recording_owner = await frame.locator("section.ti-voice-page section#my-voice-create-workspace").count() === 1;
+      if (input.scenario === "my-voice-record")
+        checks.my_voice_record_sentence = await frame.locator('[aria-label="Recording actions"]').count() === 1 &&
+          (await frame.locator("#my-voice-record-title").textContent())?.includes("Record your voice");
+      if (input.scenario === "my-voice-take-review")
+        checks.my_voice_take_review = (await create.textContent())?.includes("Save this recording") === true;
+      if (input.scenario === "my-voice-training")
+        checks.my_voice_training_stop = (await create.textContent())?.includes("Stop Creating") === true;
+      if (input.scenario === "my-voice-review")
+        checks.my_voice_held_out_eight = (await create.textContent())?.includes("8 previews") === true;
+      if (input.scenario === "my-voice-library")
+        checks.my_voice_library_direct = await frame.locator('[aria-label="Recording library"]').count() === 1 &&
+          (await library.textContent())?.includes("Create improved version") === true;
+      if (input.scenario === "my-voice-recovery")
+        checks.my_voice_recovery_visible = (await create.textContent())?.includes("Recover for review") === true;
+    }
 
     const dir = await mkdtemp(join(tmpdir(), "translateit-ui-preview-"));
-    const png = join(dir, `meeting-${input.scenario}-${input.viewport}.png`);
+    const png = join(dir, `${isMyVoice ? "my-voice" : "meeting"}-${input.scenario}-${input.viewport}.png`);
     const json = join(dir, "receipt.json");
     await page.locator("[data-preview-canvas]").screenshot({ path: png, animations: "disabled" });
     const screenshotSha256 = createHash("sha256").update(await readFile(png)).digest("hex");

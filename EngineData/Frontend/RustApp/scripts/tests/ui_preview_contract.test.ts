@@ -61,7 +61,8 @@ test("native, updater, network and app interactions stay isolated from preview f
   assert.match(frame, /onNavigate=\{noNavigation\}/);
   assert.doesNotMatch(frame + fixtures + controls, /\b(?:invoke|runCommand|fetch|install|localStorage|sessionStorage|Math\.random|Date\.now)\s*\(/);
   assert.doesNotMatch(frame + controls, /https?:\/\//);
-  assert.doesNotMatch(frame, /<FirstSetup|<MyVoice|<MeetingTranscriptExport/);
+  assert.doesNotMatch(frame, /<FirstSetup|<MeetingTranscriptExport/);
+  assert.match(frame, /<MyVoice previewReadOnly=\{true\} previewFixture=\{voiceFixture\}/);
 });
 
 test("six fixture states use canonical ProductMeetingState and stable synthetic time", () => {
@@ -195,4 +196,34 @@ test("Preview remains inside existing specialist with explicit fidelity boundari
   assert.match(protocol, /NOT_EXECUTED/);
   assert.match(protocol, /No actual saved sessions/);
   assert.match(protocol, /viewport/);
+});
+
+test("My Voice F2 uses guarded production components without a cloned frontend", () => {
+  const page = src("src/pages/MyVoice.svelte");
+  const build = src("src/components/my-voice/MyVoiceBuild.svelte");
+  assert.match(frame, /import MyVoice from "\.\.\/\.\.\/src\/pages\/MyVoice\.svelte"/);
+  assert.match(frame, /<MyVoice previewReadOnly=\{true\}/);
+  assert.match(page, /const initialPreview = previewReadOnly \? previewFixture : null/);
+  assert.match(page, /if \(previewReadOnly\) return;/);
+  assert.match(page, /<MyVoiceBuild[\s\S]*?\{previewReadOnly\} previewStatus=\{initialPreview\?\.build \?\? null\}/);
+  assert.match(build, /if \(previewReadOnly\) return;/);
+  assert.match(build, /if \(!previewReadOnly\) void checkCompute\(\)/);
+  assert.match(build, /previewReadOnly && previewStatus \? previewStatus/);
+  assert.match(frame, /\sinert\s/);
+  assert.match(frame, /showUpdateAction=\{false\}/);
+});
+test("My Voice preview scenarios preserve the existing network and source pin guards", () => {
+  for (const scenario of [
+    "my-voice-choose", "my-voice-record", "my-voice-take-review",
+    "my-voice-train", "my-voice-training", "my-voice-review",
+    "my-voice-library", "my-voice-recovery",
+  ]) assert.ok(fixtures.includes('{ id: "' + scenario + '", label:'), scenario);
+  assert.match(fixtures, /export function makeMyVoicePreviewFixture/);
+  assert.match(fixtures, /synthetic-not-a-real-file/);
+  assert.match(renderer, /const isMyVoice = input\.scenario\.startsWith\("my-voice-"\)/);
+  assert.match(renderer, /checks\.my_voice_other_workspaces_hidden/);
+  assert.match(renderer, /checks\.my_voice_training_stop/);
+  assert.match(renderer, /checks\.my_voice_library_direct/);
+  assert.match(renderer, /checks\.no_remote_requests/);
+  assert.match(renderer, /source_unchanged_during_render/);
 });

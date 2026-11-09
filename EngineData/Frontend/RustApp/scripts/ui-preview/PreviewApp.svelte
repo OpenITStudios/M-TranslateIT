@@ -51,7 +51,7 @@
     >
       <iframe
         data-preview-frame
-        title="Synthetic TranslateIT Meeting — production Svelte components"
+        title="Synthetic TranslateIT workspace — production Svelte components"
         src={frameUrl}
         sandbox="allow-scripts allow-same-origin"
         class="block h-full w-full border-0"

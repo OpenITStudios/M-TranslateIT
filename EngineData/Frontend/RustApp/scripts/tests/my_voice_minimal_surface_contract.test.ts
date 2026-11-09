@@ -36,7 +36,7 @@ test("My Voice retains Current Voice, creation stages and archive tools on separ
 
 test("My Voice separates selection, creation and archive actions without hiding native recovery", () => {
   assert.match(page, /type VoiceWorkspace = "choose" \| "create" \| "library"/);
-  assert.match(page, /let selectedWorkspace = \$state<VoiceWorkspace>\("choose"\)/);
+  assert.match(page, /let selectedWorkspace = \$state<VoiceWorkspace>\(initialPreview\?\.workspace \?\? "choose"\)/);
   assert.match(page, /aria-label="My Voice workspaces"/);
   assert.match(page, /const creationNeedsAttention = \$derived\(Boolean\(/);
   assert.match(page, /improvementStarting \? "library" : creationNeedsAttention \? "create" : selectedWorkspace/);
