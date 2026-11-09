@@ -37,6 +37,8 @@
   // recent sessions; never let the pin quota hide an ordinary recent meeting.
   const recent = $derived(recentMeetings(library?.sessions ?? []));
   function selectedIn(session: MeetingLibrarySession, surface: "recent" | "project"): boolean {
+    // Recent is a shortcut to the same channel, not a second Meeting identity.
+    // Keep one visible active location: the origin selected by the user.
     return selectedSessionId === session.session_id && selectedSurface === surface;
   }
   async function restoreFocus(): Promise<void> {
