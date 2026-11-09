@@ -17,7 +17,8 @@ const archive = source("src-tauri/src/commands/voice_lab/storage/recording_archi
 test("My Voice retains Current Voice, creation stages and archive tools on separate task surfaces", () => {
   assert.match(page, /<BuiltinVoicePicker/);
   assert.match(picker, />Current Voice<\/h3>/);
-  assert.match(picker, /Change Voice/);
+  assert.match(picker, /Hide voice options/);
+  assert.match(picker, /Show voice options/);
   assert.match(page, /id="my-voice-create-title"/);
   assert.match(page, /aria-label="My Voice creation stages"/);
   assert.match(page, />1\. Record<\/button>/);
@@ -62,6 +63,7 @@ test("My Voice separates selection, creation and archive actions without hiding 
   assert.equal((page.match(/<VoiceVersionBrowser\b/g) ?? []).length, 1);
   assert.match(picker, /let choicesOpen = \$state\(true\)/);
   assert.match(page, /if \(destination !== currentWorkspace\) stopAllMyVoiceAudio\(\);/);
+  assert.match(page, /void focusWorkspaceAfterSelection\(destination\)/);
 });
 
 test("My Voice keeps a single native recording/build owner visible for recovery", () => {
@@ -105,25 +107,25 @@ test("Recording puts truthful progress above one focus-sized sentence and contex
   assert.match(record, /Recording diagnostics/);
 });
 
-test("Voice Library shortcuts open existing native version/Improve tools without activating a voice", () => {
-  assert.match(page, /id="my-voice-library-heading"/);
-  assert.match(page, /onclick=\{\(\) => openVoiceLibrary\("versions"\)\}>Saved Voices<\/button>/);
-  assert.match(page, /onclick=\{\(\) => openVoiceLibrary\("improve"\)\}>Improve My Voice<\/button>/);
-  assert.match(page, /bind:open=\{voiceLibraryOpen\}/);
-  assert.match(page, /if \(destination === "versions"\) \{[\s\S]*?savedVersionsOpenRevision \+= 1;/);
-  assert.match(page, /else if \(!savedLibraryOpen\) \{[\s\S]*?toggleSavedLibrary\(\)/);
-  assert.match(page, /if \(improvementStarting\) voiceLibraryOpen = true/);
-  assert.match(page, /if \(improvementStarting\) event.preventDefault\(\)/);
+test("Voice Library opens saved recordings directly without nested global disclosures", () => {
+  assert.match(page, /aria-label="Recording library"/);
+  assert.match(page, /Browse recordings/);
+  assert.match(page, /my-voice-saved-recording-list/);
+  assert.match(page, /aria-expanded=\{savedLibraryOpen\}/);
+  assert.match(page, /if \(improvementStarting\) return;/);
+  assert.match(page, /if \(destination === "library" && !savedLibraryOpen\)/);
+  assert.match(page, /void loadSavedLibrary\(\)/);
+  assert.doesNotMatch(page, /voiceLibraryOpen|openVoiceLibrary/);
+  assert.doesNotMatch(page, /Recording Library &amp; Backup/);
   assert.match(page, /<VoiceVersionBrowser/);
-  assert.match(page, /openRevision=\{savedVersionsOpenRevision\}/);
-  assert.match(versions, /const revision = openRevision/);
-  assert.match(versions, /if \(!opened\) \{[\s\S]*?void load\(\)/);
   assert.match(page, /<VoiceBackupRestore/);
+  assert.match(page, /Backup &amp; recovery/);
   assert.match(page, /protectLegacyRecordings\(\)/);
   assert.match(page, /myVoiceBuildApi\.improve\(\[\.\.\.improvementIds\], improvementAuthorized\)/);
-  assert.doesNotMatch(page.slice(page.indexOf("function openVoiceLibrary("),
-    page.indexOf("function selectSavedTake(")), /myVoiceBuildApi\.improve|myVoiceBuildApi\.approve|selectBuiltin/);
+  assert.match(page, /void focusWorkspaceAfterSelection\("create"\)/);
+  assert.match(versions, /Full model integrity will be verified before use/);
 });
+
 
 test("Train readiness is grouped once and the build/review owners are unchanged", () => {
   assert.match(build, /aria-label="Training readiness"/);

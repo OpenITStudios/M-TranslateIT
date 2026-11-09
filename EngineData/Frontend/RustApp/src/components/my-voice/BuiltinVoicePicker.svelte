@@ -48,13 +48,14 @@
       {/if}
       <button type="button" class="ti-button ti-button-secondary" aria-controls="my-voice-voice-choices" aria-expanded={choicesOpen || builtinPendingId !== null}
         onclick={() => { if (!builtinPendingId) choicesOpen = !choicesOpen; }}>
-        Change Voice <ChevronDown size={16} />
+        <span>{choicesOpen || builtinPendingId !== null ? "Hide voice options" : "Show voice options"}</span>
+        <ChevronDown size={16} class={choicesOpen || builtinPendingId !== null ? "rotate-180" : ""} />
       </button>
     </div>
   </div>
 
   <div id="my-voice-voice-choices" hidden={!choicesOpen && !builtinPendingId} class="mt-4 border-t border-[var(--ti-border)] pt-4">
-    <p class="mb-0 text-[13px] leading-5 text-[var(--ti-text-muted)]">Listen to a sample before choosing the Meeting voice.</p>
+    <p class="mb-0 text-[13px] leading-5 text-[var(--ti-text-muted)]">Available voices · Preview before selecting. Only a confirmed selection changes the Meeting voice.</p>
     <div class="mt-3 space-y-2">
       {#each [
         { id: "MaleVoice" as BuiltinVoiceId, label: "Built-in Male" },
@@ -69,7 +70,7 @@
           <button type="button" class="ti-button ti-button-secondary" disabled={busy || builtinPreviewing !== null} onclick={() => void onPreview(voice.id)}>
             <Play size={14} /> {builtinPreviewing === voice.id ? "Playing..." : "Preview"}
           </button>
-          <button type="button" class="ti-button" disabled={busy || voiceChangesLocked || builtinPreviewing !== null || selected || !selectedVoiceVerified} onclick={() => void onSelect(voice.id)}>{selected ? "Selected" : "Select"}</button>
+          <button type="button" class="ti-button ti-button-secondary" disabled={busy || voiceChangesLocked || builtinPreviewing !== null || selected || !selectedVoiceVerified} onclick={() => void onSelect(voice.id)}>{selected ? "Selected" : "Select"}</button>
         </div>
       {/each}
       {#if savedPersonalVoiceAvailable && selectedVoiceVerified}

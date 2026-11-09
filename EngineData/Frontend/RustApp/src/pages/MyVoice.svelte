@@ -68,8 +68,6 @@
   let legacyProtectionUnknown = $state(false);
   let legacyProtectionBusy = $state(false);
   let savedLibraryOpen = $state(false);
-  let voiceLibraryOpen = $state(false);
-  let savedVersionsOpenRevision = $state(0);
   let savedLibraryBusy = $state(false);
   let savedLibraryError = $state(false);
   let savedLibraryPage = $state<SavedRecordingPage | null>(null);
@@ -125,6 +123,8 @@
   let draftRecoveryButton = $state<HTMLButtonElement | undefined>(undefined);
   let microphoneCheckButton = $state<HTMLButtonElement | undefined>(undefined);
   let personalVoiceHeading = $state<HTMLHeadingElement | undefined>(undefined);
+  let chooseVoiceHeading = $state<HTMLHeadingElement | undefined>(undefined);
+  let voiceLibraryHeading = $state<HTMLHeadingElement | undefined>(undefined);
 
   // Declare recording ownership before derivations that consume it.
   const isRecording = $derived(recordingState.recording_line_id !== null);
@@ -216,30 +216,10 @@
   }
 
   function toggleSavedLibrary(): void {
+    // An in-flight Improve submission must remain visible for its native receipt.
+    if (improvementStarting) return;
     savedLibraryOpen = !savedLibraryOpen;
     if (savedLibraryOpen) void loadSavedLibrary();
-  }
-
-  $effect(() => {
-    // An in-flight Improve submission must not be hidden by a collapsed
-    // library while the native outcome is still uncertain.
-    if (improvementStarting) voiceLibraryOpen = true;
-  });
-
-  function openVoiceLibrary(destination: "versions" | "improve"): void {
-    // Saved voice selection belongs to Choose Voice; archived takes and Improve
-    // belong to Voice Library. Neither shortcut performs a native mutation.
-    if (destination === "versions") {
-      selectWorkspace("choose");
-      savedVersionsOpenRevision += 1;
-    } else if (!savedLibraryOpen) {
-      selectWorkspace("library");
-      voiceLibraryOpen = true;
-      toggleSavedLibrary();
-    } else {
-      selectWorkspace("library");
-      voiceLibraryOpen = true;
-    }
   }
 
 
@@ -274,6 +254,7 @@
         selectedPane = "create";
         selectedWorkspace = "create";
         buildRefreshRevision += 1;
+        void focusWorkspaceAfterSelection("create");
       }
     } catch {
       if (!disposed) {
@@ -1015,13 +996,28 @@
     buildPlaybackOwner?.stopPlayback();
   }
 
+  async function focusWorkspaceAfterSelection(destination: VoiceWorkspace): Promise<void> {
+    // Only an explicit user task switch (or successful explicit Improve) moves focus.
+    // Native polling must never scroll the user's current position.
+    await tick();
+    if (disposed || currentWorkspace !== destination || !document.hasFocus()) return;
+    const heading = destination === "choose" ? chooseVoiceHeading
+      : destination === "create" ? personalVoiceHeading : voiceLibraryHeading;
+    heading?.focus({ preventScroll: true });
+    heading?.scrollIntoView({ block: "start", behavior: "auto" });
+  }
+
   function selectWorkspace(destination: VoiceWorkspace): void {
     if ((creationNeedsAttention && destination !== "create") ||
         (improvementStarting && destination !== "library")) return;
-    // Switching presentation never starts, approves, stops or replaces native work.
-    // Stop only preview playback before entering a different task area.
+    // Presentation switch only: no native start/approval/voice selection.
     if (destination !== currentWorkspace) stopAllMyVoiceAudio();
     selectedWorkspace = destination;
+    if (destination === "library" && !savedLibraryOpen) {
+      savedLibraryOpen = true;
+      void loadSavedLibrary();
+    }
+    void focusWorkspaceAfterSelection(destination);
   }
 
   function openCreationStage(pane: "record" | "create" | "review"): void {
@@ -1106,11 +1102,11 @@
     </div>
   </header>
 
-  <nav class="grid grid-cols-1 gap-2 sm:grid-cols-3" aria-label="My Voice workspaces">
+  <nav class="grid grid-cols-1 gap-2 border-b border-[var(--ti-border)] pb-3 sm:grid-cols-3" aria-label="My Voice workspaces">
     <button type="button" aria-current={currentWorkspace === "choose" ? "page" : undefined}
       aria-controls="my-voice-choose-workspace"
       disabled={creationNeedsAttention || improvementStarting}
-      class={currentWorkspace === "choose" ? "min-h-[70px] rounded-[var(--ti-radius-md)] border border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 py-3 text-left" : "min-h-[70px] rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface)] px-4 py-3 text-left hover:bg-[var(--ti-surface-hover)]"}
+      class={currentWorkspace === "choose" ? "min-h-[62px] rounded-[var(--ti-radius-md)] border-b-2 border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 py-2 text-left" : "min-h-[62px] rounded-[var(--ti-radius-md)] border-b-2 border-transparent px-4 py-2 text-left hover:bg-[var(--ti-surface-hover)]"}
       onclick={() => selectWorkspace("choose")}>
       <span class="block text-[14px] font-semibold">Choose Voice</span>
       <span class="mt-1 block text-[12px] text-[var(--ti-text-muted)]">Select for Meetings</span>
@@ -1118,7 +1114,7 @@
     <button type="button" aria-current={currentWorkspace === "create" ? "page" : undefined}
       aria-controls="my-voice-create-view"
       disabled={improvementStarting}
-      class={currentWorkspace === "create" ? "min-h-[70px] rounded-[var(--ti-radius-md)] border border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 py-3 text-left" : "min-h-[70px] rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface)] px-4 py-3 text-left hover:bg-[var(--ti-surface-hover)]"}
+      class={currentWorkspace === "create" ? "min-h-[62px] rounded-[var(--ti-radius-md)] border-b-2 border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 py-2 text-left" : "min-h-[62px] rounded-[var(--ti-radius-md)] border-b-2 border-transparent px-4 py-2 text-left hover:bg-[var(--ti-surface-hover)]"}
       onclick={() => selectWorkspace("create")}>
       <span class="block text-[14px] font-semibold">Create My Voice</span>
       <span class="mt-1 block text-[12px] text-[var(--ti-text-muted)]">Record · Train · Review</span>
@@ -1126,16 +1122,25 @@
     <button type="button" aria-current={currentWorkspace === "library" ? "page" : undefined}
       aria-controls="my-voice-library-workspace"
       disabled={creationNeedsAttention}
-      class={currentWorkspace === "library" ? "min-h-[70px] rounded-[var(--ti-radius-md)] border border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 py-3 text-left" : "min-h-[70px] rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface)] px-4 py-3 text-left hover:bg-[var(--ti-surface-hover)]"}
+      class={currentWorkspace === "library" ? "min-h-[62px] rounded-[var(--ti-radius-md)] border-b-2 border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 py-2 text-left" : "min-h-[62px] rounded-[var(--ti-radius-md)] border-b-2 border-transparent px-4 py-2 text-left hover:bg-[var(--ti-surface-hover)]"}
       onclick={() => selectWorkspace("library")}>
       <span class="block text-[14px] font-semibold">Voice Library</span>
       <span class="mt-1 block text-[12px] text-[var(--ti-text-muted)]">Recordings · Improve · Backup</span>
     </button>
   </nav>
+  {#if creationNeedsAttention}
+    <p class="m-0 text-[13px] leading-5 text-[var(--ti-warning)]" role="status">
+      Recording, training or recovery needs attention. Finish or verify that work before switching areas.
+    </p>
+  {:else if improvementStarting}
+    <p class="m-0 text-[13px] leading-5 text-[var(--ti-warning)]" role="status">
+      Checking the Improve request. Voice Library remains available until its outcome is confirmed.
+    </p>
+  {/if}
 
   <section id="my-voice-choose-workspace" hidden={currentWorkspace !== "choose"} class="pt-5" aria-labelledby="my-voice-choose-title">
     <header class="mb-5">
-      <h3 id="my-voice-choose-title" class="m-0 text-[19px] font-semibold tracking-[-0.02em]">Choose your Meeting voice</h3>
+      <h3 id="my-voice-choose-title" class="m-0 text-[19px] font-semibold tracking-[-0.02em]" tabindex="-1" bind:this={chooseVoiceHeading}>Choose your Meeting voice</h3>
       <p class="m-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">Choose a built-in voice or one of your approved personal voices. Recording and training are separate.</p>
     </header>
     <div class="ti-panel min-w-0 p-5 sm:p-6">
@@ -1158,7 +1163,6 @@
       <div class="mt-4" aria-label="Previously saved voice versions">
         <p class="m-0 text-[13px] text-[var(--ti-text-muted)]">Already created a voice? Open Voice versions to review and select a saved version.</p>
   <VoiceVersionBrowser
-    openRevision={savedVersionsOpenRevision}
     voiceChangesLocked={voiceChangesLocked || busy || !selectedVoiceVerified || buildStatusUnavailable ||
       buildSnapshot?.active === true || buildSnapshot?.preview_active === true ||
       recordingStatusUnknown || isRecording || pendingLineId !== null}
@@ -1589,47 +1593,34 @@
   <section class="pt-2" aria-labelledby="my-voice-library-heading">
     <div class="flex min-w-0 flex-wrap items-start justify-between gap-3">
       <div class="min-w-0 flex-1">
-        <h3 id="my-voice-library-heading" class="mb-0 text-[19px] font-semibold tracking-[-0.02em]">Voice Library</h3>
+        <h3 id="my-voice-library-heading" class="mb-0 text-[19px] font-semibold tracking-[-0.02em]" tabindex="-1" bind:this={voiceLibraryHeading}>Voice Library</h3>
         <p class="m-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">
           Review saved recordings, improve your personal voice and manage backups. Your active Meeting voice is protected.
         </p>
       </div>
-      <div class="flex shrink-0 flex-wrap gap-2">
-        <button type="button" class="ti-button ti-button-secondary"
-          aria-controls="my-voice-library-tools"
-          onclick={() => openVoiceLibrary("versions")}>Saved Voices</button>
-        {#if savedPersonalVoiceAvailable || acceptedCount > 0}
-          <button type="button" class="ti-button ti-button-secondary"
-            aria-controls="my-voice-library-tools"
-            onclick={() => openVoiceLibrary("improve")}>Improve My Voice</button>
-        {/if}
       </div>
-    </div>
     {#if legacyProtectionUnknown || (legacyProtection?.attention_sources ?? 0) > 0}
       <p class="m-0 mt-2 text-[12px] leading-5 text-[var(--ti-warning)]" role="status">
-        Some older recordings need storage verification.
+        Some earlier recordings require storage verification; originals remain protected.
       </p>
     {/if}
-    <details id="my-voice-library-tools" bind:open={voiceLibraryOpen}
-      class="mt-4 border-t border-[var(--ti-border)] pt-3" aria-label="Voice Library tools">
-      <summary class="min-h-10 cursor-pointer py-2 text-[13px] font-medium text-[var(--ti-text-muted)] hover:text-[var(--ti-text)]"
-        onclick={(event) => { if (improvementStarting) event.preventDefault(); }}>
-        Recording Library &amp; Backup
-        {#if improvementStarting}<span class="ml-2 text-[12px] text-[var(--ti-warning)]">Checking request…</span>{/if}
-      </summary>
-    <div class="min-w-0 pb-4">
-      <p class="m-0 mt-2 text-[12px] leading-5 text-[var(--ti-text-muted)]">
-        Saved recordings and models remain on this computer. All changes require an explicit action.
-      </p>
-  <section class="mt-4" aria-label="Recording library">
-    <button type="button" class="text-left text-sm font-medium text-[var(--ti-text-muted)] underline underline-offset-4"
-      aria-expanded={savedLibraryOpen}
-      onclick={toggleSavedLibrary}>Saved recordings</button>
-    {#if savedLibraryOpen}
-      <div class="ti-panel mt-3 p-4 sm:p-5">
-        <p class="mb-2 text-sm leading-5 text-[var(--ti-text-muted)]">
-          Your saved recording versions remain on this computer. Listen to a saved take without changing the one used for training.
+    <p class="m-0 mt-3 text-[13px] leading-5 text-[var(--ti-text-muted)]">
+      To change the Meeting voice, use Choose Voice. Saved recordings and backups stay on this computer.
+    </p>
+  <section class="ti-panel mt-5 min-w-0 p-4 sm:p-5" aria-label="Recording library">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div class="min-w-0 flex-1">
+        <h4 class="m-0 text-[16px] font-semibold">Saved recordings</h4>
+        <p class="m-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">
+          Listen, choose takes, then create an improved voice. The current Meeting voice stays unchanged.
         </p>
+      </div>
+      <button type="button" class="ti-button ti-button-secondary" aria-expanded={savedLibraryOpen}
+        aria-controls="my-voice-saved-recording-list" disabled={improvementStarting}
+        onclick={toggleSavedLibrary}>{savedLibraryOpen ? "Hide recordings" : "Browse recordings"}</button>
+    </div>
+    {#if savedLibraryOpen}
+      <div id="my-voice-saved-recording-list" class="mt-4 min-w-0 border-t border-[var(--ti-border)] pt-4">
         {#if savedLibraryError}
           <p role="alert" class="text-sm text-[var(--ti-warning)]">
             Couldn't verify saved recordings. Some files may need attention.
@@ -1680,7 +1671,7 @@
             </p>
             <p class="mt-2 text-sm font-medium">{improvementIds.length} recordings chosen · maximum 128 per build</p>
             {#if !trainingComputeAllowed}
-              <p class="mb-0 mt-2 text-xs leading-5 text-[var(--ti-text-muted)]" role="status">Before improving, open step 2 (Train) to check local training hardware. CPU-only use requires acknowledging the warning there.</p>
+              <p class="mb-0 mt-2 text-xs leading-5 text-[var(--ti-text-muted)]" role="status">Before improving, open Create My Voice → Train to verify GPU readiness. CPU-only training is not currently admitted.</p>
             {/if}
             <p class="mb-0 mt-1 text-xs text-[var(--ti-text-muted)]">
               The training check requires at least one minute of speech, a short reference recording and varied sentence categories. You don't need to finish every line.
@@ -1707,6 +1698,9 @@
     {/if}
   </section>
 
+  <div class="mt-6 border-t border-[var(--ti-border)] pt-5">
+    <h4 class="m-0 text-[16px] font-semibold">Backup &amp; recovery</h4>
+    <p class="m-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">Create, verify or restore a local copy without replacing your selected voice.</p>
   <VoiceBackupRestore
     voiceChangesLocked={voiceChangesLocked || busy || improvementStarting || recordingStatusUnknown ||
       isRecording || pendingLineId !== null || buildStatusUnavailable ||
@@ -1718,6 +1712,8 @@
       await refreshLegacyProtection();
     }}
   />
+
+  </div>
 
   {#if legacyProtectionUnknown || (legacyProtection && (legacyProtection.total_sources > 0 || legacyProtection.attention_sources > 0))}
     <section class="ti-panel mt-4 p-4 sm:p-5" aria-label="Saved recording protection">
@@ -1752,8 +1748,6 @@
     </section>
   {/if}
 
-    </div>
-    </details>
   </section>
   </section>
 
