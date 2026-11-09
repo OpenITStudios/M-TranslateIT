@@ -30,12 +30,15 @@
   let fallbackFocus = $state<HTMLButtonElement | null>(null);
   let editInput = $state<HTMLInputElement | null>(null);
   let collapsed = $state<Record<string, boolean>>({});
+  let showAllRecent = $state(false);
+  let uncategorizedCollapsed = $state(false);
   let actionSurface = $state<"recent" | "project">("recent");
   const deletingProject = $derived(Boolean(confirmingDelete && library?.projects.some(project => project.project_id === confirmingDelete)));
 
   // The native archive list is newest-first. Show ALL pins plus five ordinary
   // recent sessions; never let the pin quota hide an ordinary recent meeting.
-  const recent = $derived(recentMeetings(library?.sessions ?? []));
+  const recent = $derived(showAllRecent ? pinnedFirst(library?.sessions ?? []) : recentMeetings(library?.sessions ?? []));
+  const uncategorized = $derived(pinnedFirst((library?.sessions ?? []).filter(session => session.project_id === null)));
   function selectedIn(session: MeetingLibrarySession, surface: "recent" | "project"): boolean {
     // Recent is a shortcut to the same channel, not a second Meeting identity.
     // Keep one visible active location: the origin selected by the user.
@@ -194,8 +197,9 @@
     <div class="flex items-center justify-between gap-2 px-2">
       <p class="ti-channel-heading m-0">RECENT MEETINGS</p>
       <button bind:this={fallbackFocus} type="button" class="ti-library-view-all"
-        aria-label="View all saved Meetings" aria-current={viewAllSelected ? "page" : undefined}
-        onclick={() => { if (!busy) { clearMenus(); onViewAll(); } }}>View All</button>
+        aria-label={showAllRecent ? "Show fewer recent Meetings" : "Show all recent Meetings"}
+        aria-expanded={showAllRecent}
+        onclick={() => { if (!busy) { clearMenus(); showAllRecent = !showAllRecent; } }}>{showAllRecent ? "Show Less" : "View All"}</button>
     </div>
     {#if recent.length === 0}
       <p class="mx-3 my-2 text-[12px] text-[var(--ti-text-soft)]">No recent meetings</p>
@@ -242,6 +246,42 @@
   {@render actionEditor("create_project")}
   {#if library.projects.length === 0}
     <p class="mx-3 my-2 text-[12px] text-[var(--ti-text-soft)]">No projects yet. Use + to create one.</p>
+  {/if}
+  <div class="ti-library-channel mt-2">
+    <button type="button" class="ti-channel-item min-w-0 flex-1" aria-expanded={!uncategorizedCollapsed}
+      onclick={() => { clearMenus(); uncategorizedCollapsed = !uncategorizedCollapsed; }}>
+      <ChevronDown size={14} class={uncategorizedCollapsed ? "-rotate-90" : ""} aria-hidden="true"/>
+      <Folder size={16} aria-hidden="true"/>
+      <span class="min-w-0 flex-1 truncate">Uncategorized</span>
+      <span class="shrink-0 text-[11px] text-[var(--ti-text-soft)]" aria-label={uncategorized.length + " Meetings"}>{uncategorized.length}</span>
+    </button>
+  </div>
+  {#if !uncategorizedCollapsed}
+    {#each uncategorized as session (session.session_id)}
+      <div class="ti-library-channel ml-4">
+        <button type="button" class={"ti-channel-item min-w-0 flex-1 " + (selectedIn(session, "project") ? "is-active" : "")}
+          aria-current={selectedIn(session, "project") ? "page" : undefined}
+          title={session.display_name} onclick={() => openSession(session.session_id, "project")}>
+          {#if session.pinned}<Pin size={15} aria-hidden="true"/>{:else}<Hash size={15} aria-hidden="true"/>{/if}
+          <span class="min-w-0 flex-1 truncate">{session.display_name}</span>
+          {#if liveSessionId === session.session_id}<span class="text-[10px] font-semibold text-[var(--ti-success)]">LIVE</span>{/if}
+        </button>
+        <button type="button" class="ti-library-more" aria-label={"Manage " + session.display_name}
+          aria-expanded={menu === "project:" + session.session_id} disabled={!library.ok || busy}
+          onclick={(event) => toggleMenu("project:" + session.session_id, event.currentTarget)}><MoreHorizontal size={16}/></button>
+      </div>
+      {#if menu === "project:" + session.session_id && library.ok}
+        <div class="ti-library-menu ml-5">
+          <button type="button" onclick={() => openEdit("rename_meeting", session.session_id, session.display_name, "project")}><Pencil size={14}/> Rename</button>
+          <button type="button" onclick={() => void modify({ action: "pin_meeting", sessionId: session.session_id, pinned: !session.pinned })}>
+            {#if session.pinned}<PinOff size={14}/>{:else}<Pin size={14}/>{/if} {session.pinned ? "Unpin Meeting" : "Pin Meeting"}
+          </button>
+          <button type="button" onclick={() => openMove(session.session_id, "project")}><FolderInput size={14}/> Move to Project</button>
+          <button type="button" onclick={() => requestDelete(session.session_id, "project")}><Trash2 size={14}/> Delete Meeting</button>
+        </div>
+      {/if}
+      {@render actionEditor("project:" + session.session_id)}
+    {/each}
   {/if}
   {#each library.projects as project (project.project_id)}
     {@const projectSessions = library.sessions.filter(session => session.project_id === project.project_id)}
