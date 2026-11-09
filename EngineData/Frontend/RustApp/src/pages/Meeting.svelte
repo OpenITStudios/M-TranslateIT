@@ -134,7 +134,7 @@
       {#if activityVisible && meetingStatus && meetingStatus.audio_source !== "original"}
         <MeetingActivity status={meetingStatus} turns={meetingTurns} {previewReadOnly} />
       {:else}
-        <div class="flex min-h-[280px] flex-col items-center justify-center gap-3 text-center">
+        <div class="flex h-full min-h-[280px] flex-col items-center justify-center gap-4 text-center">
           <Hash size={28} class="text-[var(--ti-text-soft)]" aria-hidden="true"/>
           <h3 class="m-0 text-[19px] font-semibold">{meeting.lifecycle === "cleanup_incomplete" ? "Stop Needed" : meeting.busy ? meeting.label + " Meeting" : meeting.live ? (meetingStatus?.audio_source === "original" ? "Original Microphone is Live" : "Translation is Live") : meeting.hasSession ? "Meeting Needs Attention" : "Ready to Translate"}</h3>
           <p class="m-0 max-w-[520px] text-[13px] leading-6 text-[var(--ti-text-muted)]" role="status" aria-live="polite">
@@ -144,6 +144,16 @@
                 ? "Select TranslateIT as your microphone in Discord or Zoom, then select Start."
                 : statusMessage}
           </p>
+          {#if !meeting.hasSession && !meeting.busy && meeting.lifecycle === "idle"}
+            <button type="button" class="ti-button mt-2 min-h-11 min-w-[200px] px-6"
+              disabled={!actionEnabled} onclick={handlePrimary}
+              title={needsSetup ? "Continue Meeting setup" : needsVoice ? "Choose a voice for translation" : needsSettings ? "Open audio settings" : "Start TranslateIT Meeting audio without joining a call"}>
+              <Mic size={17} aria-hidden="true"/> {primaryLabel}
+            </button>
+            <p class="m-0 max-w-[440px] text-[12px] leading-5 text-[var(--ti-text-soft)]">
+              Start opens a live transcript channel here. Your speech appears on the right and incoming Meeting Sound on the left. TranslateIT does not join your call.
+            </p>
+          {/if}
           {#if meeting.live && meetingStatus?.audio_source === "original"}
             <p class="m-0 text-[12px] text-[var(--ti-text-soft)]">Original Microphone bypasses translation; no translated transcript is generated for your outbound speech.</p>
           {/if}
@@ -184,7 +194,7 @@
     </div>
   {/if}
 
-  {#if section === "live" || meeting.hasSession || meeting.canStop}
+  {#if (section === "live" && (meeting.hasSession || meeting.busy || meeting.canStop || meeting.lifecycle !== "idle")) || meeting.hasSession || meeting.canStop}
     <footer class="ti-call-dock flex h-[var(--ti-bottom-dock-height)] min-h-[var(--ti-bottom-dock-height)] shrink-0 items-center justify-center px-5 py-3"
       aria-label="Meeting main action">
       <button type="button"
