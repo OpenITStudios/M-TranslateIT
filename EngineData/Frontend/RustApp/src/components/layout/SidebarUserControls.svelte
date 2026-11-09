@@ -346,9 +346,9 @@
     </section>
   {:else if popup === "devices"}
     <section bind:this={devicePopup} id="ti-audio-device-menu" class="ti-user-popover absolute bottom-full left-0 z-30 mb-2 w-[min(352px,calc(100vw-18px))]"
-      role="dialog" aria-label="Choose Audio Devices">
+      role="dialog" aria-label="Choose microphone and Meeting sound devices">
       <header class="ti-user-popover-heading">
-        <strong class="text-sm">Voice &amp; Audio</strong>
+        <strong class="text-sm">Audio Devices</strong>
         <button type="button" class="ti-user-popup-close" aria-label="Close Audio Devices menu" onclick={() => void dismissPopup()}>×</button>
       </header>
       <div class="max-h-[min(490px,calc(100vh-135px))] overflow-y-auto p-2">
@@ -394,7 +394,7 @@
   <div class="flex min-h-[62px] items-center gap-1.5 border-t border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-2 py-2.5">
     <button bind:this={voiceTrigger} type="button" class="ti-actor-trigger group flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left"
       aria-label="Choose Voice Actor" aria-controls={popup === "voice" ? "ti-voice-actor-menu" : undefined} aria-expanded={popup === "voice"}
-      title={previewReadOnly ? "Synthetic preview: voice selection not connected" : "Choose Voice Actor"}
+      title={previewReadOnly ? "Synthetic preview: voice selection not connected" : "Choose the voice used for translated Meeting speech"}
       disabled={previewReadOnly} onclick={() => togglePopup("voice")}>
       <span class="relative grid size-8 shrink-0 place-items-center rounded-full bg-[var(--ti-brand)] text-white">
         <AudioLines size={17} aria-hidden="true"/>
@@ -411,18 +411,18 @@
         aria-label={meetingMuted ? "Unmute TranslateIT output" : "Mute TranslateIT output"}
         aria-pressed={meetingLive && meetingMuted}
         disabled={!meetingLive || muteBusy || previewReadOnly}
-        title={meetingLive ? "Mute controls audio sent to the meeting" : "Available during Meeting"}
+        title={meetingLive ? (meetingMuted ? "Unmute audio sent to the meeting" : "Mute audio sent to the meeting") : "Mute is available only during a live Meeting"}
         onclick={() => void onToggleMute()}>
         {#if meetingMuted}<MicOff size={19}/>{:else}<Mic size={19}/>{/if}
       </button>
       <button bind:this={devicesTrigger} type="button" class="ti-user-action ti-user-chevron"
         aria-label="Choose audio input and meeting sound devices"
         aria-controls={popup === "devices" ? "ti-audio-device-menu" : undefined} aria-expanded={popup === "devices"}
-        title="Audio device menu" disabled={previewReadOnly}
+        title="Choose physical microphone and incoming Meeting sound devices" disabled={previewReadOnly}
         onclick={() => togglePopup("devices")}><ChevronDown size={14}/></button>
     </div>
     <button type="button" class={"ti-user-action shrink-0 " + (active === "settings" ? "is-active" : "")}
       aria-label="Open Settings" aria-current={active === "settings" ? "page" : undefined}
-      title="User Settings" disabled={previewReadOnly} onclick={() => navigateTo("settings")}><Settings size={19}/></button>
+      title="Open application Settings" disabled={previewReadOnly} onclick={() => navigateTo("settings")}><Settings size={19}/></button>
   </div>
 </div>
