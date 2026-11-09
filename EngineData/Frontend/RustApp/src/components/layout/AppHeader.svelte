@@ -149,13 +149,13 @@
     {/if}
   </div>
 
-  <div class="ml-auto flex min-w-0 shrink-0 items-center gap-2" role="group" aria-label="Workspace controls">
+  <div class="ml-auto flex min-w-0 shrink-0 items-center gap-2" role="group" aria-label={route === "meeting" && meetingSection === "live" ? "Live Meeting controls" : "Workspace controls"}>
     {#if route === "meeting" && meetingSection === "live"}
       {#if sourceEditable}
-        <label class="flex min-h-9 items-center gap-2 rounded-[var(--ti-radius-sm)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] px-3" title="Audio sent to your call">
-          <ArrowLeftRight size={15} class="text-[var(--ti-text-muted)]"/>
-          <span class="text-[12px] font-medium text-[var(--ti-text-muted)]">Send to call</span>
-          <select aria-label="Audio sent to the call: translated or original microphone" title="Choose translated audio or your original microphone for the call" class="min-w-0 max-w-[150px] bg-transparent text-[12px] font-medium"
+        <label class="flex min-h-10 min-w-0 items-center gap-2 rounded-[var(--ti-radius-sm)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] px-3" title="Select what audio TranslateIT sends to your calling app">
+          <ArrowLeftRight size={15} class="shrink-0 text-[var(--ti-text-muted)]" aria-hidden="true"/>
+          <span class="hidden text-[12px] font-medium text-[var(--ti-text-muted)] sm:inline">Send to call</span>
+          <select aria-label="Audio sent to the call: translated or original microphone" title="Choose translated audio or your original microphone for the call" class="min-w-0 max-w-[138px] bg-transparent text-[12px] font-medium"
             value={currentSource} disabled={sourceChanging || snapshot.meeting.busy || previewReadOnly}
             onchange={(event) => void selectSource(event.currentTarget.value === "original" ? "original" : "translateit")}>
             <option value="translateit">{MEETING_SOURCE_LABELS.translateit}</option>
@@ -171,7 +171,7 @@
     <div class="relative shrink-0" bind:this={moreRoot}>
       <button type="button" bind:this={moreButton}
         class="ti-sidebar-icon-button border border-[var(--ti-border)] bg-[var(--ti-surface-raised)]"
-        aria-label="More workspace utilities" title="More workspace utilities"
+        aria-label={route === "meeting" && meetingSection === "live" ? "More Meeting actions" : "More workspace actions"} title={route === "meeting" && meetingSection === "live" ? "More Meeting actions" : "More workspace actions"}
         aria-haspopup="menu" aria-expanded={moreOpen}
         aria-controls={moreOpen ? "ti-meeting-more-menu" : undefined}
         onclick={() => void toggleMore()}>
@@ -180,7 +180,7 @@
       {#if moreOpen}
         <div id="ti-meeting-more-menu"
           class="ti-user-popover absolute right-0 top-full z-40 mt-2 w-[224px] p-1"
-          role="menu" aria-label="Meeting utilities">
+          role="menu" aria-label={route === "meeting" && meetingSection === "live" ? "Meeting actions" : "Workspace actions"}>
           {#if route === "meeting"}
             <button type="button" role="menuitem" class="ti-user-menu-option"
               disabled={captionBusy || previewReadOnly} onclick={() => void changeFloatingCaptions()}>
