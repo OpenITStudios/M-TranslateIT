@@ -145,7 +145,7 @@
         bind:value={value} placeholder="Enter name"/>
       <div class="mt-2 flex justify-end gap-2">
         <button type="button" class="ti-library-small" disabled={busy} onclick={dismissActions}>Cancel</button>
-        <button type="submit" class="ti-library-small ti-library-primary" disabled={busy || !library.ok || !value.trim()}>Save</button>
+        <button type="submit" class="ti-library-small ti-library-primary" disabled={busy || !library?.ok || !value.trim()}>Save</button>
       </div>
     </form>
   {/if}
