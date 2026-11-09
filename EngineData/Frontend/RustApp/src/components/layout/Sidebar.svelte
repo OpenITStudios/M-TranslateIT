@@ -109,8 +109,7 @@
       {#if onOpenSession && onLibraryChange && onDeleteSession}
         <MeetingLibraryNavigation {library} selectedSessionId={navigationSessionId}
           {liveSessionId} {selectedSurface}
-          viewAllSelected={active === "meeting" && meetingSection === "saved"}
-          {onOpenSession} onViewAll={() => onMeetingSection("saved")}
+          {onOpenSession}
           onChange={onLibraryChange} {onDeleteSession}/>
       {/if}
 
