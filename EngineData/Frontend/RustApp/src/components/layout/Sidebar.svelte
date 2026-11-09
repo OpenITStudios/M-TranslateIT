@@ -7,7 +7,7 @@
   import type { MeetingLibrary, MeetingLibraryChange } from "../../app/bridge/runtimeApi";
   import TranslateITMark from "../brand/TranslateITMark.svelte";
 
-  type MeetingSection = "live" | "last" | "saved" | "session";
+  type MeetingSection = "live" | "last" | "session";
   type SettingsTab = "meeting" | "translation" | "appearance" | "advanced";
 
   let {
