@@ -85,26 +85,26 @@
       <h2 class="m-0 truncate text-[22px] font-semibold" title={session.display_name}>{session.display_name}</h2>
       <p class="mb-0 mt-2 text-[13px] leading-5 text-[var(--ti-text-muted)]">Saved conversation · You on the right, Meeting Sound on the left. Read-only transcript.</p>
     </div>
-    <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+    <div class="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--ti-border)] pb-4" role="group" aria-label="Saved conversation tools">
       <span class="text-[12px] text-[var(--ti-text-muted)]">
         {session.entry_count} saved phrase{session.entry_count === 1 ? "" : "s"}
         · {session.complete ? "Finalized" : "Archive needs review"}
       </span>
-      <div class="flex gap-2">
+      <div class="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+        <label class="relative min-w-[190px] flex-1 sm:max-w-[320px]">
+          <Search size={16} class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ti-text-soft)]" aria-hidden="true"/>
+          <input class="ti-field min-h-9 w-full pl-10 pr-3 text-[13px]" bind:value={query} aria-label="Search this Meeting transcript" placeholder="Search conversation..."/>
+        </label>
         <button type="button" class="ti-button ti-button-secondary min-h-9 px-3 text-[12px]"
           disabled={loading} onclick={() => void load(session.session_id)} aria-label="Refresh saved Meeting">
           <RefreshCw size={14} aria-hidden="true"/> Refresh
         </button>
         <button type="button" class="ti-button ti-button-secondary min-h-9 px-3 text-[12px]"
           disabled={!snapshot?.turns.length} onclick={() => void copyAll()}>
-          {#if copied}<Check size={14}/>{:else}<Copy size={14}/>{/if} Copy
+          {#if copied}<Check size={14}/>{:else}<Copy size={14}/>{/if} Copy all
         </button>
       </div>
     </div>
-    <label class="relative mb-5 block">
-      <Search size={16} class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ti-text-soft)]" aria-hidden="true"/>
-      <input class="ti-field min-h-10 w-full pl-10 pr-3 text-[13px]" bind:value={query} aria-label="Search this Meeting transcript" placeholder="Search this conversation..."/>
-    </label>
     {#if loading}
       <p class="text-[13px] text-[var(--ti-text-muted)]" role="status">Loading Meeting...</p>
     {:else if failed}
