@@ -226,10 +226,10 @@
       <div id="settings-category-panel" class="min-w-0" role="region"
         aria-label={tab === "meeting" ? "Voice & Audio settings" : tab === "translation" ? "Meeting & Transcript settings" : tab === "appearance" ? "Appearance settings" : "Help and diagnostics"}>
     {#if tab === "meeting"}
-      <article class="ti-panel ti-settings-panel overflow-hidden">
-        <header class="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-4">
+      <article class="ti-panel ti-settings-panel overflow-hidden" aria-label="Voice and audio configuration">
+        <header class="flex flex-wrap items-start justify-between gap-3 px-5 pb-3 pt-5">
           <div class="min-w-0 flex-1">
-            <h3 class="m-0 text-[16px] font-semibold tracking-[-0.015em]">Audio devices</h3>
+            <h3 class="m-0 text-[17px] font-semibold tracking-[-0.015em]">Audio devices</h3>
             <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">Choose the microphone and speakers used in your calls. TranslateIT verifies each change before saving.</p>
           </div>
           {#if meetingResourcesLocked}
@@ -242,16 +242,16 @@
           {/if}
         </header>
 
-        <div class="flex items-center justify-end border-b border-[var(--ti-border)] px-5 py-2.5">
+        <div class="flex items-center justify-end px-5 pb-3">
           <button type="button" class="ti-button ti-button-secondary min-h-9 px-3 text-[12px]"
             disabled={devicesLoading || deviceSaving} onclick={() => void loadDevices()}>
             {devicesLoading ? "Checking devices..." : "Refresh devices"}
           </button>
         </div>
 
-        <div class="grid grid-cols-1 gap-5 p-5 lg:grid-cols-2" aria-busy={devicesLoading || deviceSaving}>
-          <label class="grid min-w-0 gap-2">
-            <span class="ti-field-label">Microphone</span>
+        <div class="grid grid-cols-1 gap-3 px-5 pb-5 lg:grid-cols-2" aria-busy={devicesLoading || deviceSaving}>
+          <label class="grid min-w-0 content-start gap-2 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] p-4">
+            <span class="ti-field-label">Microphone input</span>
             <select class="ti-field min-h-10 px-3" disabled={meetingResourcesLocked || devicesLoading || deviceSaving || !devices?.ok} value={currentDevice("microphone")} onchange={(event) => void changeDevice("microphone", selectValue(event))}>
               <option value="">Windows Default</option>
               {#each devices?.input_devices ?? [] as device (deviceId(device))}
@@ -264,8 +264,8 @@
             <small class="text-[13px] leading-5 text-[var(--ti-text-muted)]">Choose the microphone you speak into, not the virtual audio device used in your calling app.</small>
           </label>
 
-          <label class="grid min-w-0 gap-2">
-            <span class="ti-field-label">Sound from your meeting</span>
+          <label class="grid min-w-0 content-start gap-2 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] p-4">
+            <span class="ti-field-label">Incoming meeting sound</span>
             <select class="ti-field min-h-10 px-3" disabled={meetingResourcesLocked || devicesLoading || deviceSaving || !devices?.ok} value={currentDevice("meeting-sound")} onchange={(event) => void changeDevice("meeting-sound", selectValue(event))}>
               <option value="">Windows Default</option>
               {#each devices?.output_devices ?? [] as device (deviceId(device))}
@@ -285,9 +285,9 @@
           </p>
         {/if}
 
-        <div class="flex flex-wrap items-start justify-between gap-4 border-t border-[var(--ti-border)] px-5 py-4" aria-busy={routeLoading}>
+        <div class="mx-5 mb-5 flex flex-wrap items-start justify-between gap-4 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] p-4" aria-busy={routeLoading}>
           <div class="min-w-0">
-            <span class="ti-field-label">Microphone to use in your calling app</span>
+            <span class="ti-field-label">Send audio to your calling app</span>
             <strong class="mt-1.5 block break-words text-[13px] font-semibold leading-5">{meetingMicrophoneDevice}</strong>
             <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]" role={routeCheck === "unavailable" ? "alert" : "status"}>
               {routeCheck === "unavailable" ? "Couldn't check this Windows audio device. Select Check route."
@@ -317,7 +317,7 @@
           </div>
         </div>
 
-        <details class="group border-t border-[var(--ti-border)]" open={settings.translation_engine === "codex" || snapshot.meetingSession?.preflight?.blockers?.includes("meeting_session:settings_unverified") === true}>
+        <details class="group mx-5 mb-5 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)]" open={settings.translation_engine === "codex" || snapshot.meetingSession?.preflight?.blockers?.includes("meeting_session:settings_unverified") === true}>
           <summary class="flex min-h-12 cursor-pointer items-center gap-2 px-5 py-3 text-[13px] font-semibold text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-hover)]">
             <span aria-hidden="true" class="inline-block text-[11px] transition-transform group-open:rotate-90">▸</span> Advanced audio options
             <span class="ml-auto text-[12px] font-normal">Engine &amp; noise</span>
@@ -341,7 +341,7 @@
           </div>
         </details>
 
-        <footer class="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-3">
+        <footer class="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-4">
           <p class="m-0 min-w-0 flex-1 break-words text-[12px] leading-5 text-[var(--ti-text-muted)]" aria-live="polite" aria-atomic="true">
             {meetingResourcesLocked ? meetingResourceLockMessage : deviceMessage}
           </p>
