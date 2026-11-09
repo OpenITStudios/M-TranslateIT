@@ -79,12 +79,12 @@
 </script>
 
 {#if !sessionActive && snapshot?.turns.length}
-  <details bind:open={reviewOpen} class="ti-panel mt-4 overflow-hidden">
-    <summary class="cursor-pointer px-5 py-4 hover:bg-[var(--ti-surface-soft)]">
-      <strong class="block text-[15px] font-semibold">{sessionLabel} · Last session</strong>
-      <span class="mt-1 block text-sm text-[var(--ti-text-muted)]">Showing {snapshot.turns.length} recent phrase{snapshot.turns.length === 1 ? "" : "s"}</span>
-    </summary>
-    <div class="border-t border-[var(--ti-border)]">
+  <section class="min-h-0" aria-label="Last Meeting channel">
+    <header class="mb-4 border-b border-[var(--ti-border)] pb-4">
+      <strong class="block text-[18px] font-semibold">{sessionLabel}</strong>
+      <span class="mt-1 block text-[13px] text-[var(--ti-text-muted)]">Last Meeting · {snapshot.turns.length} phrase{snapshot.turns.length === 1 ? "" : "s"} · Read-only conversation</span>
+    </header>
+    <div>
       <div class="flex flex-wrap items-center justify-end gap-2 px-5 py-3">
         <button type="button" class="ti-button ti-button-secondary min-h-9" onclick={() => void copyAll()}>
           {#if copied}<Check size={14} />{:else}<Copy size={14} />{/if}{copied ? "Copied" : "Copy all"}
@@ -97,9 +97,9 @@
         </label>
       </div>
       <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users need focus to scroll this named region.) -->
-      <div class="max-h-[360px] overflow-y-auto divide-y divide-[var(--ti-border)]" role="region" aria-label="Last Meeting conversation" tabindex="0">
+      <div class="max-h-[min(68vh,720px)] overflow-y-auto" role="region" aria-label="Last Meeting conversation" tabindex="0">
         {#each visibleTurns as turn (turn.sequence)}
-          <div class="px-4 py-3">
+          <div class="px-1 py-2">
             <MeetingTurnBubble {turn} preferences={appearance} />
           </div>
         {/each}
@@ -108,7 +108,7 @@
         {/if}
       </div>
     </div>
-  </details>
+  </section>
 {:else if openByDefault}
   <p class="m-0 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-4 text-[13px] text-[var(--ti-text-muted)]" role="status">
     No last Meeting transcript is available here. Earlier sessions may be in Saved Meeting.
