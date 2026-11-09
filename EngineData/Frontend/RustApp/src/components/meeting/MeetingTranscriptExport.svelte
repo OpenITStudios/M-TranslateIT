@@ -1,16 +1,7 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { Check, Copy, Download, ExternalLink, FolderOpen, RefreshCw, Trash2, Pin } from "@lucide/svelte";
-  import { runtimeApi, type MeetingCommittedTurn, type MeetingCommittedTurnsSnapshot, type MeetingLibrary } from "../../app/bridge/runtimeApi";
-  import { languageName } from "../../app/shared/state";
-  import { meetingSpeakerLabel, meetingTime } from "../../app/runtime/meetingTranscriptPresentation";
-  import MeetingTurnBubble from "./MeetingTurnBubble.svelte";
-  import {
-    DEFAULT_TRANSCRIPT_PREFERENCES, readTranscriptPreferences, subscribeTranscriptPreferences,
-    type TranscriptPreferences,
-  } from "./transcriptPreferences";
-
-  let { hasSession = false, onNotice, onDeleted, onOpenSession }: {
+    import { Check, Copy, Download, ExternalLink, FolderOpen, RefreshCw, Trash2, Pin } from "@lucide/svelte";
+  import { runtimeApi, type MeetingLibrary } from "../../app/bridge/runtimeApi";
+        let { hasSession = false, onNotice, onDeleted, onOpenSession }: {
     hasSession?: boolean;
     onNotice: (message: string) => void;
     onDeleted?: () => void;
@@ -21,19 +12,6 @@
   // determines Last Meeting; this ordering is only for the Saved list.
   const visibleSessions = $derived([...(history?.sessions ?? [])]
     .sort((a, b) => Number(b.pinned) - Number(a.pinned)));
-  let appearance = $state<TranscriptPreferences>({ ...DEFAULT_TRANSCRIPT_PREFERENCES });
-  onMount(() => {
-    appearance = readTranscriptPreferences();
-    return subscribeTranscriptPreferences((next) => { appearance = next; });
-  });
-  let expanded = $state<string | null>(null);
-  let preview = $state<MeetingCommittedTurnsSnapshot | null>(null);
-  let previewLoading = $state(false);
-  let previewError = $state("");
-  let previewPanel = $state<HTMLDivElement>();
-  // Ignore older reads after the reader closes or changes sessions.
-  let previewRevision = 0;
-  let language = $state<"bilingual" | "id" | "en">("bilingual");
   let confirming = $state<string | null>(null);
   let busy = $state(false);
   let loading = $state(false);
@@ -54,13 +32,6 @@
       ? date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
       : "Saved Meeting";
   }
-  function textFor(turn: MeetingCommittedTurn, code: "id" | "en") {
-    if (turn.source_language === code) return { text: turn.source_text, label: "Original", fallback: false };
-    if (turn.translation_state === "translated" && turn.translated_text.trim()) {
-      return { text: turn.translated_text, label: "Translation", fallback: false };
-    }
-    return { text: turn.source_text, label: "Translation unavailable · Original fallback", fallback: true };
-  }
   async function refresh(): Promise<void> {
     if (loading) return;
     loading = true;
@@ -68,65 +39,14 @@
       history = await runtimeApi.listMeetingLibrary();
       notice = history.ok ? "" : history.message;
       if (!history.ok) {
-        expanded = null;
-        preview = null;
-        previewLoading = false;
-        previewError = "";
-        previewRevision += 1;
       }
     } catch {
       history = null;
-      expanded = null;
-      preview = null;
-      previewLoading = false;
-      previewError = "";
-      previewRevision += 1;
       notice = "Saved transcripts are unavailable.";
     } finally {
       historyChecked = true;
       loading = false;
     }
-  }
-  async function togglePreview(sessionId: string): Promise<void> {
-    confirming = null;
-    notice = "";
-    if (expanded === sessionId) {
-      expanded = null;
-      preview = null;
-      previewLoading = false;
-      previewError = "";
-      previewRevision += 1;
-      return;
-    }
-    expanded = sessionId;
-    preview = null;
-    previewError = "";
-    previewLoading = true;
-    const revision = ++previewRevision;
-    try {
-      const result = await runtimeApi.getSavedMeetingTranscriptPreview(sessionId);
-      if (revision !== previewRevision || expanded !== sessionId) return;
-      if (!result.ok) {
-        previewError = result.note || "Saved transcript could not be loaded.";
-        return;
-      }
-      preview = result;
-    } catch {
-      if (revision === previewRevision && expanded === sessionId) {
-        previewError = "Saved transcript could not be loaded.";
-      }
-    } finally {
-      if (revision === previewRevision && expanded === sessionId) previewLoading = false;
-    }
-  }
-
-  async function retryPreview(sessionId: string): Promise<void> {
-    if (expanded !== sessionId || previewLoading) return;
-    // The Retry button will be removed by Loading. Keep keyboard focus on
-    // its persistent preview region instead of dropping it to the document.
-    previewPanel?.focus();
-    expanded = null;
-    await togglePreview(sessionId);
   }
   async function toggleHtmlPreview(sessionId: string): Promise<void> {
     if (previewBusy) return;
@@ -172,13 +92,6 @@
     try {
       const result = await runtimeApi.deleteSavedMeetingTranscript(sessionId);
       if (!result.ok) { notice = result.message; return; }
-      if (expanded === sessionId) {
-        expanded = null;
-        preview = null;
-        previewLoading = false;
-        previewError = "";
-        previewRevision += 1;
-      }
       if (htmlSample?.sessionId === sessionId) htmlSample = null;
       htmlPreviewRevision += 1;
       if (receipt?.sessionId === sessionId) receipt = null;
@@ -310,69 +223,6 @@
               </p>
               <iframe title="Offline HTML transcript document preview" sandbox=""
                 srcdoc={htmlSample.html} class="h-[480px] w-full rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-bg)]"></iframe>
-            </div>
-          {/if}
-          {#if expanded === session.session_id}
-            <div bind:this={previewPanel} class="rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-soft)] p-3"
-              role="region" aria-label={`Preview saved transcript ${sessionLabel(session.session_id)}`} tabindex="-1">
-              <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <strong class="text-sm">Conversation</strong>
-                  <p class="m-0 text-[13px] text-[var(--ti-text-muted)]">
-                    Latest {preview?.turns.length ?? 0} entries · HTML includes all archived entries.
-                  </p>
-                </div>
-                <div class="flex flex-wrap gap-1 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-1"
-                  role="group" aria-label="Read transcript in">
-                  {#each [{ code: "bilingual", name: "Bilingual" }, { code: "id", name: "Bahasa Indonesia" }, { code: "en", name: "English" }] as option (option.code)}
-                    <button type="button" class={"inline-flex min-h-10 items-center rounded-[var(--ti-radius-sm)] px-3 text-[13px] " +
-                      (language === option.code ? "bg-[var(--ti-surface-raised)]" : "text-[var(--ti-text-muted)]")}
-                      aria-pressed={language === option.code}
-                      onclick={() => language = option.code as "bilingual" | "id" | "en"}>{option.name}</button>
-                  {/each}
-                </div>
-              </div>
-              {#if previewLoading}
-                <p class="m-0 text-[13px] text-[var(--ti-text-muted)]" role="status" aria-live="polite">Loading saved conversation...</p>
-              {:else if previewError}
-                <div class="grid gap-3">
-                  <p class="m-0 break-words text-[13px] leading-5 text-[var(--ti-warning)]" role="alert">{previewError} The saved session was not modified.</p>
-                  <button type="button" class="ti-button ti-button-secondary justify-self-start"
-                    onclick={() => void retryPreview(session.session_id)}>Retry preview</button>
-                </div>
-              {:else if !preview}
-                <p class="m-0 text-[13px] text-[var(--ti-text-muted)]">Preview is unavailable. Select Read to close and try again.</p>
-              {:else}
-                <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users need focus to scroll this named region.) -->
-                <div class="max-h-[360px] divide-y divide-[var(--ti-border)] overflow-y-auto" role="region" aria-label="Saved conversation" tabindex="0">
-                  {#each preview.turns as turn (turn.sequence)}
-                    <div class="py-3 first:pt-0 last:pb-0">
-                      {#if language === "bilingual"}
-                        <MeetingTurnBubble {turn} preferences={appearance} />
-                      {:else}
-                        {@const selected = textFor(turn, language)}
-                        <div class={"flex w-full " + (turn.lane === "you" ? "justify-end" : "justify-start")}>
-                          <article
-                            class={"w-[min(88%,690px)] min-w-0 rounded-[var(--ti-radius-lg)] border px-4 py-3 " +
-                              (turn.lane === "you" ? "border-[var(--ti-border-strong)] bg-[var(--ti-surface-raised)]" :
-                                "border-[var(--ti-border)] bg-[var(--ti-surface-soft)]")}
-                            aria-label={meetingSpeakerLabel(turn.lane)}
-                          >
-                            <header class="mb-2 flex flex-wrap items-center justify-between gap-2">
-                              <strong class="text-[13px] font-semibold">{meetingSpeakerLabel(turn.lane)}</strong>
-                              <span class="text-[13px] text-[var(--ti-text-muted)]">{meetingTime(turn.created_unix_ms)}</span>
-                            </header>
-                            <span class="text-[13px] text-[var(--ti-text-muted)]">{selected.label} · {languageName(selected.fallback ? turn.source_language : language)}</span>
-                            <p class={"m-0 mt-1 whitespace-pre-wrap break-words text-[14px] leading-6 " +
-                              (selected.fallback ? "text-[var(--ti-warning)]" : "")}
-                              lang={selected.fallback ? turn.source_language : language}>{selected.text}</p>
-                          </article>
-                        </div>
-                      {/if}
-                    </div>
-                  {/each}
-                </div>
-              {/if}
             </div>
           {/if}
         </div>
