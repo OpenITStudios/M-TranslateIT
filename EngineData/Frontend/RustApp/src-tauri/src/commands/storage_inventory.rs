@@ -27,6 +27,18 @@ fn measure(name: &'static str, root: &Path, excluded: Option<&Path>) -> StorageC
     let mut result = StorageCategory {
         name, bytes: Some(0), files: 0, directories: 0, complete: true, note: String::new(),
     };
+    // Canonicalize the owned root once. A missing root is empty; an unreadable
+    // root is unknown, not zero. Canonical checks also reject Windows junctions.
+    let owned_root = match fs::canonicalize(root) {
+        Ok(path) => path,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return result,
+        Err(_) => {
+            result.complete = false;
+            result.bytes = None;
+            result.note = "Storage root could not be verified.".into();
+            return result;
+        }
+    };
     let mut stack = vec![root.to_path_buf()];
     let mut visited = 0usize;
     // If a directory changes while scanning, prefer an unknown total over a false zero.
@@ -49,6 +61,16 @@ fn measure(name: &'static str, root: &Path, excluded: Option<&Path>) -> StorageC
                 continue;
             }
         };
+        // Reject reparse points/junctions escaping the owned root. Files may
+        // disappear during a scan; that is an incomplete inventory.
+        let inside_owned_root = fs::canonicalize(&path)
+            .map(|canonical| canonical.starts_with(&owned_root))
+            .unwrap_or(false);
+        if !inside_owned_root {
+            result.complete = false;
+            result.note = "A path changed or escaped the storage root; total is unknown.".into();
+            continue;
+        }
         if metadata.file_type().is_symlink() {
             result.complete = false;
             result.note = "Linked entries were skipped; total is unknown.".into();
@@ -138,6 +160,18 @@ mod tests {
         assert!(result.complete);
         assert_eq!(result.files, 1);
         assert_eq!(result.bytes, Some(3));
+        let _ = fs::remove_dir_all(root);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn external_symlink_is_not_followed() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!("translateit-inventory-link-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        symlink(std::env::temp_dir(), root.join("outside")).unwrap();
+        let result = measure("linked", &root, None);
+        assert!(!result.complete);
+        assert_eq!(result.bytes, None);
         let _ = fs::remove_dir_all(root);
     }
     #[test]
