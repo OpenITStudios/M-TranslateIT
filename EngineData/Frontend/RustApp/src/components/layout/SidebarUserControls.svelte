@@ -399,7 +399,7 @@
     </section>
   {/if}
 
-  <div class="flex min-h-[62px] items-center gap-1.5 border-t border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-2 py-2.5">
+  <div class="flex h-[var(--ti-bottom-dock-height)] min-h-[var(--ti-bottom-dock-height)] shrink-0 items-center gap-1.5 border-t border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-2 py-2.5">
     <button bind:this={voiceTrigger} type="button" class="ti-actor-trigger group flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left"
       aria-label="Choose Meeting voice" aria-controls={popup === "voice" ? "ti-voice-actor-menu" : undefined} aria-expanded={popup === "voice"}
       title={previewReadOnly ? "Synthetic preview: voice selection not connected" : "Choose the voice used for translated Meeting speech"}
