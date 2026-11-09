@@ -50,10 +50,12 @@
     menu = next;
   }
   function openSession(sessionId: string, surface: "recent" | "project"): void {
+    if (busy) return;
     clearMenus();
     onOpenSession(sessionId, surface);
   }
   function toggleProject(projectId: string): void {
+    if (busy) return;
     clearMenus();
     collapsed = { ...collapsed, [projectId]: !collapsed[projectId] };
   }
@@ -74,6 +76,7 @@
     value = previous;
   }
   function handleEscape(event: KeyboardEvent): void {
+    if (busy) return;
     if (event.key === "Escape" && (menu !== null || edit !== null ||
       moving !== null || confirmingDelete !== null)) {
       event.preventDefault();
@@ -122,7 +125,7 @@
       <input id="ti-library-edit-name" class="ti-field min-h-9 px-2 text-[13px]" maxlength="80" required
         bind:value={value} placeholder="Enter name"/>
       <div class="mt-2 flex justify-end gap-2">
-        <button type="button" class="ti-library-small" onclick={() => edit = null}>Cancel</button>
+        <button type="button" class="ti-library-small" disabled={busy} onclick={() => edit = null}>Cancel</button>
         <button type="submit" class="ti-library-small ti-library-primary" disabled={busy || !library.ok || !value.trim()}>Save</button>
       </div>
     </form>
@@ -136,7 +139,7 @@
         <button class="ti-library-small w-full text-left" disabled={busy}
           onclick={() => void modify({ action: "move_meeting", sessionId: moving, projectId: project.project_id })}>{project.name}</button>
       {/each}
-      <button class="ti-library-small w-full text-left" onclick={() => moving = null}>Cancel</button>
+      <button class="ti-library-small w-full text-left" disabled={busy} onclick={() => moving = null}>Cancel</button>
     </div>
   {/if}
   {#if confirmingDelete && target === (deletingProject ? "project:" : actionSurface + ":") + confirmingDelete}
@@ -148,7 +151,7 @@
           : "Delete this Meeting's local transcript? Exported HTML files remain."}
       </p>
       <div class="mt-2 flex justify-end gap-2">
-        <button class="ti-library-small" onclick={() => confirmingDelete = null}>Cancel</button>
+        <button class="ti-library-small" disabled={busy} onclick={() => confirmingDelete = null}>Cancel</button>
         <button class="ti-library-small ti-library-danger" disabled={busy}
           onclick={() => { if (confirmingDelete) void deleteConfirmed(confirmingDelete); }}>Confirm Delete</button>
       </div>
@@ -171,7 +174,7 @@
       <p class="ti-channel-heading m-0">RECENT MEETINGS</p>
       <button type="button" class="ti-library-view-all"
         aria-label="View all saved Meetings" aria-current={viewAllSelected ? "page" : undefined}
-        onclick={() => { clearMenus(); onViewAll(); }}>View All</button>
+        onclick={() => { if (!busy) { clearMenus(); onViewAll(); } }}>View All</button>
     </div>
     {#if recent.length === 0}
       <p class="mx-3 my-2 text-[12px] text-[var(--ti-text-soft)]">No recent meetings</p>
