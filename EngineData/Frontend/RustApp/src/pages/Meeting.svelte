@@ -61,12 +61,13 @@
 
   function handlePrimary(): void {
     if (!actionEnabled) return;
+    // Initial setup must take precedence over source-specific audio settings.
+    if (needsSetup) { void continueSetup(); return; }
     if (currentSource === "original" && !meeting.hasSession && !meeting.canStop) {
       if (originalAvailable) void onMeetingAction("original");
       else onNavigate("settings");
       return;
     }
-    if (needsSetup) { void continueSetup(); return; }
     if (needsVoice) { onNavigate("my-voice"); return; }
     if (needsSettings) { onNavigate("settings"); return; }
     void onMeetingAction(currentSource);
@@ -94,9 +95,9 @@
         ? meeting.lifecycle === "cleanup_incomplete" ? primaryControl.label : "Stop Meeting"
       : meeting.hasSession ? primaryControl.label
       : meeting.lifecycle === "unavailable" ? primaryControl.label
+      : needsSetup ? "Finish Setup"
       : currentSource === "original" && originalAvailable ? "Start Meeting"
       : currentSource === "original" && !meeting.hasSession ? "Check Audio Setup"
-      : needsSetup ? "Finish Setup"
       : needsVoice ? "Choose Voice"
       : needsSettings ? "Open Settings"
       : "Start Meeting"
