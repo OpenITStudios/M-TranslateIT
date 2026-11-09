@@ -1,7 +1,7 @@
 <script lang="ts">
-    import { Check, Copy, Download, ExternalLink, FolderOpen, RefreshCw, Trash2, Pin } from "@lucide/svelte";
+  import { Check, Copy, Download, ExternalLink, FolderOpen, RefreshCw, Trash2, Pin } from "@lucide/svelte";
   import { runtimeApi, type MeetingLibrary } from "../../app/bridge/runtimeApi";
-        let { hasSession = false, onNotice, onDeleted, onOpenSession }: {
+  let { hasSession = false, onNotice, onDeleted, onOpenSession }: {
     hasSession?: boolean;
     onNotice: (message: string) => void;
     onDeleted?: () => void;
@@ -38,8 +38,6 @@
     try {
       history = await runtimeApi.listMeetingLibrary();
       notice = history.ok ? "" : history.message;
-      if (!history.ok) {
-      }
     } catch {
       history = null;
       notice = "Saved transcripts are unavailable.";
