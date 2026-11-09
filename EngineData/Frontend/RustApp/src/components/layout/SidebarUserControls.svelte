@@ -61,7 +61,7 @@
   const voiceVerified = $derived(Boolean(voiceStatus && voiceStatus.phase !== "unavailable"
     && voiceStatus.selected_voice_kind !== "unknown"));
   const voiceLabel = $derived(
-    !voiceVerified ? "Voice Actor"
+    !voiceVerified ? "Voice unverified"
       : voiceStatus?.selected_voice_kind === "personal" ? "My Voice"
       : voiceStatus?.selected_builtin_voice_id === "MaleVoice" ? "Built-in Male"
       : voiceStatus?.selected_builtin_voice_id === "FemaleVoice" ? "Built-in Female"
@@ -295,16 +295,21 @@
 <div class="ti-user-controls relative w-full" bind:this={host}>
   {#if popup === "voice"}
     <section bind:this={voicePopup} id="ti-voice-actor-menu" class="ti-user-popover absolute bottom-full left-0 z-30 mb-2 w-[min(332px,calc(100vw-18px))]"
-      role="dialog" aria-label="Choose Voice Actor">
+      role="dialog" aria-label="Choose Meeting voice">
       <header class="ti-user-popover-heading">
-        <strong class="text-sm">Voice Actor</strong>
+        <strong class="text-sm">Meeting Voice</strong>
         <button type="button" class="ti-user-popup-close" aria-label="Close Voice Actor menu" onclick={() => void dismissPopup()}>×</button>
       </header>
       <div class="max-h-[min(420px,calc(100vh-135px))] overflow-y-auto p-2">
+        {#if voiceVerified}
+          <p class="ti-user-menu-heading">SELECTED VOICE</p>
+          <p class="mx-2 mb-3 mt-0 text-[12px] font-semibold text-[var(--ti-text)]">{voiceLabel}</p>
+          <p class="ti-user-menu-heading">AVAILABLE VOICES</p>
+        {/if}
         {#if voiceLoading}
           <p class="px-2 py-3 text-xs text-[var(--ti-text-muted)]" role="status">Checking selected voice...</p>
         {:else if !voiceVerified}
-          <p class="px-2 py-3 text-xs leading-5 text-[var(--ti-warning)]" role="status">Voice selection could not be verified.</p>
+          <p class="px-2 py-3 text-xs leading-5 text-[var(--ti-warning)]" role="status">Current voice is unverified. Check status before choosing another voice.</p>
           <button type="button" class="ti-user-menu-option" onclick={() => void readVoice()}><RotateCw size={15}/> Retry status</button>
         {:else}
           {#each builtins as actor (actor.id)}
@@ -328,7 +333,7 @@
           {/if}
         {/if}
         {#if voiceSelectionLocked || resourcesLocked || voiceStatus?.active || voiceStatus?.preview_active}
-          <p class="mx-2 my-2 flex gap-2 text-xs leading-5 text-[var(--ti-warning)]"><CircleAlert size={15} class="shrink-0"/> Finish Meeting, recording or voice creation before changing actor.</p>
+          <p class="mx-2 my-2 flex gap-2 text-xs leading-5 text-[var(--ti-warning)]"><CircleAlert size={15} class="shrink-0"/> Voice changes are locked during Meeting, recording or voice creation.</p>
         {/if}
         {#if pendingVoice}
           <div class="mt-2 rounded-md border border-[var(--ti-warning-border)] bg-[var(--ti-warning-surface)] p-3" role="group" aria-label="Confirm voice replacement">
@@ -342,7 +347,7 @@
           </div>
         {/if}
       </div>
-      <button type="button" class="ti-user-menu-footer" onclick={() => navigateTo("my-voice")}>Open My Voice settings</button>
+      <button type="button" class="ti-user-menu-footer" onclick={() => navigateTo("my-voice")}>Manage voices in My Voice</button>
     </section>
   {:else if popup === "devices"}
     <section bind:this={devicePopup} id="ti-audio-device-menu" class="ti-user-popover absolute bottom-full left-0 z-30 mb-2 w-[min(352px,calc(100vw-18px))]"
@@ -396,7 +401,7 @@
 
   <div class="flex min-h-[62px] items-center gap-1.5 border-t border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-2 py-2.5">
     <button bind:this={voiceTrigger} type="button" class="ti-actor-trigger group flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left"
-      aria-label="Choose Voice Actor" aria-controls={popup === "voice" ? "ti-voice-actor-menu" : undefined} aria-expanded={popup === "voice"}
+      aria-label="Choose Meeting voice" aria-controls={popup === "voice" ? "ti-voice-actor-menu" : undefined} aria-expanded={popup === "voice"}
       title={previewReadOnly ? "Synthetic preview: voice selection not connected" : "Choose the voice used for translated Meeting speech"}
       disabled={previewReadOnly} onclick={() => togglePopup("voice")}>
       <span class="relative grid size-8 shrink-0 place-items-center rounded-full bg-[var(--ti-brand)] text-white">
