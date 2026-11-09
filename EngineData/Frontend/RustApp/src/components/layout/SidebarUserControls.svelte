@@ -358,6 +358,7 @@
           {#each deviceGroups as group (group.kind)}
             <div class="mb-3" role="group" aria-label={group.label}>
               <p class="ti-user-menu-heading">{group.label}</p>
+              <p class="mx-2 mb-2 mt-0 text-[11px] leading-4 text-[var(--ti-text-soft)]">{group.kind === "microphone" ? "Your physical microphone" : "Audio received from the meeting"}</p>
               <button type="button" class="ti-user-menu-option" aria-pressed={group.selected === null}
                 disabled={!canChangeDevice || group.selected === null}
                 onclick={() => void selectDevice(group.kind, null)}>
@@ -368,13 +369,15 @@
                 {@const selected = group.selected === deviceId(device)}
                 <button type="button" class="ti-user-menu-option" aria-pressed={selected}
                   disabled={!canChangeDevice || selected || unsafeDevice(group.kind, device, group.ambiguous)}
-                  title={unsafeDevice(group.kind, device, group.ambiguous) ? "Virtual or ambiguous device cannot be selected here" : device.name}
+                  title={unsafeDevice(group.kind, device, group.ambiguous) ? "Virtual or ambiguous device cannot be selected here" : selected ? "Selected device" : device.name}
                   onclick={() => void selectDevice(group.kind, deviceId(device))}>
-                  <span class="min-w-0 flex-1 truncate text-left">{device.name}{device.is_default ? " · Default" : ""}</span>
+                  <span class="min-w-0 flex-1 truncate text-left" title={device.name}>{device.name}{device.is_default ? " · Windows default" : ""}</span>
                   {#if selected}<Check size={16} class="text-[var(--ti-success)]" aria-hidden="true"/>{/if}
                 </button>
               {/each}
-              {#if group.items.length === 0}<p class="px-2 py-2 text-xs text-[var(--ti-text-muted)]">No verified devices to display.</p>{/if}
+              {#if group.items.length === 0}
+                <p class="px-2 py-2 text-xs text-[var(--ti-text-muted)]">{deviceReport?.ok && routeReport?.ok ? "No devices reported for this input." : "Device list could not be verified. Refresh or open Voice & Audio Settings."}</p>
+              {/if}
             </div>
           {/each}
           {#if resourcesLocked}
