@@ -79,12 +79,17 @@
     const rect = trigger.getBoundingClientRect();
     const width = Math.min(216, Math.max(160, window.innerWidth - 16));
     const height = popup.getBoundingClientRect().height;
-    const top = rect.bottom + 5 + height <= window.innerHeight - 8
-      ? rect.bottom + 5 : Math.max(8, rect.top - height - 5);
+    const usableHeight = Math.max(0, window.innerHeight - 16);
+    const shownHeight = Math.min(height, usableHeight);
+    const below = window.innerHeight - rect.bottom - 8;
+    const above = rect.top - 8;
+    const preferAbove = below < shownHeight && above > below;
+    const preferredTop = preferAbove ? rect.top - shownHeight - 5 : rect.bottom + 5;
+    const top = Math.max(8, Math.min(window.innerHeight - shownHeight - 8, preferredTop));
     const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width));
-    menuStyle = `top:${Math.round(top)}px;left:${Math.round(left)}px;width:${width}px;max-height:calc(100vh - 16px);overflow-y:auto`;
+    menuStyle = `top:${Math.round(top)}px;left:${Math.round(left)}px;width:${width}px;max-height:${Math.round(usableHeight)}px;overflow-y:auto`;
     await tick();
-    if (menu === next) popup.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+    if (menu === next && trigger.isConnected) popup.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
   }
   function closeMenuOnViewportChange(): void {
     if (menu !== null && !busy) { menu = null; menuStyle = "visibility:hidden"; }
