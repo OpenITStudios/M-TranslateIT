@@ -422,13 +422,24 @@
     cursor: not-allowed;
   }
 
+  .ti-library-popup-anchor {
+    position: relative;
+    min-width: 0;
+  }
+
   .ti-library-menu {
+    position: absolute;
+    z-index: 30;
+    top: calc(100% + 4px);
+    right: 5px;
     display: grid;
-    margin: 3px 7px 7px;
+    width: min(216px, calc(100% - 10px));
+    margin: 0;
     padding: 5px;
-    border: 1px solid var(--ti-border);
-    border-radius: 8px;
-    background: var(--ti-surface-soft);
+    border: 1px solid var(--ti-border-strong);
+    border-radius: var(--ti-radius-md);
+    background: var(--ti-sidebar);
+    box-shadow: var(--ti-shadow-dialog);
   }
 
   .ti-library-menu button {
