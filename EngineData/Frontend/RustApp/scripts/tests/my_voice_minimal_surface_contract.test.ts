@@ -14,7 +14,7 @@ const recording = source("src-tauri/src/commands/voice_lab_recording.rs");
 const storage = source("src-tauri/src/commands/voice_lab_recording/storage_transaction.rs");
 const archive = source("src-tauri/src/commands/voice_lab/storage/recording_archive.rs");
 
-test("My Voice has persistent Current Voice, Record–Train–Review and Voice Library hierarchy", () => {
+test("My Voice retains Current Voice, creation stages and archive tools on separate task surfaces", () => {
   assert.match(page, /<BuiltinVoicePicker/);
   assert.match(picker, />Current Voice<\/h3>/);
   assert.match(picker, /Change Voice/);
@@ -31,6 +31,37 @@ test("My Voice has persistent Current Voice, Record–Train–Review and Voice L
     page.indexOf('id="my-voice-create-workspace"'));
   assert.ok(page.indexOf('id="my-voice-create-workspace"') <
     page.indexOf('id="my-voice-library-heading"'));
+});
+
+test("My Voice separates selection, creation and archive actions without hiding native recovery", () => {
+  assert.match(page, /type VoiceWorkspace = "choose" \| "create" \| "library"/);
+  assert.match(page, /let selectedWorkspace = \$state<VoiceWorkspace>\("choose"\)/);
+  assert.match(page, /aria-label="My Voice workspaces"/);
+  assert.match(page, /const creationNeedsAttention = \$derived\(Boolean\(/);
+  assert.match(page, /improvementStarting \? "library" : creationNeedsAttention \? "create" : selectedWorkspace/);
+  assert.match(page, /disabled=\{creationNeedsAttention \|\| improvementStarting\}/);
+  assert.match(page, /hidden=\{currentWorkspace !== "choose"\}/);
+  assert.match(page, /hidden=\{currentWorkspace !== "create"\}/);
+  assert.match(page, /hidden=\{currentWorkspace !== "library"\}/);
+
+  const chooserAt = page.indexOf('id="my-voice-choose-workspace"');
+  const creationAt = page.indexOf('id="my-voice-create-view"');
+  const libraryAt = page.indexOf('id="my-voice-library-workspace"');
+  assert.ok(chooserAt >= 0 && chooserAt < creationAt && creationAt < libraryAt);
+  const chooser = page.slice(chooserAt, creationAt);
+  const creation = page.slice(creationAt, libraryAt);
+  const library = page.slice(libraryAt);
+  assert.match(chooser, /<BuiltinVoicePicker/);
+  assert.match(chooser, /<VoiceVersionBrowser/);
+  assert.doesNotMatch(chooser, /<MyVoiceBuild\b/);
+  assert.match(creation, /<MyVoiceBuild\b/);
+  assert.doesNotMatch(creation, /<BuiltinVoicePicker/);
+  assert.match(library, /<VoiceBackupRestore/);
+  assert.doesNotMatch(library, /<BuiltinVoicePicker/);
+  assert.equal((page.match(/<MyVoiceBuild\b/g) ?? []).length, 1);
+  assert.equal((page.match(/<VoiceVersionBrowser\b/g) ?? []).length, 1);
+  assert.match(picker, /let choicesOpen = \$state\(true\)/);
+  assert.match(page, /if \(destination !== currentWorkspace\) stopAllMyVoiceAudio\(\);/);
 });
 
 test("My Voice keeps a single native recording/build owner visible for recovery", () => {

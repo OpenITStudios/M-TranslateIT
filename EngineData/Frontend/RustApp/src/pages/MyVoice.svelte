@@ -89,6 +89,9 @@
   let buildSnapshot = $state<MyVoiceBuildStatus | null>(null);
   let buildStatusUnavailable = $state(false);
   let selectedPane = $state<"auto" | "record" | "create" | "review">("auto");
+  // Presentation-only workspace choice. Native recording/build/voice selection remain the sole owners.
+  type VoiceWorkspace = "choose" | "create" | "library";
+  let selectedWorkspace = $state<VoiceWorkspace>("choose");
   let browseLinesOpen = $state(false);
   let browseLevel = $state("all");
   let browseFocus = $state("all");
@@ -148,6 +151,16 @@
   const showRecordPanel = $derived(activeStage === "record" || isRecording || recordingStatusUnknown);
   const showBuildPanel = $derived(
     activeStage !== "record" || buildStatusUnavailable || buildSnapshot?.active === true || buildSnapshot?.preview_active === true,
+  );
+  // A running or uncertain native action cannot disappear behind a different workspace.
+  // Improve submission stays on its originating Library surface until the result is known.
+  const creationNeedsAttention = $derived(Boolean(
+    recordingStatusUnknown || isRecording || pendingLineId !== null ||
+    recordingState.orphaned_drafts.length > 0 || buildStatusUnavailable ||
+    buildSnapshot?.active || buildSnapshot?.preview_active
+  ));
+  const currentWorkspace = $derived(
+    improvementStarting ? "library" : creationNeedsAttention ? "create" : selectedWorkspace
   );
   const acceptedCount = $derived(recordingState.lines.filter((line) => line.accepted).length);
   const minimumProgress = $derived(
@@ -214,13 +227,18 @@
   });
 
   function openVoiceLibrary(destination: "versions" | "improve"): void {
-    // An organizational shortcut: do not change the selected actor or start
-    // any training. Preserve the native version and recording library owners.
-    voiceLibraryOpen = true;
+    // Saved voice selection belongs to Choose Voice; archived takes and Improve
+    // belong to Voice Library. Neither shortcut performs a native mutation.
     if (destination === "versions") {
+      selectWorkspace("choose");
       savedVersionsOpenRevision += 1;
     } else if (!savedLibraryOpen) {
+      selectWorkspace("library");
+      voiceLibraryOpen = true;
       toggleSavedLibrary();
+    } else {
+      selectWorkspace("library");
+      voiceLibraryOpen = true;
     }
   }
 
@@ -254,6 +272,7 @@
       if (result.ok) {
         improvementAuthorized = false;
         selectedPane = "create";
+        selectedWorkspace = "create";
         buildRefreshRevision += 1;
       }
     } catch {
@@ -996,6 +1015,15 @@
     buildPlaybackOwner?.stopPlayback();
   }
 
+  function selectWorkspace(destination: VoiceWorkspace): void {
+    if ((creationNeedsAttention && destination !== "create") ||
+        (improvementStarting && destination !== "library")) return;
+    // Switching presentation never starts, approves, stops or replaces native work.
+    // Stop only preview playback before entering a different task area.
+    if (destination !== currentWorkspace) stopAllMyVoiceAudio();
+    selectedWorkspace = destination;
+  }
+
   function openCreationStage(pane: "record" | "create" | "review"): void {
     // The native owner decides whether a stage can be used. Stage switching
     // never starts recording, training, or approves a candidate.
@@ -1078,6 +1106,39 @@
     </div>
   </header>
 
+  <nav class="grid grid-cols-1 gap-2 sm:grid-cols-3" aria-label="My Voice workspaces">
+    <button type="button" aria-current={currentWorkspace === "choose" ? "page" : undefined}
+      aria-controls="my-voice-choose-workspace"
+      disabled={creationNeedsAttention || improvementStarting}
+      class={currentWorkspace === "choose" ? "min-h-[70px] rounded-[var(--ti-radius-md)] border border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 py-3 text-left" : "min-h-[70px] rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface)] px-4 py-3 text-left hover:bg-[var(--ti-surface-hover)]"}
+      onclick={() => selectWorkspace("choose")}>
+      <span class="block text-[14px] font-semibold">Choose Voice</span>
+      <span class="mt-1 block text-[12px] text-[var(--ti-text-muted)]">Select for Meetings</span>
+    </button>
+    <button type="button" aria-current={currentWorkspace === "create" ? "page" : undefined}
+      aria-controls="my-voice-create-view"
+      disabled={improvementStarting}
+      class={currentWorkspace === "create" ? "min-h-[70px] rounded-[var(--ti-radius-md)] border border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 py-3 text-left" : "min-h-[70px] rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface)] px-4 py-3 text-left hover:bg-[var(--ti-surface-hover)]"}
+      onclick={() => selectWorkspace("create")}>
+      <span class="block text-[14px] font-semibold">Create My Voice</span>
+      <span class="mt-1 block text-[12px] text-[var(--ti-text-muted)]">Record · Train · Review</span>
+    </button>
+    <button type="button" aria-current={currentWorkspace === "library" ? "page" : undefined}
+      aria-controls="my-voice-library-workspace"
+      disabled={creationNeedsAttention}
+      class={currentWorkspace === "library" ? "min-h-[70px] rounded-[var(--ti-radius-md)] border border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 py-3 text-left" : "min-h-[70px] rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface)] px-4 py-3 text-left hover:bg-[var(--ti-surface-hover)]"}
+      onclick={() => selectWorkspace("library")}>
+      <span class="block text-[14px] font-semibold">Voice Library</span>
+      <span class="mt-1 block text-[12px] text-[var(--ti-text-muted)]">Recordings · Improve · Backup</span>
+    </button>
+  </nav>
+
+  <section id="my-voice-choose-workspace" hidden={currentWorkspace !== "choose"} class="pt-5" aria-labelledby="my-voice-choose-title">
+    <header class="mb-5">
+      <h3 id="my-voice-choose-title" class="m-0 text-[19px] font-semibold tracking-[-0.02em]">Choose your Meeting voice</h3>
+      <p class="m-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">Choose a built-in voice or one of your approved personal voices. Recording and training are separate.</p>
+    </header>
+    <div class="ti-panel min-w-0 p-5 sm:p-6">
   <BuiltinVoicePicker
     {busy}
     {builtinPreviewing}
@@ -1094,6 +1155,28 @@
     onCancel={() => { builtinPendingId = null; }}
     onRetry={() => { void refreshVoiceSelection(); }}
   />
+      <div class="mt-4" aria-label="Previously saved voice versions">
+        <p class="m-0 text-[13px] text-[var(--ti-text-muted)]">Already created a voice? Open Voice versions to review and select a saved version.</p>
+  <VoiceVersionBrowser
+    openRevision={savedVersionsOpenRevision}
+    voiceChangesLocked={voiceChangesLocked || busy || !selectedVoiceVerified || buildStatusUnavailable ||
+      buildSnapshot?.active === true || buildSnapshot?.preview_active === true ||
+      recordingStatusUnknown || isRecording || pendingLineId !== null}
+    {onNotice}
+    onVoiceActivated={async (versionId, message) => {
+      if (await verifySelectedVersion(versionId) !== true) {
+        throw new Error("selected_meeting_voice_unverified");
+      }
+      buildRefreshRevision += 1;
+      await onMeetingVoiceChanged(message);
+    }}
+    onRecheck={verifySelectedVersion}
+  />
+      </div>
+    </div>
+  </section>
+
+  <section id="my-voice-create-view" hidden={currentWorkspace !== "create"} class="pt-5" aria-label="Create My Voice workspace">
   {#if recordingStatusUnknown}
     <div class="flex flex-wrap items-center justify-between gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-warning-border)] p-4">
       <p class="m-0 text-sm text-[var(--ti-warning)]" role="alert">Couldn't verify recording status. The last confirmed state was kept.</p>
@@ -1102,7 +1185,7 @@
     </div>
   {/if}
 
-  <section class="mt-7 border-t border-[var(--ti-border)] pt-6" aria-labelledby="my-voice-create-title">
+  <section class="pt-2" aria-labelledby="my-voice-create-title">
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div class="min-w-0 flex-1">
         <h3 id="my-voice-create-title" class="mb-0 text-[19px] font-semibold tracking-[-0.02em]"
@@ -1500,12 +1583,15 @@
   </section>
   </section>
 
-  <section class="mt-7 border-t border-[var(--ti-border)] pt-6" aria-labelledby="my-voice-library-heading">
+  </section>
+
+  <section id="my-voice-library-workspace" hidden={currentWorkspace !== "library"} class="pt-5" aria-label="Voice Library workspace">
+  <section class="pt-2" aria-labelledby="my-voice-library-heading">
     <div class="flex min-w-0 flex-wrap items-start justify-between gap-3">
       <div class="min-w-0 flex-1">
         <h3 id="my-voice-library-heading" class="mb-0 text-[19px] font-semibold tracking-[-0.02em]">Voice Library</h3>
         <p class="m-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">
-          Manage approved voices and improve your recordings without replacing your active voice.
+          Review saved recordings, improve your personal voice and manage backups. Your active Meeting voice is protected.
         </p>
       </div>
       <div class="flex shrink-0 flex-wrap gap-2">
@@ -1621,23 +1707,6 @@
     {/if}
   </section>
 
-  <VoiceVersionBrowser
-    openRevision={savedVersionsOpenRevision}
-    voiceChangesLocked={voiceChangesLocked || busy || !selectedVoiceVerified || buildStatusUnavailable ||
-      buildSnapshot?.active === true || buildSnapshot?.preview_active === true ||
-      recordingStatusUnknown || isRecording || pendingLineId !== null}
-    {onNotice}
-    onVoiceActivated={async (versionId, message) => {
-      if (await verifySelectedVersion(versionId) !== true) {
-        throw new Error("selected_meeting_voice_unverified");
-      }
-      buildRefreshRevision += 1;
-      await onMeetingVoiceChanged(message);
-    }}
-    onRecheck={verifySelectedVersion}
-  />
-
-
   <VoiceBackupRestore
     voiceChangesLocked={voiceChangesLocked || busy || improvementStarting || recordingStatusUnknown ||
       isRecording || pendingLineId !== null || buildStatusUnavailable ||
@@ -1685,6 +1754,7 @@
 
     </div>
     </details>
+  </section>
   </section>
 
 </section>

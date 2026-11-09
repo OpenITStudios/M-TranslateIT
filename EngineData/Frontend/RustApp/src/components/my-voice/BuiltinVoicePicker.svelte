@@ -21,7 +21,7 @@
     onCancel: () => void;
     onRetry: () => void | Promise<void>;
   } = $props();
-  let choicesOpen = $state(false);
+  let choicesOpen = $state(true);
   const currentLabel = $derived(
     !selectedVoiceVerified ? "Selection unavailable"
       : selectedVoiceKind === "personal" ? "My Voice"
