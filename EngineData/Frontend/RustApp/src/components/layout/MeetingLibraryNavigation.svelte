@@ -108,6 +108,49 @@
   }
 </script>
 
+{@snippet actionEditor(target: string)}
+  {#if edit && (edit.kind === "create_project" ? target === "create_project" : edit.kind === "rename_project" ? target === "project:" + edit.id : target === "meeting:" + edit.id)}
+    <form class="ti-library-editor" onsubmit={(event) => { event.preventDefault(); void commitEdit(); }}>
+      <label for="ti-library-edit-name" class="text-[12px] font-semibold">
+        {edit.kind === "create_project" ? "New Project" : edit.kind === "rename_project" ? "Rename Project" : "Rename Meeting"}
+      </label>
+      <input id="ti-library-edit-name" class="ti-field min-h-9 px-2 text-[13px]" maxlength="80" required
+        bind:value={value} placeholder="Enter name"/>
+      <div class="mt-2 flex justify-end gap-2">
+        <button type="button" class="ti-library-small" onclick={() => edit = null}>Cancel</button>
+        <button type="submit" class="ti-library-small ti-library-primary" disabled={busy || !library.ok || !value.trim()}>Save</button>
+      </div>
+    </form>
+  {/if}
+  {#if moving && target === "meeting:" + moving}
+    <div class="ti-library-editor" role="group" aria-label="Move Meeting to Project">
+      <p class="m-0 text-[12px] font-semibold">Move Meeting to Project</p>
+      <button class="ti-library-small w-full text-left" disabled={busy}
+        onclick={() => void modify({ action: "move_meeting", sessionId: moving, projectId: null })}>Uncategorized</button>
+      {#each library.projects as project (project.project_id)}
+        <button class="ti-library-small w-full text-left" disabled={busy}
+          onclick={() => void modify({ action: "move_meeting", sessionId: moving, projectId: project.project_id })}>{project.name}</button>
+      {/each}
+      <button class="ti-library-small w-full text-left" onclick={() => moving = null}>Cancel</button>
+    </div>
+  {/if}
+  {#if confirmingDelete && target === (confirmingDelete.startsWith("project_") ? "project:" : "meeting:") + confirmingDelete}
+    <div class="ti-library-editor border-[var(--ti-danger-border)]" role="group" aria-label="Confirm deletion">
+      <p class="m-0 text-[12px] font-semibold text-[var(--ti-danger)]">Confirm deletion</p>
+      <p class="m-0 text-[12px] leading-5 text-[var(--ti-danger)]">
+        {confirmingDelete.startsWith("project_")
+          ? "Delete this category? Meetings will become Uncategorized."
+          : "Delete this Meeting's local transcript? Exported HTML files remain."}
+      </p>
+      <div class="mt-2 flex justify-end gap-2">
+        <button class="ti-library-small" onclick={() => confirmingDelete = null}>Cancel</button>
+        <button class="ti-library-small ti-library-danger" disabled={busy}
+          onclick={() => { if (confirmingDelete) void deleteConfirmed(confirmingDelete); }}>Confirm Delete</button>
+      </div>
+    </div>
+  {/if}
+{/snippet}
+
 <svelte:window onkeydown={handleEscape} />
 
 {#if library === null}
@@ -158,6 +201,7 @@
             <button onclick={() => requestDelete(session.session_id)}><Trash2 size={14}/> Delete Meeting</button>
           </div>
         {/if}
+        {@render actionEditor("meeting:" + session.session_id)}
       {/each}
     {/if}
   </div>
@@ -166,6 +210,7 @@
     <button type="button" class="ti-library-more" aria-label="Create Project category"
       title="Create Project" disabled={!library.ok || busy} onclick={() => openEdit("create_project", "")}><FolderPlus size={17}/></button>
   </div>
+  {@render actionEditor("create_project")}
   {#if library.projects.length === 0}
     <p class="mx-3 my-2 text-[12px] text-[var(--ti-text-soft)]">No projects yet. Use + to create one.</p>
   {/if}
@@ -194,6 +239,7 @@
         <button onclick={() => requestDelete(project.project_id)}><Trash2 size={14}/> Delete Project</button>
       </div>
     {/if}
+    {@render actionEditor("project:" + project.project_id)}
     {#if !collapsed[project.project_id]}
       {#each pinnedFirst(projectSessions) as session (session.session_id)}
         <div class="ti-library-channel ml-4">
@@ -236,49 +282,10 @@
             </button>
           </div>
         {/if}
+        {@render actionEditor("meeting:" + session.session_id)}
       {/each}
     {/if}
   {/each}
 
-  {#if edit}
-    <form class="ti-library-editor" onsubmit={(event) => { event.preventDefault(); void commitEdit(); }}>
-      <label for="ti-library-edit-name" class="text-[12px] font-semibold">
-        {edit.kind === "create_project" ? "New Project" : edit.kind === "rename_project" ? "Rename Project" : "Rename Meeting"}
-      </label>
-      <input id="ti-library-edit-name" class="ti-field min-h-9 px-2 text-[13px]" maxlength="80" required
-        bind:value={value} placeholder="Enter name"/>
-      <div class="mt-2 flex justify-end gap-2">
-        <button type="button" class="ti-library-small" onclick={() => edit = null}>Cancel</button>
-        <button type="submit" class="ti-library-small ti-library-primary" disabled={busy || !library.ok || !value.trim()}>Save</button>
-      </div>
-    </form>
-  {/if}
 
-  {#if moving}
-    <div class="ti-library-editor" role="group" aria-label="Move Meeting to Project">
-      <p class="m-0 text-[12px] font-semibold">Move Meeting to Project</p>
-      <button class="ti-library-small w-full text-left" disabled={busy}
-        onclick={() => void modify({ action: "move_meeting", sessionId: moving, projectId: null })}>Uncategorized</button>
-      {#each library.projects as project (project.project_id)}
-        <button class="ti-library-small w-full text-left" disabled={busy}
-          onclick={() => void modify({ action: "move_meeting", sessionId: moving, projectId: project.project_id })}>{project.name}</button>
-      {/each}
-      <button class="ti-library-small w-full text-left" onclick={() => moving = null}>Cancel</button>
-    </div>
-  {/if}
-  {#if confirmingDelete}
-    <div class="ti-library-editor border-[var(--ti-danger-border)]" role="group" aria-label="Confirm deletion">
-      <p class="m-0 text-[12px] font-semibold text-[var(--ti-danger)]">Confirm deletion</p>
-      <p class="m-0 text-[12px] leading-5 text-[var(--ti-danger)]">
-        {confirmingDelete.startsWith("project_")
-          ? "Delete this category? Meetings will become Uncategorized."
-          : "Delete this Meeting's local transcript? Exported HTML files remain."}
-      </p>
-      <div class="mt-2 flex justify-end gap-2">
-        <button class="ti-library-small" onclick={() => confirmingDelete = null}>Cancel</button>
-        <button class="ti-library-small ti-library-danger" disabled={busy}
-          onclick={() => { if (confirmingDelete) void deleteConfirmed(confirmingDelete); }}>Confirm Delete</button>
-      </div>
-    </div>
-  {/if}
 {/if}
