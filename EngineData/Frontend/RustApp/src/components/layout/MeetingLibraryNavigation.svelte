@@ -152,10 +152,10 @@
           <div class="ti-library-menu">
             <button onclick={() => openEdit("rename_meeting", session.session_id, session.display_name)}><Pencil size={14}/> Rename</button>
             <button onclick={() => void modify({ action: "pin_meeting", sessionId: session.session_id, pinned: !session.pinned })}>
-              <PinOff size={14}/> {session.pinned ? "Unpin Meeting" : "Pin Meeting"}
+              {#if session.pinned}<PinOff size={14}/>{:else}<Pin size={14}/>{/if} {session.pinned ? "Unpin Meeting" : "Pin Meeting"}
             </button>
             <button onclick={() => openMove(session.session_id)}><FolderInput size={14}/> Move to Project</button>
-            <button onclick={() => requestDelete(session.session_id)}><Trash2 size={14}/> Delete</button>
+            <button onclick={() => requestDelete(session.session_id)}><Trash2 size={14}/> Delete Meeting</button>
           </div>
         {/if}
       {/each}
@@ -232,7 +232,7 @@
               <FolderInput size={14}/> Move to Project
             </button>
             <button type="button" onclick={() => requestDelete(session.session_id)}>
-              <Trash2 size={14}/> Delete
+              <Trash2 size={14}/> Delete Meeting
             </button>
           </div>
         {/if}
@@ -256,7 +256,7 @@
 
   {#if moving}
     <div class="ti-library-editor" role="group" aria-label="Move Meeting to Project">
-      <p class="m-0 text-[12px] font-semibold">Move Meeting to</p>
+      <p class="m-0 text-[12px] font-semibold">Move Meeting to Project</p>
       <button class="ti-library-small w-full text-left" disabled={busy}
         onclick={() => void modify({ action: "move_meeting", sessionId: moving, projectId: null })}>Uncategorized</button>
       {#each library.projects as project (project.project_id)}
@@ -268,6 +268,7 @@
   {/if}
   {#if confirmingDelete}
     <div class="ti-library-editor border-[var(--ti-danger-border)]" role="group" aria-label="Confirm deletion">
+      <p class="m-0 text-[12px] font-semibold text-[var(--ti-danger)]">Confirm deletion</p>
       <p class="m-0 text-[12px] leading-5 text-[var(--ti-danger)]">
         {confirmingDelete.startsWith("project_")
           ? "Delete this category? Meetings will become Uncategorized."
@@ -276,7 +277,7 @@
       <div class="mt-2 flex justify-end gap-2">
         <button class="ti-library-small" onclick={() => confirmingDelete = null}>Cancel</button>
         <button class="ti-library-small ti-library-danger" disabled={busy}
-          onclick={() => { if (confirmingDelete) void deleteConfirmed(confirmingDelete); }}>Delete</button>
+          onclick={() => { if (confirmingDelete) void deleteConfirmed(confirmingDelete); }}>Confirm Delete</button>
       </div>
     </div>
   {/if}
