@@ -20,7 +20,7 @@
   import StatusBadge from "../components/ui/StatusBadge.svelte";
   import StatusRow from "../components/ui/StatusRow.svelte";
 
-  type SettingsTab = "meeting" | "translation" | "appearance" | "advanced";
+  type SettingsTab = "meeting" | "translation" | "saved-data" | "appearance" | "advanced";
 
   let {
     tab,
@@ -220,12 +220,12 @@
   <div class="ti-page">
     <header class="ti-page-header">
       <div>
-        <h2 class="ti-page-title">{tab === "meeting" ? "Voice & Audio" : tab === "translation" ? "Meeting & Transcript" : tab === "appearance" ? "Appearance" : "Help & Diagnostics"}</h2>
-        <p class="ti-page-copy">{tab === "meeting" ? "Choose your microphone, meeting sound and audio options." : tab === "translation" ? "Transcript presentation and floating caption preferences." : tab === "appearance" ? "The current visual language of TranslateIT." : "Review setup health and recovery options."}</p>
+        <h2 class="ti-page-title">{tab === "meeting" ? "Voice & Audio" : tab === "translation" ? "Meeting & Transcript" : tab === "saved-data" ? "Saved Data" : tab === "appearance" ? "Appearance" : "Help & Diagnostics"}</h2>
+        <p class="ti-page-copy">{tab === "meeting" ? "Choose your microphone, meeting sound and audio options." : tab === "translation" ? "Transcript presentation and floating caption preferences." : tab === "saved-data" ? "Review local storage usage without changing or deleting files." : tab === "appearance" ? "The current visual language of TranslateIT." : "Review setup health and recovery options."}</p>
       </div>
     </header>
       <div id="settings-category-panel" class="min-w-0" role="region"
-        aria-label={tab === "meeting" ? "Voice & Audio settings" : tab === "translation" ? "Meeting & Transcript settings" : tab === "appearance" ? "Appearance settings" : "Help and diagnostics"}>
+        aria-label={tab === "meeting" ? "Voice & Audio settings" : tab === "translation" ? "Meeting & Transcript settings" : tab === "saved-data" ? "Saved Data settings" : tab === "appearance" ? "Appearance settings" : "Help and diagnostics"}>
     {#if tab === "meeting"}
       <article class="ti-panel ti-settings-panel overflow-hidden" aria-label="Voice and audio configuration">
         <header class="flex flex-wrap items-start justify-between gap-3 px-5 pb-3 pt-5">
@@ -367,6 +367,8 @@
           <FloatingCaptionPreferences {onNotice} />
         </section>
       </div>
+    {:else if tab === "saved-data"}
+      <SavedDataInventory />
     {:else if tab === "appearance"}
       <section class="grid gap-5" aria-label="Current appearance">
         <h3 class="m-0 text-[16px] font-semibold">Interface Appearance</h3>
@@ -414,7 +416,6 @@
           <button type="button" class="ti-button ti-button-secondary" disabled={diagnosticsLoading} onclick={() => void refreshDiagnostics()}>{diagnosticsLoading ? "Opening..." : "Open Diagnostics"}</button>
         </footer>
       </article>
-      <SavedDataInventory />
       <details class="ti-panel mt-4">
         <summary class="min-h-11 cursor-pointer px-5 py-4 text-sm font-medium hover:bg-[var(--ti-surface-soft)]">Past translation issue reports</summary>
         <div class="border-t border-[var(--ti-border)] p-4">
