@@ -379,6 +379,8 @@ Physical microphone, incoming Meeting Sound and calling-app microphone/speaker r
 ### PR-110 — My Voice workflow
 **MUST:** authorized recording → replay/accept/retry → dataset → train → held-out evaluate → user preview/approve → save.
 
+**SHOULD:** My Voice present three immediately discoverable sections in the existing two-column TranslateIT UI: **Current Voice** (verified selected Meeting actor and Change Voice), **Create My Voice** (always-visible Record → Train → Review & Use stage navigation with a native-state-derived next-step message and one disclosure for the active task), and **Voice Library** (Saved Voices, Improve My Voice, Recording Library, Backup & Restore). Stage navigation may reveal the existing task panel but must never implicitly start recording, train, approve, or switch voice; the build controller stays mounted for native Stop/Review recovery even when its workspace is collapsed. Running, pending review, interrupted or unknown work must remain visible and cannot be hidden by collapsing the workspace. Keep historical recordings, prior approved versions, resource locks and explicit voice authorization unchanged; do not add another progress estimator, training status owner, navigation sidebar or visual theme.
+
 ### PR-111 — Authorization
 **MUST:** Require confirmation that custom training uses the user's voice or an authorized voice.
 

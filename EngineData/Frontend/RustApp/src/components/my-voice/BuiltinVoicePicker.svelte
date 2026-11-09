@@ -34,11 +34,11 @@
 <section class="border-b border-[var(--ti-border)] px-0 pb-5" aria-labelledby="my-voice-selected-heading">
   <div class="flex flex-wrap items-center justify-between gap-3">
     <div class="min-w-0">
-      <h3 id="my-voice-selected-heading" class="mb-0 text-[13px] font-semibold text-[var(--ti-text-muted)]">Current Meeting voice</h3>
+      <h3 id="my-voice-selected-heading" class="mb-0 text-[13px] font-semibold text-[var(--ti-text-muted)]">Current Voice</h3>
       <p class="mb-0 mt-1 text-[18px] font-semibold tracking-[-0.015em]">{currentLabel}</p>
       <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">
         {selectedVoiceVerified
-          ? (selectedVoiceKind === "none" || selectedVoiceKind === "unknown" ? "Select a voice to use for meetings." : "Selected for meetings")
+          ? (selectedVoiceKind === "none" || selectedVoiceKind === "unknown" ? "Select a voice to use for meetings." : "Selected for Meetings")
           : "Couldn't verify the current selection."}
       </p>
     </div>
@@ -48,13 +48,13 @@
       {/if}
       <button type="button" class="ti-button ti-button-secondary" aria-controls="my-voice-voice-choices" aria-expanded={choicesOpen || builtinPendingId !== null}
         onclick={() => { if (!builtinPendingId) choicesOpen = !choicesOpen; }}>
-        Change voice <ChevronDown size={16} />
+        Change Voice <ChevronDown size={16} />
       </button>
     </div>
   </div>
 
   <div id="my-voice-voice-choices" hidden={!choicesOpen && !builtinPendingId} class="mt-4 border-t border-[var(--ti-border)] pt-4">
-    <p class="mb-0 text-[13px] leading-5 text-[var(--ti-text-muted)]">Preview a voice before selecting it.</p>
+    <p class="mb-0 text-[13px] leading-5 text-[var(--ti-text-muted)]">Listen to a sample before choosing the Meeting voice.</p>
     <div class="mt-3 space-y-2">
       {#each [
         { id: "MaleVoice" as BuiltinVoiceId, label: "Built-in Male" },

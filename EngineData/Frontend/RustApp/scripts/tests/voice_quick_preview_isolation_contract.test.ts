@@ -57,7 +57,7 @@ test("typed Quick Preview bridge exposes only generation, cancellation and readi
 
 test("My Voice UI has one collapsible voice selector and a stage-aware recording workspace", () => {
   const selector = readFileSync(new URL("../../src/components/my-voice/BuiltinVoicePicker.svelte", import.meta.url), "utf8");
-  assert.match(selector, /Current Meeting voice/);
+  assert.match(selector, /Current Voice/);
   assert.match(selector, /aria-expanded={choicesOpen \|\| builtinPendingId !== null}/);
   assert.match(selector, /hidden={!choicesOpen && !builtinPendingId}/);
   assert.match(recordingUi, /Create My Voice/);
@@ -299,8 +299,8 @@ test("My Voice puts the compact current Meeting voice above an accessible three-
   assert.ok(current >= 0 && current < create, "current voice stays above creation");
   assert.ok(create < library && library < history && history < backup,
     "record/create/review must precede secondary saved-version and backup controls");
-  assert.match(picker, /Current Meeting voice/);
-  assert.match(picker, /p-3 sm:p-4/);
+  assert.match(picker, /Current Voice/);
+  assert.match(picker, /border-b border-\[var\(--ti-border\)\] px-0 pb-5/);
   assert.match(picker, /onPreview=|onSelect|onConfirm/);
   assert.match(page, /onPreview=\{previewBuiltin\}/);
   assert.match(page, /onSelect=\{selectBuiltin\}/);

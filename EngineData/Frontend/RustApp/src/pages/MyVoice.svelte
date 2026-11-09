@@ -376,6 +376,36 @@
     if (creatorNeedsAttention) creatorOpen = true;
   });
 
+  // Display guidance only. Native My Voice status remains authoritative.
+  const nextVoiceStep = $derived(
+    recordingStatusUnknown || buildStatusUnavailable
+      ? "Recording or training status needs verification. Use Retry status before continuing."
+      : isRecording
+        ? "Recording in progress. Finish this take before switching steps."
+        : pendingLineId !== null || recordingState.orphaned_drafts.length > 0
+          ? "Review or recover the unfinished recording before continuing."
+          : buildSnapshot?.active
+            ? buildSnapshot.phase === "training"
+              ? "Training is running. Your current Meeting voice remains unchanged."
+              : "Voice creation is in progress. Your current Meeting voice remains unchanged."
+            : buildSnapshot?.evaluation_ready
+              ? "Review your new voice. Listen to every sample before approving it."
+              : buildSnapshot?.can_build
+                ? "Recording requirements met. Check training hardware in step 2."
+                : acceptedCount > 0
+                  ? `${acceptedCount} accepted recording${acceptedCount === 1 ? "" : "s"}. Continue adding clear, varied samples.`
+                  : "Record guided English samples, then train and review before using your voice."
+  );
+
+  const creatorButtonLabel = $derived(
+    creatorNeedsAttention
+      ? recordingStatusUnknown || buildStatusUnavailable ? "Check Status"
+        : buildSnapshot?.evaluation_ready ? "Review Required" : "Creation in Progress"
+      : creatorOpen ? "Hide Steps"
+      : buildSnapshot?.can_build ? "Continue to Train"
+      : acceptedCount > 0 ? "Continue Recording" : "Get Started",
+  );
+
   function builtinLabel(voiceId: BuiltinVoiceId): string {
     return voiceId === "MaleVoice" ? "Built-in Male" : "Built-in Female";
   }
@@ -967,7 +997,20 @@
 
   function openCreationStage(pane: "record" | "create" | "review"): void {
     stopAllMyVoiceAudio();
+    creatorOpen = true;
     selectedPane = pane;
+  }
+
+  function toggleCreator(): void {
+    if (creatorNeedsAttention) return;
+    if (creatorOpen) {
+      stopAllMyVoiceAudio();
+      creatorOpen = false;
+      return;
+    }
+    creatorOpen = true;
+    selectedPane = buildSnapshot?.evaluation_ready ? "review"
+      : buildSnapshot?.can_build ? "create" : "record";
   }
 
   async function replayTake(startMs: number | null = null): Promise<void> {
@@ -1069,44 +1112,40 @@
     </div>
   {/if}
 
-  <div class="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--ti-border)] pt-5">
-    <div class="min-w-0">
-      <h3 class="mb-0 text-base font-semibold" tabindex="-1" bind:this={personalVoiceHeading}>Personal voice</h3>
-      <p class="mb-0 mt-1 text-sm leading-5 text-[var(--ti-text-muted)]">Optional. Built-in voices work without recording or training.</p>
-    </div>
-    <button type="button" class="ti-button ti-button-secondary"
-      aria-controls="my-voice-create-workspace" aria-expanded={creatorOpen}
-      disabled={creatorNeedsAttention}
-      onclick={() => { if (creatorOpen) stopAllMyVoiceAudio(); creatorOpen = !creatorOpen; }}>
-      {creatorNeedsAttention ? "Creation in progress" : creatorOpen ? "Hide creation steps" : "Create My Voice"}
-    </button>
-  </div>
-
-  <section id="my-voice-create-workspace" hidden={!creatorOpen}
-    class="border-t border-[var(--ti-border)] pt-5" aria-labelledby="my-voice-create-title">
+  <section class="mt-7 border-t border-[var(--ti-border)] pt-6" aria-labelledby="my-voice-create-title">
     <div class="flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h3 id="my-voice-create-title" class="mb-0 text-xl font-semibold tracking-[-0.02em]">Create My Voice</h3>
-        <p class="mb-0 mt-1 text-sm leading-6 text-[var(--ti-text-muted)]">Record natural English samples, create your voice, then listen before using it.</p>
+      <div class="min-w-0 flex-1">
+        <h3 id="my-voice-create-title" class="mb-0 text-[19px] font-semibold tracking-[-0.02em]"
+          tabindex="-1" bind:this={personalVoiceHeading}>Create My Voice</h3>
+        <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">
+          Record guided samples, train your voice, then review it before using it in meetings.
+        </p>
       </div>
+      <button type="button" class="ti-button ti-button-secondary"
+        aria-controls="my-voice-create-workspace" aria-expanded={creatorOpen}
+        disabled={creatorNeedsAttention} onclick={toggleCreator}>{creatorButtonLabel}</button>
     </div>
-    <nav class="mt-5 flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto pb-1" aria-label="My Voice creation stages">
+    <p class="mb-0 mt-3 text-[13px] leading-5 text-[var(--ti-text-muted)]" role="status">{nextVoiceStep}</p>
+    <nav class="mt-4 flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto pb-1" aria-label="My Voice creation stages">
       <button type="button" aria-current={activeStage === "record" ? "step" : undefined}
-        class={activeStage === "record" ? "inline-flex min-h-11 shrink-0 items-center rounded-[var(--ti-radius-md)] border border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 text-[13px] font-semibold text-[var(--ti-text)]" : "inline-flex min-h-11 shrink-0 items-center rounded-[var(--ti-radius-md)] border border-transparent px-4 text-[13px] font-medium text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)] hover:text-[var(--ti-text)]"}
+        class={activeStage === "record" ? "inline-flex min-h-10 shrink-0 items-center rounded-[var(--ti-radius-md)] border border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 text-[13px] font-semibold text-[var(--ti-text)]" : "inline-flex min-h-10 shrink-0 items-center rounded-[var(--ti-radius-md)] border border-transparent px-4 text-[13px] font-medium text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)] hover:text-[var(--ti-text)]"}
         disabled={busy || recordingStatusUnknown || isRecording || pendingLineId !== null}
         onclick={() => openCreationStage("record")}>1. Record</button>
       <ChevronRight size={14} class="shrink-0 text-[var(--ti-text-soft)]" aria-hidden="true" />
       <button type="button" aria-current={activeStage === "create" ? "step" : undefined}
-        class={activeStage === "create" ? "inline-flex min-h-11 shrink-0 items-center rounded-[var(--ti-radius-md)] border border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 text-[13px] font-semibold text-[var(--ti-text)]" : "inline-flex min-h-11 shrink-0 items-center rounded-[var(--ti-radius-md)] border border-transparent px-4 text-[13px] font-medium text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)] hover:text-[var(--ti-text)]"}
+        class={activeStage === "create" ? "inline-flex min-h-10 shrink-0 items-center rounded-[var(--ti-radius-md)] border border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 text-[13px] font-semibold text-[var(--ti-text)]" : "inline-flex min-h-10 shrink-0 items-center rounded-[var(--ti-radius-md)] border border-transparent px-4 text-[13px] font-medium text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)] hover:text-[var(--ti-text)]"}
         disabled={busy || recordingStatusUnknown || buildStatusUnavailable || isRecording || pendingLineId !== null || buildSnapshot?.active === true || buildSnapshot?.preview_active === true || buildSnapshot?.evaluation_ready === true}
-        onclick={() => openCreationStage("create")}>2. Create</button>
+        onclick={() => openCreationStage("create")}>2. Train</button>
       <ChevronRight size={14} class="shrink-0 text-[var(--ti-text-soft)]" aria-hidden="true" />
       <button type="button" aria-current={activeStage === "review" ? "step" : undefined}
-        class={activeStage === "review" ? "inline-flex min-h-11 shrink-0 items-center rounded-[var(--ti-radius-md)] border border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 text-[13px] font-semibold text-[var(--ti-text)]" : "inline-flex min-h-11 shrink-0 items-center rounded-[var(--ti-radius-md)] border border-transparent px-4 text-[13px] font-medium text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)] hover:text-[var(--ti-text)]"}
+        class={activeStage === "review" ? "inline-flex min-h-10 shrink-0 items-center rounded-[var(--ti-radius-md)] border border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 text-[13px] font-semibold text-[var(--ti-text)]" : "inline-flex min-h-10 shrink-0 items-center rounded-[var(--ti-radius-md)] border border-transparent px-4 text-[13px] font-medium text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)] hover:text-[var(--ti-text)]"}
         disabled={busy || recordingStatusUnknown || buildStatusUnavailable || isRecording || pendingLineId !== null || buildSnapshot?.active === true || !buildSnapshot?.evaluation_ready}
-        onclick={() => openCreationStage("review")}>3. Review</button>
+        onclick={() => openCreationStage("review")}>3. Review &amp; Use</button>
     </nav>
 
+
+  <section id="my-voice-create-workspace" hidden={!creatorOpen}
+    class="border-t border-[var(--ti-border)] pt-5" aria-labelledby="my-voice-create-title">
     {#if showRecordPanel && showBuildPanel}
       <p role="status" class="mb-0 mt-4 text-sm leading-6 text-[var(--ti-warning)]">A status check needs attention. Use Stop or Retry status where available before continuing.</p>
     {/if}
@@ -1318,7 +1357,7 @@
               {#if buildSnapshot.evaluation_ready && !isRecording && pendingLineId === null}
                 <button type="button" class="ti-button mt-4 w-full" disabled={buildStatusUnavailable || recordingStatusUnknown || busy} onclick={() => openCreationStage("review")}>Return to Review</button>
               {:else if buildSnapshot.can_build && !buildSnapshot.active && !isRecording && pendingLineId === null}
-                <button type="button" class="ti-button mt-4 w-full" disabled={voiceChangesLocked || buildStatusUnavailable || recordingStatusUnknown} onclick={() => openCreationStage("create")}>Continue to Create</button>
+                <button type="button" class="ti-button mt-4 w-full" disabled={voiceChangesLocked || buildStatusUnavailable || recordingStatusUnknown} onclick={() => openCreationStage("create")}>Continue to Train</button>
               {/if}
               {#if buildSnapshot.recording_suggestions?.length > 0 && !buildSnapshot.active && !isRecording && pendingLineId === null}
                 <details class="mt-4 overflow-hidden rounded-[var(--ti-radius-md)] border border-[var(--ti-border)]" aria-label="Optional recording suggestions">
@@ -1436,15 +1475,25 @@
         refreshRevision={buildRefreshRevision} />
     </div>
   </section>
-  <details class="mt-6 overflow-hidden rounded-[var(--ti-radius-md)] border border-[var(--ti-border)]" aria-label="Saved voice management">
+  </section>
+
+  <section class="mt-7 border-t border-[var(--ti-border)] pt-6" aria-labelledby="my-voice-library-heading">
+    <h3 id="my-voice-library-heading" class="mb-0 text-[19px] font-semibold tracking-[-0.02em]">Voice Library</h3>
+    <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">
+      Manage voice versions, improve with saved recordings, and keep verified backups.
+    </p>
+    <details class="mt-3 overflow-hidden rounded-[var(--ti-radius-md)] border border-[var(--ti-border)]" aria-label="Voice Library tools">
     <summary class="min-h-11 cursor-pointer px-5 py-4 text-sm font-semibold hover:bg-[var(--ti-surface-soft)]">
-      Saved voices &amp; backups
+      <span class="block">Manage Library</span>
+      <span class="mt-1 block text-[12px] font-normal leading-5 text-[var(--ti-text-muted)]">
+        Saved Voices · Improve My Voice · Recording Library · Backup &amp; Restore
+      </span>
       {#if legacyProtectionUnknown || (legacyProtection?.attention_sources ?? 0) > 0}
         <span class="ml-2 text-xs font-medium text-[var(--ti-warning)]">Recording storage needs attention</span>
       {/if}
     </summary>
     <div class="border-t border-[var(--ti-border)] px-5 pb-5">
-      <p class="mb-0 mt-4 text-sm leading-5 text-[var(--ti-text-muted)]">Advanced tools for earlier recordings, saved voice versions and backups. Your current Meeting voice is unchanged by opening these tools.</p>
+      <p class="mb-0 mt-4 text-sm leading-5 text-[var(--ti-text-muted)]">Manage saved voice versions, improve using recordings, or create a verified backup. Opening these tools does not change your selected Meeting voice.</p>
   <section class="mt-4" aria-label="Recording library">
     <button type="button" class="text-left text-sm font-medium text-[var(--ti-text-muted)] underline underline-offset-4"
       aria-expanded={savedLibraryOpen}
@@ -1504,7 +1553,7 @@
             </p>
             <p class="mt-2 text-sm font-medium">{improvementIds.length} recordings chosen · maximum 128 per build</p>
             {#if !trainingComputeAllowed}
-              <p class="mb-0 mt-2 text-xs leading-5 text-[var(--ti-text-muted)]" role="status">Before improving, open step 2 (Create) to check local training hardware. CPU-only use requires acknowledging the warning there.</p>
+              <p class="mb-0 mt-2 text-xs leading-5 text-[var(--ti-text-muted)]" role="status">Before improving, open step 2 (Train) to check local training hardware. CPU-only use requires acknowledging the warning there.</p>
             {/if}
             <p class="mb-0 mt-1 text-xs text-[var(--ti-text-muted)]">
               The training check requires at least one minute of speech, a short reference recording and varied sentence categories. You don't need to finish every line.
@@ -1593,6 +1642,7 @@
   {/if}
 
     </div>
-  </details>
+    </details>
+  </section>
 
 </section>

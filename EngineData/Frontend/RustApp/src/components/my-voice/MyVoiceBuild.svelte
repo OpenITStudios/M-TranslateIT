@@ -645,8 +645,8 @@
   {/if}
   <div class="flex flex-wrap items-start justify-between gap-4">
     <div class="min-w-0 flex-1">
-      <h4 class="mb-0 text-lg font-semibold">{build.evaluation_ready ? "Review your voice" : build.active ? activeTitle() : "Create your voice"}</h4>
-      <p class="mb-0 mt-2 max-w-[680px] text-sm leading-6 text-[var(--ti-text-muted)]">{build.evaluation_ready ? "Listen to the new voice before selecting it for meetings." : "Use your accepted recordings to create a personal English voice."}</p>
+      <h4 class="mb-0 text-lg font-semibold">{build.evaluation_ready ? "Review & Use My Voice" : build.active ? activeTitle() : "Train My Voice"}</h4>
+      <p class="mb-0 mt-2 max-w-[680px] text-sm leading-6 text-[var(--ti-text-muted)]">{build.evaluation_ready ? "Listen to the new voice before selecting it for meetings." : "Use your accepted recordings to train a personal English voice."}</p>
     </div>
     {#if build.selected_voice_kind === "personal"}
       <span class="flex items-center gap-1.5 text-sm font-semibold text-[var(--ti-success)]"><Check size={15} />Personal voice selected</span>
@@ -872,7 +872,7 @@
         <span class="text-sm leading-5 text-[var(--ti-text-muted)]">I confirm these recordings are my voice, or a voice I have permission to create.</span>
       </label>
       <button type="button" class="ti-button mt-4 w-full sm:w-auto" disabled={busy || statusCheckUnavailable || voiceChangesLocked || !authorized || !computeCanStart} onclick={() => void startBuild()}>
-        <span>{busy ? "Starting..." : "Create My Voice"}</span>
+        <span>{busy ? "Starting..." : "Train My Voice"}</span>
       </button>
     {/if}
   {/if}

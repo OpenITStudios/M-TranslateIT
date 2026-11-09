@@ -6,19 +6,34 @@ const root = new URL("../../", import.meta.url);
 const source = (path: string) => readFileSync(new URL(path, root), "utf8");
 const page = source("src/pages/MyVoice.svelte");
 const build = source("src/components/my-voice/MyVoiceBuild.svelte");
+const picker = source("src/components/my-voice/BuiltinVoicePicker.svelte");
 const voiceApi = source("src/app/bridge/myVoiceApi.ts");
 const registry = source("src-tauri/src/commands/registry.rs");
 const recording = source("src-tauri/src/commands/voice_lab_recording.rs");
 const storage = source("src-tauri/src/commands/voice_lab_recording/storage_transaction.rs");
 const archive = source("src-tauri/src/commands/voice_lab/storage/recording_archive.rs");
 
-test("normal My Voice opens with a ready-to-use voice picker before optional creation", () => {
+test("My Voice landing exposes Current Voice, creation stages and Voice Library without extra sidebar", () => {
   assert.match(page, /<BuiltinVoicePicker/);
+  assert.match(picker, />Current Voice<\/h3>/);
+  assert.match(picker, /Change Voice/);
   assert.match(page, /let creatorOpen = \$state\(false\)/);
   assert.match(page, /hidden=\{!creatorOpen\}/);
-  assert.ok(page.indexOf("<BuiltinVoicePicker") < page.indexOf('id="my-voice-create-workspace"'));
-  assert.match(page, /Built-in voices work without recording or training/);
+  assert.match(page, /id="my-voice-create-title"/);
   assert.match(page, /aria-controls="my-voice-create-workspace" aria-expanded=\{creatorOpen\}/);
+  assert.match(page, /aria-label="My Voice creation stages"/);
+  assert.match(page, />1\. Record<\/button>/);
+  assert.match(page, />2\. Train<\/button>/);
+  assert.match(page, />3\. Review &amp; Use<\/button>/);
+  assert.match(page, /Voice Library/);
+  assert.match(page, /id="my-voice-library-heading"/);
+  assert.match(page, /Saved Voices · Improve My Voice · Recording Library · Backup &amp; Restore/);
+  assert.ok(page.indexOf("<BuiltinVoicePicker") < page.indexOf('id="my-voice-create-title"'));
+  assert.ok(page.indexOf('aria-label="My Voice creation stages"') <
+    page.indexOf('id="my-voice-create-workspace"'),
+    "Creation stages must stay visible even when the detailed task is collapsed");
+  assert.ok(page.indexOf('id="my-voice-create-workspace"') <
+    page.indexOf('aria-label="Voice Library"'));
 });
 
 test("hidden voice creator stays mounted and must show active or uncertain work", () => {
@@ -43,13 +58,30 @@ test("ongoing Improve My Voice request cannot be hidden while submission is pend
 });
 
 test("saved recordings, historic versions and backup remain accessible but secondary", () => {
-  assert.match(page, /<details[^>]*aria-label="Saved voice management"/);
-  assert.match(page, /Saved voices &amp; backups/);
+  assert.match(page, /<details[^>]*aria-label="Voice Library tools"/);
+  assert.match(page, /id="my-voice-library-heading"/);
+  assert.match(page, /Manage Library<\/span>/);
   assert.match(page, /Recording storage needs attention/);
   assert.match(page, /<VoiceVersionBrowser/);
   assert.match(page, /<VoiceBackupRestore/);
   assert.match(page, /<section class="mt-4" aria-label="Recording library">/);
   assert.match(page, /protectLegacyRecordings\(\)/);
+});
+
+test("Current My Voice progression uses real native states and never auto-trains", () => {
+  assert.match(page, /const nextVoiceStep = \$derived\(/);
+  assert.match(page, /buildSnapshot\?\.phase === "training"/);
+  assert.match(page, /buildSnapshot\?\.evaluation_ready/);
+  assert.match(page, /const creatorButtonLabel = \$derived\(/);
+  assert.match(page, /creatorNeedsAttention/);
+  assert.match(page, /function toggleCreator\(\): void \{/);
+  assert.match(page, /if \(creatorNeedsAttention\) return;/);
+  assert.match(page, /function openCreationStage\(pane: "record" \| "create" \| "review"\): void \{\s*stopAllMyVoiceAudio\(\);\s*creatorOpen = true;/);
+  assert.equal((page.match(/<MyVoiceBuild\b/g) ?? []).length, 1);
+  assert.match(build, /build\.active \? activeTitle\(\) : "Train My Voice"/);
+  assert.match(build, /Start.*Training|onClick|onclick=\{\(\) => void startBuild\(\)\}/);
+  assert.match(page, /isRecording \|\| pendingLineId !== null/);
+  assert.match(page, /voiceChangesLocked=/);
 });
 
 test("training hardware internals and nonselectable quick preview are disclosed only on demand", () => {
