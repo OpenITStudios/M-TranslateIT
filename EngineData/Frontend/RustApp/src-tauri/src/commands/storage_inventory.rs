@@ -29,6 +29,7 @@ fn measure(name: &'static str, root: &Path, excluded: Option<&Path>) -> StorageC
     };
     let mut stack = vec![root.to_path_buf()];
     let mut visited = 0usize;
+    // If a directory changes while scanning, prefer an unknown total over a false zero.
     while let Some(path) = stack.pop() {
         // Exclude an entire owned subtree before opening or counting it.
         if excluded.is_some_and(|excluded| path == excluded) { continue; }
@@ -52,14 +53,14 @@ fn measure(name: &'static str, root: &Path, excluded: Option<&Path>) -> StorageC
             result.complete = false;
             result.note = "Linked entries were skipped; total is unknown.".into();
         } else if metadata.is_file() {
-            result.files += 1;
+            result.files = result.files.saturating_add(1);
             result.bytes = result.bytes.and_then(|bytes| bytes.checked_add(metadata.len()));
             if result.bytes.is_none() {
                 result.complete = false;
                 result.note = "Storage size overflowed.".into();
             }
         } else if metadata.is_dir() {
-            result.directories += 1;
+            result.directories = result.directories.saturating_add(1);
             match fs::read_dir(&path) {
                 Ok(entries) => for entry in entries {
                     match entry {
@@ -125,6 +126,19 @@ mod tests {
         assert!(result.complete);
         assert_eq!(result.bytes, Some(0));
         let _ = fs::remove_file(path);
+    }
+    #[test]
+    fn excluded_subtree_is_not_counted() {
+        let root = std::env::temp_dir().join(format!("translateit-inventory-subtree-{}", std::process::id()));
+        let excluded = root.join("Sessions");
+        fs::create_dir_all(&excluded).unwrap();
+        fs::write(excluded.join("transcript.txt"), b"12345").unwrap();
+        fs::write(root.join("other.txt"), b"abc").unwrap();
+        let result = measure("other", &root, Some(&excluded));
+        assert!(result.complete);
+        assert_eq!(result.files, 1);
+        assert_eq!(result.bytes, Some(3));
+        let _ = fs::remove_dir_all(root);
     }
     #[test]
     fn regular_file_is_counted() {
