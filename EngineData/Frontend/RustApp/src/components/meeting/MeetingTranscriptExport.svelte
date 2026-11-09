@@ -263,7 +263,7 @@
             <div class="flex min-w-0 flex-wrap items-start gap-2">
               <button type="button" class="ti-button ti-button-secondary min-h-10 text-[13px] font-semibold"
                 aria-label={`Open saved Meeting channel ${sessionLabel(session.session_id)}`}
-                disabled={busy || session.entry_count === 0}
+                disabled={busy || !onOpenSession}
                 onclick={() => onOpenSession?.(session.session_id)}>
                 Open channel
               </button>
