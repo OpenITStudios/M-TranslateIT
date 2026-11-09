@@ -126,7 +126,7 @@
         `${meetingSpeakerLabel(t.lane)} · ${meetingTime(t.created_unix_ms)}\n${languageName(t.source_language)}: ${t.source_text}\n${languageName(t.target_language)}: ${meetingTranslationDisplay(t)}`
       ).join("\n\n"));
       copied = true;
-      onNotice("Available transcript entries copied.");
+      onNotice("Displayed transcript entries copied (up to 240).");
     } catch { onNotice("Could not copy saved Meeting entries."); }
   }
 </script>
@@ -167,7 +167,7 @@
             </button>
             <button type="button" class="ti-button ti-button-secondary min-h-9 w-full justify-start px-3 text-[12px]"
               disabled={!snapshot?.turns.length} onclick={() => { actionsOpen = false; void copyAll(); }}>
-              {#if copied}<Check size={14}/>{:else}<Copy size={14}/>{/if} Copy all
+              {#if copied}<Check size={14}/>{:else}<Copy size={14}/>{/if} Copy displayed
             </button>
             <button type="button" class="ti-button ti-button-secondary min-h-9 w-full justify-start px-3 text-[12px]"
               disabled={previewBusy || previewReadOnly} onclick={() => { actionsOpen = false; void toggleHtmlPreview(); }}
