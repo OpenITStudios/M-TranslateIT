@@ -27,6 +27,7 @@
   let confirmingDelete = $state<string | null>(null);
   let busy = $state(false);
   let returnFocus = $state<HTMLButtonElement | null>(null);
+  let editInput = $state<HTMLInputElement | null>(null);
   let collapsed = $state<Record<string, boolean>>({});
   let actionSurface = $state<"recent" | "project">("recent");
   const deletingProject = $derived(Boolean(confirmingDelete && library?.projects.some(project => project.project_id === confirmingDelete)));
@@ -82,11 +83,14 @@
     confirmingDelete = id;
     actionSurface = surface;
   }
-  function openEdit(kind: Edit["kind"], id: string, previous = "", surface: "recent" | "project" = "recent"): void {
+  async function openEdit(kind: Edit["kind"], id: string, previous = "", surface: "recent" | "project" = "recent", trigger?: HTMLButtonElement): Promise<void> {
     clearMenus();
+    if (trigger) returnFocus = trigger;
     edit = { kind, id };
     actionSurface = surface;
     value = previous;
+    await tick();
+    editInput?.focus();
   }
   function handleEscape(event: KeyboardEvent): void {
     if (busy) return;
@@ -135,7 +139,7 @@
       <label for="ti-library-edit-name" class="text-[12px] font-semibold">
         {edit.kind === "create_project" ? "New Project" : edit.kind === "rename_project" ? "Rename Project" : "Rename Meeting"}
       </label>
-      <input id="ti-library-edit-name" class="ti-field min-h-9 px-2 text-[13px]" maxlength="80" required
+      <input bind:this={editInput} id="ti-library-edit-name" class="ti-field min-h-9 px-2 text-[13px]" maxlength="80" required
         bind:value={value} placeholder="Enter name"/>
       <div class="mt-2 flex justify-end gap-2">
         <button type="button" class="ti-library-small" disabled={busy} onclick={dismissActions}>Cancel</button>
@@ -229,7 +233,7 @@
   <div class="mt-5 flex items-center justify-between gap-2 px-2">
     <p class="ti-channel-heading m-0">PROJECTS</p>
     <button type="button" class="ti-library-more" aria-label="Create Project category"
-      title="Create Project" disabled={!library.ok || busy} onclick={() => openEdit("create_project", "")}><FolderPlus size={17}/></button>
+      title="Create Project" disabled={!library.ok || busy} onclick={(event) => void openEdit("create_project", "", "recent", event.currentTarget)}><FolderPlus size={17}/></button>
   </div>
   {@render actionEditor("create_project")}
   {#if library.projects.length === 0}
