@@ -53,7 +53,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
 
   let booting = $state(true);
   let route=$state<AppRoute>("meeting");
-  let meetingSection = $state<"live" | "last" | "saved" | "session">("live");
+  let meetingSection = $state<"live" | "last" | "session">("live");
   let selectedSessionId = $state<string | null>(null);
   // The same archive may appear under Recent and a Project. Highlight only
   // the location the user actually opened, not both copies of its ID.
@@ -154,7 +154,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     route = "meeting";
   }
 
-  function openMeetingSection(next: "live" | "last" | "saved" | "session"): void {
+  function openMeetingSection(next: "live" | "last" | "session"): void {
     if (voiceRecordingLock && route !== "meeting") {
       setKnownNotice("Stop the current My Voice recording before leaving My Voice.", "attention");
       return;
@@ -740,8 +740,6 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
           <Meeting
             section={meetingSection}
             selectedSession={library?.sessions.find(s => s.session_id === selectedSessionId) ?? null}
-            onLibraryRefresh={refreshMeetingLibrary}
-            onOpenSession={(id) => openMeetingSession(id, "recent")}
             {snapshot}
             {meetingStatus}
             meetingTurns={meetingViewState.turns}
