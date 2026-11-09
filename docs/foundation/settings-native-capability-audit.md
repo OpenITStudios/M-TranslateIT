@@ -44,3 +44,30 @@ GitHub code search for keybind, shortcut, hotkey and storage returned incomplete
 
 ## Next safe UI step
 Refine current Settings navigation and Voice & Audio layout without removing existing controls. New categories can be shown as explanatory planned capabilities only if explicitly labeled unavailable, but avoid dead interactive buttons.
+
+## Rust/Tauri follow-up — confirmed source findings (2026-11-10)
+
+Inspected exact native files:
+- `EngineData/Frontend/RustApp/src-tauri/Cargo.toml`: Tauri 2.12.5, Rust 1.99.1; `tauri-plugin-updater` present; no `tauri-plugin-global-shortcut` dependency listed.
+- `EngineData/Frontend/RustApp/src-tauri/src/main.rs`: updater plugin initialized; no global shortcut plugin initialization in this file.
+- `EngineData/Frontend/RustApp/src-tauri/capabilities/default.json`: main window permits core show/hide/destroy; no global-shortcut permissions.
+- `EngineData/Frontend/RustApp/src-tauri/src/commands/registry.rs`: registered native saved transcript list/preview/delete/export commands.
+- `EngineData/Frontend/RustApp/src-tauri/src/engine/paths.rs`: `user_cache_dir` uses `CacheData`; `user_saved_dir` uses `SavedProject`.
+- `EngineData/Frontend/RustApp/src-tauri/src/commands/meeting_session/transcript_archive.rs`: session archive root is `SavedProject/Transcripts/Sessions` under the discovered user-data root.
+- `EngineData/Frontend/RustApp/src-tauri/src/commands/meeting_session/transcript_export.rs`: HTML exports are written separately beneath the saved-data root; export has source-preservation and completeness warnings.
+
+### Keybind native implementation prerequisites
+1. Add and initialize the official Tauri 2 global-shortcut plugin, with least-privilege window capability permissions. Confirm OS and Rust version compatibility before changing dependencies.
+2. Define actions and safe event ownership, including key pressed/released semantics, PTT edge handling, conflict validation, and shortcut lifecycle.
+3. Persist shortcuts with versioned settings migration, never enabling Start/Stop globally by default.
+4. Add native and frontend tests; only then expose active Record Shortcut UI.
+Official reference: https://v2.tauri.app/plugin/global-shortcut/
+
+### Saved Data native implementation prerequisites
+1. Inventory every directory under `SavedProject` and `CacheData` before defining cleanup scopes.
+2. Read-only storage inventory must reject symlinks, handle unreadable entries and overflow, and report unknown size rather than zero.
+3. Do not count exports as transcript archives; do not delete export files when clearing cache.
+4. Implement per-category destructive actions only after ownership/active-writer guards and clear confirmation contracts are verified.
+5. Keep archive list/export/delete APIs intact; no bulk delete until a separate safe native API exists.
+
+This is source audit only, not a build, Windows execution, or proof of repository-wide absence of alternate key handlers.
