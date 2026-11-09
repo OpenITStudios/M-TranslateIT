@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Check, Copy, Download, RefreshCw, AlertTriangle, Hash, Search } from "@lucide/svelte";
+  import { Check, Copy, Download, Eye, RefreshCw, AlertTriangle, Hash, Search } from "@lucide/svelte";
   import { runtimeApi, type MeetingCommittedTurnsSnapshot, type MeetingLibrarySession } from "../../app/bridge/runtimeApi";
   import { languageName } from "../../app/shared/state";
   import { meetingSpeakerLabel, meetingTime, meetingTranslationDisplay } from "../../app/runtime/meetingTranscriptPresentation";
@@ -22,6 +22,9 @@
   let copied = $state(false);
   let exporting = $state(false);
   let exportRevision = 0;
+  let htmlPreviewRevision = 0;
+  let previewBusy = $state(false);
+  let htmlPreview = $state<{ html: string; count: number } | null>(null);
   let exportResult = $state<{ path: string; count: number; incomplete: boolean } | null>(null);
   let query = $state("");
   const visibleTurns = $derived((snapshot?.turns ?? []).filter(turn => {
@@ -44,6 +47,9 @@
     copied = false;
     exportResult = null;
     exportRevision++;
+    htmlPreviewRevision++;
+    htmlPreview = null;
+    previewBusy = false;
     exporting = false;
     if (!previewReadOnly) void load(id);
   });
@@ -64,6 +70,28 @@
       if (revision === readRevision) failed = "Saved Meeting read failed; the archive was not changed.";
     } finally {
       if (revision === readRevision) loading = false;
+    }
+  }
+  async function toggleHtmlPreview(): Promise<void> {
+    if (previewBusy || previewReadOnly) return;
+    if (htmlPreview) { htmlPreview = null; htmlPreviewRevision++; return; }
+    previewBusy = true;
+    const id = session.session_id;
+    const revision = ++htmlPreviewRevision;
+    try {
+      const result = await runtimeApi.previewSavedMeetingTranscriptHtml(id);
+      if (revision !== htmlPreviewRevision || session.session_id !== id) return;
+      if (!result.ok) {
+        onNotice(result.message || "HTML document preview is unavailable.");
+        return;
+      }
+      htmlPreview = { html: result.html, count: result.entry_count };
+    } catch {
+      if (revision === htmlPreviewRevision && session.session_id === id) {
+        onNotice("HTML document preview could not be rendered.");
+      }
+    } finally {
+      if (revision === htmlPreviewRevision) previewBusy = false;
     }
   }
   async function exportHtml(): Promise<void> {
@@ -133,12 +161,24 @@
           {#if copied}<Check size={14}/>{:else}<Copy size={14}/>{/if} Copy all
         </button>
         <button type="button" class="ti-button ti-button-secondary min-h-9 px-3 text-[12px]"
+          disabled={previewBusy || previewReadOnly} onclick={() => void toggleHtmlPreview()}
+          aria-expanded={Boolean(htmlPreview)} aria-label="Preview exported HTML document">
+          <Eye size={14} aria-hidden="true"/> {previewBusy ? "Loading..." : htmlPreview ? "Hide preview" : "Preview HTML"}
+        </button>
+        <button type="button" class="ti-button ti-button-secondary min-h-9 px-3 text-[12px]"
           disabled={exporting || previewReadOnly} onclick={() => void exportHtml()}
           aria-label="Export complete saved Meeting as HTML">
           <Download size={14} aria-hidden="true"/> {exporting ? "Exporting..." : "Export HTML"}
         </button>
       </div>
     </div>
+    {#if htmlPreview}
+      <section class="mb-5 grid gap-2 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-3" aria-label="HTML export document preview">
+        <p class="m-0 text-[12px] text-[var(--ti-text-muted)]">Preview of {htmlPreview.count} recent archived entries. Export HTML to include all available entries.</p>
+        <iframe title="Offline HTML transcript document preview" sandbox=""
+          srcdoc={htmlPreview.html} class="h-[min(52vh,480px)] w-full rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-bg)]"></iframe>
+      </section>
+    {/if}
     {#if exportResult}
       <p class="mb-4 break-words text-[12px] text-[var(--ti-text-muted)]" role="status">
         Exported {exportResult.count} entries to {exportResult.path}{exportResult.incomplete ? " · Archive completeness unverified" : ""}
