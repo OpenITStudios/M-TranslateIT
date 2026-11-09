@@ -741,6 +741,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
             section={meetingSection}
             selectedSession={library?.sessions.find(s => s.session_id === selectedSessionId) ?? null}
             onLibraryRefresh={refreshMeetingLibrary}
+            onOpenSession={(id) => openMeetingSession(id, "recent")}
             {snapshot}
             {meetingStatus}
             meetingTurns={meetingViewState.turns}
