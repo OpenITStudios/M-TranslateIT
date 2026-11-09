@@ -92,6 +92,8 @@
       : resumeBusy ? "Opening setup..."
       : primaryControl.action === "stop"
         ? meeting.lifecycle === "cleanup_incomplete" ? primaryControl.label : "Stop Meeting"
+      : meeting.hasSession ? primaryControl.label
+      : meeting.lifecycle === "unavailable" ? primaryControl.label
       : currentSource === "original" && originalAvailable ? "Start Meeting"
       : currentSource === "original" && !meeting.hasSession ? "Check Audio Setup"
       : needsSetup ? "Finish Setup"
@@ -186,7 +188,7 @@
       aria-label="Meeting main action">
       <button type="button"
         class={"ti-button min-h-11 min-w-[172px] px-5 " + (primaryControl.action === "stop" ? "ti-call-stop" : "")}
-        title={meeting.canStop ? "Stop TranslateIT audio without leaving your Discord or Zoom call" : "Start TranslateIT meeting audio; this does not join a Discord or Zoom call"}
+        title={meeting.canStop ? "Stop TranslateIT audio without leaving your Discord or Zoom call" : meeting.hasSession || meeting.lifecycle === "unavailable" ? "Meeting status must be resolved before another session can start" : "Start TranslateIT meeting audio; this does not join a Discord or Zoom call"}
         disabled={!actionEnabled} onclick={handlePrimary}>
         {#if primaryControl.action === "stop" || (meeting.canStop && actionBusy) || meeting.lifecycle === "stopping"}<PhoneOff size={18} aria-hidden="true"/>{:else}<Mic size={18} aria-hidden="true"/>{/if}
         {primaryLabel}
