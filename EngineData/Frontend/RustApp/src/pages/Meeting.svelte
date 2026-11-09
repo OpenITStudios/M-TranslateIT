@@ -90,14 +90,14 @@
   const primaryLabel = $derived(
     primaryControl.action === "stop"
       ? meeting.lifecycle === "cleanup_incomplete" ? primaryControl.label : "Stop Meeting"
-      : currentSource === "original" && originalAvailable ? "Start"
+      : currentSource === "original" && originalAvailable ? "Start Meeting"
       : currentSource === "original" && !meeting.hasSession ? "Check Audio Setup"
       : meeting.busy || actionBusy ? primaryControl.label
       : resumeBusy ? "Opening setup..."
       : needsSetup ? "Finish Setup"
       : needsVoice ? "Choose Voice"
       : needsSettings ? "Open Settings"
-      : "Start"
+      : "Start Meeting"
   );
   const statusMessage = $derived(
     meeting.canStop || meeting.hasSession
@@ -186,7 +186,7 @@
       aria-label="Meeting main action">
       <button type="button"
         class={"ti-button min-h-11 min-w-[172px] px-5 " + (primaryControl.action === "stop" ? "ti-call-stop" : "")}
-        title={primaryControl.action === "stop" ? "Stops TranslateIT audio; does not leave the Discord or Zoom call" : "Start or recover TranslateIT meeting audio"}
+        title={primaryControl.action === "stop" ? "Stop TranslateIT audio without leaving your Discord or Zoom call" : "Start TranslateIT meeting audio; this does not join a Discord or Zoom call"}
         disabled={!actionEnabled} onclick={handlePrimary}>
         {#if primaryControl.action === "stop"}<PhoneOff size={18} aria-hidden="true"/>{:else}<Mic size={18} aria-hidden="true"/>{/if}
         {primaryLabel}
