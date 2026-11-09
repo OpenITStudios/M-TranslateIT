@@ -7,81 +7,103 @@ const source = (path: string) => readFileSync(new URL(path, root), "utf8");
 const page = source("src/pages/MyVoice.svelte");
 const build = source("src/components/my-voice/MyVoiceBuild.svelte");
 const picker = source("src/components/my-voice/BuiltinVoicePicker.svelte");
+const versions = source("src/components/my-voice/VoiceVersionBrowser.svelte");
 const voiceApi = source("src/app/bridge/myVoiceApi.ts");
 const registry = source("src-tauri/src/commands/registry.rs");
 const recording = source("src-tauri/src/commands/voice_lab_recording.rs");
 const storage = source("src-tauri/src/commands/voice_lab_recording/storage_transaction.rs");
 const archive = source("src-tauri/src/commands/voice_lab/storage/recording_archive.rs");
 
-test("My Voice landing exposes Current Voice, creation stages and Voice Library without extra sidebar", () => {
+test("My Voice has persistent Current Voice, Record–Train–Review and Voice Library hierarchy", () => {
   assert.match(page, /<BuiltinVoicePicker/);
   assert.match(picker, />Current Voice<\/h3>/);
   assert.match(picker, /Change Voice/);
-  assert.match(page, /let creatorOpen = \$state\(false\)/);
-  assert.match(page, /hidden=\{!creatorOpen\}/);
   assert.match(page, /id="my-voice-create-title"/);
-  assert.match(page, /aria-controls="my-voice-create-workspace" aria-expanded=\{creatorOpen\}/);
   assert.match(page, /aria-label="My Voice creation stages"/);
   assert.match(page, />1\. Record<\/button>/);
   assert.match(page, />2\. Train<\/button>/);
   assert.match(page, />3\. Review &amp; Use<\/button>/);
-  assert.match(page, /Voice Library/);
+  assert.match(page, /<section id="my-voice-create-workspace"/);
+  assert.doesNotMatch(page, /creatorOpen|Hide Steps/);
   assert.match(page, /id="my-voice-library-heading"/);
-  assert.match(page, /Saved Voices · Improve My Voice · Recording Library · Backup &amp; Restore/);
   assert.ok(page.indexOf("<BuiltinVoicePicker") < page.indexOf('id="my-voice-create-title"'));
   assert.ok(page.indexOf('aria-label="My Voice creation stages"') <
-    page.indexOf('id="my-voice-create-workspace"'),
-    "Creation stages must stay visible even when the detailed task is collapsed");
+    page.indexOf('id="my-voice-create-workspace"'));
   assert.ok(page.indexOf('id="my-voice-create-workspace"') <
-    page.indexOf('aria-label="Voice Library"'));
+    page.indexOf('id="my-voice-library-heading"'));
 });
 
-test("hidden voice creator stays mounted and must show active or uncertain work", () => {
-  assert.match(page, /const creatorNeedsAttention = \$derived\(Boolean\(/);
-  for (const state of [
-    "recordingStatusUnknown", "isRecording", "pendingLineId !== null",
-    "buildStatusUnavailable", "buildSnapshot?.active", "buildSnapshot?.preview_active",
-    "buildSnapshot?.evaluation_ready",
-  ]) assert.ok(page.includes(state), state);
-  assert.match(page, /if \(creatorNeedsAttention\) creatorOpen = true/);
-  assert.match(page, /disabled=\{creatorNeedsAttention\}/);
-  assert.match(page, /<MyVoiceBuild/);
+test("My Voice keeps a single native recording/build owner visible for recovery", () => {
+  assert.match(page, /const activeStage = \$derived\(/);
+  assert.match(page, /recordingStatusUnknown \|\| isRecording \|\| pendingLineId !== null/);
+  assert.match(page, /const showRecordPanel = \$derived\(/);
+  assert.match(page, /const showBuildPanel = \$derived\(/);
+  assert.match(page, /hidden={!showRecordPanel}/);
+  assert.match(page, /hidden={!showBuildPanel}/);
+  assert.equal((page.match(/<MyVoiceBuild\b/g) ?? []).length, 1);
   assert.match(build, /Stop Creating/);
   assert.match(build, /Stop Preview/);
   assert.doesNotMatch(page, /\{#if creatorOpen\}[\s\S]*?<MyVoiceBuild/);
+  assert.match(page, /function openCreationStage\(pane: "record" \| "create" \| "review"\): void \{[\s\S]*?stopAllMyVoiceAudio\(\);[\s\S]*?selectedPane = pane;/);
 });
 
-test("ongoing Improve My Voice request cannot be hidden while submission is pending", () => {
-  assert.match(page, /\|\| improvementStarting \|\| buildStatusUnavailable/);
-  assert.match(page, /if \(creatorNeedsAttention\) creatorOpen = true/);
-  assert.match(page, /disabled=\{creatorNeedsAttention\}/);
+test("Recording puts truthful progress above one focus-sized sentence and context actions", () => {
+  const record = page.slice(page.indexOf('id="my-voice-create-workspace"'),
+    page.indexOf('<div class="mt-4" hidden={!showBuildPanel}>'));
+  assert.match(record, /class="grid grid-cols-1 gap-4"/);
+  assert.doesNotMatch(record, /xl:grid-cols-\[minmax\(0,1fr\)_280px\]/);
+  assert.doesNotMatch(record, /Recording progress and lines/);
+  assert.match(record, /aria-label="Recording progress"/);
+  assert.match(record, /buildSnapshot\.accepted_duration_ms/);
+  assert.match(record, /buildSnapshot\.accepted_take_count/);
+  assert.match(record, /aria-valuenow=\{minimumProgress\}/);
+  assert.ok(record.indexOf('aria-label="Recording progress"') <
+    record.indexOf('>Microphone</strong>'));
+  assert.ok(record.indexOf('>Microphone</strong>') <
+    record.indexOf('{currentLine.text}'));
+  assert.match(record, /bind:checked=\{authorized\}/);
+  assert.match(record, /aria-label="Recording actions"/);
+  assert.match(record, /onclick=\{\(\) => void startRecording\(\)\}/);
+  assert.match(record, /onclick=\{\(\) => void stopRecording\(\)\}/);
+  assert.match(record, /onclick=\{\(\) => void retryTake\(\)\}/);
+  assert.match(record, /onclick=\{\(\) => void acceptTake\(\)\}/);
+  assert.match(record, /onclick=\{\(\) => void replayTake\(\)\}/);
+  assert.match(record, /aria-label="Additional recording lines and suggestions"/);
+  assert.match(record, /Browse lines/);
+  assert.match(record, /Suggested next lines/);
+  assert.match(record, /Recording diagnostics/);
 });
 
-test("saved recordings, historic versions and backup remain accessible but secondary", () => {
-  assert.match(page, /<details[^>]*aria-label="Voice Library tools"/);
+test("Voice Library shortcuts open existing native version/Improve tools without activating a voice", () => {
   assert.match(page, /id="my-voice-library-heading"/);
-  assert.match(page, /Manage Library<\/span>/);
-  assert.match(page, /Recording storage needs attention/);
+  assert.match(page, /onclick=\{\(\) => openVoiceLibrary\("versions"\)\}>Saved Voices<\/button>/);
+  assert.match(page, /onclick=\{\(\) => openVoiceLibrary\("improve"\)\}>Improve My Voice<\/button>/);
+  assert.match(page, /bind:open=\{voiceLibraryOpen\}/);
+  assert.match(page, /if \(destination === "versions"\) \{[\s\S]*?savedVersionsOpenRevision \+= 1;/);
+  assert.match(page, /else if \(!savedLibraryOpen\) \{[\s\S]*?toggleSavedLibrary\(\)/);
+  assert.match(page, /if \(improvementStarting\) voiceLibraryOpen = true/);
+  assert.match(page, /if \(improvementStarting\) event.preventDefault\(\)/);
   assert.match(page, /<VoiceVersionBrowser/);
+  assert.match(page, /openRevision=\{savedVersionsOpenRevision\}/);
+  assert.match(versions, /const revision = openRevision/);
+  assert.match(versions, /if \(!opened\) \{[\s\S]*?void load\(\)/);
   assert.match(page, /<VoiceBackupRestore/);
-  assert.match(page, /<section class="mt-4" aria-label="Recording library">/);
   assert.match(page, /protectLegacyRecordings\(\)/);
+  assert.match(page, /myVoiceBuildApi\.improve\(\[\.\.\.improvementIds\], improvementAuthorized\)/);
+  assert.doesNotMatch(page.slice(page.indexOf("function openVoiceLibrary("),
+    page.indexOf("function selectSavedTake(")), /myVoiceBuildApi\.improve|myVoiceBuildApi\.approve|selectBuiltin/);
 });
 
-test("Current My Voice progression uses real native states and never auto-trains", () => {
-  assert.match(page, /const nextVoiceStep = \$derived\(/);
-  assert.match(page, /buildSnapshot\?\.phase === "training"/);
-  assert.match(page, /buildSnapshot\?\.evaluation_ready/);
-  assert.match(page, /const creatorButtonLabel = \$derived\(/);
-  assert.match(page, /creatorNeedsAttention/);
-  assert.match(page, /function toggleCreator\(\): void \{/);
-  assert.match(page, /if \(creatorNeedsAttention\) return;/);
-  assert.match(page, /function openCreationStage\(pane: "record" \| "create" \| "review"\): void \{\s*stopAllMyVoiceAudio\(\);\s*creatorOpen = true;/);
-  assert.equal((page.match(/<MyVoiceBuild\b/g) ?? []).length, 1);
-  assert.match(build, /build\.active \? activeTitle\(\) : "Train My Voice"/);
-  assert.match(build, /Start.*Training|onClick|onclick=\{\(\) => void startBuild\(\)\}/);
-  assert.match(page, /isRecording \|\| pendingLineId !== null/);
-  assert.match(page, /voiceChangesLocked=/);
+test("Train readiness is grouped once and the build/review owners are unchanged", () => {
+  assert.match(build, /aria-label="Training readiness"/);
+  assert.match(build, /aria-label="Recording readiness"/);
+  assert.match(build, /aria-label="Training hardware"/);
+  assert.match(build, /build\.can_build \? "Recording requirements met"/);
+  assert.match(build, /onclick=\{\(\) => void checkCompute\(\)\}/);
+  assert.match(build, /await myVoiceBuildApi\.start\(authorized\)/);
+  assert.match(build, /myVoiceBuildApi\.approve\(reviewedLineIds, qualityConfirmed, build\.evaluation_review_id\)/);
+  assert.match(build, /!evaluationReviewComplete \|\| !qualityConfirmed/);
+  assert.match(build, /Advanced: temporary voice sample/);
 });
 
 test("training hardware internals and nonselectable quick preview are disclosed only on demand", () => {
@@ -223,7 +245,7 @@ test("My Voice audio owners hand off playback before record and ignore stale pre
   assert.match(page, /let buildPlaybackOwner = \$state/);
   assert.match(page, /<MyVoiceBuild bind:this=\{buildPlaybackOwner\}/);
   assert.match(page, /onBeforePlayback=\{\(\) => stopReplay\(\)\}/);
-  assert.match(page, /playbackEnabled=\{creatorOpen && !showRecordPanel/);
+  assert.match(page, /playbackEnabled=\{!showRecordPanel && !voiceChangesLocked/);
   const cancel = page.slice(page.indexOf("function stopAllMyVoiceAudio()"),
     page.indexOf("function openCreationStage("));
   assert.match(cancel, /stopReplay\(\)/);

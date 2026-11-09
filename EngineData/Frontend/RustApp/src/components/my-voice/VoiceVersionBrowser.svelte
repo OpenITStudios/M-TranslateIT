@@ -8,14 +8,19 @@
     onNotice,
     onVoiceActivated,
     onRecheck,
+    openRevision = 0,
   }: {
     voiceChangesLocked: boolean;
     onNotice: (message: string) => void;
     onVoiceActivated: (versionId: string, message?: string) => void | Promise<void>;
     onRecheck: (versionId: string) => Promise<boolean | null>;
+    openRevision?: number;
   } = $props();
 
   let opened = $state(false);
+  // Parent may reveal saved versions, but selection/activation still requires
+  // the existing explicit confirmation and native version verification.
+  let lastOpenRevision = 0;
   let busy = $state(false);
   let error = $state(false);
   let selectionUnknown = $state(false);
@@ -55,6 +60,16 @@
       busy = false;
     }
   }
+
+  $effect(() => {
+    const revision = openRevision;
+    if (revision <= lastOpenRevision) return;
+    lastOpenRevision = revision;
+    if (!opened) {
+      opened = true;
+      void load();
+    }
+  });
 
   function toggle(): void {
     // An unfinished read/mutation must settle before hiding its result.

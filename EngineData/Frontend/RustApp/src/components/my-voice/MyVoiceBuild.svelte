@@ -657,12 +657,22 @@
     {/if}
   </div>
 
-  <div class="mt-5 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-4 py-3.5">
+  <div class="mt-5 grid min-w-0 grid-cols-1 gap-5 border-y border-[var(--ti-border)] py-4 md:grid-cols-2"
+    aria-label="Training readiness">
+    <section class="min-w-0 md:border-r md:border-[var(--ti-border)] md:pr-5" aria-label="Recording readiness">
     <div class="flex items-center justify-between gap-4">
-      <strong class="text-sm font-semibold">Accepted recordings</strong>
+      <strong class="text-[13px] font-semibold">Recording readiness</strong>
       <span class="text-[13px] font-semibold text-[var(--ti-text-muted)]">{formatDuration(build.accepted_duration_ms)} / {formatDuration(build.minimum_duration_ms)}</span>
     </div>
-    <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">{build.accepted_take_count} accepted recordings · the minimum duration is only one requirement</p>
+    <p class="mb-0 mt-1 text-[12px] leading-5 text-[var(--ti-text-muted)]">
+        {build.accepted_take_count} accepted recordings · Duration is only one requirement
+      </p>
+      {#if !build.active && !build.evaluation_ready}
+        <p class={build.can_build ? "m-0 mt-2 text-[12px] font-semibold text-[var(--ti-success)]" :
+          "m-0 mt-2 text-[12px] text-[var(--ti-text-muted)]"}>
+          {build.can_build ? "Recording requirements met" : "More valid recordings may be required"}
+        </p>
+      {/if}
     <div
       class="mt-3 h-1.5 overflow-hidden rounded-full bg-[var(--ti-border)]"
       role="progressbar"
@@ -674,16 +684,15 @@
     >
       <div class="h-full rounded-full bg-[var(--ti-accent)]" style={`width:${speechProgress}%`}></div>
     </div>
-  </div>
-
-  <div class="mt-5 min-w-0 rounded-[var(--ti-radius-md)] bg-[var(--ti-surface-soft)] px-4 py-3" aria-label="My Voice training hardware">
+    </section>
+    <section class="min-w-0" aria-label="Training hardware">
     <div class="flex flex-wrap items-center justify-between gap-3">
-      <strong class="text-sm font-semibold">Training hardware</strong>
+      <strong class="text-[13px] font-semibold">Hardware readiness</strong>
       <button type="button" class="ti-button ti-button-secondary" disabled={computeChecking || build.active || quickPreviewBusy} onclick={() => void checkCompute()}>
         {computeChecking ? "Checking..." : "Recheck hardware"}
       </button>
     </div>
-    <p class="mb-0 mt-2 text-[13px] font-medium leading-5" role="status">
+    <p class="mb-0 mt-2 text-[12px] leading-5" role="status">
       {computeChecking ? "Checking GPU identity and memory..." : computeStatus?.admission_state === "admitted"
         ? "Device-aware CUDA safety — preliminary memory check passed" : computeStatus?.state === "cpu_only"
         ? "CPU-only training blocked — not verified" : computeStatus?.admission_state === "blocked_unsupported_precision"
@@ -708,6 +717,7 @@
       <p class="mb-0 mt-1 text-[13px] text-[var(--ti-text-muted)]">Recheck to identify your local compute environment before creating a voice.</p>
     {/if}
     </details>
+    </section>
   </div>
 
   {#if quickPreviewBusy || build.preview_active}
