@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Check, Copy, RefreshCw, AlertTriangle, Hash, Search } from "@lucide/svelte";
+  import { Check, Copy, Download, RefreshCw, AlertTriangle, Hash, Search } from "@lucide/svelte";
   import { runtimeApi, type MeetingCommittedTurnsSnapshot, type MeetingLibrarySession } from "../../app/bridge/runtimeApi";
   import { languageName } from "../../app/shared/state";
   import { meetingSpeakerLabel, meetingTime, meetingTranslationDisplay } from "../../app/runtime/meetingTranscriptPresentation";
@@ -20,6 +20,8 @@
   let loading = $state(false);
   let failed = $state("");
   let copied = $state(false);
+  let exporting = $state(false);
+  let exportResult = $state<{ path: string; count: number; incomplete: boolean } | null>(null);
   let query = $state("");
   const visibleTurns = $derived((snapshot?.turns ?? []).filter(turn => {
     const needle = query.trim().toLowerCase();
@@ -39,6 +41,7 @@
     // A search belongs to the selected channel; never carry it into another archive.
     query = "";
     copied = false;
+    exportResult = null;
     if (!previewReadOnly) void load(id);
   });
   async function load(id: string): Promise<void> {
@@ -58,6 +61,28 @@
       if (revision === readRevision) failed = "Saved Meeting read failed; the archive was not changed.";
     } finally {
       if (revision === readRevision) loading = false;
+    }
+  }
+  async function exportHtml(): Promise<void> {
+    if (exporting || previewReadOnly) return;
+    exporting = true;
+    exportResult = null;
+    const id = session.session_id;
+    try {
+      const result = await runtimeApi.exportSavedMeetingTranscriptHtml(id);
+      if (session.session_id !== id) return;
+      if (!result.ok || !result.file_path) {
+        onNotice(result.message || "HTML transcript export could not be verified.");
+        return;
+      }
+      exportResult = { path: result.file_path, count: result.turn_count, incomplete: result.incomplete };
+      onNotice(result.incomplete
+        ? "HTML exported, but archive completeness could not be verified."
+        : "HTML transcript exported.");
+    } catch {
+      if (session.session_id === id) onNotice("HTML transcript export failed; saved conversation was not changed.");
+    } finally {
+      exporting = false;
     }
   }
   async function copyAll(): Promise<void> {
@@ -103,8 +128,18 @@
           disabled={!snapshot?.turns.length} onclick={() => void copyAll()}>
           {#if copied}<Check size={14}/>{:else}<Copy size={14}/>{/if} Copy all
         </button>
+        <button type="button" class="ti-button ti-button-secondary min-h-9 px-3 text-[12px]"
+          disabled={exporting || previewReadOnly} onclick={() => void exportHtml()}
+          aria-label="Export complete saved Meeting as HTML">
+          <Download size={14} aria-hidden="true"/> {exporting ? "Exporting..." : "Export HTML"}
+        </button>
       </div>
     </div>
+    {#if exportResult}
+      <p class="mb-4 break-words text-[12px] text-[var(--ti-text-muted)]" role="status">
+        Exported {exportResult.count} entries to {exportResult.path}{exportResult.incomplete ? " · Archive completeness unverified" : ""}
+      </p>
+    {/if}
     {#if loading}
       <p class="text-[13px] text-[var(--ti-text-muted)]" role="status">Loading Meeting...</p>
     {:else if failed}
@@ -122,7 +157,7 @@
           <p class="py-8 text-center text-[13px] text-[var(--ti-text-muted)]" role="status">No messages match this search.</p>
         {/if}
         <p class="mt-5 text-center text-[12px] text-[var(--ti-text-soft)]">
-          Display shows up to 240 saved phrases. Use Saved Meeting to export all available entries.
+          Display shows up to 240 saved phrases. Export HTML above to include all available archived entries.
         </p>
       {/if}
     {:else}
