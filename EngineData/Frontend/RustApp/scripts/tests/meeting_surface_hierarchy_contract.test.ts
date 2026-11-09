@@ -366,6 +366,37 @@ test("A Meeting only highlights the Recent or Project row that opened it", () =>
   assert.match(navigation, /onOpenSession\(session\.session_id, "project"\)/);
 });
 
+test("A meeting has only one open action menu across Recent and Projects", () => {
+  const navigation = readFileSync(new URL("../../src/components/layout/MeetingLibraryNavigation.svelte", import.meta.url), "utf8");
+  // One shared state, not independent per-row booleans for duplicate sessions.
+  assert.equal((navigation.match(/let menu = \$state<string \| null>\(null\)/g) ?? []).length, 1);
+  assert.match(navigation, /function toggleMenu\(key: string\)/);
+  assert.match(navigation, /const next = menu === key \? null : key;/);
+  assert.match(navigation, /clearMenus\(\);\s*menu = next;/);
+  assert.match(navigation, /toggleMenu\("recent:" \+ session\.session_id\)/);
+  assert.match(navigation, /toggleMenu\("project:" \+ session\.session_id\)/);
+  assert.match(navigation, /toggleMenu\("category:" \+ project\.project_id\)/);
+  assert.match(navigation, /menu === "recent:" \+ session\.session_id/);
+  assert.match(navigation, /menu === "project:" \+ session\.session_id/);
+  assert.doesNotMatch(navigation, /onclick=\{\(\) => menu = menu ===/);
+});
+
+test("Selecting a channel or starting another action closes the previous inline menu", () => {
+  const navigation = readFileSync(new URL("../../src/components/layout/MeetingLibraryNavigation.svelte", import.meta.url), "utf8");
+  assert.match(navigation, /function openSession\(sessionId: string, surface: "recent" \| "project"\)/);
+  assert.match(navigation, /function openMove\(sessionId: string\)/);
+  assert.match(navigation, /function requestDelete\(id: string\)/);
+  assert.match(navigation, /function openEdit\(kind: Edit\["kind"\], id: string, previous = ""\)/);
+  assert.match(navigation, /function toggleProject\(projectId: string\)/);
+  assert.match(navigation, /<svelte:window onkeydown=\{handleEscape\}/);
+  assert.match(navigation, /if \(event\.key === "Escape"/);
+  for (const fn of ["openSession", "openMove", "requestDelete", "openEdit", "toggleProject"]) {
+    const start = navigation.indexOf(`function ${fn}(`);
+    assert.ok(start >= 0);
+    assert.match(navigation.slice(start, start + 420), /clearMenus\(\)/, fn);
+  }
+});
+
 test("Transcript display mode only changes presentation; failures retain original text", () => {
   const preferences = readFileSync(new URL("../../src/components/meeting/transcriptPreferences.ts", import.meta.url), "utf8");
   const bubble = readFileSync(new URL("../../src/components/meeting/MeetingTurnBubble.svelte", import.meta.url), "utf8");

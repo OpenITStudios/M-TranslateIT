@@ -33,9 +33,47 @@
   function selectedIn(session: MeetingLibrarySession, surface: "recent" | "project"): boolean {
     return selectedSessionId === session.session_id && selectedSurface === surface;
   }
-  function clearMenus(): void { menu = null; edit = null; moving = null; confirmingDelete = null; }
+  function clearMenus(): void {
+    menu = null;
+    edit = null;
+    moving = null;
+    confirmingDelete = null;
+  }
+  // One exclusive action surface across Recent, Project and category rows.
+  // No independent menus may open for duplicate appearances of one session.
+  function toggleMenu(key: string): void {
+    if (busy) return;
+    const next = menu === key ? null : key;
+    clearMenus();
+    menu = next;
+  }
+  function openSession(sessionId: string, surface: "recent" | "project"): void {
+    clearMenus();
+    onOpenSession(sessionId, surface);
+  }
+  function toggleProject(projectId: string): void {
+    clearMenus();
+    collapsed = { ...collapsed, [projectId]: !collapsed[projectId] };
+  }
+  function openMove(sessionId: string): void {
+    clearMenus();
+    moving = sessionId;
+  }
+  function requestDelete(id: string): void {
+    clearMenus();
+    confirmingDelete = id;
+  }
   function openEdit(kind: Edit["kind"], id: string, previous = ""): void {
-    menu = null; edit = { kind, id }; value = previous;
+    clearMenus();
+    edit = { kind, id };
+    value = previous;
+  }
+  function handleEscape(event: KeyboardEvent): void {
+    if (event.key === "Escape" && (menu !== null || edit !== null ||
+      moving !== null || confirmingDelete !== null)) {
+      event.preventDefault();
+      clearMenus();
+    }
   }
   async function commitEdit(): Promise<void> {
     if (!edit || busy || !value.trim()) return;
@@ -70,6 +108,8 @@
   }
 </script>
 
+<svelte:window onkeydown={handleEscape} />
+
 {#if library === null}
   <p class="mx-3 my-3 text-[12px] text-[var(--ti-text-soft)]">Checking saved Meetings...</p>
 {:else}
@@ -92,7 +132,7 @@
         <div class="ti-library-channel">
           <button type="button" class={"ti-channel-item min-w-0 flex-1 " + (selectedIn(session, "recent") ? "is-active" : "")}
             aria-label={itemLabel(session)} aria-current={selectedIn(session, "recent") ? "page" : undefined}
-            title={itemLabel(session)} onclick={() => onOpenSession(session.session_id, "recent")}>
+            title={itemLabel(session)} onclick={() => openSession(session.session_id, "recent")}>
             {#if session.pinned}<Pin size={16} class="shrink-0 text-[var(--ti-text-muted)]"/>{:else}<Hash size={16} class="shrink-0"/>{/if}
             <span class="min-w-0 flex-1 truncate">{itemLabel(session)}</span>
             {#if liveSessionId === session.session_id}
@@ -104,7 +144,7 @@
           <button type="button" class="ti-library-more" aria-label={"Manage " + itemLabel(session)}
             aria-expanded={menu === "recent:" + session.session_id}
             disabled={!library.ok || busy}
-            onclick={() => menu = menu === "recent:" + session.session_id ? null : "recent:" + session.session_id}>
+            onclick={() => toggleMenu("recent:" + session.session_id)}>
             <MoreHorizontal size={16}/>
           </button>
         </div>
@@ -114,8 +154,8 @@
             <button onclick={() => void modify({ action: "pin_meeting", sessionId: session.session_id, pinned: !session.pinned })}>
               <PinOff size={14}/> {session.pinned ? "Unpin Meeting" : "Pin Meeting"}
             </button>
-            <button onclick={() => { moving = session.session_id; menu = null; }}><FolderInput size={14}/> Move to Project</button>
-            <button onclick={() => { confirmingDelete = session.session_id; menu = null; }}><Trash2 size={14}/> Delete</button>
+            <button onclick={() => openMove(session.session_id)}><FolderInput size={14}/> Move to Project</button>
+            <button onclick={() => requestDelete(session.session_id)}><Trash2 size={14}/> Delete</button>
           </div>
         {/if}
       {/each}
@@ -134,7 +174,7 @@
     <div class="ti-library-channel">
       <button type="button" class="ti-channel-item min-w-0 flex-1"
         aria-expanded={!collapsed[project.project_id]}
-        onclick={() => collapsed = { ...collapsed, [project.project_id]: !collapsed[project.project_id] }}>
+        onclick={() => toggleProject(project.project_id)}>
         <ChevronDown size={14} class={collapsed[project.project_id] ? "-rotate-90" : ""}/>
         <Folder size={16}/>
         <span class="min-w-0 flex-1 truncate" title={project.name}>{project.name}</span>
@@ -144,14 +184,14 @@
       <button type="button" class="ti-library-more" aria-label={"Manage Project " + project.name}
         aria-expanded={menu === "category:" + project.project_id}
         disabled={!library.ok || busy}
-        onclick={() => menu = menu === "category:" + project.project_id ? null : "category:" + project.project_id}>
+        onclick={() => toggleMenu("category:" + project.project_id)}>
         <MoreHorizontal size={16}/>
       </button>
     </div>
     {#if menu === "category:" + project.project_id && library.ok}
       <div class="ti-library-menu">
         <button onclick={() => openEdit("rename_project", project.project_id, project.name)}><Pencil size={14}/> Rename Project</button>
-        <button onclick={() => { confirmingDelete = project.project_id; menu = null; }}><Trash2 size={14}/> Delete Project</button>
+        <button onclick={() => requestDelete(project.project_id)}><Trash2 size={14}/> Delete Project</button>
       </div>
     {/if}
     {#if !collapsed[project.project_id]}
@@ -162,7 +202,7 @@
             aria-label={session.display_name}
             aria-current={selectedIn(session, "project") ? "page" : undefined}
             title={session.display_name}
-            onclick={() => onOpenSession(session.session_id, "project")}>
+            onclick={() => openSession(session.session_id, "project")}>
             {#if session.pinned}<Pin size={15} class="shrink-0"/>{:else}<Hash size={15} class="shrink-0"/>{/if}
             <span class="min-w-0 flex-1 truncate">{session.display_name}</span>
             {#if liveSessionId === session.session_id}
@@ -174,7 +214,7 @@
             aria-label={"Manage " + session.display_name + " in Project"}
             aria-expanded={menu === "project:" + session.session_id}
             disabled={!library.ok || busy}
-            onclick={() => menu = menu === "project:" + session.session_id ? null : "project:" + session.session_id}>
+            onclick={() => toggleMenu("project:" + session.session_id)}>
             <MoreHorizontal size={16}/>
           </button>
         </div>
@@ -187,10 +227,10 @@
               {#if session.pinned}<PinOff size={14}/>{:else}<Pin size={14}/>{/if}
               {session.pinned ? "Unpin Meeting" : "Pin Meeting"}
             </button>
-            <button type="button" onclick={() => { moving = session.session_id; menu = null; }}>
+            <button type="button" onclick={() => openMove(session.session_id)}>
               <FolderInput size={14}/> Move to Project
             </button>
-            <button type="button" onclick={() => { confirmingDelete = session.session_id; menu = null; }}>
+            <button type="button" onclick={() => requestDelete(session.session_id)}>
               <Trash2 size={14}/> Delete
             </button>
           </div>
