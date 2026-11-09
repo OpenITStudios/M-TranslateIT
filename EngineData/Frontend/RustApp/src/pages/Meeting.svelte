@@ -87,12 +87,13 @@
     && (primaryControl.enabled || originalAvailable || needsSetup || needsVoice || needsSettings));
   const activityVisible = $derived(Boolean(meetingStatus && meeting.applicationOwned && meeting.live));
   const primaryLabel = $derived(
-    primaryControl.action === "stop"
-      ? meeting.lifecycle === "cleanup_incomplete" ? primaryControl.label : "Stop Meeting"
+    // Transition states take precedence over source-specific setup labels.
+    meeting.busy || actionBusy ? primaryControl.label
+      : resumeBusy ? "Opening setup..."
+      : primaryControl.action === "stop"
+        ? meeting.lifecycle === "cleanup_incomplete" ? primaryControl.label : "Stop Meeting"
       : currentSource === "original" && originalAvailable ? "Start Meeting"
       : currentSource === "original" && !meeting.hasSession ? "Check Audio Setup"
-      : meeting.busy || actionBusy ? primaryControl.label
-      : resumeBusy ? "Opening setup..."
       : needsSetup ? "Finish Setup"
       : needsVoice ? "Choose Voice"
       : needsSettings ? "Open Settings"
