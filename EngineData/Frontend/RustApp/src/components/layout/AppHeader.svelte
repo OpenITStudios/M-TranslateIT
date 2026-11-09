@@ -23,7 +23,7 @@
   }: {
     snapshot: ProductRuntimeSnapshot;
     route: AppRoute;
-    meetingSection: "live" | "last" | "saved" | "session";
+    meetingSection: "live" | "last" | "session";
     selectedSessionName?: string | null;
     previewReadOnly?: boolean;
     onRefresh?: (message?: string) => void | Promise<void>;
