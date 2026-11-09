@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Check, Copy, RefreshCw, AlertTriangle } from "@lucide/svelte";
+  import { Check, Copy, RefreshCw, AlertTriangle, Hash, Search } from "@lucide/svelte";
   import { runtimeApi, type MeetingCommittedTurnsSnapshot, type MeetingLibrarySession } from "../../app/bridge/runtimeApi";
   import { languageName } from "../../app/shared/state";
   import { meetingSpeakerLabel, meetingTime, meetingTranslationDisplay } from "../../app/runtime/meetingTranscriptPresentation";
@@ -20,6 +20,11 @@
   let loading = $state(false);
   let failed = $state("");
   let copied = $state(false);
+  let query = $state("");
+  const visibleTurns = $derived((snapshot?.turns ?? []).filter(turn => {
+    const needle = query.trim().toLowerCase();
+    return !needle || `${turn.source_text} ${turn.translated_text}`.toLowerCase().includes(needle);
+  }));
   let appearance = $state<TranscriptPreferences>({ ...DEFAULT_TRANSCRIPT_PREFERENCES });
   let readRevision = 0;
 
@@ -71,6 +76,12 @@
     </p>
   {/if}
   <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-7" aria-label="Saved Meeting transcript">
+    <div class="mx-auto w-full max-w-[920px]">
+    <div class="mb-6 border-b border-[var(--ti-border)] pb-5">
+      <Hash size={27} class="mb-3 text-[var(--ti-text-soft)]" aria-hidden="true"/>
+      <h2 class="m-0 truncate text-[22px] font-semibold" title={session.display_name}>{session.display_name}</h2>
+      <p class="mb-0 mt-2 text-[13px] leading-5 text-[var(--ti-text-muted)]">Saved conversation · You on the right, Meeting Sound on the left. Read-only transcript.</p>
+    </div>
     <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
       <span class="text-[12px] text-[var(--ti-text-muted)]">
         {session.entry_count} saved phrase{session.entry_count === 1 ? "" : "s"}
@@ -87,6 +98,10 @@
         </button>
       </div>
     </div>
+    <label class="relative mb-5 block">
+      <Search size={16} class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ti-text-soft)]" aria-hidden="true"/>
+      <input class="ti-field min-h-10 w-full pl-10 pr-3 text-[13px]" bind:value={query} aria-label="Search this Meeting transcript" placeholder="Search this conversation..."/>
+    </label>
     {#if loading}
       <p class="text-[13px] text-[var(--ti-text-muted)]" role="status">Loading Meeting...</p>
     {:else if failed}
@@ -96,10 +111,13 @@
         <p class="text-[13px] text-[var(--ti-text-muted)]">No recognized phrases in this Meeting.</p>
       {:else}
         <div class="grid gap-3">
-          {#each snapshot.turns as turn (turn.sequence)}
+          {#each visibleTurns as turn (turn.sequence)}
             <MeetingTurnBubble {turn} preferences={appearance}/>
           {/each}
         </div>
+        {#if visibleTurns.length === 0}
+          <p class="py-8 text-center text-[13px] text-[var(--ti-text-muted)]" role="status">No messages match this search.</p>
+        {/if}
         <p class="mt-5 text-center text-[12px] text-[var(--ti-text-soft)]">
           Display shows up to 240 saved phrases. Use Saved Meeting to export all available entries.
         </p>
@@ -107,5 +125,6 @@
     {:else}
       <p class="text-[13px] text-[var(--ti-text-muted)]">Select Refresh to check this Meeting.</p>
     {/if}
+    </div>
   </div>
 </section>
