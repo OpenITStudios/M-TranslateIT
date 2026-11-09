@@ -28,7 +28,6 @@
   });
   let query = $state("");
   let copied = $state(false);
-  let reviewOpen = $state(false);
   let loadedForInactive = false;
 
   const sessionLabel = $derived(meetingSessionTitle(meetingFirstRecordedTime(snapshot?.turns ?? [])));
@@ -65,7 +64,6 @@
   $effect(() => {
     if (sessionActive) {
       loadedForInactive = false;
-      reviewOpen = false;
       snapshot = null;
     } else if (!loadedForInactive) {
       loadedForInactive = true;
@@ -73,9 +71,6 @@
     }
   });
 
-  $effect(() => {
-    if (openByDefault && snapshot?.turns.length) reviewOpen = true;
-  });
 </script>
 
 {#if !sessionActive && snapshot?.turns.length}
@@ -85,16 +80,14 @@
       <span class="mt-1 block text-[13px] text-[var(--ti-text-muted)]">Last Meeting · {snapshot.turns.length} phrase{snapshot.turns.length === 1 ? "" : "s"} · Read-only conversation</span>
     </header>
     <div>
-      <div class="flex flex-wrap items-center justify-end gap-2 px-5 py-3">
-        <button type="button" class="ti-button ti-button-secondary min-h-9" onclick={() => void copyAll()}>
-          {#if copied}<Check size={14} />{:else}<Copy size={14} />{/if}{copied ? "Copied" : "Copy all"}
-        </button>
-      </div>
-      <div class="border-t border-[var(--ti-border)] px-5 py-3">
-        <label class="relative block">
-          <Search size={14} class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ti-text-soft)]" />
-          <input class="ti-field min-h-10 w-full pl-9 pr-3 text-sm" bind:value={query} placeholder="Search last session..." aria-label="Search last session" />
+      <div class="mb-4 flex flex-wrap items-center justify-end gap-2 border-b border-[var(--ti-border)] pb-4" role="group" aria-label="Last Meeting conversation tools">
+        <label class="relative min-w-[190px] flex-1 sm:max-w-[320px]">
+          <Search size={16} class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ti-text-soft)]" aria-hidden="true" />
+          <input class="ti-field min-h-9 w-full pl-10 pr-3 text-[13px]" bind:value={query} placeholder="Search conversation..." aria-label="Search last Meeting" />
         </label>
+        <button type="button" class="ti-button ti-button-secondary min-h-9" onclick={() => void copyAll()}>
+          {#if copied}<Check size={14} aria-hidden="true" />{:else}<Copy size={14} aria-hidden="true" />{/if}{copied ? "Copied" : "Copy all"}
+        </button>
       </div>
       <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users need focus to scroll this named region.) -->
       <div class="max-h-[min(68vh,720px)] overflow-y-auto" role="region" aria-label="Last Meeting conversation" tabindex="0">
