@@ -29,12 +29,11 @@
 
   let savedDeletionRevision = $state(0);
   let resumeBusy = $state(false);
-  let currentSource = $state<"original" | "translateit">("translateit");
-  $effect(() => {
-    if (meetingStatus) {
-      currentSource = meetingStatus.audio_source === "original" ? "original" : "translateit";
-    }
-  });
+  // The header and Meeting dock must read the same runtime-owned source.
+  // Do not keep a separate local copy that can lag behind a preference change.
+  const currentSource = $derived<"original" | "translateit">(
+    snapshot.meetingSession?.audio_source === "original" ? "original" : "translateit",
+  );
   const meeting = $derived(snapshot.meeting);
   const needsSetup = $derived(!meeting.hasSession && !meeting.canStop
     && ["new", "deferred"].includes(snapshot.settings.meeting_setup_state));
