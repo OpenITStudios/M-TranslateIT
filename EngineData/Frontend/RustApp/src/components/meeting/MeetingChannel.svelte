@@ -21,6 +21,7 @@
   let failed = $state("");
   let copied = $state(false);
   let exporting = $state(false);
+  let exportRevision = 0;
   let exportResult = $state<{ path: string; count: number; incomplete: boolean } | null>(null);
   let query = $state("");
   const visibleTurns = $derived((snapshot?.turns ?? []).filter(turn => {
@@ -42,6 +43,7 @@
     query = "";
     copied = false;
     exportResult = null;
+    exportRevision++;
     if (!previewReadOnly) void load(id);
   });
   async function load(id: string): Promise<void> {
@@ -67,10 +69,11 @@
     if (exporting || previewReadOnly) return;
     exporting = true;
     exportResult = null;
+    const revision = ++exportRevision;
     const id = session.session_id;
     try {
       const result = await runtimeApi.exportSavedMeetingTranscriptHtml(id);
-      if (session.session_id !== id) return;
+      if (session.session_id !== id || revision !== exportRevision) return;
       if (!result.ok || !result.file_path) {
         onNotice(result.message || "HTML transcript export could not be verified.");
         return;
@@ -80,9 +83,9 @@
         ? "HTML exported, but archive completeness could not be verified."
         : "HTML transcript exported.");
     } catch {
-      if (session.session_id === id) onNotice("HTML transcript export failed; saved conversation was not changed.");
+      if (session.session_id === id && revision === exportRevision) onNotice("HTML transcript export failed; saved conversation was not changed.");
     } finally {
-      exporting = false;
+      if (revision === exportRevision) exporting = false;
     }
   }
   async function copyAll(): Promise<void> {
