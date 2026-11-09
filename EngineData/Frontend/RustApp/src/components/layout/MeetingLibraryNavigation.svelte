@@ -126,19 +126,19 @@
         onclick={() => { clearMenus(); onViewAll(); }}>View All</button>
     </div>
     {#if recent.length === 0}
-      <p class="mx-3 my-2 text-[12px] text-[var(--ti-text-soft)]">No Meeting yet</p>
+      <p class="mx-3 my-2 text-[12px] text-[var(--ti-text-soft)]">No recent meetings</p>
     {:else}
       {#each recent as session (session.session_id)}
         <div class="ti-library-channel">
           <button type="button" class={"ti-channel-item min-w-0 flex-1 " + (selectedIn(session, "recent") ? "is-active" : "")}
-            aria-label={itemLabel(session)} aria-current={selectedIn(session, "recent") ? "page" : undefined}
+            aria-label={itemLabel(session) + (liveSessionId === session.session_id ? ", live Meeting" : "")} aria-current={selectedIn(session, "recent") ? "page" : undefined}
             title={itemLabel(session)} onclick={() => openSession(session.session_id, "recent")}>
             {#if session.pinned}<Pin size={16} class="shrink-0 text-[var(--ti-text-muted)]"/>{:else}<Hash size={16} class="shrink-0"/>{/if}
             <span class="min-w-0 flex-1 truncate">{itemLabel(session)}</span>
             {#if liveSessionId === session.session_id}
-              <span class="size-1.5 rounded-full bg-[var(--ti-success)]" title="Live"></span>
+              <span class="shrink-0 text-[10px] font-semibold text-[var(--ti-success)]" title="Meeting currently live">LIVE</span>
             {:else if session.storage_warning || !session.complete}
-              <span class="size-1.5 rounded-full bg-[var(--ti-warning)]" title="Storage needs review"></span>
+              <span class="size-1.5 shrink-0 rounded-full bg-[var(--ti-warning)]" title="Saved Meeting needs storage review" aria-label="Storage needs review"></span>
             {/if}
           </button>
           <button type="button" class="ti-library-more" aria-label={"Manage " + itemLabel(session)}
@@ -167,7 +167,7 @@
       title="Create Project" disabled={!library.ok || busy} onclick={() => openEdit("create_project", "")}><FolderPlus size={17}/></button>
   </div>
   {#if library.projects.length === 0}
-    <p class="mx-3 my-2 text-[12px] text-[var(--ti-text-soft)]">Create a Project to group Meetings</p>
+    <p class="mx-3 my-2 text-[12px] text-[var(--ti-text-soft)]">No projects yet. Use + to create one.</p>
   {/if}
   {#each library.projects as project (project.project_id)}
     {@const projectSessions = library.sessions.filter(session => session.project_id === project.project_id)}
@@ -199,15 +199,16 @@
         <div class="ti-library-channel ml-4">
           <button type="button"
             class={"ti-channel-item min-w-0 flex-1 " + (selectedIn(session, "project") ? "is-active" : "")}
-            aria-label={session.display_name}
+            aria-label={session.display_name + (liveSessionId === session.session_id ? ", live Meeting" : "")}
             aria-current={selectedIn(session, "project") ? "page" : undefined}
             title={session.display_name}
             onclick={() => openSession(session.session_id, "project")}>
             {#if session.pinned}<Pin size={15} class="shrink-0"/>{:else}<Hash size={15} class="shrink-0"/>{/if}
             <span class="min-w-0 flex-1 truncate">{session.display_name}</span>
             {#if liveSessionId === session.session_id}
-              <span class="size-1.5 shrink-0 rounded-full bg-[var(--ti-success)]"
-                title="Meeting live"></span>
+              <span class="shrink-0 text-[10px] font-semibold text-[var(--ti-success)]" title="Meeting currently live">LIVE</span>
+            {:else if session.storage_warning || !session.complete}
+              <span class="size-1.5 shrink-0 rounded-full bg-[var(--ti-warning)]" title="Saved Meeting needs storage review" aria-label="Storage needs review"></span>
             {/if}
           </button>
           <button type="button" class="ti-library-more"
