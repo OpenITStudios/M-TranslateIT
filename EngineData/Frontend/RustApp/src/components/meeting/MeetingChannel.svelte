@@ -44,6 +44,7 @@
     copied = false;
     exportResult = null;
     exportRevision++;
+    exporting = false;
     if (!previewReadOnly) void load(id);
   });
   async function load(id: string): Promise<void> {
