@@ -21,6 +21,7 @@ pub mod runtime_watchdog;
 pub mod mic_test;
 pub mod runtime;
 pub mod settings;
+pub mod storage_inventory;
 pub mod startup_recovery;
 pub mod virtual_mic_route;
 pub mod voice_lab;
