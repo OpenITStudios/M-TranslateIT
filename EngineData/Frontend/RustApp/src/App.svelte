@@ -223,7 +223,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
       if (selectedSessionId === id) {
         selectedSessionId = null;
         selectedSurface = "recent";
-        meetingSection = "saved";
+        meetingSection = "live";
       }
       setNotice("Saved Meeting deleted.");
       return true;
