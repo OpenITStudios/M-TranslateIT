@@ -133,7 +133,7 @@
       {:else}
         <div class="flex min-h-[280px] flex-col items-center justify-center gap-3 text-center">
           <Hash size={28} class="text-[var(--ti-text-soft)]" aria-hidden="true"/>
-          <h3 class="m-0 text-[19px] font-semibold">{meeting.lifecycle === "cleanup_incomplete" ? "Stop Needed" : meeting.busy ? meeting.label + " Meeting" : meeting.live ? "Original Microphone is live" : meeting.hasSession ? "Meeting Needs Attention" : "Ready to Translate"}</h3>
+          <h3 class="m-0 text-[19px] font-semibold">{meeting.lifecycle === "cleanup_incomplete" ? "Stop Needed" : meeting.busy ? meeting.label + " Meeting" : meeting.live ? (meetingStatus?.audio_source === "original" ? "Original Microphone is Live" : "Translation is Live") : meeting.hasSession ? "Meeting Needs Attention" : "Ready to Translate"}</h3>
           <p class="m-0 max-w-[520px] text-[13px] leading-6 text-[var(--ti-text-muted)]" role="status" aria-live="polite">
             {meeting.live ? statusMessage
               : originalAvailable ? "Original Microphone sends your voice without translation. Select Start to begin."
@@ -186,7 +186,7 @@
       aria-label="Meeting main action">
       <button type="button"
         class={"ti-button min-h-11 min-w-[172px] px-5 " + (primaryControl.action === "stop" ? "ti-call-stop" : "")}
-        title={primaryControl.action === "stop" ? "Stop TranslateIT audio without leaving your Discord or Zoom call" : "Start TranslateIT meeting audio; this does not join a Discord or Zoom call"}
+        title={meeting.canStop ? "Stop TranslateIT audio without leaving your Discord or Zoom call" : "Start TranslateIT meeting audio; this does not join a Discord or Zoom call"}
         disabled={!actionEnabled} onclick={handlePrimary}>
         {#if primaryControl.action === "stop" || (meeting.canStop && actionBusy) || meeting.lifecycle === "stopping"}<PhoneOff size={18} aria-hidden="true"/>{:else}<Mic size={18} aria-hidden="true"/>{/if}
         {primaryLabel}
