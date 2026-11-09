@@ -205,6 +205,7 @@
       <p class="mx-3 my-2 text-[12px] text-[var(--ti-text-soft)]">No recent meetings</p>
     {:else}
       {#each recent as session (session.session_id)}
+        <div class="ti-library-popup-anchor">
         <div class="ti-library-channel">
           <button type="button" class={"ti-channel-item min-w-0 flex-1 " + (selectedIn(session, "recent") ? "is-active" : "")}
             aria-label={itemLabel(session) + (liveSessionId === session.session_id ? ", live Meeting" : "")} aria-current={selectedIn(session, "recent") ? "page" : undefined}
@@ -234,6 +235,7 @@
             <button onclick={() => requestDelete(session.session_id, "recent")}><Trash2 size={14}/> Delete Meeting</button>
           </div>
         {/if}
+        </div>
         {@render actionEditor("recent:" + session.session_id)}
       {/each}
     {/if}
@@ -258,6 +260,7 @@
   </div>
   {#if !uncategorizedCollapsed}
     {#each uncategorized as session (session.session_id)}
+      <div class="ti-library-popup-anchor">
       <div class="ti-library-channel ml-4">
         <button type="button" class={"ti-channel-item min-w-0 flex-1 " + (selectedIn(session, "project") ? "is-active" : "")}
           aria-current={selectedIn(session, "project") ? "page" : undefined}
@@ -280,11 +283,13 @@
           <button type="button" onclick={() => requestDelete(session.session_id, "project")}><Trash2 size={14}/> Delete Meeting</button>
         </div>
       {/if}
+      </div>
       {@render actionEditor("project:" + session.session_id)}
     {/each}
   {/if}
   {#each library.projects as project (project.project_id)}
     {@const projectSessions = library.sessions.filter(session => session.project_id === project.project_id)}
+    <div class="ti-library-popup-anchor">
     <div class="ti-library-channel">
       <button type="button" class="ti-channel-item min-w-0 flex-1"
         aria-expanded={!collapsed[project.project_id]}
@@ -308,9 +313,11 @@
         <button onclick={() => requestDelete(project.project_id)}><Trash2 size={14}/> Delete Project</button>
       </div>
     {/if}
+    </div>
     {@render actionEditor("project:" + project.project_id)}
     {#if !collapsed[project.project_id]}
       {#each pinnedFirst(projectSessions) as session (session.session_id)}
+        <div class="ti-library-popup-anchor">
         <div class="ti-library-channel ml-4">
           <button type="button"
             class={"ti-channel-item min-w-0 flex-1 " + (selectedIn(session, "project") ? "is-active" : "")}
@@ -351,6 +358,7 @@
             </button>
           </div>
         {/if}
+        </div>
         {@render actionEditor("project:" + session.session_id)}
       {/each}
     {/if}
