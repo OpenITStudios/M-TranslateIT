@@ -10,6 +10,21 @@ import type {
   RuntimeSettings,
 } from "../shared/types";
 
+export type StorageCategory = {
+  name: string;
+  bytes: number | null;
+  files: number;
+  directories: number;
+  complete: boolean;
+  note: string;
+};
+
+export type StorageInventory = {
+  ok: boolean;
+  categories: StorageCategory[];
+  message: string;
+};
+
 export type AudioQualityReport = {
   available: boolean;
   quality: "good" | "too_quiet" | "clipping" | "noisy" | "no_signal" | "unavailable" | string;
@@ -439,6 +454,13 @@ export const runtimeApi = {
       "update_meeting_library", { change },
       { ok: false, revision: 0, projects: [], sessions: [], active_write_errors: 0,
         message: "Meeting library change could not be verified. Refresh before retrying." },
+    );
+  },
+
+  async getStorageInventory(): Promise<StorageInventory> {
+    return invokeOr<StorageInventory>(
+      "get_storage_inventory", undefined,
+      { ok: false, categories: [], message: "Storage inventory could not be verified." },
     );
   },
 
