@@ -6,18 +6,15 @@
   import { meetingControlState } from "../app/bridge/productMeetingState";
   import MeetingActivity from "../components/meeting/MeetingActivity.svelte";
   import MeetingSessionReview from "../components/meeting/MeetingSessionReview.svelte";
-  import MeetingTranscriptExport from "../components/meeting/MeetingTranscriptExport.svelte";
   import MeetingChannel from "../components/meeting/MeetingChannel.svelte";
   import type { MeetingLibrarySession } from "../app/bridge/runtimeApi";
 
   let {
     section = "live", snapshot, meetingStatus, meetingTurns, actionBusy = false, previewReadOnly = false,
-    selectedSession = null, onLibraryRefresh, onOpenSession, onMeetingAction, onRefresh, onNavigate,
+    selectedSession = null, onMeetingAction, onRefresh, onNavigate,
   }: {
-    section?: "live" | "last" | "saved" | "session";
+    section?: "live" | "last" | "session";
     selectedSession?: MeetingLibrarySession | null;
-    onLibraryRefresh?: () => void | Promise<void>;
-    onOpenSession?: (id: string) => void;
     snapshot: ProductRuntimeSnapshot;
     meetingStatus: MeetingSessionStatus | null;
     meetingTurns: MeetingCommittedTurnsSnapshot | null;
@@ -28,7 +25,6 @@
     onNavigate: (route: AppRoute) => void;
   } = $props();
 
-  let savedDeletionRevision = $state(0);
   let resumeBusy = $state(false);
   // The header and Meeting dock must read the same runtime-owned source.
   // Do not keep a separate local copy that can lag behind a preference change.
@@ -166,7 +162,7 @@
       <MeetingChannel session={selectedSession} onNotice={(message) => void onRefresh(message)} {previewReadOnly}/>
     {:else}
       <div class="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-[13px] text-[var(--ti-text-muted)]">
-        This Meeting is no longer in the saved library. Open Saved Meeting to refresh the list.
+        This Meeting is no longer available. Choose another Meeting from Recent or Projects.
       </div>
     {/if}
   {:else if section === "last"}
@@ -179,19 +175,8 @@
           The last-session review becomes available after Meeting stops. The current session is still running; choose Live Meeting to view its transcript.
         </p>
       {:else}
-        {#key savedDeletionRevision}
-          <MeetingSessionReview sessionActive={meeting.hasSession} openByDefault={true} onNotice={(message) => void onRefresh(message)} />
-        {/key}
+        <MeetingSessionReview sessionActive={meeting.hasSession} openByDefault={true} onNotice={(message) => void onRefresh(message)} />
       {/if}
-    </div>
-  {:else}
-    <p class="m-0 shrink-0 border-b border-[var(--ti-border)] px-6 py-3 text-[13px] text-[var(--ti-text-muted)]">
-      Choose a saved meeting to read, export, or delete its local archive.
-    </p>
-    <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-7">
-      <MeetingTranscriptExport hasSession={meeting.hasSession} {onOpenSession}
-        onNotice={(message) => void onRefresh(message)}
-        onDeleted={() => { savedDeletionRevision += 1; void onLibraryRefresh?.(); }} />
     </div>
   {/if}
 
