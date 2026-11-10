@@ -67,11 +67,10 @@ export function validateKeybindChord(chord: string, scope: KeybindScope): Keybin
   if (scope === "global" && modifiers.size < 2) {
     return { ok: false, reason: "Global shortcuts require two modifiers." };
   }
-  if (modifiers.has("Meta") && key === "L") {
-    return { ok: false, reason: "Reserved Windows shortcut." };
-  }
-  if (modifiers.has("Ctrl") && modifiers.has("Alt") && key === "Delete") {
-    return { ok: false, reason: "Reserved Windows shortcut." };
+  if ((modifiers.has("Alt") && key === "F4") ||
+      (modifiers.has("Ctrl") && modifiers.has("Shift") && key === "Escape") ||
+      (modifiers.has("Meta") && ["D", "E", "L", "R"].includes(key))) {
+    return { ok: false, reason: "Reserved operating-system shortcut." };
   }
   return {
     ok: true,
