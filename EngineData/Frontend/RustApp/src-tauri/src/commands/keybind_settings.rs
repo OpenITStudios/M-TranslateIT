@@ -80,19 +80,28 @@ fn read_file(path: &Path) -> Result<Configuration, String> {
     validate_inert(&config).map_err(str::to_string)?;
     Ok(config)
 }
+fn transaction_artifact_present(path: &Path) -> bool {
+    [path.with_extension("json.bak"), path.with_extension("json.tmp")]
+        .iter()
+        // symlink_metadata detects dangling links that Path::exists misses.
+        .any(|artifact| fs::symlink_metadata(artifact).is_ok())
+}
+
 fn read_locked(path: &Path) -> KeybindSettingsResult {
+    // A valid primary is not sufficient evidence that a previous save finished.
+    // Never report clean success while backup/temporary artifacts remain.
+    if transaction_artifact_present(path) {
+        return KeybindSettingsResult {
+            ok: false, configuration: None,
+            message: "An interrupted keybind settings transaction requires recovery; no shortcuts were activated.".into(),
+        };
+    }
     match read_file(path) {
         Ok(configuration) => KeybindSettingsResult { ok: true, configuration: Some(configuration), message: "Saved keybind preferences verified. Shortcuts remain unassigned.".into() },
         Err(_) if matches!(fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound) => {
             // Missing primary is only a clean default when no incomplete/backup
             // transaction exists. Never overwrite uncertain persisted state.
-            let backup = path.with_extension("json.bak");
-            let temp = path.with_extension("json.tmp");
-            if backup.exists() || temp.exists() {
-                KeybindSettingsResult { ok: false, configuration: None, message: "Keybind settings recovery is required; no shortcuts were activated.".into() }
-            } else {
-                KeybindSettingsResult { ok: true, configuration: Some(defaults()), message: "No saved keybind preferences; all shortcuts are unassigned.".into() }
-            }
+            KeybindSettingsResult { ok: true, configuration: Some(defaults()), message: "No saved keybind preferences; all shortcuts are unassigned.".into() }
         }
         Err(message) => KeybindSettingsResult { ok: false, configuration: None, message },
     }
@@ -126,7 +135,7 @@ pub fn save_keybind_settings(configuration: Configuration) -> KeybindSettingsRes
         if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
         let temp = path.with_extension("json.tmp");
         let backup = path.with_extension("json.bak");
-        if fs::symlink_metadata(&temp).is_ok() || fs::symlink_metadata(&backup).is_ok() {
+        if transaction_artifact_present(&path) {
             return Err(std::io::Error::other("unfinished keybind transaction"));
         }
         // No destructive replacement: preserve the last committed primary if
@@ -143,7 +152,8 @@ pub fn save_keybind_settings(configuration: Configuration) -> KeybindSettingsRes
                 // backup intact; next read reports recovery required.
                 return Err(error);
             }
-            let _ = fs::remove_file(backup);
+            // Failed cleanup must not be reported as a successful transaction.
+            fs::remove_file(backup)?;
         } else {
             fs::rename(&temp, &path)?;
         }
@@ -165,6 +175,16 @@ mod tests {
         let mut config = defaults();
         config.assignments[0].chord = Some("Ctrl+Shift+M".into());
         assert!(validate_inert(&config).is_err());
+    }
+    #[test]
+    fn interrupted_transaction_is_not_reported_as_saved() {
+        let root = std::env::temp_dir().join(format!("translateit-keybind-interrupted-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("keybind_preferences_v1.json");
+        fs::write(&path, serde_json::to_vec(&defaults()).unwrap()).unwrap();
+        fs::write(path.with_extension("json.tmp"), b"partial").unwrap();
+        assert!(!read_locked(&path).ok);
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn unknown_action_is_rejected() {
