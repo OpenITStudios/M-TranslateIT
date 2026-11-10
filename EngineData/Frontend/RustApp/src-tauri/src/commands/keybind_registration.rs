@@ -97,8 +97,10 @@ pub fn apply_registration_transaction<R: ShortcutRegistrar, S: ShortcutPreferenc
     let mut acquired: Vec<&str> = Vec::new();
     for chord in &plan.acquire {
         if registrar.acquire(chord).is_err() {
-            let rollback_failed = acquired.iter().rev()
-                .any(|registered| registrar.release(registered).is_err());
+            let mut rollback_failed = false;
+            for registered in acquired.iter().rev() {
+                if registrar.release(registered).is_err() { rollback_failed = true; }
+            }
             return Err(if rollback_failed { RegistrationError::RollbackFailed } else { RegistrationError::AcquireFailed });
         }
         acquired.push(chord);
@@ -153,6 +155,62 @@ mod tests {
             self.active.remove(chord);
             Ok(())
         }
+    }
+    #[derive(Default)]
+    struct FakeStore {
+        fail_persist: bool,
+        fail_restore: bool,
+        persisted: bool,
+    }
+    impl ShortcutPreferenceStore for FakeStore {
+        fn persist_candidate(&mut self) -> Result<(), ()> {
+            if self.fail_persist { return Err(()); }
+            self.persisted = true;
+            Ok(())
+        }
+        fn restore_previous(&mut self) -> Result<(), ()> {
+            if self.fail_restore { return Err(()); }
+            self.persisted = false;
+            Ok(())
+        }
+    }
+    #[test]
+    fn transaction_commits_and_releases_old_chord() {
+        let plan = plan_registration(&["Ctrl+Alt+S".into()], &["Ctrl+Shift+M".into()]).unwrap();
+        let mut fake = Fake::default();
+        fake.active.insert("Ctrl+Alt+S".into());
+        let mut store = FakeStore::default();
+        assert_eq!(apply_registration_transaction(&mut fake, &mut store, &plan), Ok(()));
+        assert_eq!(fake.active, BTreeSet::from(["Ctrl+Shift+M".into()]));
+        assert!(store.persisted);
+    }
+    #[test]
+    fn persistence_failure_rolls_back_new_chord() {
+        let plan = plan_registration(&["Ctrl+Alt+S".into()], &["Ctrl+Shift+M".into()]).unwrap();
+        let mut fake = Fake::default();
+        fake.active.insert("Ctrl+Alt+S".into());
+        let mut store = FakeStore { fail_persist: true, ..FakeStore::default() };
+        assert_eq!(apply_registration_transaction(&mut fake, &mut store, &plan), Err(RegistrationError::PersistenceFailed));
+        assert_eq!(fake.active, BTreeSet::from(["Ctrl+Alt+S".into()]));
+        assert!(!store.persisted);
+    }
+    #[test]
+    fn release_failure_restores_previous_registration_and_disk_state() {
+        let plan = plan_registration(&["Ctrl+Alt+S".into()], &["Ctrl+Shift+M".into()]).unwrap();
+        let mut fake = Fake::default();
+        fake.active.insert("Ctrl+Alt+S".into());
+        fake.fail_release = Some("Ctrl+Alt+S".into());
+        let mut store = FakeStore::default();
+        assert_eq!(apply_registration_transaction(&mut fake, &mut store, &plan), Err(RegistrationError::ReleaseFailed));
+        assert_eq!(fake.active, BTreeSet::from(["Ctrl+Alt+S".into()]));
+        assert!(!store.persisted);
+    }
+    #[test]
+    fn failed_disk_rollback_is_reported_as_degraded() {
+        let plan = plan_registration(&[], &["Ctrl+Shift+M".into()]).unwrap();
+        let mut fake = Fake::default();
+        let mut store = FakeStore { fail_persist: true, fail_restore: true, persisted: false };
+        assert_eq!(apply_registration_transaction(&mut fake, &mut store, &plan), Err(RegistrationError::RollbackFailed));
     }
     #[test]
     fn unchanged_chords_do_not_reacquire() {
