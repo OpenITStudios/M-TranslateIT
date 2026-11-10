@@ -115,6 +115,47 @@ pub fn load_keybind_settings() -> KeybindSettingsResult {
     read_locked(&config_path())
 }
 
+/// Explicit recovery never trusts an unfinished temporary write.
+/// Prefer a verified primary; otherwise restore a verified backup without
+/// deleting the backup before the replacement is confirmed.
+#[tauri::command]
+pub fn recover_keybind_settings() -> KeybindSettingsResult {
+    let Ok(_guard) = lock().lock() else {
+        return KeybindSettingsResult { ok: false, configuration: None, message: "Keybind settings are unavailable.".into() };
+    };
+    let path = config_path();
+    let backup = path.with_extension("json.bak");
+    let temp = path.with_extension("json.tmp");
+    if read_file(&path).is_err() {
+        if read_file(&backup).is_err() {
+            return KeybindSettingsResult { ok: false, configuration: None, message: "Neither primary nor backup keybind preferences could be verified; recovery was not attempted.".into() };
+        }
+        // Do not overwrite a damaged primary silently. Manual inspection is
+        // required unless the primary is verifiably missing.
+        if fs::symlink_metadata(&path).is_ok() {
+            return KeybindSettingsResult { ok: false, configuration: None, message: "Primary keybind preferences are invalid; recovery requires manual inspection.".into() };
+        }
+        if fs::copy(&backup, &path).is_err() || read_file(&path).is_err() {
+            return KeybindSettingsResult { ok: false, configuration: None, message: "Could not verify restoration of keybind preferences.".into() };
+        }
+    }
+    // Only known artifacts from this command are removed after verifying a
+    // committed primary. Refuse linked artifacts instead of following them.
+    for artifact in [&temp, &backup] {
+        match fs::symlink_metadata(artifact) {
+            Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
+                return KeybindSettingsResult { ok: false, configuration: None, message: "Untrusted keybind transaction artifact requires manual inspection.".into() };
+            }
+            Ok(_) => if fs::remove_file(artifact).is_err() {
+                return KeybindSettingsResult { ok: false, configuration: None, message: "Could not clear interrupted keybind transaction.".into() };
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return KeybindSettingsResult { ok: false, configuration: None, message: "Could not inspect interrupted keybind transaction.".into() },
+        }
+    }
+    read_locked(&path)
+}
+
 #[tauri::command]
 pub fn save_keybind_settings(configuration: Configuration) -> KeybindSettingsResult {
     if let Err(message) = validate_inert(&configuration) {
