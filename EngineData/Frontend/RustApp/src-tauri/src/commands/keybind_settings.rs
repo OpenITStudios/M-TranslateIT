@@ -272,6 +272,19 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"corrupt");
         fs::remove_dir_all(root).unwrap();
     }
+    #[cfg(unix)]
+    #[test]
+    fn recovery_rejects_linked_transaction_artifact() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!("translateit-keybind-linked-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("keybind_preferences_v1.json");
+        fs::write(&path, serde_json::to_vec(&defaults()).unwrap()).unwrap();
+        symlink(&path, path.with_extension("json.tmp")).unwrap();
+        assert!(!recover_locked(&path).ok);
+        assert!(path.with_extension("json.tmp").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn unknown_action_is_rejected() {
         let mut config = defaults();
