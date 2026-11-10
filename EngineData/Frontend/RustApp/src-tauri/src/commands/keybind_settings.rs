@@ -129,6 +129,18 @@ pub fn recover_keybind_settings() -> KeybindSettingsResult {
 fn recover_locked(path: &Path) -> KeybindSettingsResult {
     let backup = path.with_extension("json.bak");
     let temp = path.with_extension("json.tmp");
+    // Inspect both artifacts BEFORE any restoration or cleanup. A linked or
+    // unreadable artifact must never cause partial mutation of other files.
+    for artifact in [&temp, &backup] {
+        match fs::symlink_metadata(artifact) {
+            Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
+                return KeybindSettingsResult { ok: false, configuration: None, message: "Untrusted keybind transaction artifact requires manual inspection.".into() };
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return KeybindSettingsResult { ok: false, configuration: None, message: "Could not inspect interrupted keybind transaction.".into() },
+        }
+    }
     // Never accept an unreadable/linked primary as equivalent to a missing
     // primary. A permissions failure must not authorize overwriting it.
     if read_file(path).is_err() {
@@ -270,6 +282,21 @@ mod tests {
         fs::write(path.with_extension("json.bak"), serde_json::to_vec(&defaults()).unwrap()).unwrap();
         assert!(!recover_locked(&path).ok);
         assert_eq!(fs::read(&path).unwrap(), b"corrupt");
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn linked_temp_cannot_trigger_partial_backup_restoration() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!("translateit-keybind-no-partial-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("keybind_preferences_v1.json");
+        let backup = path.with_extension("json.bak");
+        fs::write(&backup, serde_json::to_vec(&defaults()).unwrap()).unwrap();
+        symlink(&backup, path.with_extension("json.tmp")).unwrap();
+        assert!(!recover_locked(&path).ok);
+        assert!(!path.exists(), "linked temp must not create primary");
+        assert!(backup.exists(), "backup must remain intact");
         fs::remove_dir_all(root).unwrap();
     }
     #[cfg(unix)]
