@@ -1,6 +1,6 @@
 //! Inert keybind configuration storage. No OS shortcut registration or dispatch.
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -63,6 +63,9 @@ fn config_path() -> PathBuf {
     PathBuf::from(ProjectPaths::discover().user_saved_dir).join("keybind_preferences_v1.json")
 }
 fn read_file(path: &Path) -> Result<Configuration, String> {
+    if fs::symlink_metadata(path).map(|meta| meta.file_type().is_symlink()).unwrap_or(false) {
+        return Err("Linked keybind settings file is not trusted.".into());
+    }
     let mut file = File::open(path).map_err(|_| "Cannot open saved keybind settings.")?;
     let metadata = file.metadata().map_err(|_| "Cannot inspect saved keybind settings.")?;
     if !metadata.is_file() || metadata.len() > MAX_BYTES {
@@ -123,13 +126,13 @@ pub fn save_keybind_settings(configuration: Configuration) -> KeybindSettingsRes
         if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
         let temp = path.with_extension("json.tmp");
         let backup = path.with_extension("json.bak");
-        if temp.exists() || backup.exists() {
+        if fs::symlink_metadata(&temp).is_ok() || fs::symlink_metadata(&backup).is_ok() {
             return Err(std::io::Error::other("unfinished keybind transaction"));
         }
         // No destructive replacement: preserve the last committed primary if
         // a platform cannot atomically replace the destination.
         {
-            let mut file = File::create(&temp)?;
+            let mut file = OpenOptions::new().write(true).create_new(true).open(&temp)?;
             file.write_all(&body)?;
             file.sync_all()?;
         }
