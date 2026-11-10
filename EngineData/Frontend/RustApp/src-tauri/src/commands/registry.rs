@@ -53,6 +53,7 @@ pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wr
         crate::commands::settings::load_runtime_settings,
         crate::commands::keybind_settings::load_keybind_settings,
         crate::commands::keybind_settings::save_keybind_settings,
+        crate::commands::keybind_settings::recover_keybind_settings,
         crate::commands::storage_inventory::get_storage_inventory,
         crate::commands::voice_lab_recording::get_voice_lab_guided_recording_state,
         crate::commands::voice_lab_recording::inspect_voice_lab_accepted_take_recovery,
