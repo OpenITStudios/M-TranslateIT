@@ -65,3 +65,18 @@ Never conflate physical microphone, incoming meeting capture, virtual translated
 4. Check viewport widths 800, 1024, 1280, 1440, 1920 and Windows scaling.
 5. Verify persistence across restart; failures must not be reported as saved.
 6. No visual PASS without screenshots; no native PASS without native test.
+
+## Keybind registration transaction (native implementation gate)
+
+Current state: `src/app/runtime/keybindPolicy.ts` is a non-executing validation policy only. `src-tauri/Cargo.toml`, `src-tauri/src/main.rs`, and `src-tauri/capabilities/default.json` do not yet configure a global shortcut plugin. Do not label a Keybinds editor functional until native hooks and persistence are implemented and verified.
+
+1. **Load:** read a versioned, bounded shortcut configuration from a dedicated native owner. Unknown actions/scopes/chords fail closed; defaults remain unassigned. Do not silently write defaults over corrupt saved configuration.
+2. **Prepare:** validate the entire candidate set, check duplicate actions and chord collisions, reject OS-reserved chords, and check action availability. A global shortcut is a capability requiring explicit native registration; a local shortcut must never be misrepresented as global.
+3. **Acquire:** attempt to register new global chords before releasing old ones where the OS permits. If acquisition fails, unregister any newly acquired chords and keep the previous working set and persisted configuration intact. For a replacement of the same chord/action, avoid double registration and define idempotent ownership.
+4. **Commit:** only persist the candidate configuration after registration succeeds; if persistence fails, roll back newly acquired registrations and restore the old set. If rollback cannot be verified, expose a degraded/unknown state rather than claiming success.
+5. **Release:** unregister old chords after the new set is committed, with explicit recovery if release fails; never execute an old and new action for one keypress.
+6. **Dispatch:** route shortcut events through the same meeting/audio resource locks as ordinary UI actions. No shortcut may bypass mute/meeting safety. Push to Talk requires key-down/key-up handling and forced release on focus loss, disconnect, or unregister.
+7. **Lifecycle:** startup registration, window recreation, app exit, sleep/wake, and OS registration loss must have deterministic cleanup/reconciliation.
+8. **Security:** no keyboard event logging, no private transcript content in shortcut diagnostics, no implicit plugin installation or permission expansion.
+
+Acceptance cases: conflicting chord, duplicate action, malformed chord, unsupported action, OS-reserved chord, registration denial, partial acquisition, persistence failure, rollback failure, active meeting lock, repeated keydown, PTT release, app restart and shutdown. Native Windows behavior remains NOT_EXECUTED until the integrated acceptance phase.
