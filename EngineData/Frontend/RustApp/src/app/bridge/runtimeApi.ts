@@ -10,6 +10,21 @@ import type {
   RuntimeSettings,
 } from "../shared/types";
 
+export type NativeKeybindAssignment = {
+  action: string;
+  scope: "local" | "global";
+  chord: string | null;
+};
+export type NativeKeybindConfiguration = {
+  version: number;
+  assignments: NativeKeybindAssignment[];
+};
+export type NativeKeybindSettingsResult = {
+  ok: boolean;
+  configuration: NativeKeybindConfiguration | null;
+  message: string;
+};
+
 export type StorageCategory = {
   name: string;
   bytes: number | null;
@@ -454,6 +469,20 @@ export const runtimeApi = {
       "update_meeting_library", { change },
       { ok: false, revision: 0, projects: [], sessions: [], active_write_errors: 0,
         message: "Meeting library change could not be verified. Refresh before retrying." },
+    );
+  },
+
+  async loadKeybindSettings(): Promise<NativeKeybindSettingsResult> {
+    return invokeOr<NativeKeybindSettingsResult>(
+      "load_keybind_settings", undefined,
+      { ok: false, configuration: null, message: "Keybind preferences could not be verified." },
+    );
+  },
+
+  async recoverKeybindSettings(): Promise<NativeKeybindSettingsResult> {
+    return invokeOr<NativeKeybindSettingsResult>(
+      "recover_keybind_settings", undefined,
+      { ok: false, configuration: null, message: "Keybind recovery could not be verified." },
     );
   },
 
