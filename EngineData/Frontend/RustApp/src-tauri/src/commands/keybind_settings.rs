@@ -80,21 +80,30 @@ fn read_file(path: &Path) -> Result<Configuration, String> {
     validate_inert(&config).map_err(str::to_string)?;
     Ok(config)
 }
-fn transaction_artifact_present(path: &Path) -> bool {
-    [path.with_extension("json.bak"), path.with_extension("json.tmp")]
-        .iter()
-        // symlink_metadata detects dangling links that Path::exists misses.
-        .any(|artifact| fs::symlink_metadata(artifact).is_ok())
+fn transaction_artifact_status(path: &Path) -> Result<bool, String> {
+    let mut present = false;
+    for artifact in [path.with_extension("json.bak"), path.with_extension("json.tmp")] {
+        match fs::symlink_metadata(&artifact) {
+            Ok(_) => present = true, // Includes dangling symlinks.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err("Keybind transaction artifacts could not be inspected.".into()),
+        }
+    }
+    Ok(present)
 }
 
 fn read_locked(path: &Path) -> KeybindSettingsResult {
     // A valid primary is not sufficient evidence that a previous save finished.
     // Never report clean success while backup/temporary artifacts remain.
-    if transaction_artifact_present(path) {
-        return KeybindSettingsResult {
+    match transaction_artifact_status(path) {
+        Ok(false) => {}
+        Ok(true) => return KeybindSettingsResult {
             ok: false, configuration: None,
             message: "An interrupted keybind settings transaction requires recovery; no shortcuts were activated.".into(),
-        };
+        },
+        Err(message) => return KeybindSettingsResult {
+            ok: false, configuration: None, message,
+        },
     }
     match read_file(path) {
         Ok(configuration) => KeybindSettingsResult { ok: true, configuration: Some(configuration), message: "Saved keybind preferences verified. Shortcuts remain unassigned.".into() },
@@ -200,7 +209,9 @@ pub fn save_keybind_settings(configuration: Configuration) -> KeybindSettingsRes
         if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
         let temp = path.with_extension("json.tmp");
         let backup = path.with_extension("json.bak");
-        if transaction_artifact_present(&path) {
+        if transaction_artifact_status(&path)
+            .map_err(std::io::Error::other)?
+        {
             return Err(std::io::Error::other("unfinished keybind transaction"));
         }
         // No destructive replacement: preserve the last committed primary if
