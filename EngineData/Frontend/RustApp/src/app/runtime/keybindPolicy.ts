@@ -109,3 +109,74 @@ export function checkKeybindAssignments(assignments: readonly KeybindAssignment[
 export const DEFAULT_KEYBINDS: readonly KeybindAssignment[] = KEYBIND_ACTIONS.map((action) => ({
   action, scope: "local", chord: null,
 }));
+
+/**
+ * Versioned configuration boundary. This only validates and serializes data;
+ * it neither persists nor registers shortcuts.
+ */
+export const KEYBIND_CONFIG_VERSION = 1;
+export type KeybindConfiguration = {
+  version: typeof KEYBIND_CONFIG_VERSION;
+  assignments: KeybindAssignment[];
+};
+export type KeybindConfigurationResult =
+  | { ok: true; configuration: KeybindConfiguration }
+  | { ok: false; reason: string };
+
+export function parseKeybindConfiguration(raw: unknown): KeybindConfigurationResult {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, reason: "Configuration must be an object." };
+  }
+  const record = raw as Record<string, unknown>;
+  if (record.version !== KEYBIND_CONFIG_VERSION ||
+      Object.keys(record).sort().join(",") !== "assignments,version") {
+    return { ok: false, reason: "Unsupported configuration version or fields." };
+  }
+  if (!Array.isArray(record.assignments) || record.assignments.length !== KEYBIND_ACTIONS.length) {
+    return { ok: false, reason: "Expected exactly one assignment per supported action." };
+  }
+  const knownActions = new Set<string>(KEYBIND_ACTIONS);
+  const normalized: KeybindAssignment[] = [];
+  for (const value of record.assignments) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      return { ok: false, reason: "Invalid assignment." };
+    }
+    const item = value as Record<string, unknown>;
+    if (Object.keys(item).sort().join(",") !== "action,chord,scope" ||
+        typeof item.action !== "string" || !knownActions.has(item.action) ||
+        (item.scope !== "local" && item.scope !== "global") ||
+        (item.chord !== null && typeof item.chord !== "string")) {
+      return { ok: false, reason: "Unsupported action, scope, chord, or assignment fields." };
+    }
+    const action = item.action as KeybindAction;
+    const scope = item.scope as KeybindScope;
+    const chord = item.chord as string | null;
+    if (chord === null) {
+      normalized.push({ action, scope, chord: null });
+      continue;
+    }
+    const checked = validateKeybindChord(chord, scope);
+    if (!checked.ok) return { ok: false, reason: `${action}: ${checked.reason}` };
+    normalized.push({ action, scope, chord: checked.normalized });
+  }
+  const issues = checkKeybindAssignments(normalized);
+  if (issues.length) return { ok: false, reason: issues[0] };
+  const actions = new Set(normalized.map((item) => item.action));
+  if (actions.size !== KEYBIND_ACTIONS.length) {
+    return { ok: false, reason: "Duplicate or missing action." };
+  }
+  // Stable canonical ordering ensures deterministic persistence payloads.
+  return {
+    ok: true,
+    configuration: {
+      version: KEYBIND_CONFIG_VERSION,
+      assignments: KEYBIND_ACTIONS.map((action) => normalized.find((item) => item.action === action)!),
+    },
+  };
+}
+
+export function serializeKeybindConfiguration(raw: unknown): KeybindConfigurationResult & { json?: string } {
+  const checked = parseKeybindConfiguration(raw);
+  if (!checked.ok) return checked;
+  return { ...checked, json: JSON.stringify(checked.configuration) };
+}
