@@ -123,19 +123,31 @@ pub fn recover_keybind_settings() -> KeybindSettingsResult {
     let Ok(_guard) = lock().lock() else {
         return KeybindSettingsResult { ok: false, configuration: None, message: "Keybind settings are unavailable.".into() };
     };
-    let path = config_path();
+    recover_locked(&config_path())
+}
+
+fn recover_locked(path: &Path) -> KeybindSettingsResult {
     let backup = path.with_extension("json.bak");
     let temp = path.with_extension("json.tmp");
-    if read_file(&path).is_err() {
+    // Never accept an unreadable/linked primary as equivalent to a missing
+    // primary. A permissions failure must not authorize overwriting it.
+    if read_file(path).is_err() {
         if read_file(&backup).is_err() {
             return KeybindSettingsResult { ok: false, configuration: None, message: "Neither primary nor backup keybind preferences could be verified; recovery was not attempted.".into() };
         }
         // Do not overwrite a damaged primary silently. Manual inspection is
         // required unless the primary is verifiably missing.
-        if fs::symlink_metadata(&path).is_ok() {
-            return KeybindSettingsResult { ok: false, configuration: None, message: "Primary keybind preferences are invalid; recovery requires manual inspection.".into() };
+        if !matches!(fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound) {
+            return KeybindSettingsResult { ok: false, configuration: None, message: "Primary keybind preferences are invalid or inaccessible; recovery requires manual inspection.".into() };
         }
-        if fs::copy(&backup, &path).is_err() || read_file(&path).is_err() {
+        // Do not allow restoration to follow a link at the destination.
+        let restored = (|| -> std::io::Result<()> {
+            let mut source = File::open(&backup)?;
+            let mut target = OpenOptions::new().write(true).create_new(true).open(path)?;
+            std::io::copy(&mut source, &mut target)?;
+            target.sync_all()
+        })();
+        if restored.is_err() || read_file(path).is_err() {
             return KeybindSettingsResult { ok: false, configuration: None, message: "Could not verify restoration of keybind preferences.".into() };
         }
     }
@@ -153,7 +165,7 @@ pub fn recover_keybind_settings() -> KeybindSettingsResult {
             Err(_) => return KeybindSettingsResult { ok: false, configuration: None, message: "Could not inspect interrupted keybind transaction.".into() },
         }
     }
-    read_locked(&path)
+    read_locked(path)
 }
 
 #[tauri::command]
@@ -225,6 +237,39 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&defaults()).unwrap()).unwrap();
         fs::write(path.with_extension("json.tmp"), b"partial").unwrap();
         assert!(!read_locked(&path).ok);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn recovery_clears_only_verified_transaction_artifacts() {
+        let root = std::env::temp_dir().join(format!("translateit-keybind-recovery-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("keybind_preferences_v1.json");
+        fs::write(&path, serde_json::to_vec(&defaults()).unwrap()).unwrap();
+        fs::write(path.with_extension("json.tmp"), b"partial").unwrap();
+        assert!(!read_locked(&path).ok);
+        assert!(recover_locked(&path).ok);
+        assert!(read_locked(&path).ok);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn recovery_restores_missing_primary_from_valid_backup() {
+        let root = std::env::temp_dir().join(format!("translateit-keybind-backup-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("keybind_preferences_v1.json");
+        fs::write(path.with_extension("json.bak"), serde_json::to_vec(&defaults()).unwrap()).unwrap();
+        assert!(recover_locked(&path).ok);
+        assert!(read_locked(&path).ok);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn invalid_primary_is_not_overwritten() {
+        let root = std::env::temp_dir().join(format!("translateit-keybind-invalid-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("keybind_preferences_v1.json");
+        fs::write(&path, b"corrupt").unwrap();
+        fs::write(path.with_extension("json.bak"), serde_json::to_vec(&defaults()).unwrap()).unwrap();
+        assert!(!recover_locked(&path).ok);
+        assert_eq!(fs::read(&path).unwrap(), b"corrupt");
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
