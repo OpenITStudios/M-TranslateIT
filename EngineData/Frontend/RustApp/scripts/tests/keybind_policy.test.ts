@@ -24,9 +24,24 @@ test("normalizes modifiers and detects equivalent conflicting shortcuts", () => 
 });
 
 test("rejects missing modifiers, unsupported keys and reserved combinations", () => {
-  for (const chord of ["M", "Ctrl+Ctrl+M", "Ctrl+Shift+M+N", "Alt+F4", "Ctrl+Shift+Escape", "Meta+L"]) {
+  for (const chord of ["M", "Ctrl+Ctrl+M", "Ctrl++M", "Ctrl+Shift+M+N", "Alt+F4", "Ctrl+Shift+Escape", "Meta+L", "Ctrl+Alt+Delete"]) {
     assert.equal(validateKeybindChord(chord, "local").ok, false, chord);
   }
   assert.equal(validateKeybindChord("Ctrl+M", "global").ok, false);
   assert.equal(validateKeybindChord("Ctrl+Alt+M", "global").ok, true);
+});
+
+test("duplicate action assignments are rejected even when chords differ", () => {
+  const issues = checkKeybindAssignments([
+    { action: "toggle-microphone", scope: "local", chord: "Ctrl+Shift+M" },
+    { action: "toggle-microphone", scope: "local", chord: "Ctrl+Alt+M" },
+  ]);
+  assert.equal(issues.length, 1);
+  assert.match(issues[0], /duplicate action/);
+});
+
+test("invalid assignments never claim successful normalization", () => {
+  for (const chord of ["+Ctrl+M", "Ctrl+M+", "Ctrl++M", "Ctrl+Ctrl+M"]) {
+    assert.equal(validateKeybindChord(chord, "local").ok, false);
+  }
 });
