@@ -43,7 +43,10 @@ export type KeybindValidation =
   | { ok: false; reason: string };
 
 export function validateKeybindChord(chord: string, scope: KeybindScope): KeybindValidation {
-  const parts = chord.split("+").map((part) => part.trim()).filter(Boolean);
+  const parts = chord.split("+").map((part) => part.trim());
+  if (parts.some((part) => !part)) {
+    return { ok: false, reason: "Empty shortcut key or modifier." };
+  }
   if (parts.length < 2 || parts.length > 5) {
     return { ok: false, reason: "Use one key with at least one modifier." };
   }
@@ -68,6 +71,7 @@ export function validateKeybindChord(chord: string, scope: KeybindScope): Keybin
     return { ok: false, reason: "Global shortcuts require two modifiers." };
   }
   if ((modifiers.has("Alt") && key === "F4") ||
+      (modifiers.has("Ctrl") && modifiers.has("Alt") && key === "Delete") ||
       (modifiers.has("Ctrl") && modifiers.has("Shift") && key === "Escape") ||
       (modifiers.has("Meta") && ["D", "E", "L", "R"].includes(key))) {
     return { ok: false, reason: "Reserved operating-system shortcut." };
@@ -81,7 +85,13 @@ export function validateKeybindChord(chord: string, scope: KeybindScope): Keybin
 export function checkKeybindAssignments(assignments: readonly KeybindAssignment[]): string[] {
   const issues: string[] = [];
   const seen = new Map<string, KeybindAction>();
+  const assignedActions = new Set<KeybindAction>();
   for (const assignment of assignments) {
+    if (assignedActions.has(assignment.action)) {
+      issues.push(`${assignment.action}: duplicate action assignment`);
+      continue;
+    }
+    assignedActions.add(assignment.action);
     if (assignment.chord === null) continue;
     const validation = validateKeybindChord(assignment.chord, assignment.scope);
     if (!validation.ok) {
