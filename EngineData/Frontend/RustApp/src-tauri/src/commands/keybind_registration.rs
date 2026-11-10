@@ -135,6 +135,81 @@ pub fn apply_registration_transaction<R: ShortcutRegistrar, S: ShortcutPreferenc
     Ok(())
 }
 
+/// A fail-closed ownership state for a future OS adapter. This type does
+/// not register real shortcuts or authorize dispatch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RegistrationState {
+    Unassigned,
+    Active(BTreeSet<String>),
+    Degraded,
+}
+
+pub struct RegistrationLifecycle {
+    state: RegistrationState,
+}
+
+impl RegistrationLifecycle {
+    pub fn new() -> Self {
+        Self { state: RegistrationState::Unassigned }
+    }
+
+    pub fn state(&self) -> &RegistrationState { &self.state }
+
+    /// Caller must serialize all operations and suspend event dispatch while
+    /// this method runs. No operation is allowed after uncertain rollback.
+    pub fn apply<R: ShortcutRegistrar, S: ShortcutPreferenceStore>(
+        &mut self,
+        registrar: &mut R,
+        store: &mut S,
+        candidate: &[String],
+    ) -> Result<(), RegistrationError> {
+        let current: Vec<String> = match &self.state {
+            RegistrationState::Unassigned => Vec::new(),
+            RegistrationState::Active(chords) => chords.iter().cloned().collect(),
+            RegistrationState::Degraded => return Err(RegistrationError::RollbackFailed),
+        };
+        let plan = plan_registration(&current, candidate)?;
+        match apply_registration_transaction(registrar, store, &plan) {
+            Ok(()) => {
+                let active = checked_set(candidate)?;
+                self.state = if active.is_empty() {
+                    RegistrationState::Unassigned
+                } else {
+                    RegistrationState::Active(active)
+                };
+                Ok(())
+            }
+            Err(error) => {
+                if error == RegistrationError::RollbackFailed {
+                    self.state = RegistrationState::Degraded;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Shutdown cleanup only reports success when every release succeeded.
+    /// On failure, state becomes Degraded and no later action is admitted.
+    pub fn shutdown<R: ShortcutRegistrar>(&mut self, registrar: &mut R) -> Result<(), RegistrationError> {
+        let current = match &self.state {
+            RegistrationState::Unassigned => return Ok(()),
+            RegistrationState::Active(chords) => chords.clone(),
+            RegistrationState::Degraded => return Err(RegistrationError::RollbackFailed),
+        };
+        let mut failed = false;
+        for chord in &current {
+            if registrar.release(chord).is_err() { failed = true; }
+        }
+        if failed {
+            self.state = RegistrationState::Degraded;
+            Err(RegistrationError::ReleaseFailed)
+        } else {
+            self.state = RegistrationState::Unassigned;
+            Ok(())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,6 +248,36 @@ mod tests {
             self.persisted = false;
             Ok(())
         }
+    }
+    #[test]
+    fn lifecycle_blocks_new_transactions_after_rollback_failure() {
+        let mut lifecycle = RegistrationLifecycle::new();
+        let mut registrar = Fake::default();
+        let mut store = FakeStore { fail_persist: true, fail_restore: true, ..FakeStore::default() };
+        assert_eq!(lifecycle.apply(&mut registrar, &mut store, &["Ctrl+Shift+M".into()]), Err(RegistrationError::RollbackFailed));
+        assert_eq!(lifecycle.state(), &RegistrationState::Degraded);
+        let mut fresh = FakeStore::default();
+        assert_eq!(lifecycle.apply(&mut registrar, &mut fresh, &[]), Err(RegistrationError::RollbackFailed));
+    }
+    #[test]
+    fn lifecycle_shutdown_releases_owned_chords() {
+        let mut lifecycle = RegistrationLifecycle::new();
+        let mut registrar = Fake::default();
+        let mut store = FakeStore::default();
+        lifecycle.apply(&mut registrar, &mut store, &["Ctrl+Shift+M".into()]).unwrap();
+        assert_eq!(lifecycle.shutdown(&mut registrar), Ok(()));
+        assert!(registrar.active.is_empty());
+        assert_eq!(lifecycle.state(), &RegistrationState::Unassigned);
+    }
+    #[test]
+    fn lifecycle_shutdown_failure_is_degraded() {
+        let mut lifecycle = RegistrationLifecycle::new();
+        let mut registrar = Fake::default();
+        let mut store = FakeStore::default();
+        lifecycle.apply(&mut registrar, &mut store, &["Ctrl+Shift+M".into()]).unwrap();
+        registrar.fail_release = Some("Ctrl+Shift+M".into());
+        assert_eq!(lifecycle.shutdown(&mut registrar), Err(RegistrationError::ReleaseFailed));
+        assert_eq!(lifecycle.state(), &RegistrationState::Degraded);
     }
     #[test]
     fn transaction_commits_and_releases_old_chord() {
