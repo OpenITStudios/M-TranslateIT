@@ -29,6 +29,25 @@ fn measure(name: &'static str, root: &Path, excluded: Option<&Path>) -> StorageC
     };
     // Canonicalize the owned root once. A missing root is empty; an unreadable
     // root is unknown, not zero. Canonical checks also reject Windows junctions.
+    // Do not silently trust a replaced root that points outside app-owned data.
+    // In particular, canonicalizing a symlink root would otherwise bless its
+    // external target as the new ownership boundary.
+    match fs::symlink_metadata(root) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            result.complete = false;
+            result.bytes = None;
+            result.note = "Storage root is linked; ownership could not be verified.".into();
+            return result;
+        }
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return result,
+        Err(_) => {
+            result.complete = false;
+            result.bytes = None;
+            result.note = "Storage root metadata could not be verified.".into();
+            return result;
+        }
+    }
     let owned_root = match fs::canonicalize(root) {
         Ok(path) => path,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return result,
@@ -161,6 +180,17 @@ mod tests {
         assert_eq!(result.files, 1);
         assert_eq!(result.bytes, Some(3));
         let _ = fs::remove_dir_all(root);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn linked_root_is_not_trusted() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!("translateit-inventory-root-link-{}", std::process::id()));
+        symlink(std::env::temp_dir(), &root).unwrap();
+        let result = measure("linked-root", &root, None);
+        assert!(!result.complete);
+        assert_eq!(result.bytes, None);
+        let _ = fs::remove_file(root);
     }
     #[cfg(unix)]
     #[test]
