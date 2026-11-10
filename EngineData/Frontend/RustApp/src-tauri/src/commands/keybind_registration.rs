@@ -206,6 +206,20 @@ mod tests {
         assert!(!store.persisted);
     }
     #[test]
+    fn partial_old_release_failure_reacquires_already_released_chords() {
+        let plan = plan_registration(
+            &["Ctrl+Alt+A".into(), "Ctrl+Alt+B".into()],
+            &["Ctrl+Shift+M".into()],
+        ).unwrap();
+        let mut fake = Fake::default();
+        fake.active.extend(["Ctrl+Alt+A".into(), "Ctrl+Alt+B".into()]);
+        fake.fail_release = Some("Ctrl+Alt+B".into());
+        let mut store = FakeStore::default();
+        assert_eq!(apply_registration_transaction(&mut fake, &mut store, &plan), Err(RegistrationError::ReleaseFailed));
+        assert_eq!(fake.active, BTreeSet::from(["Ctrl+Alt+A".into(), "Ctrl+Alt+B".into()]));
+        assert!(!store.persisted);
+    }
+    #[test]
     fn failed_disk_rollback_is_reported_as_degraded() {
         let plan = plan_registration(&[], &["Ctrl+Shift+M".into()]).unwrap();
         let mut fake = Fake::default();
