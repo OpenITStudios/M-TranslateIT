@@ -60,7 +60,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
   let selectedSurface = $state<"recent" | "project">("recent");
   let library = $state<MeetingLibrary | null>(null);
   let libraryBusy = $state(false);
-  let settingsTab = $state<"meeting" | "translation" | "saved-data" | "appearance" | "advanced">("meeting");
+  let settingsTab = $state<"meeting" | "translation" | "keybinds" | "saved-data" | "appearance" | "advanced">("meeting");
   let muteBusy = $state(false);
   let voiceSelectionRevision = $state(0);
   let notice = $state<AppNotice>(appNotice("Getting TranslateIT ready...", "progress"));
