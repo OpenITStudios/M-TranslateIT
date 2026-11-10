@@ -4,6 +4,9 @@ import {
   DEFAULT_KEYBINDS,
   checkKeybindAssignments,
   validateKeybindChord,
+  KEYBIND_CONFIG_VERSION,
+  parseKeybindConfiguration,
+  serializeKeybindConfiguration,
 } from "../../src/app/runtime/keybindPolicy.ts";
 
 test("all shortcuts are unassigned by default", () => {
@@ -43,5 +46,36 @@ test("duplicate action assignments are rejected even when chords differ", () => 
 test("invalid assignments never claim successful normalization", () => {
   for (const chord of ["+Ctrl+M", "Ctrl+M+", "Ctrl++M", "Ctrl+Ctrl+M"]) {
     assert.equal(validateKeybindChord(chord, "local").ok, false);
+  }
+});
+
+test("versioned configuration roundtrips with canonical ordering", () => {
+  const input = {
+    version: KEYBIND_CONFIG_VERSION,
+    assignments: [...DEFAULT_KEYBINDS].reverse().map((item) =>
+      item.action === "toggle-microphone" ? { ...item, chord: "shift+ctrl+m" } : item),
+  };
+  const result = serializeKeybindConfiguration(input);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.configuration.assignments[0].chord, "Ctrl+Shift+M");
+  const decoded = parseKeybindConfiguration(JSON.parse(result.json!));
+  assert.deepEqual(decoded, { ok: true, configuration: result.configuration });
+});
+
+test("configuration rejects unknown fields, duplicate actions and invalid scopes", () => {
+  const base = { version: KEYBIND_CONFIG_VERSION, assignments: [...DEFAULT_KEYBINDS] };
+  for (const invalid of [
+    { ...base, version: 2 },
+    { ...base, secret: "unexpected" },
+    { ...base, assignments: base.assignments.slice(1) },
+    { ...base, assignments: base.assignments.map((item, index) =>
+      index === 1 ? { ...item, action: "toggle-microphone" } : item) },
+    { ...base, assignments: base.assignments.map((item, index) =>
+      index === 0 ? { ...item, scope: "remote" } : item) },
+    { ...base, assignments: base.assignments.map((item, index) =>
+      index === 0 ? { ...item, chord: "Ctrl++M" } : item) },
+  ]) {
+    assert.equal(parseKeybindConfiguration(invalid).ok, false);
   }
 });
