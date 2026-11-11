@@ -146,14 +146,20 @@ pub enum RegistrationState {
 
 pub struct RegistrationLifecycle {
     state: RegistrationState,
+    dispatch_suspended: bool,
 }
 
 impl RegistrationLifecycle {
     pub fn new() -> Self {
-        Self { state: RegistrationState::Unassigned }
+        Self { state: RegistrationState::Unassigned, dispatch_suspended: false }
     }
 
     pub fn state(&self) -> &RegistrationState { &self.state }
+    /// This is a model gate only; real dispatch must also check audio locks.
+    pub fn can_dispatch(&self, chord: &str) -> bool {
+        !self.dispatch_suspended
+            && matches!(&self.state, RegistrationState::Active(chords) if chords.contains(chord))
+    }
 
     /// Caller must serialize all operations and suspend event dispatch while
     /// this method runs. No operation is allowed after uncertain rollback.
@@ -169,6 +175,7 @@ impl RegistrationLifecycle {
             RegistrationState::Degraded => return Err(RegistrationError::RollbackFailed),
         };
         let plan = plan_registration(&current, candidate)?;
+        self.dispatch_suspended = true;
         match apply_registration_transaction(registrar, store, &plan) {
             Ok(()) => {
                 let active = checked_set(candidate)?;
@@ -177,11 +184,14 @@ impl RegistrationLifecycle {
                 } else {
                     RegistrationState::Active(active)
                 };
+                self.dispatch_suspended = false;
                 Ok(())
             }
             Err(error) => {
                 if error == RegistrationError::RollbackFailed {
                     self.state = RegistrationState::Degraded;
+                } else {
+                    self.dispatch_suspended = false;
                 }
                 Err(error)
             }
@@ -191,8 +201,9 @@ impl RegistrationLifecycle {
     /// Shutdown cleanup only reports success when every release succeeded.
     /// On failure, state becomes Degraded and no later action is admitted.
     pub fn shutdown<R: ShortcutRegistrar>(&mut self, registrar: &mut R) -> Result<(), RegistrationError> {
+        self.dispatch_suspended = true;
         let current = match &self.state {
-            RegistrationState::Unassigned => return Ok(()),
+            RegistrationState::Unassigned => { self.dispatch_suspended = false; return Ok(()); },
             RegistrationState::Active(chords) => chords.clone(),
             RegistrationState::Degraded => return Err(RegistrationError::RollbackFailed),
         };
@@ -205,6 +216,7 @@ impl RegistrationLifecycle {
             Err(RegistrationError::ReleaseFailed)
         } else {
             self.state = RegistrationState::Unassigned;
+            self.dispatch_suspended = false;
             Ok(())
         }
     }
@@ -258,6 +270,20 @@ mod tests {
         assert_eq!(lifecycle.state(), &RegistrationState::Degraded);
         let mut fresh = FakeStore::default();
         assert_eq!(lifecycle.apply(&mut registrar, &mut fresh, &[]), Err(RegistrationError::RollbackFailed));
+    }
+    #[test]
+    fn dispatch_requires_owned_active_chord_and_blocks_after_rollback_failure() {
+        let mut lifecycle = RegistrationLifecycle::new();
+        let mut registrar = Fake::default();
+        let mut store = FakeStore::default();
+        assert!(!lifecycle.can_dispatch("Ctrl+Shift+M"));
+        lifecycle.apply(&mut registrar, &mut store, &["Ctrl+Shift+M".into()]).unwrap();
+        assert!(lifecycle.can_dispatch("Ctrl+Shift+M"));
+        assert!(!lifecycle.can_dispatch("Ctrl+Shift+X"));
+        let mut broken = FakeStore { fail_persist: true, fail_restore: true, ..FakeStore::default() };
+        assert_eq!(lifecycle.apply(&mut registrar, &mut broken, &["Ctrl+Shift+X".into()]), Err(RegistrationError::RollbackFailed));
+        assert!(!lifecycle.can_dispatch("Ctrl+Shift+M"));
+        assert!(!lifecycle.can_dispatch("Ctrl+Shift+X"));
     }
     #[test]
     fn lifecycle_shutdown_releases_owned_chords() {
