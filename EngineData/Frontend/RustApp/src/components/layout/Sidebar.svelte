@@ -79,16 +79,16 @@
 
   <nav class="ti-primary-navigation min-h-0 flex-1 overflow-y-auto px-2.5 py-4" aria-label="Workspace navigation">
     {#if active === "settings"}
-      <button type="button" class="ti-channel-item mb-4 w-full" onclick={() => onMeetingSection("live")}>
+      <button type="button" class="ti-channel-item mb-5 w-full" aria-label="Back to Live Meeting" onclick={() => onMeetingSection("live")}>
         <ArrowLeft size={17} aria-hidden="true" />
         <span>Back to Meeting</span>
       </button>
-      <p class="ti-channel-heading">USER SETTINGS</p>
+      <p class="ti-channel-heading mb-2 px-2 text-[11px] font-semibold uppercase tracking-[0.09em]">USER SETTINGS</p>
       {#each settingItems as item}
         {@const Icon = item.icon}
-        <button type="button" class={"ti-channel-item w-full " + (settingsTab === item.id ? "is-active" : "")}
+        <button type="button" class={"ti-channel-item mb-0.5 min-h-10 w-full rounded-[var(--ti-radius-md)] transition-colors " + (settingsTab === item.id ? "is-active" : "")}
           aria-current={settingsTab === item.id ? "page" : undefined}
-          aria-label={item.label} onclick={() => onSettingsTab(item.id)}>
+          aria-label={item.label} aria-controls="settings-category-panel" onclick={() => onSettingsTab(item.id)}>
           <Icon size={18} strokeWidth={1.8} aria-hidden="true" />
           <span class="truncate">{item.label}</span>
         </button>
