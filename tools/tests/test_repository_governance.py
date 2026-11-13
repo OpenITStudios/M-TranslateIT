@@ -52,7 +52,7 @@ class GitHubSourceOnlyGovernanceTests(unittest.TestCase):
 
         def invalid(rel: str) -> str:
             value = real_text(rel)
-            if rel == "GITHUB_RULES.md":
+            if rel == ".agent-standard/project-policy.md":
                 return value.replace("Never ask the user to run", "Ask the user to run", 1)
             return value
 
@@ -95,8 +95,8 @@ class GitHubSourceOnlyGovernanceTests(unittest.TestCase):
 
         def missing(rel: str) -> str:
             content = original(rel)
-            if rel == "AGENTS.md":
-                return content.replace("github.com/cursor/plugins/tree/", "github.com/cursor/plugins/ref/", 1)
+            if rel == ".agent-standard/methods.json":
+                return content.replace('"repository": "cursor/plugins"', '"repository": "bogus/plugins"', 1)
             return content
 
         errors: list[str] = []

@@ -214,8 +214,13 @@ def check_structure(errors: list[str]) -> None:
             expected = {entry["id"] for entry in entries}
             if registry.get("schemaVersion") != 1 or len(expected) != len(entries):
                 fail(errors, "agent skill registry version/unique identity mismatch")
-            if actual != expected:
-                fail(errors, f"agent skill inventory mismatch: expected={sorted(expected)} actual={sorted(actual)}")
+            shared = {"oits-agent-quality-review", "oits-development-brief", "oits-repository-audit"}
+            if actual != expected | shared:
+                fail(errors, f"agent skill inventory mismatch: expected={sorted(expected | shared)} actual={sorted(actual)}")
+            for skill in shared:
+                path = skills_root / skill / "SKILL.md"
+                if not path.is_file() or f"name: {skill}" not in path.read_text(encoding="utf-8"):
+                    fail(errors, f"invalid shared governance Skill: {skill}")
             for entry in entries:
                 skill = entry["id"]
                 if entry.get("kind") not in ("planning", "specialist") or not isinstance(entry.get("domain"), str):
@@ -233,7 +238,7 @@ def check_structure(errors: list[str]) -> None:
 
 
 def check_development_foundation(errors: list[str]) -> None:
-    agents = text("AGENTS.md")
+    agents = text(".agent-standard/project-policy.md")
     discipline = text("docs/knowledge/development-discipline.md")
     ownership = text("docs/knowledge/source-ownership.md")
     toolchain = text("tooling/windows/config/requirements.json")
@@ -264,27 +269,23 @@ def check_development_foundation(errors: list[str]) -> None:
     if "Unified Windows developer routing" not in ownership:
         fail(errors, "source ownership must identify the developer router owner")
     github_rules = text("GITHUB_RULES.md")
-    for marker in ("Commit-based continuity and cold-start recovery", "Work:", "State:", "Proof:", "expected `Local` SHA"):
-        if marker not in github_rules:
-            fail(errors, f"GITHUB_RULES.md lost material commit continuity: {marker}")
+    if "## Commit quality and cross-chat continuity" not in github_rules or "Surface" not in github_rules:
+        fail(errors, "shared GitHub commit continuity contract missing")
     if "Short-prompt and session recovery" not in agents:
-        fail(errors, "AGENTS.md must preserve source-grounded cold-start recovery")
-    if "## ChatGPT source boundary" not in agents or "source/version control only" not in agents:
-        fail(errors, "AGENTS.md lost ChatGPT remote-only source routing")
-    if "### ChatGPT no-user-PC invariant" not in github_rules or "user-PC to-do" not in github_rules:
-        fail(errors, "GITHUB_RULES.md must preserve no-user-PC proof boundary")
+        fail(errors, "Local project policy lost source-grounded cold-start recovery")
+    if "source/version control only" not in agents or "CHATGPT_GITHUB" not in github_rules:
+        fail(errors, "ChatGPT source-only execution boundary missing")
+    if "LOCAL_PC_AGENT" not in github_rules or "do not run" not in github_rules.lower():
+        fail(errors, "shared no-PC-host and no-unexecuted-test proof boundary missing")
     if "Development preflight:" not in discipline or "Completion review:" not in discipline:
         fail(errors, "development discipline lost mandatory preflight/completion review")
-    for marker in (
-        "CI result is evidence; branch protection/rulesets are enforcement.",
-        "successful workflow still counts only as exact-SHA evidence",
-    ):
+    for marker in ("Never trade away selected-branch authority", "Do not treat a GitHub commit as running code"):
         if marker not in github_rules:
-            fail(errors, f"GITHUB_RULES.md missing hosted-proof enforcement boundary: {marker}")
+            fail(errors, f"shared GitHub rules missing source/proof integrity: {marker}")
 
 
 def check_branch_authority(errors: list[str]) -> None:
-    rules = text("GITHUB_RULES.md")
+    rules = text(".agent-standard/project-policy.md")
     for marker in (
         "GitHub default branch remains `main`",
         "Promotion to `main` requires explicit user approval",
@@ -295,7 +296,7 @@ def check_branch_authority(errors: list[str]) -> None:
     next_action = text("planning/development.md")
     if "GitHub default branch `main` remains reserved" not in next_action:
         fail(errors, "planning/development.md must preserve main as a final-only branch")
-    for rel in ("README.md", "AGENTS.md", "GITHUB_RULES.md", "CONTEXT.md", "CONTRIBUTING.md"):
+    for rel in ("README.md", ".agent-standard/project-policy.md", "CONTEXT.md", "CONTRIBUTING.md"):
         value = text(rel)
         if "Local-only" not in value:
             fail(errors, f"{rel} must state the Local-only repository model")
@@ -616,10 +617,9 @@ def check_chatgpt_execution_policy(errors: list[str]) -> None:
     This is source/static enforcement, never executed or native acceptance proof.
     """
     required = {
-        "AGENTS.md": ("## ChatGPT source boundary", "ChatGPT Project Instructions",
-                      "source/version control only", "UNKNOWN / NOT EXECUTED"),
-        "GITHUB_RULES.md": ("### ChatGPT no-user-PC invariant", "Never ask the user to run",
-                            "No cloud inference or unrestricted hosted CI/builds.", "Integrated test-ready candidate gate"),
+        ".agent-standard/project-policy.md": ("source/version control only", "UNKNOWN / NOT EXECUTED",
+                            "Never ask the user to run", "No cloud inference or unrestricted hosted CI/builds.",
+                            "Integrated test-ready candidate gate", "Local-only"),
         "README.md": ("optional developer convenience", "not a step ChatGPT assigns"),
         "CONTRIBUTING.md": ("## ChatGPT repository route", "single planned stage"),
         "docs/knowledge/development-discipline.md": ("Test readiness and native escalation",
@@ -641,30 +641,31 @@ def check_chatgpt_execution_policy(errors: list[str]) -> None:
             if marker not in contents:
                 fail(errors, f"{rel} lost remote/candidate contract: {marker}")
 
-    # Agent Rules is governed by this repository's root, not by another
-    # OpenIT product. This checks source markers only, not live agent behavior.
+    # Shared root is authoritative; local product mode restrictions stay local.
     agent_rules = text("AGENTS.md")
-    if "## Agent Rules — independent seven-method contract" not in agent_rules:
-        fail(errors, "Agent Rules independent root contract missing")
-    if "The user selects the branch manually" not in agent_rules:
-        fail(errors, "Agent Rules must preserve manual branch selection")
-    for method_repo in (
-        "multica-ai/andrej-karpathy-skills",
-        "dietrichgebert/ponytail",
-        "cursor/plugins",
-        "google-research/harness2",
-        "deepseek-ai/deepseek-harness",
-        "morluto/rea",
-        "nextlevelbuilder/ui-ux-pro-max-skill",
-    ):
-        if f"github.com/{method_repo}/tree/" not in agent_rules:
-            fail(errors, f"Agent Rules missing reviewed source: {method_repo}")
+    if "# OpenITStudios — Shared Agent Rules" not in agent_rules:
+        fail(errors, "AgentSkill shared root missing")
     if "github.com/OpenITStudios/M-LazyDesigner/blob/" in agent_rules:
         fail(errors, "Agent Rules root must not depend on M-LazyDesigner")
-
+    if "Local-only" not in text(".agent-standard/project-policy.md"):
+        fail(errors, "Local project source authority missing")
+    try:
+        registry = json.loads(text(".agent-standard/methods.json"))
+        expected = {"multica-ai/andrej-karpathy-skills", "dietrichgebert/ponytail",
+                    "cursor/plugins", "google-research/harness2",
+                    "deepseek-ai/deepseek-harness", "morluto/rea",
+                    "nextlevelbuilder/ui-ux-pro-max-skill", "mattpocock/skills"}
+        observed = {m["provenance"]["repository"] for m in registry["methods"]}
+        if observed != expected:
+            for missing in sorted(expected - observed):
+                fail(errors, f"Agent Rules missing reviewed source: {missing}")
+            for extra in sorted(observed - expected):
+                fail(errors, f"unexpected unreviewed source: {extra}")
+    except (OSError, ValueError, KeyError, TypeError):
+        fail(errors, "invalid shared method registry")
     for rel in (
-        "AGENTS.md", "GITHUB_RULES.md", "README.md", "CONTRIBUTING.md",
-        "planning/development.md", "docs/knowledge/flow.md",
+        "AGENTS.md", "GITHUB_RULES.md", ".agent-standard/project-policy.md",
+        "README.md", "CONTRIBUTING.md", "planning/development.md", "docs/knowledge/flow.md",
         "docs/knowledge/development-discipline.md",
         "docs/knowledge/current-validation.md",
         "docs/knowledge/operations/target-windows-performance.md",

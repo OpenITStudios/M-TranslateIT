@@ -124,8 +124,13 @@ def admit_skills(root: Path = ROOT) -> list[str]:
             problems.append("unreviewed skill-root entry: " + item.name)
         else:
             actual.add(item.name)
-    if actual != set(expected):
+    shared = {"oits-agent-quality-review", "oits-development-brief", "oits-repository-audit"}
+    if actual != set(expected) | shared:
         problems.append("skill package folders differ from canonical inventory")
+    for name in shared:
+        candidate = skill_root / name / "SKILL.md"
+        if not candidate.is_file() or candidate.is_symlink() or f"name: {name}" not in candidate.read_text(encoding="utf-8"):
+            problems.append("missing or invalid shared governance Skill: " + name)
 
     count, entries_seen, total = 0, 0, 0
     for identity, item in sorted(expected.items()):

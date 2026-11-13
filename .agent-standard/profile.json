@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "repository": "OpenITStudios/M-TranslateIT",
+  "activeBranch": "Local",
+  "branchPolicy": {
+    "writableBranches": [
+      "Local"
+    ],
+    "allowAutoBranch": false,
+    "allowAutoPromotion": false
+  },
+  "executionPolicy": {
+    "ci": "disabled",
+    "tests": "on_hold",
+    "nativeProof": "required_when_claimed"
+  },
+  "permissions": {
+    "crossRepoWrites": false,
+    "mutatingActionsRequireUserIntent": true,
+    "releaseRequiresExplicitApproval": true
+  },
+  "protectedPaths": [],
+  "holds": [
+    {
+      "id": "translate-no-cloud-test-hold",
+      "reason": "Current project: no cloud compute/inference, hosted CI and per-source-change PC-local tests; no automatic Windows native test requests.",
+      "paths": [],
+      "blockedActions": [
+        "ci",
+        "test"
+      ],
+      "until": "Explicit maintainer-approved integrated local PC test phase after coherent source work."
+    }
+  ],
+  "dataPolicy": "confidential-project",
+  "note": "Read .agent-standard/project-policy.md as project-specific Local, audio/privacy, six-skill and no-cloud owner. Root and core are pinned AgentSkill bytes; old root instructions archived under .agent-standard/history/.",
+  "workflowPolicy": {
+    "sourceSurface": "CHATGPT_GITHUB",
+    "localValidationSurface": "LOCAL_PC_AGENT",
+    "localTestDuringSourcePhase": false,
+    "requestLocaltestFromChatGPT": false,
+    "githubActionsOrCloudTestSubstitution": false,
+    "localValidationRequiresExplicitTransition": true
+  }
+}
