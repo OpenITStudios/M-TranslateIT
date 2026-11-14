@@ -2,6 +2,8 @@
 
 This is the canonical operating procedure for the `desktop-ui-design-development` specialist when the user requests a UI preview in ChatGPT. Root `AGENTS.md`, `GITHUB_RULES.md`, user-selected `Local` branch, runtime safety and privacy constraints remain authoritative.
 
+The TranslateIT-specific procedure specializes the [OpenITStudios HTML_SOURCE_PREVIEW standard](https://github.com/OpenITStudios/AgentSkill/blob/40ca9df89e728513199e64128528606b893ac4e1/docs/standards/chatgpt-source-ui-preview.md). It already owns the Meeting/voice page defaults, the exact UI state fixture and the stricter microphone/audio privacy rules. The shared reference is not an installer, automatic instruction load or reason to change production code.
+
 ## One supported ChatGPT preview method
 
 **`HTML_SOURCE_PREVIEW` is the sole visual preview method within ChatGPT.** Reconstruct the *current production* Svelte UI as a standalone, source-faithful HTML/CSS document using the selected page, imported UI, current styles, semantic tokens and one documented synthetic fixture. Do not require or offer F2 browser-component or F3 target-Windows capture workflows as prerequisites or alternative preview tiers. Browser/native execution remains part of separate app validation, not this preview procedure.
