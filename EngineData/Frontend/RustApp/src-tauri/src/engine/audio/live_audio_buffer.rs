@@ -143,19 +143,16 @@ fn append_mono_samples(samples_mono: &[f32], sample_rate_hz: u32, source_channel
     window.frames_received = window
         .frames_received
         .saturating_add(samples_mono.len() as u64);
-    window
-        .samples_mono
-        .extend(samples_mono.iter().map(|sample| safe_sample(*sample)));
-
-    let excess = window
-        .samples_mono
-        .len()
-        .saturating_sub(window.max_buffer_samples);
+    // Discard the incoming prefix that cannot fit, then evict the oldest
+    // retained samples BEFORE appending. Never grow past the preallocated
+    // window or sanitize samples that would immediately be discarded.
+    let retained_input = &samples_mono[samples_mono.len().saturating_sub(window.max_buffer_samples)..];
+    let remaining_capacity = window.max_buffer_samples - retained_input.len();
+    let excess = window.samples_mono.len().saturating_sub(remaining_capacity);
     if excess > 0 {
-        // VecDeque front removal does not memmove the retained tail. The old Vec
-        // drain(0..excess) path did exactly that work inside the audio callback.
         drop(window.samples_mono.drain(..excess));
     }
+    window.samples_mono.extend(retained_input.iter().map(|sample| safe_sample(*sample)));
 }
 
 fn build_status(window: Option<&LiveAudioWindow>) -> LiveAudioBufferStatusReport {
@@ -294,6 +291,36 @@ fn inactive_status(blocker: &str, note: &str) -> LiveAudioBufferStatusReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rolling_buffer_never_grows_and_preserves_input_count_across_wraps() {
+        let _serial = crate::engine::runtime_state::runtime_test_guard();
+        clear_live_audio_buffer();
+        reset_live_audio_buffer(10, 1);
+        let store = LIVE_AUDIO_WINDOW.get_or_init(|| Mutex::new(None));
+        let initial_capacity = store.lock().unwrap().as_ref().unwrap().samples_mono.capacity();
+        let mut reference = Vec::new();
+        let mut received = 0u64;
+        for batch in [
+            vec![0.1; 15],
+            vec![0.2; 13],
+            vec![0.3; 20],
+            vec![0.4; 45],
+            vec![f32::NAN, 2.0, -2.0, 0.0],
+        ] {
+            received += batch.len() as u64;
+            reference.extend(batch.iter().map(|sample| safe_sample(*sample)));
+            let excess = reference.len().saturating_sub(20);
+            reference.drain(..excess);
+            append_live_mono_f32_samples(&batch, 10, 1);
+            let guard = store.lock().unwrap();
+            let window = guard.as_ref().unwrap();
+            assert_eq!(window.samples_mono.capacity(), initial_capacity);
+            assert_eq!(window.frames_received, received);
+            assert!(window.samples_mono.iter().copied().eq(reference.iter().copied()));
+        }
+        clear_live_audio_buffer();
+    }
 
     #[test]
     fn rolling_buffer_retains_only_newest_samples_in_chronological_order() {

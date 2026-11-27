@@ -111,18 +111,19 @@ fn write_finalized_meeting_utterance_wav(
     let audio_path = audio_dir.join(&filename);
     let label = format!("{FINALIZED_SEGMENT_ROOT_LABEL}{filename}");
 
-    let suppressed_samples = if noise_suppression_enabled {
-        suppress_low_level_noise(&frame.samples)
+    let noise_threshold = if noise_suppression_enabled {
+        noise_suppression_threshold(&frame.samples)
     } else {
         None
     };
-    let samples = suppressed_samples.as_deref().unwrap_or(&frame.samples);
 
-    match write_pcm16_wav(
+    match write_pcm16_wav_with_promotion(
         &audio_path,
         frame.sample_rate_hz,
         frame.channels,
-        samples,
+        &frame.samples,
+        noise_threshold,
+        |staged, destination| fs::rename(staged, destination),
     ) {
         Ok(()) => LiveSegmentWavWriteReport {
             ok: true,
@@ -345,7 +346,7 @@ pub(crate) fn write_pcm16_wav(
     samples: &[f32],
 ) -> io::Result<()> {
     write_pcm16_wav_with_promotion(
-        path, sample_rate_hz, channels, samples, |staged, destination| {
+        path, sample_rate_hz, channels, samples, None, |staged, destination| {
             fs::rename(staged, destination)
         },
     )
@@ -358,6 +359,7 @@ fn write_pcm16_wav_with_promotion(
     sample_rate_hz: u32,
     channels: u16,
     samples: &[f32],
+    noise_threshold: Option<f32>,
     promote: impl FnOnce(&PathBuf, &PathBuf) -> io::Result<()>,
 ) -> io::Result<()> {
     if let Some(parent) = path.parent() {
@@ -389,8 +391,14 @@ fn write_pcm16_wav_with_promotion(
     wav.extend_from_slice(b"data");
     wav.extend_from_slice(&data_size.to_le_bytes());
 
+    // Apply the existing optional gain directly before PCM16 quantization.
+    // The finalized f32 frame stays unchanged and no filtered Vec is needed.
     for sample in samples {
-        let value = (safe_sample(*sample) * i16::MAX as f32).round() as i16;
+        let filtered = match noise_threshold {
+            Some(threshold) => attenuate_low_level_sample(*sample, threshold),
+            None => *sample,
+        };
+        let value = (safe_sample(filtered) * i16::MAX as f32).round() as i16;
         wav.extend_from_slice(&value.to_le_bytes());
     }
     // Exclusive creation prevents two writers from truncating the same
@@ -409,7 +417,7 @@ fn write_pcm16_wav_with_promotion(
     promoted
 }
 
-fn suppress_low_level_noise(samples: &[f32]) -> Option<Vec<f32>> {
+fn noise_suppression_threshold(samples: &[f32]) -> Option<f32> {
     if samples.len() < 320 {
         return None;
     }
@@ -418,22 +426,21 @@ fn suppress_low_level_noise(samples: &[f32]) -> Option<Vec<f32>> {
         return None;
     }
 
-    let threshold = (evidence.rms * 0.08).clamp(0.0015, 0.006);
+    Some((evidence.rms * 0.08).clamp(0.0015, 0.006))
+}
+
+fn attenuate_low_level_sample(sample: f32, threshold: f32) -> f32 {
     let transition_end = threshold * 2.5;
-    let mut output = Vec::with_capacity(samples.len());
-    for sample in samples {
-        let value = safe_sample(*sample);
-        let level = value.abs();
-        let gain = if level <= threshold {
-            0.22
-        } else if level < transition_end {
-            0.22 + 0.78 * ((level - threshold) / (transition_end - threshold))
-        } else {
-            1.0
-        };
-        output.push(value * gain);
-    }
-    Some(output)
+    let value = safe_sample(sample);
+    let level = value.abs();
+    let gain = if level <= threshold {
+        0.22
+    } else if level < transition_end {
+        0.22 + 0.78 * ((level - threshold) / (transition_end - threshold))
+    } else {
+        1.0
+    };
+    value * gain
 }
 
 fn safe_sample(value: f32) -> f32 {
@@ -464,16 +471,48 @@ mod tests {
     fn noise_suppression_attenuates_floor_without_reducing_strong_speech() {
         let mut samples = vec![0.002_f32; 320];
         samples.extend(vec![0.12_f32; 320]);
-        let processed = suppress_low_level_noise(&samples).expect("strong speech should allow cleanup");
-        assert!(processed[0].abs() < samples[0].abs() * 0.4);
-        assert!((processed[400] - samples[400]).abs() <= 1e-6);
+        let threshold = noise_suppression_threshold(&samples).expect("strong speech should allow cleanup");
+        assert!(attenuate_low_level_sample(samples[0], threshold).abs() < samples[0].abs() * 0.4);
+        assert!((attenuate_low_level_sample(samples[400], threshold) - samples[400]).abs() <= 1e-6);
     }
 
     #[test]
     fn noise_suppression_bypasses_quiet_or_clipping_audio() {
-        assert!(suppress_low_level_noise(&vec![0.002_f32; 640]).is_none());
+        assert!(noise_suppression_threshold(&vec![0.002_f32; 640]).is_none());
         let clipping = (0..640).map(|index| if index % 10 == 0 { 1.0 } else { 0.1 }).collect::<Vec<_>>();
-        assert!(suppress_low_level_noise(&clipping).is_none());
+        assert!(noise_suppression_threshold(&clipping).is_none());
+    }
+
+    #[test]
+    fn fused_noise_gain_preserves_previous_pcm16_bytes() {
+        let root = unique_test_root("wav-fused-gain");
+        let mut samples = vec![0.002_f32; 320];
+        samples.extend(vec![0.12_f32; 320]);
+        samples.extend([0.004, -0.009, f32::NAN, f32::INFINITY, -0.002]);
+        let threshold = noise_suppression_threshold(&samples).unwrap();
+        let transition_end = threshold * 2.5;
+        // Previous implementation, retained only as a byte-parity oracle.
+        let filtered: Vec<f32> = samples.iter().map(|sample| {
+            let value = safe_sample(*sample);
+            let level = value.abs();
+            let gain = if level <= threshold {
+                0.22
+            } else if level < transition_end {
+                0.22 + 0.78 * ((level - threshold) / (transition_end - threshold))
+            } else {
+                1.0
+            };
+            value * gain
+        }).collect();
+        let reference = root.join("reference.wav");
+        let fused = root.join("fused.wav");
+        write_pcm16_wav(&reference, TARGET_SAMPLE_RATE_HZ, 1, &filtered).unwrap();
+        write_pcm16_wav_with_promotion(
+            &fused, TARGET_SAMPLE_RATE_HZ, 1, &samples, Some(threshold),
+            |staged, destination| fs::rename(staged, destination),
+        ).unwrap();
+        assert_eq!(fs::read(reference).unwrap(), fs::read(fused).unwrap());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -589,7 +628,7 @@ mod tests {
         let previous = fs::read(&destination).expect("read original WAV");
         let failed = write_pcm16_wav_with_promotion(
             &destination,
-            TARGET_SAMPLE_RATE_HZ, 1, &[0.75, -0.75],
+            TARGET_SAMPLE_RATE_HZ, 1, &[0.75, -0.75], None,
             |staged, target| {
                 assert!(staged.is_file(), "complete staging WAV exists before promotion");
                 assert_eq!(fs::read(target).unwrap(), previous);

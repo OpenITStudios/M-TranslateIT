@@ -64,6 +64,16 @@ Live Meeting UI freshness uses lightweight backend change events from authoritat
 Reliability monitoring remains polling-based where the condition itself is time-dependent (watchdog, device-loss detection, long-session pressure). Watchdog + device-loss share one live reliability IPC every 8 seconds and reuse one fresh Meeting status observation. The device-loss guard and virtual-route owner also share one current audio-device enumeration; standalone diagnostics still take their own fresh observations. No cross-poll cache or cadence change is introduced; long-session health remains on its separate 30-second cadence. UI-only advisory checks such as meeting-app detection and idle audio-quality status are on-demand/page-entry reads rather than permanent polling.
 
 
+### Bounded audio preparation
+
+The existing two-second diagnostic PCM window evicts excess samples before
+appending, keeping its allocated capacity stable for a fixed audio format.
+Oversized incoming batches retain only the newest window while counting every
+received sample. Optional finalized-WAV noise attenuation is applied directly
+during the existing PCM16 encoding pass, preserving the gain formula,
+quantization, single buffered write, exclusive staging and atomic promotion.
+No extra filtered audio vector, callback owner, transport or model is added.
+
 ### Frontend application controller
 
 The frontend shell consumes one `ProductRuntimeSnapshot` through `src/app/runtime/applicationController.ts`. The controller owns refresh sequencing, setup-state transitions, settings projection, and Meeting-session projection. `App.svelte` owns only UI-shell concerns such as route, transient notices, busy flags, close-dialog state, and the live transcript view.
