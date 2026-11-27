@@ -309,6 +309,35 @@ pub fn worker_text(value: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+// This observation is already returned by the required status request.
+// Do not load a candidate whose current capability/asset identity is degraded.
+fn meeting_cuda_capability_admitted(value: &Value) -> bool {
+    value.get("cuda_capability_known").and_then(Value::as_bool) == Some(true)
+        && value.get("cpu_fallback_active").and_then(Value::as_bool) == Some(false)
+        && value.get("selected_device").and_then(Value::as_str) == Some("cuda")
+        && value.get("selected_translation_device").and_then(Value::as_str) == Some("cuda")
+        && value.get("readiness").and_then(|readiness| readiness.get("cuda_degraded"))
+            .and_then(Value::as_bool) == Some(false)
+}
+
+pub(super) fn meeting_compute_preflight_admitted(value: &Value) -> bool {
+    meeting_cuda_capability_admitted(value)
+        && value.get("asr_primary_model_ready").and_then(Value::as_bool) == Some(true)
+        && value.get("asr_active_model_id").and_then(Value::as_str)
+            == Some("faster-whisper-large-v3-turbo")
+        && match value.get("loaded").and_then(|loaded| loaded.get("asr")).and_then(Value::as_bool) {
+            Some(false) => true,
+            Some(true) => {
+                let loaded = &value["loaded"];
+                loaded.get("asr_device").and_then(Value::as_str) == Some("cuda")
+                    && loaded.get("asr_compute_type").and_then(Value::as_str) == Some("int8_float16")
+                    && loaded.get("asr_model_id").and_then(Value::as_str)
+                        == Some("faster-whisper-large-v3-turbo")
+            }
+            None => false,
+        }
+}
+
 pub fn apply_worker_status(runtime: &mut HelperBridgeRuntime, status: &Value) {
     let worker_ok = worker_bool(status, "ok");
     let asr_ready = worker_nested_bool(status, "readiness", "asr");
@@ -316,10 +345,14 @@ pub fn apply_worker_status(runtime: &mut HelperBridgeRuntime, status: &Value) {
     let tts_ready = worker_nested_bool(status, "readiness", "voice_actor_tts");
     let cuda_degraded = worker_nested_bool(status, "readiness", "cuda_degraded");
 
-    runtime.cuda_ready = !cuda_degraded;
-    runtime.provider_ready = worker_ok && asr_ready && outbound_translation_ready && tts_ready;
+    runtime.cuda_ready = meeting_cuda_capability_admitted(status);
+    let capabilities_present = worker_ok && asr_ready && outbound_translation_ready && tts_ready;
+    runtime.provider_ready = capabilities_present && meeting_compute_preflight_admitted(status);
     runtime.degraded_mode = worker_ok && cuda_degraded;
     runtime.last_error = worker_text(status, "blocker").filter(|value| !value.is_empty());
+    if capabilities_present && !runtime.provider_ready && runtime.last_error.is_none() {
+        runtime.last_error = Some("cuda:meeting_primary_compute_unverified".to_string());
+    }
     runtime.message = if runtime.provider_ready {
         "Python helper process is running and current worker status reports the required outbound AI capabilities available."
             .to_string()
@@ -886,6 +919,13 @@ mod readiness_contract_tests {
             &mut runtime,
             &json!({
                 "ok": true,
+                "cuda_capability_known": true,
+                "cpu_fallback_active": false,
+                "selected_device": "cuda",
+                "selected_translation_device": "cuda",
+                "asr_primary_model_ready": true,
+                "asr_active_model_id": "faster-whisper-large-v3-turbo",
+                "loaded": {"asr": false},
                 "readiness": {
                     "asr": true,
                     "translation_id_en": true,
@@ -915,6 +955,47 @@ mod readiness_contract_tests {
             }),
         );
         assert!(!legacy_only.provider_ready);
+        assert!(!legacy_only.cuda_ready);
+    }
+
+    #[test]
+    fn helper_status_never_advertises_fallback_as_meeting_ready() {
+        let valid = json!({
+            "ok": true,
+            "cuda_capability_known": true,
+            "cpu_fallback_active": false,
+            "selected_device": "cuda",
+            "selected_translation_device": "cuda",
+            "asr_primary_model_ready": true,
+            "asr_active_model_id": "faster-whisper-large-v3-turbo",
+            "loaded": {"asr": false},
+            "readiness": {
+                "asr": true, "translation_id_en": true,
+                "voice_actor_tts": true, "cuda_degraded": false
+            }
+        });
+        let mut runtime = HelperBridgeRuntime::default();
+        apply_worker_status(&mut runtime, &valid);
+        assert!(runtime.provider_ready && runtime.cuda_ready);
+        for (key, replacement) in [
+            ("cuda_capability_known", json!(null)),
+            ("cpu_fallback_active", json!(true)),
+            ("selected_device", json!("cpu")),
+            ("selected_translation_device", json!("cpu")),
+            ("asr_primary_model_ready", json!(false)),
+            ("asr_active_model_id", json!("faster-whisper-medium")),
+            ("loaded", json!({"asr": true, "asr_device": "cpu"})),
+        ] {
+            let mut rejected = valid.clone();
+            rejected[key] = replacement;
+            apply_worker_status(&mut runtime, &rejected);
+            assert!(!runtime.provider_ready, "{key}");
+            assert_eq!(runtime.last_error.as_deref(), Some("cuda:meeting_primary_compute_unverified"));
+        }
+        let mut unknown = valid;
+        unknown["readiness"]["cuda_degraded"] = Value::Null;
+        apply_worker_status(&mut runtime, &unknown);
+        assert!(!runtime.provider_ready && !runtime.cuda_ready);
     }
 }
 

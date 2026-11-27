@@ -4,6 +4,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::engine::runtime_state::runtime_generation_is_authoritative;
+use super::super::helper_bridge_runtime::meeting_compute_preflight_admitted;
 
 use super::functional_readiness::{
     functional_asr_output, functional_translation_output, functional_voice_actor_output_path,
@@ -15,29 +16,6 @@ use super::{
 };
 
 const REQUIRED_OUTBOUND_FUNCTIONAL_ID_FIXTURE: &str = "selamat pagi";
-
-// This observation is already returned by the required status request.
-// Do not load a candidate whose current capability/asset identity is degraded.
-fn meeting_compute_preflight_admitted(value: &Value) -> bool {
-    value.get("cuda_capability_known").and_then(Value::as_bool) == Some(true)
-        && value.get("cpu_fallback_active").and_then(Value::as_bool) == Some(false)
-        && value.get("selected_device").and_then(Value::as_str) == Some("cuda")
-        && value.get("selected_translation_device").and_then(Value::as_str) == Some("cuda")
-        && value.get("asr_primary_model_ready").and_then(Value::as_bool) == Some(true)
-        && value.get("asr_active_model_id").and_then(Value::as_str)
-            == Some("faster-whisper-large-v3-turbo")
-        && match value.get("loaded").and_then(|loaded| loaded.get("asr")).and_then(Value::as_bool) {
-            Some(false) => true,
-            Some(true) => {
-                let loaded = &value["loaded"];
-                loaded.get("asr_device").and_then(Value::as_str) == Some("cuda")
-                    && loaded.get("asr_compute_type").and_then(Value::as_str) == Some("int8_float16")
-                    && loaded.get("asr_model_id").and_then(Value::as_str)
-                        == Some("faster-whisper-large-v3-turbo")
-            }
-            None => false,
-        }
-}
 
 fn remove_probe_output_paths(requested_path: &str, reported_path: Option<&str>) {
     if let Some(path) = reported_path.filter(|path| !path.trim().is_empty()) {
@@ -307,6 +285,7 @@ mod tests {
     fn meeting_compute_preflight_refuses_cpu_backup_and_unknown_resident_identity() {
         let valid = json!({
             "cuda_capability_known": true, "cpu_fallback_active": false,
+            "readiness": {"cuda_degraded": false},
             "selected_device": "cuda", "selected_translation_device": "cuda",
             "asr_primary_model_ready": true,
             "asr_active_model_id": "faster-whisper-large-v3-turbo",
