@@ -393,3 +393,39 @@ def test_translation_failure_taxonomy_hides_unknown_exception_class() -> None:
     )
 
     assert result["blocker"] == "translation:provider_failed"
+
+
+def test_direct_protocol_translation_validates_output_once(monkeypatch) -> None:
+    worker = load_worker_module()
+    handler = worker.runtime.HANDLERS["translate"]
+    direct = worker.runtime.handle_translate
+    original_contract = direct.__globals__["_translation_contract_result"]
+    calls = []
+
+    def counted_contract(result, payload=None):
+        calls.append(payload)
+        return original_contract(result, payload)
+
+    # Entry modules may be loaded repeatedly while the canonical runtime's
+    # installed guard persists. Observe both owners without assuming they
+    # share a module namespace.
+    monkeypatch.setitem(direct.__globals__, "_translation_contract_result", counted_contract)
+    monkeypatch.setitem(handler.__globals__, "_translation_contract_result", counted_contract)
+    for kind in ("", "meeting", "standalone_text_chunk"):
+        request = {"text": "Selamat pagi", "request_kind": kind}
+        set_original_translate(worker, monkeypatch, lambda _payload: success_result("Good morning"))
+        calls.clear()
+        result = handler(request)
+        assert result["ok"] is True
+        assert result["translated_text"] == "Good morning"
+        assert calls == [request]
+
+        set_original_translate(worker, monkeypatch, lambda _payload: success_result(
+            "Translate this from Indonesian to English: Indonesian: Selamat pagi English:"
+        ))
+        calls.clear()
+        rejected = handler(request)
+        assert rejected["ok"] is False
+        assert rejected["blocker"] == "translation:prompt_echo"
+        assert rejected["translated_text"] == ""
+        assert calls == [request]

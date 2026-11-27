@@ -243,7 +243,12 @@ if not getattr(runtime, _PRELOAD_POLICY_SENTINEL, False):
 
 
 def _contract_guarded_translate_request(payload):
-    return _translation_contract_result(runtime.handle_translate_request(payload), payload)
+    # Direct requests already cross the guarded runtime.handle_translate
+    # boundary. Only the standalone planner creates a new aggregate result
+    # that needs its own output/failure contract after all guarded chunks.
+    if str(payload.get("request_kind", "")).strip().lower() == "standalone_text":
+        return _translation_contract_result(runtime.handle_translate_request(payload), payload)
+    return runtime.handle_translate(payload)
 
 
 runtime.HANDLERS["translation_preload"] = runtime.handle_translation_preload

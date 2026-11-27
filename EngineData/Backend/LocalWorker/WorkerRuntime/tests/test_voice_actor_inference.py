@@ -501,13 +501,20 @@ def test_worker_reuses_actor_runtime_until_package_identity_changes(monkeypatch)
     worker.clear_voice_actor_runtime()
     current = {"fingerprint": (("actor.json", 1, 1),)}
     loads: list[object] = []
+    validations: list[object] = []
+
+    def validate(_path):
+        validations.append(current["fingerprint"])
+        return {"fingerprint": current["fingerprint"]}
+
     monkeypatch.setattr(
         worker.io_runtime.voice_actor_provider,
         "validate_actor_package",
-        lambda _path: {"fingerprint": current["fingerprint"]},
+        validate,
     )
 
-    def load_runtime(_source, _actor):
+    def load_runtime(_source, _actor, *, validated_package):
+        assert validated_package["fingerprint"] == current["fingerprint"]
         loads.append(current["fingerprint"])
         return {
             "fingerprint": current["fingerprint"],
@@ -521,13 +528,16 @@ def test_worker_reuses_actor_runtime_until_package_identity_changes(monkeypatch)
         load_runtime,
     )
     first = worker.get_voice_actor_runtime()
+    assert len(validations) == 2  # before load and fresh post-load proof
     second = worker.get_voice_actor_runtime()
     assert first is second
     assert len(loads) == 1
+    assert len(validations) == 3
     current["fingerprint"] = (("actor.json", 2, 2),)
     third = worker.get_voice_actor_runtime()
     assert third is not first
     assert len(loads) == 2
+    assert len(validations) == 5
 
 
 def test_voice_actor_synthesis_uses_only_myvoice_path(tmp_path: Path, monkeypatch) -> None:
@@ -807,3 +817,45 @@ def test_voice_actor_synthesize_forwards_native_speed_factor(tmp_path: Path, mon
     assert seen == [1.10]
     assert result["pace_applied"] is True
     assert result["pace_factor"] == 1.10
+
+
+def test_cold_actor_load_reuses_package_and_rejects_post_load_identity_change(
+    tmp_path: Path, monkeypatch
+) -> None:
+    worker = load_worker_module()
+    io = worker.io_runtime
+    provider = io.voice_actor_provider
+    actor = tmp_path / "actor"
+    write_actor(actor)
+    monkeypatch.setattr(io.common, "VOICE_ACTOR_ROOT", actor)
+    monkeypatch.setattr(io, "VOICE_ACTOR_RUNTIME", None)
+    monkeypatch.setattr(io, "VOICE_ACTOR_RUNTIME_FINGERPRINT", None)
+    validate = provider.validate_actor_package
+    observations = []
+
+    def observed_validate(path):
+        package = validate(path)
+        observations.append(package["fingerprint"])
+        return package
+
+    monkeypatch.setattr(provider, "validate_actor_package", observed_validate)
+    monkeypatch.setattr(provider, "inference_source_assets", lambda _source: {})
+
+    def change_during_load(_source, _assets, _gpt, _sovits, _wav):
+        # A size change is deterministic even if filesystem mtime is coarse.
+        (actor / "gpt.ckpt").write_bytes(b"changed checkpoint")
+        return {"tts": object(), "device": "cpu", "reference_cached": True}
+
+    monkeypatch.setattr(provider, "create_tts_runtime", change_during_load)
+    with pytest.raises(provider.VoiceLabProviderError, match="actor_changed_during_load"):
+        io.get_voice_actor_runtime()
+    assert len(observations) == 2
+    assert observations[0] != observations[1]
+    assert io.VOICE_ACTOR_RUNTIME is None
+    assert io.VOICE_ACTOR_RUNTIME_FINGERPRINT is None
+
+    # A standalone load still performs its own initial package validation.
+    observations.clear()
+    runtime = provider.load_voice_actor_runtime(tmp_path, actor)
+    assert len(observations) == 1
+    assert runtime["fingerprint"] == observations[0]

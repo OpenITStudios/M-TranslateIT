@@ -61,6 +61,10 @@ Production rules:
 - RuntimeAssets readiness requires `.translateit_model_revision` to match the pinned revision;
 - no M2M100/Marian/second-translator fallback/router.
 
+Direct worker translation requests use the existing output contract exactly once.
+Standalone Text still validates each chunk and the newly assembled aggregate.
+No prompt, token budget, EOS, failure-invalidation, or inference policy changes.
+
 Meeting translation is context-free across turns: outbound ID→EN uses only the current finalized Indonesian utterance; incoming EN→ID uses only the current finalized English utterance. Standalone Text uses only its current input. Prior translated pairs, transcript history, and historical `context_pairs` are not supplied to MiLMMT. Transcript retention is for review/export only.
 
 ## ASR and Meeting voice
@@ -72,7 +76,11 @@ Meeting translation is context-free across turns: outbound ID→EN uses only the
   warm preload validates and reports the actual resident model, without switching or
   reloading it. Explicit asset checks remain fresh, not a persistent readiness cache.
   The status candidate and loaded model identity remain separate.
-- Meeting voice inference: one GPT-SoVITS `voice_actor_*` contract.
+- Meeting voice inference: one GPT-SoVITS `voice_actor_*` contract. Cold actor
+  construction consumes the same validated package from the worker load
+  transaction; a fresh post-load fingerprint check remains required before
+  publishing the resident runtime. Standalone loader calls still validate
+  their own package. Warm bound synthesis remains unchanged.
 - Built-in Male/Female: Rust prepares a selected actor profile from pinned LibriSpeech reference assets plus reviewed shared V2ProPlus pretrained weights; user training is not required.
 - My Voice: optional trained GPT-SoVITS V2ProPlus actor promoted only after held-out evaluation and explicit user approval.
 - Existing `voice_lab_*` Python filenames/error namespaces are legacy compatibility identifiers, not product vocabulary.

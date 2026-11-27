@@ -397,7 +397,9 @@ def get_voice_actor_runtime(package: dict[str, Any] | None = None) -> dict[str, 
         return VOICE_ACTOR_RUNTIME
     clear_voice_actor_runtime()
     runtime = voice_actor_provider.load_voice_actor_runtime(
-        common.GPT_SOVITS_SOURCE_ROOT, common.VOICE_ACTOR_ROOT
+        common.GPT_SOVITS_SOURCE_ROOT,
+        common.VOICE_ACTOR_ROOT,
+        validated_package=package,
     )
     if runtime.get("fingerprint") != fingerprint:
         raise voice_actor_provider.VoiceLabProviderError("actor_changed_during_load")

@@ -626,8 +626,18 @@ def synthesize_pretrained_voice_preview(
     return result
 
 
-def load_voice_actor_runtime(source_root: Path, actor_dir: Path) -> dict[str, Any]:
-    package = validate_actor_package(actor_dir)
+def load_voice_actor_runtime(
+    source_root: Path,
+    actor_dir: Path,
+    *,
+    validated_package: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    # Only the internal worker load transaction supplies an already validated
+    # package; it rechecks identity after loading before publishing the runtime.
+    # Standalone callers retain the original package validation.
+    package = validate_actor_package(actor_dir) if validated_package is None else validated_package
+    if package["actor_dir"] != actor_dir:
+        raise VoiceLabProviderError("actor_package_root_mismatch")
     assets = inference_source_assets(source_root)
     runtime = create_tts_runtime(
         source_root,
