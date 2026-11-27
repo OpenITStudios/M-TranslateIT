@@ -21,7 +21,9 @@ use super::{
     validated_meeting_voice_output_path, worker_blocker, worker_number,
     MeetingOutboundProcessResult,
 };
-use super::playback_runtime::{enqueue_meeting_playback, PreparedPlaybackJob};
+use super::playback_runtime::{
+    cleanup_job, enqueue_meeting_playback, PreparedPlaybackAudio, PreparedPlaybackJob,
+};
 use super::session_state::{
     elapsed_millis, set_outbound_timing, update_outbound_status, OutboundTimingContext,
 };
@@ -745,9 +747,11 @@ fn process_outbound_transcript(
         session_id: session_id.to_string(),
         event_sequence,
         utterance_id,
-        requested_tts_path,
-        actual_tts_path: verified_tts_path.to_string_lossy().into_owned(),
-        opened_tts_file: Some(opened_tts_file),
+        audio: PreparedPlaybackAudio::Wav {
+            requested_tts_path,
+            actual_tts_path: verified_tts_path.to_string_lossy().into_owned(),
+            opened_tts_file: Some(opened_tts_file),
+        },
         timing,
         prepared_at: Instant::now(),
     };
@@ -760,8 +764,7 @@ fn process_outbound_transcript(
     ) {
         // Do not leave the Windows read-only share guard open during cleanup:
         // the queued job has not yet transferred ownership to playback.
-        drop(playback_job.opened_tts_file.take());
-        remove_temporary_tts_paths(&playback_job.requested_tts_path, &playback_job.actual_tts_path);
+        cleanup_job(&mut playback_job);
         update_outbound_status(
             generation, session_id, "attention_needed", event_sequence, false, false,
             "meeting_outbound:delivery_reservation_failed",

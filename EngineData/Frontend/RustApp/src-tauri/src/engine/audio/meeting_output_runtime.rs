@@ -600,47 +600,74 @@ fn blocked(blocker: &str, execution_attempted: bool) -> MeetingOutputDeliveryRep
     }
 }
 
-// Keep path-based callers unchanged. Meeting's prepared TTS queue owns a
-// File opened at synthesis admission, and passes it to the same WAV decoder.
-enum MeetingWavInput<'a> {
+// Both sources reach one device delivery owner. The legacy WAV input still
+// owns the admitted file; native ZONOS3 supplies its owned mono F32 buffer.
+const NATIVE_VOICE_SAMPLE_RATE_HZ: u32 = 44_100;
+const MAX_NATIVE_VOICE_SAMPLES: usize = 44_100 * 60;
+
+enum MeetingAudioInput<'a> {
     Path(&'a str),
     Opened(File),
+    NativePcm(Vec<f32>),
 }
 
-fn decode_meeting_wav_input(input: MeetingWavInput<'_>) -> Result<audio_format::DecodedWav, String> {
+fn decode_meeting_audio_input(input: MeetingAudioInput<'_>) -> Result<audio_format::DecodedWav, String> {
     match input {
-        MeetingWavInput::Path(path) => decode_wav_file(Path::new(path)),
-        MeetingWavInput::Opened(file) => {
+        MeetingAudioInput::Path(path) => decode_wav_file(Path::new(path)),
+        MeetingAudioInput::Opened(file) => {
             let bytes = read_bounded_open_wav(file)?;
             decode_wav_bytes(&bytes)
         }
+        MeetingAudioInput::NativePcm(samples) => {
+            if samples.is_empty() || samples.len() > MAX_NATIVE_VOICE_SAMPLES
+                || samples.iter().any(|sample| !sample.is_finite() || sample.abs() > 1.0)
+                || !samples.iter().any(|sample| sample.abs() >= 0.0001)
+            {
+                return Err("meeting_output:native_pcm_invalid".into());
+            }
+            Ok(audio_format::DecodedWav {
+                sample_rate_hz: NATIVE_VOICE_SAMPLE_RATE_HZ,
+                channels: 1,
+                samples,
+            })
+        }
     }
+}
+
+/// The caller must already own the native voice receipt for this exact turn.
+/// The PCM buffer is moved through the same source-epoch/device/Stop fences.
+pub(crate) fn deliver_meeting_output_native_pcm_for_source(
+    samples: Vec<f32>, selected_output_device: Option<&str>, generation: u64, source_epoch: u64,
+) -> MeetingOutputDeliveryReport {
+    deliver_meeting_output_inner(
+        MeetingAudioInput::NativePcm(samples), selected_output_device, generation, Some(source_epoch),
+    )
 }
 
 pub(crate) fn deliver_meeting_output_open_wav_for_source(
     source_audio_file: File, selected_output_device: Option<&str>, generation: u64, source_epoch: u64,
 ) -> MeetingOutputDeliveryReport {
-    deliver_meeting_output_wav_inner(
-        MeetingWavInput::Opened(source_audio_file), selected_output_device,
+    deliver_meeting_output_inner(
+        MeetingAudioInput::Opened(source_audio_file), selected_output_device,
         generation, Some(source_epoch),
     )
 }
 pub fn deliver_meeting_output_wav_for_source(
     source_audio_path: &str, selected_output_device: Option<&str>, generation: u64, source_epoch: u64,
 ) -> MeetingOutputDeliveryReport {
-    deliver_meeting_output_wav_inner(
-        MeetingWavInput::Path(source_audio_path), selected_output_device, generation, Some(source_epoch),
+    deliver_meeting_output_inner(
+        MeetingAudioInput::Path(source_audio_path), selected_output_device, generation, Some(source_epoch),
     )
 }
 pub fn deliver_meeting_output_wav(
     source_audio_path: &str, selected_output_device: Option<&str>, generation: u64,
 ) -> MeetingOutputDeliveryReport {
-    deliver_meeting_output_wav_inner(
-        MeetingWavInput::Path(source_audio_path), selected_output_device, generation, None,
+    deliver_meeting_output_inner(
+        MeetingAudioInput::Path(source_audio_path), selected_output_device, generation, None,
     )
 }
-fn deliver_meeting_output_wav_inner(
-    input: MeetingWavInput<'_>, selected_output_device: Option<&str>, generation: u64, source_epoch: Option<u64>,
+fn deliver_meeting_output_inner(
+    input: MeetingAudioInput<'_>, selected_output_device: Option<&str>, generation: u64, source_epoch: Option<u64>,
 ) -> MeetingOutputDeliveryReport {
     if !runtime_generation_is_authoritative(generation) {
         return blocked("meeting_output:generation_not_authoritative", false);
@@ -655,7 +682,7 @@ fn deliver_meeting_output_wav_inner(
         return blocked("meeting_output:selected_output_device_missing", false);
     };
 
-    let wav = match decode_meeting_wav_input(input) {
+    let source = match decode_meeting_audio_input(input) {
         Ok(value) => value,
         Err(blocker) => {
             return blocked(&blocker, false)
@@ -675,13 +702,20 @@ fn deliver_meeting_output_wav_inner(
     };
     let sample_format = supported.sample_format();
     let config: cpal::StreamConfig = supported.into();
-    let samples = match prepare_output_samples(&wav, config.sample_rate, config.channels) {
-        Ok(value) => value,
-        Err(blocker) => return blocked(&blocker, false),
+    // For a matching mono device, transfer the already validated source
+    // allocation directly. Other configurations use the existing resampler.
+    let samples = if source.channels == 1 && config.channels == 1
+        && source.sample_rate_hz == config.sample_rate {
+        source.samples
+    } else {
+        let prepared = match prepare_output_samples(&source, config.sample_rate, config.channels) {
+            Ok(value) => value,
+            Err(blocker) => return blocked(&blocker, false),
+        };
+        // Release the decoded source before device stream construction.
+        drop(source);
+        prepared
     };
-    // Only the prepared device-format samples are needed by native playback.
-    // Release the decoded source before opening or waiting on the stream.
-    drop(wav);
     let sample_count = samples.len();
     if sample_count == 0 {
         return blocked("meeting_output:prepared_audio_empty", false);
@@ -810,8 +844,8 @@ fn deliver_meeting_output_wav_inner(
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_meeting_wav_input, decode_wav_bytes, decode_wav_file, delivery_deadline_ms,
-        prepare_output_samples, projected_unix_ms, MeetingWavInput,
+        decode_meeting_audio_input, decode_wav_bytes, decode_wav_file, delivery_deadline_ms,
+        prepare_output_samples, projected_unix_ms, MeetingAudioInput,
         stream_start_to_first_audio_ms, wait_for_output_completion, wait_for_output_tail,
         install_cancel_control, clear_cancel_control, cancel_meeting_output_for_generation,
         cancel_control, release_output_stream, signal_output_callback_failure,
@@ -1233,13 +1267,42 @@ mod tests {
         let opened = fs::File::open(&path).expect("retain original file handle");
         fs::rename(&path, &original_path).expect("replace path after admission");
         fs::write(&path, replacement).expect("write different WAV with equal length");
-        let decoded = decode_meeting_wav_input(MeetingWavInput::Opened(opened))
+        let decoded = decode_meeting_audio_input(MeetingAudioInput::Opened(opened))
             .expect("decode through pinned file handle");
         assert_eq!(decoded.samples.len(), 2);
         assert_eq!(decoded.samples[0], 10_000.0_f32 / 32768.0_f32);
         assert_eq!(decoded.samples[1], -10_000.0_f32 / 32768.0_f32);
         fs::remove_file(path).expect("remove replacement");
         fs::remove_file(original_path).expect("remove original");
+    }
+
+    #[test]
+    fn native_pcm_admission_moves_valid_audio_and_rejects_invalid_samples() {
+        let samples = vec![0.0, 0.25, -0.5, 1.0];
+        let allocation = samples.as_ptr();
+        let decoded = decode_meeting_audio_input(MeetingAudioInput::NativePcm(samples))
+            .expect("valid native voice PCM");
+        assert_eq!(decoded.sample_rate_hz, 44_100);
+        assert_eq!(decoded.channels, 1);
+        assert_eq!(decoded.samples.as_ptr(), allocation);
+        assert_eq!(decoded.samples, vec![0.0, 0.25, -0.5, 1.0]);
+        for invalid in [vec![], vec![0.0], vec![f32::NAN], vec![0.1, 1.1]] {
+            assert_eq!(
+                decode_meeting_audio_input(MeetingAudioInput::NativePcm(invalid)).err().as_deref(),
+                Some("meeting_output:native_pcm_invalid"),
+            );
+        }
+    }
+
+    #[test]
+    fn stale_native_pcm_delivery_cannot_reach_device() {
+        let _serial = crate::engine::runtime_state::runtime_test_guard();
+        let _ = crate::engine::runtime_state::clear_runtime_session_state();
+        let result = super::deliver_meeting_output_native_pcm_for_source(
+            vec![0.25], Some("unused-test-output"), u64::MAX, 1,
+        );
+        assert!(!result.ok && !result.execution_attempted);
+        assert_eq!(result.blocker, "meeting_output:generation_not_authoritative");
     }
 
     #[test]

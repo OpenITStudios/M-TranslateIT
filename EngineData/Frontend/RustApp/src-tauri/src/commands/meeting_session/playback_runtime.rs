@@ -5,7 +5,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::engine::audio::meeting_output::{
-    deliver_meeting_output_open_wav_for_source, MAX_DELIVERY_DEADLINE_MS,
+    deliver_meeting_output_open_wav_for_source, deliver_meeting_output_native_pcm_for_source,
+    MAX_DELIVERY_DEADLINE_MS,
 };
 use crate::engine::runtime_state::runtime_generation_is_authoritative;
 use crate::engine::audio::original_voice_pcm;
@@ -47,15 +48,24 @@ fn playback_finished_within(thread: &JoinHandle<()>, budget: Duration) -> bool {
     true
 }
 
+// One queue and one delivery owner. WAV is the transitional producer;
+// the native producer will move its validated PCM into the same job.
+pub(super) enum PreparedPlaybackAudio {
+    Wav {
+        requested_tts_path: String,
+        actual_tts_path: String,
+        opened_tts_file: Option<File>,
+    },
+    NativePcm(Vec<f32>),
+}
+
 pub(super) struct PreparedPlaybackJob {
     pub(super) generation: u64,
     pub(super) source_epoch: u64,
     pub(super) session_id: String,
     pub(super) event_sequence: u64,
     pub(super) utterance_id: u64,
-    pub(super) requested_tts_path: String,
-    pub(super) actual_tts_path: String,
-    pub(super) opened_tts_file: Option<File>,
+    pub(super) audio: PreparedPlaybackAudio,
     pub(super) timing: OutboundTimingContext,
     pub(super) prepared_at: Instant,
 }
@@ -81,11 +91,15 @@ fn playback_runtime_store() -> &'static Mutex<Option<MeetingPlaybackRuntime>> {
     MEETING_PLAYBACK_RUNTIME.get_or_init(|| Mutex::new(None))
 }
 
-fn cleanup_job(job: &mut PreparedPlaybackJob) {
-    // Release the opened handle first, so Windows cleanup may delete the
-    // session-owned file without waiting for this queued job to be dropped.
-    drop(job.opened_tts_file.take());
-    remove_temporary_tts_paths(&job.requested_tts_path, &job.actual_tts_path);
+pub(super) fn cleanup_job(job: &mut PreparedPlaybackJob) {
+    match &mut job.audio {
+        PreparedPlaybackAudio::Wav { requested_tts_path, actual_tts_path, opened_tts_file } => {
+            // Release the Windows read-share guard before deleting owned files.
+            drop(opened_tts_file.take());
+            remove_temporary_tts_paths(requested_tts_path, actual_tts_path);
+        }
+        PreparedPlaybackAudio::NativePcm(samples) => drop(std::mem::take(samples)),
+    }
 }
 
 fn mark_interrupted(job: &PreparedPlaybackJob) {
@@ -240,18 +254,34 @@ fn process_playback_job(mut job: PreparedPlaybackJob, last_sequence: &mut u64) {
         drop(suppression_guard);
         return;
     }
-    // The TTS-admitted File already pins the audio identity. One metadata
-    // comparison at dequeue replaces repeated path canonicalization and
-    // rejects a missing/substituted session WAV. The canonical decoder still
-    // checks bytes and any detectable mutation during its one bounded read.
-    let owned_file = if job.opened_tts_file.as_ref().is_some_and(|file| {
-        prepared_tts_output_still_owned(&job.requested_tts_path, file)
-    }) {
-        job.opened_tts_file.take()
-    } else {
-        None
+    // The legacy file remains pinned and identity-checked at dequeue.
+    // Native PCM has no path to reopen or temporary file to remove.
+    let delivery = match &mut job.audio {
+        PreparedPlaybackAudio::Wav { requested_tts_path, opened_tts_file, .. } => {
+            if opened_tts_file.as_ref().is_some_and(|file| {
+                prepared_tts_output_still_owned(requested_tts_path, file)
+            }) {
+                opened_tts_file.take().map(|file| {
+                    let started = Instant::now();
+                    let route = deliver_meeting_output_open_wav_for_source(
+                        file, Some(bound_output_device.as_str()), job.generation, job.source_epoch,
+                    );
+                    (started, route)
+                })
+            } else {
+                None
+            }
+        }
+        PreparedPlaybackAudio::NativePcm(samples) => {
+            let started = Instant::now();
+            let route = deliver_meeting_output_native_pcm_for_source(
+                std::mem::take(samples), Some(bound_output_device.as_str()),
+                job.generation, job.source_epoch,
+            );
+            Some((started, route))
+        }
     };
-    let Some(owned_file) = owned_file else {
+    let Some((delivery_started_at, route)) = delivery else {
         cleanup_job(&mut job);
         let _ = update_committed_turn_delivery_state(
             &job.session_id,
@@ -275,15 +305,6 @@ fn process_playback_job(mut job: PreparedPlaybackJob, last_sequence: &mut u64) {
         );
         return;
     };
-    let delivery_started_at = Instant::now();
-    // The TTS-admitted handle supplies the decoder; no second path open can
-    // replace the accepted WAV with another session's file during this gap.
-    let route = deliver_meeting_output_open_wav_for_source(
-        owned_file,
-        Some(bound_output_device.as_str()),
-        job.generation,
-        job.source_epoch,
-    );
     record_first_playback_timing(
         &mut timing,
         delivery_started_at,
@@ -470,7 +491,7 @@ fn enqueue_with_deadline<T>(
 }
 
 pub(super) fn enqueue_meeting_playback(mut job: PreparedPlaybackJob) -> Result<(), String> {
-    // Only the canonical source/turn owner may admit a Local prepared WAV.
+    // Only the canonical source/turn owner may admit Local prepared audio.
     // Unverified Codex assistant text never enters this queue.
     if !super::local_translated_meeting_route_admitted() {
         cleanup_job(&mut job);

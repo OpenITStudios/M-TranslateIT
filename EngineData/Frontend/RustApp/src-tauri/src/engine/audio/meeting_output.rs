@@ -7,7 +7,8 @@ use super::duration_ms;
 mod runtime;
 
 pub(crate) use runtime::{
-    deliver_meeting_output_open_wav_for_source, MAX_DELIVERY_DEADLINE_MS,
+    deliver_meeting_output_open_wav_for_source, deliver_meeting_output_native_pcm_for_source,
+    MAX_DELIVERY_DEADLINE_MS,
     decode_functional_probe_asr_pcm,
 };
 
