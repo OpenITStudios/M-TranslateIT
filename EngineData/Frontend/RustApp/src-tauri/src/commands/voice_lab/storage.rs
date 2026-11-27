@@ -142,6 +142,95 @@ fn actor_kind(path: &Path) -> ActorKind {
     }
 }
 
+
+// The legacy selected actor establishes only the built-in choice. Its
+// checkpoint and evaluation are NOT approval of a personal ZONOS3 clone.
+// Pin the existing shipped CC-BY-4.0 references (BuiltInVoices/SOURCES.json)
+// rather than trusting an editable manifest to name an arbitrary speaker.
+#[cfg(windows)]
+pub(crate) struct NativeBuiltinReference {
+    voice_id: &'static str,
+    pcm: Vec<f32>,
+}
+
+#[cfg(windows)]
+impl NativeBuiltinReference {
+    // Keep construction in the selected-reference verifier.
+    pub(crate) fn into_parts(self) -> (&'static str, Vec<f32>) {
+        (self.voice_id, self.pcm)
+    }
+}
+
+#[cfg(windows)]
+fn builtin_reference_pin(id: &str) -> Option<(&'static str, &'static str)> {
+    match id {
+        "MaleVoice" => Some(("MaleVoice", "1351eea8182b2f6ef00025b4e68b6a0e5184c059bd7c6d7dacc18988f2dbd200")),
+        "FemaleVoice" => Some(("FemaleVoice", "81b131f23a3f4dd8dbef31082e07a957ea42bf7e7b86522c75b0e23209343423")),
+        _ => None,
+    }
+}
+
+#[cfg(windows)]
+fn read_pinned_builtin_reference(path: &Path, expected: &str) -> Result<Vec<f32>, &'static str> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    const MAX_REFERENCE_BYTES: u64 = 2 * 1024 * 1024;
+    // Decode exactly the bytes whose identity is checked. The selected
+    // copy is read once, no path chosen by a request and no writes.
+    let mut file = fs::OpenOptions::new().read(true).share_mode(1)
+        .custom_flags(0x00200000).open(path)
+        .map_err(|_| "native_voice:reference_unavailable")?;
+    let meta = file.metadata().map_err(|_| "native_voice:reference_unavailable")?;
+    if !meta.is_file() || meta.file_attributes() & 0x400 != 0
+        || meta.len() == 0 || meta.len() > MAX_REFERENCE_BYTES {
+        return Err("native_voice:reference_invalid");
+    }
+    let mut bytes = Vec::new();
+    file.by_ref().take(MAX_REFERENCE_BYTES + 1).read_to_end(&mut bytes)
+        .map_err(|_| "native_voice:reference_unavailable")?;
+    if bytes.len() as u64 != meta.len() || bytes.len() as u64 > MAX_REFERENCE_BYTES {
+        return Err("native_voice:reference_invalid");
+    }
+    let digest = sha256_digest(&bytes).ok_or("native_voice:reference_identity_unverified")?;
+    let actual: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    if actual != expected { return Err("native_voice:reference_identity_mismatch"); }
+    crate::engine::audio::meeting_output::decode_native_voice_reference(&bytes)
+        .map_err(|_| "native_voice:reference_audio_invalid")
+}
+
+#[cfg(windows)]
+pub(crate) fn selected_native_builtin_reference(paths: &ProjectPaths) -> Result<NativeBuiltinReference, &'static str> {
+    if !paths.packaged_context_initialized && !paths.development_root_verified {
+        return Err("native_voice:runtime_root_unverified");
+    }
+    let storage = VoiceLabStoragePaths::from_project_paths(paths);
+    // Do not recover, migrate or activate a different profile here.
+    let id = match actor_kind(&storage.approved_actor_dir) {
+        ActorKind::Builtin(Some(id)) => id,
+        ActorKind::Personal => return Err("native_voice:personal_clone_approval_required"),
+        _ => return Err("native_voice:selected_reference_unverified"),
+    };
+    let (voice_id, expected) = builtin_reference_pin(&id)
+        .ok_or("native_voice:selected_reference_unverified")?;
+    let pcm = read_pinned_builtin_reference(&storage.approved_actor_dir.join(REFERENCE_WAV_FILE), expected)?;
+    Ok(NativeBuiltinReference { voice_id, pcm })
+}
+
+#[cfg(all(test, windows))]
+mod native_builtin_reference_tests {
+    use super::*;
+    #[test]
+    fn only_the_two_published_builtins_have_reference_pins() {
+        let male = builtin_reference_pin("MaleVoice").unwrap();
+        let female = builtin_reference_pin("FemaleVoice").unwrap();
+        assert_ne!(male.1, female.1);
+        assert_eq!(male.1.len(), 64);
+        assert_eq!(female.1.len(), 64);
+        for invalid in ["", "MyVoice", "PersonalVoice", "malevoice", "../MaleVoice"] {
+            assert!(builtin_reference_pin(invalid).is_none());
+        }
+    }
+}
+
 fn personal_next(paths: &VoiceLabStoragePaths) -> PathBuf {
     paths.saved_root.join(".PersonalVoice.next")
 }

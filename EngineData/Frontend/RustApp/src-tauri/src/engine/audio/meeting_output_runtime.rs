@@ -45,6 +45,25 @@ pub(crate) fn decode_functional_probe_asr_pcm(file: File) -> Result<Vec<f32>, St
     prepare_output_samples(&source, 16_000, 1)
 }
 
+/// The selected built-in reference is already SHA-256 verified by the
+/// voice selection owner. Reuse the canonical WAV decoder and existing
+/// anti-aliased FFT resampler, not a second decoder or a linear downsample.
+#[cfg(windows)]
+pub(crate) fn decode_native_voice_reference(bytes: &[u8]) -> Result<Vec<f32>, String> {
+    let source = decode_wav_bytes(bytes)?;
+    if source.channels != 1 || source.sample_rate_hz != 32_000
+        || !(32_000 * 3..=32_000 * 30).contains(&source.samples.len()) {
+        return Err("native_voice:reference_format_invalid".into());
+    }
+    let pcm = crate::engine::audio::guided_take::resample_mono_fft(&source.samples, 32_000, 16_000)?;
+    if !(16_000 * 3..=16_000 * 30).contains(&pcm.len())
+        || pcm.iter().any(|sample| !sample.is_finite() || sample.abs() > 1.0)
+        || !pcm.iter().any(|sample| sample.abs() >= 0.0001) {
+        return Err("native_voice:reference_pcm_invalid".into());
+    }
+    Ok(pcm)
+}
+
 fn current_unix_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1274,6 +1293,21 @@ mod tests {
         assert_eq!(decoded.samples[1], -10_000.0_f32 / 32768.0_f32);
         fs::remove_file(path).expect("remove replacement");
         fs::remove_file(original_path).expect("remove original");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_voice_reference_uses_bounded_16khz_mono_contract() {
+        let mut samples = vec![0i16; 32_000 * 3];
+        for (i, sample) in samples.iter_mut().enumerate() {
+            *sample = if i % 64 < 32 { 4096 } else { -4096 };
+        }
+        let wav = pcm16_wav(32_000, 1, &samples);
+        let pcm = super::decode_native_voice_reference(&wav).expect("canonical reference");
+        assert_eq!(pcm.len(), 16_000 * 3);
+        assert!(pcm.iter().any(|value| value.abs() > 0.01));
+        assert!(super::decode_native_voice_reference(&pcm16_wav(16_000, 1, &samples)).is_err());
+        assert!(super::decode_native_voice_reference(&pcm16_wav(32_000, 1, &[0; 64])).is_err());
     }
 
     #[test]

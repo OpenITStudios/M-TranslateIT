@@ -12,6 +12,9 @@ pub(crate) use runtime::{
     decode_functional_probe_asr_pcm,
 };
 
+#[cfg(windows)]
+pub(crate) use runtime::decode_native_voice_reference;
+
 pub use runtime::{
     cancel_meeting_output_for_generation, clear_prepared_meeting_output_device,
     deliver_meeting_output_wav, deliver_meeting_output_wav_for_source,

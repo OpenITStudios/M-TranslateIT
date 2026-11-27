@@ -89,6 +89,15 @@ pub struct HelperBridgeActionResult {
 pub(super) struct NativeInferenceOwner {
     pub(super) session_id: Option<String>,
     pub(super) owner: translateit_native_cuda::RuntimeOwner,
+    // A candidate binding is only meaningful for the exact prepared scope.
+    native_voice: Option<NativeVoiceSession>,
+}
+
+#[cfg(windows)]
+struct NativeVoiceSession {
+    generation: u64,
+    voice_id: &'static str,
+    binding: translateit_native_cuda::VoiceBinding,
 }
 
 #[cfg(windows)]
@@ -133,7 +142,87 @@ impl NativeInferenceOwner {
         use translateit_native_cuda::RuntimeOwner;
         let (dll, asr, projector, mt, pins) = Self::asset_paths()?;
         let owner = unsafe { RuntimeOwner::open(&dll, pins, &asr, &projector, &mt, None)? };
-        Ok(Self { session_id, owner })
+        Ok(Self { session_id, owner, native_voice: None })
+    }
+
+    /// Candidate open, used only by explicit selected-voice preparation,
+    /// not by live synthesis or the current pair-only production admission.
+    /// All model paths are derived from the controlled runtime root.
+    ///
+    /// # Safety
+    /// Same reviewed build/closure and trusted root requirements as open.
+    pub(super) unsafe fn open_voice_candidate(session_id: String)
+        -> Result<Self, translateit_native_cuda::Error>
+    {
+        use translateit_native_cuda::{Error, RuntimeOwner};
+        if session_id.is_empty() { return Err(Error::InvalidInput); }
+        let (dll, asr, projector, mt, pins) = Self::asset_paths()?;
+        let paths = crate::engine::paths::ProjectPaths::discover();
+        let voice = PathBuf::from(&paths.voice_runtime_dir).join("ModelData/zonos3-mini");
+        let model = voice.join("ZONOS3-Mini-Q8_0.gguf");
+        let codec = voice.join("mmproj-ZONOS3-Mini-F32.gguf");
+        let owner = unsafe {
+            RuntimeOwner::open_with_voice(&dll, pins, &asr, &projector, &mt, None,
+                Some((&model, &codec)))?
+        };
+        Ok(Self { session_id: Some(session_id), owner, native_voice: None })
+    }
+
+    fn voice_scope_matches(&self, generation: u64, session_id: &str, preparing: bool) -> bool {
+        use crate::engine::runtime_state::{latest_runtime_session_state, APPLICATION_MEETING_OWNER_ID};
+        generation != 0 && self.session_id.as_deref() == Some(session_id)
+            && latest_runtime_session_state().snapshot.is_some_and(|snapshot| {
+                snapshot.owner_id == APPLICATION_MEETING_OWNER_ID && snapshot.authority_active
+                    && snapshot.generation == generation && snapshot.session_id == session_id
+                    && (if preparing { snapshot.phase == "starting" } else { snapshot.phase == "live" })
+            })
+    }
+
+    /// Call only under the existing helper permit and lifecycle owner.
+    /// The returned request must be awaited OUTSIDE the lifecycle mutex.
+    pub(super) fn begin_selected_builtin_voice(
+        &mut self, generation: u64, session_id: &str,
+        reference: crate::commands::voice_lab::NativeBuiltinReference, deadline: Instant,
+    ) -> Result<(&'static str, translateit_native_cuda::PendingInference), translateit_native_cuda::Error> {
+        use translateit_native_cuda::{Error, InferenceInput};
+        if !self.voice_scope_matches(generation, session_id, true) {
+            return Err(Error::InvalidInput);
+        }
+        self.native_voice = None;
+        let (voice_id, pcm) = reference.into_parts();
+        let pending = self.owner.begin(InferenceInput::BindVoice { reference: pcm }, deadline)?;
+        Ok((voice_id, pending))
+    }
+
+    /// Publish only the typed receipt after the transport verifies its
+    /// request ID and helper generation, and the same Meeting scope again.
+    pub(super) fn finish_selected_builtin_voice(
+        &mut self, generation: u64, session_id: &str, voice_id: &'static str,
+        output: translateit_native_cuda::InferenceOutput,
+    ) -> Result<(), translateit_native_cuda::Error> {
+        use translateit_native_cuda::{Error, InferenceOutput};
+        self.native_voice = None;
+        if !self.voice_scope_matches(generation, session_id, true)
+            || !matches!(voice_id, "MaleVoice" | "FemaleVoice") {
+            return Err(Error::InvalidInput);
+        }
+        let InferenceOutput::VoiceBound(binding) = output else { return Err(Error::InvalidReceipt); };
+        self.native_voice = Some(NativeVoiceSession { generation, voice_id, binding });
+        Ok(())
+    }
+
+    /// Only the selected binding for the exact live Meeting may synthesize.
+    /// The scheduler permit and transport retain ownership through reply.
+    pub(super) fn begin_bound_voice(
+        &mut self, generation: u64, session_id: &str, voice_id: &str,
+        text: String, deadline: Instant,
+    ) -> Result<translateit_native_cuda::PendingInference, translateit_native_cuda::Error> {
+        use translateit_native_cuda::{Error, InferenceInput};
+        if !self.voice_scope_matches(generation, session_id, false) { return Err(Error::InvalidInput); }
+        let selected = self.native_voice.as_ref()
+            .filter(|voice| voice.generation == generation && voice.voice_id == voice_id)
+            .ok_or(Error::InvalidInput)?;
+        self.owner.begin(InferenceInput::Voice { text, binding: selected.binding }, deadline)
     }
 }
 

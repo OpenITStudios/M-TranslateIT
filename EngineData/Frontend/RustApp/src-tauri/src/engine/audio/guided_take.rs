@@ -400,7 +400,7 @@ fn recording_environment_hints(
     }
 }
 
-fn resample_mono_fft(samples: &[f32], source_rate: u32, target_rate: u32) -> Result<Vec<f32>, String> {
+pub(crate) fn resample_mono_fft(samples: &[f32], source_rate: u32, target_rate: u32) -> Result<Vec<f32>, String> {
     if samples.is_empty() || source_rate == 0 || target_rate == 0 {
         return Err("voice_lab:take_has_no_audio".to_string());
     }
