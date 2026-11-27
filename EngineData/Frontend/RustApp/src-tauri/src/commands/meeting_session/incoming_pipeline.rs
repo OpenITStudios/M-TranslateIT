@@ -8,13 +8,15 @@ use super::committed_turns::{
 };
 use super::incoming_deferred::{
     classify_incoming_asr_response, deferred_enqueue_unix_ms, enqueue_deferred_incoming,
-    incoming_deferred_for_required_outbound, requeue_deferred_incoming_front,
+    requeue_deferred_incoming_front,
     take_due_deferred_incoming, DeferredIncomingJob, DeferredIncomingStage,
     IncomingAsrDisposition, MAX_DEFERRED_INCOMING,
 };
 use super::{incoming_session_is_eligible, validated_meeting_translation, worker_blocker};
 use super::session_state::update_incoming_status;
-use super::super::helper_bridge::{send_helper_worker_pcm_task, send_helper_worker_task};
+use super::super::helper_bridge::{
+    incoming_deferred_for_required_outbound, send_helper_worker_pcm_task, send_helper_worker_task,
+};
 use super::super::helper_bridge_runtime::unix_ms;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -63,7 +65,10 @@ fn process_incoming_pcm_with_direction(
         "",
         "Finalized Meeting Sound is being transcribed locally.",
     );
-    let asr = send_helper_worker_pcm_task(
+    // Keep only the small event identity after transferring PCM ownership.
+    let owned_session_id = utterance.session_id.clone();
+    let session_id = owned_session_id.as_str();
+    let (asr, deferred_utterance) = send_helper_worker_pcm_task(
         json!({
             "language": source_language,
             "beam_size": 1,
@@ -73,7 +78,7 @@ fn process_incoming_pcm_with_direction(
             "meeting_sequence": event_sequence,
             "utterance_id": utterance_id,
         }),
-        &utterance,
+        utterance,
         noise_suppression_enabled,
     );
     if !incoming_session_is_eligible(session_id) {
@@ -84,10 +89,17 @@ fn process_incoming_pcm_with_direction(
         IncomingAsrDisposition::Deferred => {
             let enqueued_unix_ms =
                 deferred_enqueue_unix_ms(deferred_enqueued_unix_ms, unix_ms() as u64);
-            // Move the PCM into the existing bounded deferred queue.
-            let status_session_id = session_id.to_string();
+            // Only a verified pre-execution deferral returns owned PCM.
+            let Some(utterance) = deferred_utterance else {
+                update_incoming_status(
+                    session_id, "degraded", true,
+                    "meeting_incoming:deferred_pcm_missing",
+                    "Incoming ASR returned a deferral without its original PCM. The event was not queued.",
+                );
+                return IncomingAudioProcessResult::Complete;
+            };
             let job = DeferredIncomingJob {
-                session_id: status_session_id.clone(),
+                session_id: owned_session_id.clone(),
                 event_sequence,
                 utterance_id,
                 stage: DeferredIncomingStage::NeedsAsr {
@@ -103,7 +115,6 @@ fn process_incoming_pcm_with_direction(
             } else {
                 enqueue_deferred_incoming(job)
             };
-            let session_id = status_session_id.as_str();
             if held == 0 {
                 update_incoming_status(
                     session_id,
@@ -148,9 +159,7 @@ fn process_incoming_pcm_with_direction(
         IncomingAsrDisposition::Transcript(transcript) => transcript,
     };
 
-    let session_id = utterance.session_id;
-    drop(utterance.frame);
-    let session_id = session_id.as_str();
+    // The ASR owner already released its PCM before returning.
     // Retain a source-first mixed incoming-audio turn even if MiLMMT later fails,
     // is deferred, or the helper becomes unavailable.
     if !commit_meeting_turn(

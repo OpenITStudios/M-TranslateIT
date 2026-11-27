@@ -22,7 +22,8 @@ use super::request_policy::{
     meeting_outbound_pipeline_active, meeting_session_id, task_priority,
 };
 use super::{
-    get_helper_bridge_status, prepare_required_outbound_ai_runtime, start_helper_bridge_internal,
+    get_helper_bridge_status, incoming_deferred_for_required_outbound,
+    prepare_required_outbound_ai_runtime, start_helper_bridge_internal,
     worker_message, worker_text, HelperBridgeWorkerResponse,
 };
 use super::super::helper_bridge_runtime::{
@@ -782,18 +783,18 @@ pub(super) fn send_worker_task(task: &str, payload: Value) -> HelperBridgeWorker
 
 pub(super) fn send_worker_pcm_task(
     payload: Value,
-    utterance: &FinalizedMeetingUtterance,
+    utterance: FinalizedMeetingUtterance,
     noise_suppression_enabled: bool,
-) -> HelperBridgeWorkerResponse {
+) -> (HelperBridgeWorkerResponse, Option<FinalizedMeetingUtterance>) {
     let prepare_ms = Cell::new(0);
-    let input = MeetingPcmInput { utterance, noise_suppression_enabled, prepare_ms: &prepare_ms };
+    let input = MeetingPcmInput { utterance: &utterance, noise_suppression_enabled, prepare_ms: &prepare_ms };
     let mut response = if !input.matches("transcribe", &payload) {
         standalone_blocked_response(
             "transcribe", "invalid-meeting-pcm", task_priority("transcribe", &payload),
             "error", "asr:finalized_pcm_contract_invalid",
             "Finalized PCM Meeting event ownership is invalid.",
         )
-    } else if let Some(rejection) = finalized_asr_frame_rejection(utterance) {
+    } else if let Some(rejection) = finalized_asr_frame_rejection(&utterance) {
         standalone_blocked_response(
             "transcribe", "invalid-meeting-pcm", task_priority("transcribe", &payload),
             "error", &rejection.blocker, &rejection.note,
@@ -804,7 +805,18 @@ pub(super) fn send_worker_pcm_task(
     if let Some(object) = response.worker_response_json.as_object_mut() {
         object.insert("audio_prepare_ms".into(), json!(prepare_ms.get()));
     }
-    response
+    // The legacy adapter borrows the owned frame only during its bounded
+    // attempt/retry. No terminal response may retain a PCM allocation.
+    let deferred = retain_deferred_pcm(&response, utterance);
+    (response, deferred)
+}
+
+fn retain_deferred_pcm(
+    response: &HelperBridgeWorkerResponse,
+    utterance: FinalizedMeetingUtterance,
+) -> Option<FinalizedMeetingUtterance> {
+    (utterance.lane == "incoming" && incoming_deferred_for_required_outbound(response))
+        .then_some(utterance)
 }
 
 fn send_worker_task_with_input(task: &str, payload: Value, pcm: Option<MeetingPcmInput<'_>>) -> HelperBridgeWorkerResponse {
@@ -1157,5 +1169,24 @@ mod finalized_pcm_handoff_tests {
         utterance.frame.samples.truncate(4_799);
         assert_eq!(finalized_asr_frame_rejection(&utterance).unwrap().blocker,
                    "finalized_utterance_writer:segment_too_short");
+
+        // The caller transfers its original allocation; only an actual
+        // scheduler deferral may return it, never a worker-supplied blocker.
+        utterance.frame.samples.push(0.1);
+        utterance.lane = "incoming".into();
+        utterance.generation = None;
+        let ptr = utterance.frame.samples.as_ptr();
+        let deferred = incoming_deferred_response("transcribe", "incoming-owned-pcm");
+        let returned = retain_deferred_pcm(&deferred, utterance).expect("deferred original PCM");
+        assert_eq!(ptr, returned.frame.samples.as_ptr());
+        assert_eq!(returned.frame.samples.len(), 4_800);
+
+        let mut untrusted = deferred.clone();
+        untrusted.runtime_claim = "helper_process_ready_ping_verified".into();
+        assert!(!incoming_deferred_for_required_outbound(&untrusted));
+        let mut completed = deferred.clone();
+        completed.ok = true;
+        assert!(!incoming_deferred_for_required_outbound(&completed));
+        assert!(retain_deferred_pcm(&untrusted, returned).is_none());
     }
 }

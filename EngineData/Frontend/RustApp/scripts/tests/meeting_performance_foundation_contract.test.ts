@@ -118,8 +118,12 @@ test("finalized Meeting PCM enters the existing scheduler before transitional WA
   assert.doesNotMatch(consumers, /write_finalized_.*_wav/);
   assert.match(queue, /utterance: FinalizedMeetingUtterance/);
   assert.doesNotMatch(queue, /audio_path: String|retain_failed_wav_cleanup/);
-  assert.match(incoming, /send_helper_worker_pcm_task\(/);
-  assert.match(outbound, /send_helper_worker_pcm_task\(/);
+  assert.match(incoming, /let \(asr, deferred_utterance\) = send_helper_worker_pcm_task\(/);
+  assert.match(outbound, /let \(asr, _\) = send_helper_worker_pcm_task\(/);
+  assert.match(transport, /retain_deferred_pcm\(&response, utterance\)/);
+  assert.match(incoming, /let Some\(utterance\) = deferred_utterance else/);
+  assert.doesNotMatch(incoming, /utterance\.clone\(|drop\(utterance\.frame\)/);
+  assert.doesNotMatch(outbound, /utterance\.clone\(|drop\(utterance\.frame\)/);
   const inner = transport.indexOf("fn send_worker_task_inner(");
   const permit = transport.indexOf("acquire_helper_task_permit(priority)", inner);
   const defer = transport.indexOf("return incoming_deferred_response", permit);

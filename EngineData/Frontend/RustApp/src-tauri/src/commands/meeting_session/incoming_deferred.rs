@@ -4,9 +4,9 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance;
 
-use super::{validated_meeting_asr_transcript, worker_blocker, worker_text};
+use super::{validated_meeting_asr_transcript, worker_blocker};
 use super::committed_turns::finish_meeting_turn_translation;
-use super::super::helper_bridge::HelperBridgeWorkerResponse;
+use super::super::helper_bridge::{incoming_deferred_for_required_outbound, HelperBridgeWorkerResponse};
 
 pub(super) const MAX_DEFERRED_INCOMING: usize = 4;
 const MAX_DEFERRED_INCOMING_AGE_MS: u64 = 20_000;
@@ -49,13 +49,6 @@ static DEFERRED_DROPPED_STALE: AtomicU64 = AtomicU64::new(0);
 
 fn deferred_incoming_queue() -> &'static Mutex<VecDeque<DeferredIncomingJob>> {
     DEFERRED_INCOMING_QUEUE.get_or_init(|| Mutex::new(VecDeque::new()))
-}
-
-pub(super) fn incoming_deferred_for_required_outbound(
-    response: &HelperBridgeWorkerResponse,
-) -> bool {
-    worker_text(response, "blocker").as_deref()
-        == Some("helper_scheduler:incoming_deferred_for_outbound")
 }
 
 pub(super) fn classify_incoming_asr_response(
@@ -376,7 +369,7 @@ mod tests {
             scheduler_priority: "meeting_incoming".to_string(),
             message: "deferred".to_string(),
             generation_token: 1,
-            runtime_claim: "test".to_string(),
+            runtime_claim: "helper_scheduler_request_not_executed".to_string(),
             worker_response_json: serde_json::json!({
                 "ok": false,
                 "stage": "transcribe",

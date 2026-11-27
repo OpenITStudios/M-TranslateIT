@@ -376,7 +376,10 @@ pub(super) fn process_outbound_pcm(
     );
     set_outbound_timing(generation, session_id, event_sequence, &timing.metrics);
     let asr_started_at = Instant::now();
-    let asr = send_helper_worker_pcm_task(
+    // Keep only the small event identity after transferring PCM ownership.
+    let owned_session_id = utterance.session_id.clone();
+    let session_id = owned_session_id.as_str();
+    let (asr, _) = send_helper_worker_pcm_task(
         json!({
             "language": "id",
             "beam_size": 1,
@@ -388,7 +391,7 @@ pub(super) fn process_outbound_pcm(
             "utterance_id": utterance_id,
             "source_speech_duration_ms": speech_duration_ms,
         }),
-        &utterance,
+        utterance,
         noise_suppression_enabled,
     );
     let asr_wall_ms = elapsed_millis(asr_started_at, Instant::now());
@@ -444,12 +447,10 @@ pub(super) fn process_outbound_pcm(
         };
     }
     let transcript = transcript.unwrap_or_default();
-    // Release the PCM allocation before MT and TTS.
-    let session_id = utterance.session_id;
-    drop(utterance.frame);
+    // The ASR owner already released its PCM before returning.
     process_outbound_transcript(
         generation,
-        &session_id,
+        session_id,
         event_sequence,
         utterance_id,
         source_epoch,

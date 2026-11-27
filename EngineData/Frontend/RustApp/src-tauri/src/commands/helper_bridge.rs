@@ -146,13 +146,22 @@ pub fn send_helper_worker_task(task: &str, payload: Value) -> HelperBridgeWorker
     send_worker_task(task, payload)
 }
 
-// Internal Meeting-only PCM handoff; PCM never enters JSON.
+// Internal Meeting-only owned PCM handoff; PCM never enters JSON. Only
+// a pre-execution incoming deferral returns its original owned frame.
 pub(crate) fn send_helper_worker_pcm_task(
     payload: Value,
-    utterance: &crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance,
+    utterance: crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance,
     noise_suppression_enabled: bool,
-) -> HelperBridgeWorkerResponse {
+) -> (HelperBridgeWorkerResponse, Option<crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance>) {
     transport::send_worker_pcm_task(payload, utterance, noise_suppression_enabled)
+}
+
+pub(crate) fn incoming_deferred_for_required_outbound(response: &HelperBridgeWorkerResponse) -> bool {
+    !response.ok && response.state == "deferred"
+        && response.scheduler_priority == "meeting_incoming"
+        && response.runtime_claim == "helper_scheduler_request_not_executed"
+        && response.worker_response_json.get("blocker").and_then(Value::as_str)
+            == Some("helper_scheduler:incoming_deferred_for_outbound")
 }
 
 pub(crate) fn invalidate_required_outbound_readiness_for_voice_change() {
