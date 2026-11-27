@@ -13,12 +13,15 @@ use std::{
 
 type Version = unsafe extern "C" fn() -> u32;
 type Open = unsafe extern "C" fn(*const c_char, *const c_char, *const c_char,
-    *const c_char, *mut c_char, usize, *mut *mut c_void) -> i32;
+    *const c_char, *const c_char, *const c_char, *mut c_char, usize, *mut *mut c_void) -> i32;
 type Close = unsafe extern "C" fn(*mut c_void);
 type Transcribe = unsafe extern "C" fn(*mut c_void, *const f32, usize, u32,
     StopCheck, *const c_void, *mut c_char, usize, *mut usize) -> i32;
 type Translate = unsafe extern "C" fn(*mut c_void, *const c_char, usize, u32, u32,
     StopCheck, *const c_void, *mut c_char, usize, *mut usize) -> i32;
+
+type Synthesize = unsafe extern "C" fn(*mut c_void, *const c_char, usize, *const f32, usize,
+    StopCheck, *const c_void, *mut f32, usize, *mut usize) -> i32;
 
 #[derive(Clone, Copy)]
 pub(super) struct Api {
@@ -26,6 +29,7 @@ pub(super) struct Api {
     pub close: Close,
     pub transcribe: Transcribe,
     pub translate: Translate,
+    pub synthesize: Synthesize,
 }
 
 const DLL_NAME: &str = "translateit_native_cuda.dll";
@@ -244,6 +248,7 @@ pub(super) unsafe fn load(path: &Path, pins: &str) -> Result<Api, Error> {
         close: symbol!("ti_runtime_close", Close),
         transcribe: symbol!("ti_runtime_transcribe", Transcribe),
         translate: symbol!("ti_runtime_translate", Translate),
+        synthesize: symbol!("ti_runtime_synthesize", Synthesize),
     };
     // llama.cpp backend initialization is process-global. Pin the admitted
     // module; close each model pair on its own thread, not the DLL globals.

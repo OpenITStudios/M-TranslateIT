@@ -6,9 +6,9 @@ use std::{ffi::{c_char, c_void, CString}, marker::PhantomData, path::Path,
 
 mod loader;
 mod owner;
-pub use owner::{InferenceInput, PendingInference, RuntimeOwner};
+pub use owner::{InferenceInput, InferenceOutput, PendingInference, RuntimeOwner};
 
-const ABI: u32 = 5;
+const ABI: u32 = 6;
 const CANCELLED: i32 = 16;
 const DEADLINE: i32 = 17;
 type StopCheck = unsafe extern "C" fn(*const c_void) -> i32;
@@ -17,6 +17,10 @@ const MAX_TRANSLATION_OUTPUT_CHARS: usize = 4_000;
 const MAX_OUTPUT_BYTES: usize = 16_000;
 const MIN_SAMPLES: usize = 4_800;
 const MAX_SAMPLES: usize = 960_000;
+pub const VOICE_SAMPLE_RATE: u32 = 44_100;
+const MAX_VOICE_SAMPLES: usize = 44_100 * 60;
+const MIN_VOICE_REFERENCE: usize = 16_000 * 3;
+const MAX_VOICE_REFERENCE: usize = 16_000 * 30;
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,16 +104,36 @@ impl Runtime {
     /// hashes read from the installed DLL directory itself.
     pub unsafe fn open(dll: &Path, pins: &str, asr: &Path, projector: &Path, mt: &Path,
                        pci_id: Option<&str>) -> Result<Self, Error> {
+        unsafe { Self::open_with_voice(dll, pins, asr, projector, mt, pci_id, None) }
+    }
+
+    /// Candidate voice joins the same resident owner, never an independent model runtime.
+    /// # Safety
+    /// Same reviewed build and trusted parent requirements as open, for all five assets.
+    pub unsafe fn open_with_voice(dll: &Path, pins: &str, asr: &Path, projector: &Path, mt: &Path,
+                                  pci_id: Option<&str>, voice: Option<(&Path, &Path)>) -> Result<Self, Error> {
         let asr_path = loader::dos_path(asr)?;
         let projector_path = loader::dos_path(projector)?;
         let mt_path = loader::dos_path(mt)?;
-        let mut asset_parents = loader::lock_parents(&asr_path)?;
-        if projector_path.parent() != asr_path.parent() {
-            asset_parents.extend(loader::lock_parents(&projector_path)?);
+        let voice_paths = voice.map(|(model, projector)| -> Result<_, Error> {
+            Ok((loader::dos_path(model)?, loader::dos_path(projector)?))
+        }).transpose()?;
+        let mut paths = vec![asr_path.as_path(), projector_path.as_path(), mt_path.as_path()];
+        if let Some((model, projector)) = &voice_paths {
+            paths.extend([model.as_path(), projector.as_path()]);
         }
-        if mt_path.parent() != asr_path.parent() && mt_path.parent() != projector_path.parent() {
-            asset_parents.extend(loader::lock_parents(&mt_path)?);
+        let mut asset_parents = Vec::new();
+        for (index, path) in paths.iter().enumerate() {
+            if !paths[..index].iter().any(|previous| previous.parent() == path.parent()) {
+                asset_parents.extend(loader::lock_parents(path)?);
+            }
         }
+        let voice_native = voice_paths.as_ref().map(|(model, projector)| -> Result<_, Error> {
+            Ok((native_path(model)?, native_path(projector)?))
+        }).transpose()?;
+        let (voice_model, voice_projector) = voice_native.as_ref().map_or(
+            (std::ptr::null(), std::ptr::null()),
+            |(model, projector)| (model.as_ptr(), projector.as_ptr()));
         let asr = native_path(&asr_path)?;
         let projector = native_path(&projector_path)?;
         let mt = native_path(&mt_path)?;
@@ -119,7 +143,7 @@ impl Runtime {
         let mut raw = std::ptr::null_mut();
         let mut actual = [0u8; 32];
         let status = unsafe {
-            (api.open)(asr.as_ptr(), projector.as_ptr(), mt.as_ptr(), device.as_ptr(),
+            (api.open)(asr.as_ptr(), projector.as_ptr(), mt.as_ptr(), voice_model, voice_projector, device.as_ptr(),
                        actual.as_mut_ptr().cast(), actual.len(), &mut raw)
         };
         if status != 0 {
@@ -178,6 +202,49 @@ impl Runtime {
         check_control(control)?;
         Ok(text)
     }
+
+    /// Candidate only: normalized English and 16 kHz mono authorized voice reference.
+    /// Output is owned PCM, not a WAV, JSON payload or borrowed native pointer.
+    pub fn synthesize(&mut self, normalized: &str, reference: &[f32],
+                      control: &RequestControl<'_>) -> Result<Vec<f32>, Error> {
+        if normalized.trim().is_empty() || normalized.len() > 4000 ||
+            normalized.contains('\0') || normalized.contains("<|") ||
+            !(MIN_VOICE_REFERENCE..=MAX_VOICE_REFERENCE).contains(&reference.len()) {
+            return Err(Error::InvalidInput);
+        }
+        check_control(control)?;
+        let mut output = Vec::<f32>::new();
+        output.try_reserve_exact(MAX_VOICE_SAMPLES).map_err(|_| Error::Native(12))?;
+        let mut len = 0;
+        let status = unsafe {
+            (self.api.synthesize)(self.handle.as_ptr(), normalized.as_ptr().cast(), normalized.len(),
+                reference.as_ptr(), reference.len(), stop_check, control.data(),
+                output.as_mut_ptr(), MAX_VOICE_SAMPLES, &mut len)
+        };
+        if status != 0 {
+            return Err(if len != 0 { Error::InvalidReceipt } else { match status {
+                CANCELLED => Error::Cancelled,
+                DEADLINE => Error::DeadlineExceeded,
+                _ => Error::Native(status),
+            }});
+        }
+        if len == 0 || len > MAX_VOICE_SAMPLES { return Err(Error::InvalidReceipt); }
+        // SAFETY: the pinned ABI initializes exactly len samples on success;
+        // no uninitialized elements are exposed on any failure.
+        unsafe { output.set_len(len); }
+        validate_voice_pcm(&output)?;
+        check_control(control)?;
+        Ok(output)
+    }
+}
+
+fn validate_voice_pcm(samples: &[f32]) -> Result<(), Error> {
+    if samples.is_empty() || samples.len() > MAX_VOICE_SAMPLES ||
+        samples.iter().any(|s| !s.is_finite() || s.abs() > 1.0) ||
+        !samples.iter().any(|s| s.abs() >= 0.0001) {
+        return Err(Error::InvalidReceipt);
+    }
+    Ok(())
 }
 
 impl Drop for Runtime {
@@ -303,6 +370,69 @@ mod tests {
         for invalid in ["", "cuda:0", "0000:01:00.0-v0", "0000:AF:00.0", "0000:01:00.8"] {
             assert!(!valid_pci_id(invalid));
         }
+    }
+
+    #[test]
+    #[ignore = "requires authorized target Windows GPU, five pinned assets and public reference PCM"]
+    fn voice_candidate_uses_the_existing_owner_and_returns_pcm() {
+        use std::io::Read;
+        use std::time::Duration;
+        let required = |key| std::env::var(key).expect("missing target acceptance input");
+        let dll = std::path::PathBuf::from(required("TRANSLATEIT_TEST_NATIVE_DLL"));
+        let pins = required("TRANSLATEIT_TEST_NATIVE_DLL_PINS");
+        let asr = std::path::PathBuf::from(required("TRANSLATEIT_TEST_ASR_GGUF"));
+        let projector = std::path::PathBuf::from(required("TRANSLATEIT_TEST_PROJECTOR_GGUF"));
+        let mt = std::path::PathBuf::from(required("TRANSLATEIT_TEST_MT_GGUF"));
+        let voice = std::path::PathBuf::from(required("TRANSLATEIT_TEST_VOICE_GGUF"));
+        let voice_projector = std::path::PathBuf::from(required("TRANSLATEIT_TEST_VOICE_PROJECTOR_GGUF"));
+        let pci = required("TRANSLATEIT_TEST_CUDA_PCI");
+        // Public, explicitly authorized, 16 kHz mono F32LE reference fixture.
+        // Bound the read before allocation; no model or audio file discovery.
+        let reference_file = std::fs::File::open(required("TRANSLATEIT_TEST_VOICE_REFERENCE_PCM"))
+            .expect("public voice reference PCM");
+        let mut raw = Vec::new();
+        reference_file.take((MAX_VOICE_REFERENCE * 4 + 1) as u64)
+            .read_to_end(&mut raw).expect("read bounded fixture");
+        assert_eq!(raw.len() % 4, 0);
+        assert!((MIN_VOICE_REFERENCE * 4..=MAX_VOICE_REFERENCE * 4).contains(&raw.len()));
+        let reference: Vec<f32> = raw.chunks_exact(4)
+            .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap())).collect();
+        drop(raw);
+        assert!(reference.iter().all(|sample| sample.is_finite() && sample.abs() <= 1.0));
+        assert!(reference.iter().any(|sample| sample.abs() >= 0.0001));
+        // A mismatched candidate projector must fail before any model load.
+        assert!(matches!(unsafe {
+            RuntimeOwner::open_with_voice(&dll, &pins, &asr, &projector, &mt, Some(&pci),
+                Some((&voice, &voice)))
+        }, Err(Error::Native(13))));
+        let mut owner = unsafe {
+            RuntimeOwner::open_with_voice(&dll, &pins, &asr, &projector, &mt, Some(&pci),
+                Some((&voice, &voice_projector)))
+        }.expect("resident ASR, translation and voice on one device");
+        assert_eq!(owner.device_id(), pci.as_str());
+        let pending = owner.begin(InferenceInput::Voice {
+            normalized: "Hello, this is a voice quality check.".into(),
+            reference,
+        }, Instant::now() + Duration::from_secs(90)).expect("admitted voice request");
+        let InferenceOutput::Voice(samples) = pending.wait_output().expect("complete native PCM") else {
+            panic!("voice request returned a non-PCM receipt");
+        };
+        validate_voice_pcm(&samples).expect("bounded finite non-silent PCM");
+        // The same owner must still execute another stage after voice completes.
+        let result = owner.begin(InferenceInput::Translation {
+            source: "Halo".into(), from: Language::Indonesian, to: Language::English,
+        }, Instant::now() + Duration::from_secs(30)).expect("admitted translation")
+            .wait().expect("same resident owner");
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn voice_pcm_receipt_rejects_empty_silent_and_invalid_samples() {
+        assert_eq!(validate_voice_pcm(&[]), Err(Error::InvalidReceipt));
+        assert_eq!(validate_voice_pcm(&[0.0; 10]), Err(Error::InvalidReceipt));
+        assert_eq!(validate_voice_pcm(&[0.1, f32::NAN]), Err(Error::InvalidReceipt));
+        assert_eq!(validate_voice_pcm(&[1.1]), Err(Error::InvalidReceipt));
+        assert_eq!(validate_voice_pcm(&[0.0, -0.1, 0.1]), Ok(()));
     }
 
     #[test]

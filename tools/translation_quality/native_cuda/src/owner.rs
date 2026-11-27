@@ -16,6 +16,14 @@ use std::{
 pub enum InferenceInput {
     Speech { pcm: Vec<f32>, language: Language },
     Translation { source: String, from: Language, to: Language },
+    // Candidate: authorized, 16 kHz mono F32 reference. Never a model path.
+    Voice { normalized: String, reference: Vec<f32> },
+}
+
+#[derive(Debug, PartialEq)]
+pub enum InferenceOutput {
+    Text(String),
+    Voice(Vec<f32>),
 }
 
 struct RequestState {
@@ -27,20 +35,27 @@ struct Request {
     input: InferenceInput,
     state: Arc<RequestState>,
     deadline: Instant,
-    reply: SyncSender<Result<String, Error>>,
+    reply: SyncSender<Result<InferenceOutput, Error>>,
 }
 
 /// Keep the existing scheduler permit until wait returns (or this receipt is
 /// dropped). Never wait or drop an unfinished receipt under the lifecycle lock.
 #[must_use]
 pub struct PendingInference {
-    reply: Option<Receiver<Result<String, Error>>>,
+    reply: Option<Receiver<Result<InferenceOutput, Error>>>,
     state: Arc<RequestState>,
     deadline: Instant,
 }
 
 impl PendingInference {
-    pub fn wait(mut self) -> Result<String, Error> {
+    pub fn wait(self) -> Result<String, Error> {
+        match self.wait_output()? {
+            InferenceOutput::Text(text) => Ok(text),
+            InferenceOutput::Voice(_) => Err(Error::InvalidReceipt),
+        }
+    }
+
+    pub fn wait_output(mut self) -> Result<InferenceOutput, Error> {
         let reply = self.reply.take().expect("one owned inference reply");
         let result = reply.recv().map_err(|_| Error::OwnerThreadFailed)??;
         // A stop/deadline after native completion but before host consumption
@@ -85,6 +100,16 @@ impl RuntimeOwner {
     /// Supply reviewed build pins, a trusted parent and system dependency policy.
     pub unsafe fn open(dll: &Path, pins: &str, asr: &Path, projector: &Path, mt: &Path,
                        pci_id: Option<&str>) -> Result<Self, Error> {
+        unsafe { Self::open_with_voice(dll, pins, asr, projector, mt, pci_id, None) }
+    }
+
+    /// Optional candidate voice is opened with the same resident pair, on this
+    /// same execution thread; no separate scheduler, process or runtime.
+    /// # Safety
+    /// Same trusted asset and build-pin preconditions as open.
+    pub unsafe fn open_with_voice(dll: &Path, pins: &str, asr: &Path, projector: &Path, mt: &Path,
+                                  pci_id: Option<&str>, voice: Option<(&Path, &Path)>) -> Result<Self, Error> {
+        let voice = voice.map(|(model, projector)| (model.to_owned(), projector.to_owned()));
         let (dll, pins, asr, projector, mt, pci_id) =
             (dll.to_owned(), pins.to_owned(), asr.to_owned(), projector.to_owned(),
              mt.to_owned(), pci_id.map(str::to_owned));
@@ -93,7 +118,8 @@ impl RuntimeOwner {
         let (sender, requests) = mpsc::sync_channel::<Request>(1);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let thread = thread::Builder::new().name("translateit-inference".into()).spawn(move || {
-            let mut runtime = match unsafe { Runtime::open(&dll, &pins, &asr, &projector, &mt, pci_id.as_deref()) } {
+            let mut runtime = match unsafe { Runtime::open_with_voice(&dll, &pins, &asr, &projector, &mt,
+                pci_id.as_deref(), voice.as_ref().map(|(model, projector)| (model.as_path(), projector.as_path()))) } {
                 Ok(runtime) => runtime,
                 Err(error) => { let _ = ready_tx.send(Err(error)); return; }
             };
@@ -105,10 +131,14 @@ impl RuntimeOwner {
                 let control = RequestControl { cancelled: &state.cancelled, deadline };
                 let result = match input {
                     InferenceInput::Speech { pcm, language } =>
-                        runtime.transcribe(&pcm, language, &control, &mut output),
+                        runtime.transcribe(&pcm, language, &control, &mut output)
+                            .map(|text| InferenceOutput::Text(text.to_owned())),
                     InferenceInput::Translation { source, from, to } =>
-                        runtime.translate(&source, from, to, &control, &mut output),
-                }.map(str::to_owned);
+                        runtime.translate(&source, from, to, &control, &mut output)
+                            .map(|text| InferenceOutput::Text(text.to_owned())),
+                    InferenceInput::Voice { normalized, reference } =>
+                        runtime.synthesize(&normalized, &reference, &control).map(InferenceOutput::Voice),
+                };
                 // Input is released before the result; the only text copy is
                 // the owned Rust result leaving reusable native scratch.
                 let _ = reply.send(result);
@@ -217,7 +247,7 @@ mod tests {
             release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
             let cancelled = request.state.cancelled.load(Ordering::Acquire);
             request.reply.send(if cancelled { Err(Error::Cancelled) } else {
-                Ok("unexpected".to_string())
+                Ok(InferenceOutput::Text("unexpected".to_string()))
             }).unwrap();
         });
         let mut owner = RuntimeOwner {

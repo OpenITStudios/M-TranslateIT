@@ -35,6 +35,11 @@ constexpr char k_mt_eos[] = u8"<｜hy_place▁holder▁no▁2｜>";
 constexpr size_t k_max_output_bytes = 16000;
 constexpr size_t k_min_samples = 4800;
 constexpr size_t k_max_samples = 960000;
+// Bounded, complete candidate utterances only; no partial playback.
+constexpr size_t k_voice_min_ref_samples = 16000 * 3;
+constexpr size_t k_voice_max_ref_samples = 16000 * 30;
+constexpr size_t k_voice_max_samples = 44100 * 60;
+constexpr uint32_t k_voice_max_frames = 900;
 
 std::once_flag backend_once;
 std::atomic<bool> runtime_open{false};
@@ -208,7 +213,7 @@ struct decoder {
 };
 
 int32_t open_decoder(decoder & d, const char * path, ggml_backend_dev_t device,
-                     const char * expected_arch) {
+                     const char * expected_arch, bool audio_generation = false) {
     ggml_backend_dev_t devices[] = {device, nullptr};
     auto model_params = llama_model_default_params();
     model_params.devices = devices;
@@ -233,13 +238,16 @@ int32_t open_decoder(decoder & d, const char * path, ggml_backend_dev_t device,
     params.n_threads_batch = 4;
     params.offload_kqv = true;
     params.op_offload = true;
+    params.embeddings = audio_generation;
     d.context.reset(llama_init_from_model(d.model.get(), params));
     if (!d.context || !llama_get_memory(d.context.get()) ||
         llama_n_ctx_seq(d.context.get()) < k_context ||
         llama_n_batch(d.context.get()) < k_batch) return TI_CONTEXT_LOAD;
-    d.batch.reset(llama_batch_ext_init(d.context.get()));
-    d.sampler.reset(llama_sampler_init_greedy());
-    if (!d.batch || !d.sampler) return TI_CONTEXT_LOAD;
+    if (!audio_generation) {
+        d.batch.reset(llama_batch_ext_init(d.context.get()));
+        d.sampler.reset(llama_sampler_init_greedy());
+        if (!d.batch || !d.sampler) return TI_CONTEXT_LOAD;
+    }
     return TI_OK;
 }
 
@@ -257,7 +265,35 @@ struct ti_mt : decoder {
     llama_token eos = LLAMA_TOKEN_NULL;
 };
 
-extern "C" uint32_t ti_cuda_abi_version(void) { return 5; }
+struct ti_voice : decoder {
+    owned<mtmd_context, mtmd_free> projector{nullptr, mtmd_free};
+    owned<mtmd_helper_gen_audio, mtmd_helper_gen_audio_free> gen{nullptr, mtmd_helper_gen_audio_free};
+};
+
+extern "C" uint32_t ti_cuda_abi_version(void) { return 6; }
+
+static int32_t open_voice(const char * model_path, const char * projector_path,
+                          ggml_backend_dev_t device, std::unique_ptr<ti_voice> & out) {
+    auto voice = std::make_unique<ti_voice>();
+    const auto status = open_decoder(*voice, model_path, device, "zonos3", true);
+    if (status != TI_OK) return status;
+    auto params = mtmd_context_params_default();
+    params.use_gpu = true;
+    params.device = device;
+    params.n_threads = 4;
+    params.print_timings = false;
+    params.warmup = false;
+    voice->projector.reset(mtmd_init_from_file(projector_path, voice->model.get(), params));
+    if (!voice->projector || !mtmd_support_audio(voice->projector.get()) ||
+        mtmd_get_audio_sample_rate(voice->projector.get()) != 16000) return TI_PROJECTOR_LOAD;
+    const auto info = mtmd_gen_audio_get_info(voice->projector.get());
+    if (info.type != MTMD_GEN_AUDIO_TYPE_ZONOS3 || info.sample_rate != 44100 ||
+        info.n_channels != 1) return TI_PROJECTOR_LOAD;
+    voice->gen.reset(mtmd_helper_gen_audio_init(voice->context.get(), voice->projector.get()));
+    if (!voice->gen) return TI_CONTEXT_LOAD;
+    out = std::move(voice);
+    return TI_OK;
+}
 
 static int32_t open_asr(const char * model_path, const char * projector_path,
                         ggml_backend_dev_t device, ti_asr ** out) {
@@ -563,29 +599,117 @@ static int32_t translate_mt(ti_mt * mt, const char * source, size_t source_len,
     }
 }
 
-// The only public owner of the two resident model stages. No public partial
-// opens. A failure to prepare either model releases all acquired resources.
+
+namespace {
+// Upstream helper state is reset even on cancellation or failed inference.
+// The model and its allocation remain resident on the same owning thread.
+struct clear_voice_utterance {
+    ti_voice & voice;
+    ~clear_voice_utterance() {
+        llama_synchronize(voice.context.get());
+        mtmd_helper_gen_audio_reset(voice.gen.get());
+        llama_memory_clear(llama_get_memory(voice.context.get()), false);
+    }
+};
+
+int32_t synthesize_voice(ti_voice & voice, const char * normalized, size_t text_len,
+                         const float * reference, size_t reference_len,
+                         const request_control & control, float * output,
+                         size_t output_cap, size_t * out_len) {
+    // The caller must provide already normalized English and the selected,
+    // authorized reference, converted by Rust to 16 kHz mono F32.
+    if (!normalized || !text_len || text_len > 4000 || !reference ||
+        reference_len < k_voice_min_ref_samples || reference_len > k_voice_max_ref_samples ||
+        !output || output_cap < k_voice_max_samples) return TI_INVALID_INPUT;
+    const std::string_view text(normalized, text_len);
+    if (text.find('\0') != std::string_view::npos ||
+        text.find("<|") != std::string_view::npos) return TI_INVALID_INPUT;
+    bool signal = false;
+    for (size_t i = 0; i < reference_len; ++i) {
+        const float sample = reference[i];
+        if (!std::isfinite(sample) || std::abs(sample) > 1.0f) return TI_INVALID_INPUT;
+        signal |= std::abs(sample) >= 0.0001f;
+    }
+    if (!signal) return TI_INVALID_INPUT;
+    if (const auto status = control.check(); status != TI_OK) return status;
+    clear_voice_utterance clear{voice};
+    owned<mtmd_bitmap, mtmd_bitmap_free> bitmap(
+        mtmd_bitmap_init_from_audio(reference_len, reference), mtmd_bitmap_free);
+    if (!bitmap) return TI_INTERNAL;
+    auto inp = mtmd_helper_gen_audio_inp_default();
+    inp.prompt = normalized;
+    inp.prompt_len = text_len;
+    inp.lang = "en";
+    inp.speaker_ref = bitmap.get();
+    inp.out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM;
+    inp.stream = false;
+    const auto prepared = mtmd_helper_gen_audio_set_input(voice.gen.get(), &inp);
+    if (prepared != 0) return prepared == 2 ? TI_INVALID_INPUT : TI_INFERENCE;
+    for (;;) {
+        if (const auto status = control.check(); status != TI_OK) return status;
+        const auto remaining = mtmd_helper_gen_audio_step_prompt(
+            voice.gen.get(), static_cast<int32_t>(llama_n_batch(voice.context.get())));
+        if (remaining < 0) return TI_INFERENCE;
+        if (remaining == 0) break;
+    }
+    bool stopped = false;
+    for (uint32_t i = 0; i < k_voice_max_frames; ++i) {
+        if (const auto status = control.check(); status != TI_OK) return status;
+        const float * next = nullptr;
+        // ZONOS3's pinned pipeline samples its own codebook heads and ignores
+        // the caller's token and hidden state; no extra sampler or copy.
+        if (mtmd_helper_gen_audio_step_gen(voice.gen.get(), LLAMA_TOKEN_NULL,
+                                          nullptr, &next, &stopped) != 0) return TI_INFERENCE;
+        if (stopped) break;
+        if (!next) return TI_INFERENCE;
+    }
+    if (!stopped) return TI_INCOMPLETE;
+    if (const auto status = control.check(); status != TI_OK) return status;
+    int32_t rate = 0;
+    int64_t samples = 0;
+    const char * data = nullptr;
+    size_t bytes = 0;
+    if (mtmd_helper_gen_audio_get_output(voice.gen.get(), &rate, &data, &bytes, &samples) != 0)
+        return TI_INFERENCE;
+    if (rate != 44100 || !data || samples <= 0 ||
+        static_cast<uint64_t>(samples) > k_voice_max_samples ||
+        static_cast<uint64_t>(samples) > output_cap ||
+        bytes != static_cast<size_t>(samples) * sizeof(float)) return TI_OUTPUT_LIMIT;
+    if (const auto status = control.check(); status != TI_OK) return status;
+    std::memcpy(output, data, bytes);
+    *out_len = static_cast<size_t>(samples);
+    return TI_OK;
+}
+}
+
+// The only public owner; optional candidate voice assets join the same
+// runtime atomically. A failed open releases all acquired resources.
 struct ti_runtime {
     runtime_lease lease;
-    std::array<locked_asset, 3> assets;
+    std::array<locked_asset, 5> assets;
     std::unique_ptr<ti_asr> asr;
     std::unique_ptr<ti_mt> mt;
+    std::unique_ptr<ti_voice> voice;
     bool poisoned = false;
     void invalidate() {
         poisoned = true;
+        voice.reset();
         mt.reset();
         asr.reset();
     }
 };
 
 extern "C" int32_t ti_runtime_open(const char * asr_path, const char * projector_path,
-                                   const char * mt_path, const char * device_id,
+                                   const char * mt_path, const char * voice_path,
+                                   const char * voice_projector_path, const char * device_id,
                                    char * actual_device, size_t device_cap, ti_runtime ** out) {
     if (out) *out = nullptr;
     if (actual_device && device_cap) *actual_device = '\0';
     if (!out || !actual_device || device_cap < 32 ||
         !asr_path || !*asr_path || !projector_path || !*projector_path ||
-        !mt_path || !*mt_path || !device_id) return TI_INVALID_INPUT;
+        !mt_path || !*mt_path || !device_id ||
+        (voice_path == nullptr) != (voice_projector_path == nullptr) ||
+        (voice_path && (!*voice_path || !*voice_projector_path))) return TI_INVALID_INPUT;
     try {
         auto runtime = std::make_unique<ti_runtime>();
         if (!runtime->lease.acquire()) return TI_BUSY;
@@ -595,7 +719,7 @@ extern "C" int32_t ti_runtime_open(const char * asr_path, const char * projector
         ggml_backend_dev_get_props(device, &device_props);
         if (!device_props.device_id || !physical_pci_id(device_props.device_id)) return TI_CUDA_DEVICE;
         const std::string selected_id(device_props.device_id);
-        // Hash all three before any model allocation, one shared 1 MiB buffer.
+        // Hash every selected asset before any model allocation, one shared 1 MiB buffer.
         {
             hash_algorithm algorithm;
             if (BCryptOpenAlgorithmProvider(&algorithm.handle, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
@@ -610,6 +734,13 @@ extern "C" int32_t ti_runtime_open(const char * asr_path, const char * projector
                 !verify_asset(runtime->assets[2], mt_path,
                               "d98fe604dec1f28f58f80d7d560f7177e584d3b8e5835862687660e5ff97cb40",
                               0, algorithm.handle, scratch)) return TI_ARTIFACT;
+            if (voice_path &&
+                (!verify_asset(runtime->assets[3], voice_path,
+                               "60568efc88e2f9231f4f5c061e246421f575986642d72ab9ae68f77d6cf76be4",
+                               854726208ull, algorithm.handle, scratch) ||
+                 !verify_asset(runtime->assets[4], voice_projector_path,
+                               "aeeb92325b4b6927bef656390b78e1246148065f947d8b59c2663557a809414d",
+                               1142502880ull, algorithm.handle, scratch))) return TI_ARTIFACT;
         }
         // Device-global free bytes are a coarse admission signal, not app
         // peak VRAM or residency proof. Check only at lifecycle boundaries.
@@ -621,12 +752,19 @@ extern "C" int32_t ti_runtime_open(const char * asr_path, const char * projector
                                             runtime->assets[1].path.c_str(), device, &speech);
         if (speech_status != TI_OK) return speech_status;
         runtime->asr.reset(speech);
-        if (!memory_admitted(device, runtime->assets[2].bytes + k_reserve_bytes)) return TI_VRAM;
+        const auto voice_bytes = runtime->assets[3].bytes + runtime->assets[4].bytes;
+        if (!memory_admitted(device, runtime->assets[2].bytes + voice_bytes + k_reserve_bytes)) return TI_VRAM;
         ti_mt * mt = nullptr;
         const auto mt_status = open_mt(runtime->assets[2].path.c_str(), device, &mt);
         if (mt_status != TI_OK) return mt_status;
         runtime->mt.reset(mt);
-        if (!memory_admitted(device, k_reserve_bytes)) return TI_VRAM;
+        if (!memory_admitted(device, voice_bytes + k_reserve_bytes)) return TI_VRAM;
+        if (voice_path) {
+            const auto voice_status = open_voice(runtime->assets[3].path.c_str(),
+                runtime->assets[4].path.c_str(), device, runtime->voice);
+            if (voice_status != TI_OK) return voice_status;
+            if (!memory_admitted(device, k_reserve_bytes)) return TI_VRAM;
+        }
         std::memcpy(actual_device, selected_id.c_str(), selected_id.size() + 1);
         *out = runtime.release();
         return TI_OK;
@@ -674,4 +812,25 @@ extern "C" int32_t ti_runtime_translate(ti_runtime * runtime, const char * sourc
     return finish_stage(*runtime, translate_mt(runtime->mt.get(), source, source_len,
                                               source_language, target_language,
                                               control, output, output_cap, out_len), control, out_len);
+}
+
+extern "C" int32_t ti_runtime_synthesize(ti_runtime * runtime, const char * normalized,
+                                         size_t text_len, const float * reference, size_t reference_len,
+                                         ti_stop_check stop, const void * stop_data,
+                                         float * output, size_t output_cap, size_t * out_len) {
+    if (!out_len) return TI_INVALID_INPUT;
+    *out_len = 0;
+    if (!runtime || !stop || !stop_data) return TI_INVALID_INPUT;
+    if (runtime->poisoned) return TI_POISONED;
+    if (!runtime->voice) return TI_INVALID_INPUT;
+    const request_control control{stop, stop_data};
+    if (const auto status = control.check(); status != TI_OK) return status;
+    int32_t status;
+    try {
+        status = synthesize_voice(*runtime->voice, normalized, text_len,
+                                  reference, reference_len, control, output, output_cap, out_len);
+    } catch (...) {
+        status = TI_INTERNAL;
+    }
+    return finish_stage(*runtime, status, control, out_len);
 }
