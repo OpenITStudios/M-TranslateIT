@@ -36,6 +36,21 @@ fn packages() -> Result<PathBuf, String> {
     } else { Err("silero:unverified_runtime_root".to_string()) }
 }
 
+// Shared with the held-out My Voice verifier. No second ORT environment,
+// process, or automatic provider choice. Current verified DLL path is
+// transitional; move it with VAD during the native payload cutover.
+pub(crate) fn verified_ort_environment() -> Result<ort::environment::Environment, String> {
+    let mut slot = ENVIRONMENT.lock().map_err(|_| "silero:environment_poisoned")?;
+    if let Some(env) = slot.as_ref() { return Ok(env.clone()); }
+    let dll = packages()?.join("onnxruntime/capi/onnxruntime.dll");
+    verified(&dll, DLL_SHA256, 19_288_928)?;
+    let env = ort::init_from(&dll).map_err(|_| "silero:runtime_load_failed".to_string())?
+        .with_name("translateit-speech-presence").with_telemetry(false)
+        .build().map_err(|_| "silero:environment_failed".to_string())?;
+    *slot = Some(env.clone());
+    Ok(env)
+}
+
 pub struct Silero {
     session: Session,
     context: [f32; 64],
@@ -46,18 +61,8 @@ pub struct Silero {
 impl Silero {
     pub fn load() -> Result<Self, String> {
         let packages = packages()?;
-        let dll = packages.join("onnxruntime/capi/onnxruntime.dll");
-        verified(&dll, DLL_SHA256, 19_288_928)?;
         let model = verified(&packages.join("faster_whisper/assets/silero_vad_v6.onnx"), MODEL_SHA256, 1_245_151)?;
-        let env = {
-            let mut slot = ENVIRONMENT.lock().map_err(|_| "silero:environment_poisoned")?;
-            if slot.is_none() {
-                *slot = Some(ort::init_from(&dll).map_err(|_| "silero:runtime_load_failed".to_string())?
-                    .with_name("translateit-speech-presence").with_telemetry(false)
-                    .build().map_err(|_| "silero:environment_failed".to_string())?);
-            }
-            slot.as_ref().expect("environment initialized").clone()
-        };
+        let env = verified_ort_environment()?;
         let session = Session::builder(&env).and_then(|b| Ok(b.with_intra_threads(1)?))
             .and_then(|b| Ok(b.with_inter_threads(1)?))
             .and_then(|mut b| b.commit_from_memory(&model))
