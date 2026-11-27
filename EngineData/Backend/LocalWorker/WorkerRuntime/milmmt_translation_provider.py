@@ -4,6 +4,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import worker_runtime_common as common
+
 MODEL_ID = "milmmt-46-1b-v1.0"
 HF_MODEL_ID = "xiaomi-research/MiLMMT-46-1B-v1.0"
 MODEL_REVISION = "4fc480b6c58dec29c159dcdf9fde0f6d5c354995"
@@ -88,11 +90,31 @@ def translation_input_token_limit(_tokenizer: Any, _model: Any) -> int:
     return STANDALONE_SOURCE_TOKEN_LIMIT
 
 
+def require_meeting_translation_runtime(runtime: dict[str, Any]) -> None:
+    model = runtime.get("model")
+    placement = getattr(model, "hf_device_map", None)
+    if (
+        runtime.get("device") != "cuda"
+        or runtime.get("precision") != "bf16"
+        or runtime.get("model_id") != MODEL_ID
+        or runtime.get("model_revision") != MODEL_REVISION
+        or runtime.get("translation_degraded") is not False
+        or runtime.get("translation_fallback_reason") != ""
+        or str(getattr(model, "device", "")) != "cuda:0"
+        or str(getattr(model, "dtype", "")) != "torch.bfloat16"
+        or not isinstance(placement, dict)
+        or not placement
+        or any(value not in (0, "cuda", "cuda:0") for value in placement.values())
+    ):
+        raise RuntimeError("cuda:meeting_translation_compute_unverified")
+
+
 def get_translation_runtime(
     source_language: str,
     target_language: str,
     *,
     assets_verified: bool = False,
+    require_cuda: bool = False,
 ) -> dict[str, Any]:
     host = _host()
     pair = host["direction_pair"](source_language, target_language)
@@ -102,19 +124,27 @@ def get_translation_runtime(
     model_id, model_path = selected
     runtimes = host["TRANSLATION_RUNTIME"]
     if pair in runtimes:
-        return runtimes[pair]
+        runtime = runtimes[pair]
+        if require_cuda:
+            require_meeting_translation_runtime(runtime)
+        return runtime
     if runtimes:
-        runtime = {**next(iter(runtimes.values())), "direction_pair": pair}
+        resident = next(iter(runtimes.values()))
+        if require_cuda:
+            require_meeting_translation_runtime(resident)
+        runtime = {**resident, "direction_pair": pair}
         runtimes[pair] = runtime
         return runtime
     if not assets_verified and not host["translation_model_ready"](model_path):
         raise RuntimeError(MISSING_BLOCKER)
 
+    device, fallback_reason = host["translation_runtime_config"]()
+    if require_cuda and (device != "cuda" or fallback_reason):
+        raise RuntimeError("cuda:meeting_translation_required")
+
     import torch
     import transformers
     from transformers import AutoModelForCausalLM, AutoTokenizer
-
-    device, fallback_reason = host["translation_runtime_config"]()
     started = time.perf_counter()
     tokenizer = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True)
     load_kwargs: dict[str, Any] = {"local_files_only": True}
@@ -159,6 +189,8 @@ def get_translation_runtime(
         "attention_backend": attention_backend,
         "cold_load_ms": round((time.perf_counter() - started) * 1000.0, 2),
     }
+    if require_cuda:
+        require_meeting_translation_runtime(runtime)
     runtimes[pair] = runtime
     return runtime
 
@@ -284,6 +316,7 @@ def handle_translate(payload: dict[str, Any]) -> dict[str, Any]:
             source_language,
             target_language,
             assets_verified=model_asset_check_performed,
+            require_cuda=common.meeting_cuda_required(payload),
         )
         tokenizer = runtime["tokenizer"]
         model = runtime["model"]
@@ -463,6 +496,7 @@ def handle_translation_preload(payload: dict[str, Any]) -> dict[str, Any]:
             source_language,
             target_language,
             assets_verified=True,
+            require_cuda=common.meeting_cuda_required(payload),
         )
         return {
             "ok": True,

@@ -49,6 +49,16 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def meeting_cuda_required(payload: dict[str, Any] | None) -> bool:
+    # The existing functional probe always sends a boolean preparation marker,
+    # including False for the setup-only probe. Live lanes carry ownership.
+    return isinstance(payload, dict) and (
+        isinstance(payload.get("meeting_start_prepare"), bool)
+        or payload.get("meeting_lane") in ("you", "incoming")
+        or payload.get("meeting_generation") is not None
+    )
+
+
 def request_deadline_remaining_ms(payload: dict[str, Any] | None) -> int | None:
     if not isinstance(payload, dict):
         return None

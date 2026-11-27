@@ -717,3 +717,97 @@ def test_legacy_translation_style_input_cannot_reactivate_style_mode(monkeypatch
 
     assert result["ok"] is True
     assert "translation_style" not in result
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"meeting_start_prepare": False},
+        {"meeting_start_prepare": True},
+        {"meeting_lane": "you", "meeting_generation": 7},
+        {"meeting_lane": "incoming", "meeting_session_id": "meeting-test"},
+    ],
+)
+def test_meeting_asr_rejects_cold_cpu_and_backup_without_loading(monkeypatch, payload) -> None:
+    io = load_worker_module().io_runtime
+    monkeypatch.setattr(io, "ASR_RUNTIME", None)
+    loads = []
+    monkeypatch.setitem(
+        sys.modules,
+        "faster_whisper",
+        types.SimpleNamespace(WhisperModel=lambda *args, **kwargs: loads.append(args)),
+    )
+    monkeypatch.setattr(io.common, "import_ready", lambda _name: True)
+    monkeypatch.setattr(io, "asr_model_ready", lambda path: path == io.ASR_BACKUP_MODEL)
+    monkeypatch.setattr(io, "asr_runtime_config", lambda _payload: ("cuda", "int8_float16", ""))
+    assert not io.handle_asr_preload(payload)["ok"]
+    with pytest.raises(RuntimeError, match="faster_whisper_large_v3_turbo_missing"):
+        io.get_asr_runtime(payload)
+    monkeypatch.setattr(io, "asr_model_ready", lambda _path: True)
+    monkeypatch.setattr(io, "asr_runtime_config", lambda _payload: ("cpu", "int8", ""))
+    with pytest.raises(RuntimeError, match="meeting_asr_required"):
+        io.get_asr_runtime(payload)
+    assert not loads
+
+
+def test_meeting_asr_checks_actual_native_compute_before_publishing(monkeypatch) -> None:
+    io = load_worker_module().io_runtime
+    payload = {"meeting_start_prepare": False}
+    for name, value in (
+        ("ASR_RUNTIME", None),
+        ("ASR_RUNTIME_MODEL_ID", "not_loaded"),
+        ("ASR_RUNTIME_DEVICE", "not_loaded"),
+        ("ASR_RUNTIME_COMPUTE", "not_loaded"),
+    ):
+        monkeypatch.setattr(io, name, value)
+    monkeypatch.setattr(io, "asr_model_ready", lambda _path: True)
+    monkeypatch.setattr(io, "asr_runtime_config", lambda _payload: ("cuda", "int8_float16", ""))
+    native = types.SimpleNamespace(device="cpu", compute_type="int8")
+    model = types.SimpleNamespace(model=native)
+    monkeypatch.setitem(
+        sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=lambda *a, **k: model)
+    )
+    with pytest.raises(RuntimeError, match="meeting_asr_compute_unverified"):
+        io.get_asr_runtime(payload)
+    assert io.ASR_RUNTIME is None
+    native.device, native.compute_type = "cuda", "int8_float16"
+    assert io.get_asr_runtime(payload) is model
+    native.device = "cpu"
+    with pytest.raises(RuntimeError, match="meeting_asr_compute_unverified"):
+        io.get_asr_runtime(payload)
+
+
+def test_meeting_translation_refuses_cold_cpu_and_warm_degraded_runtime(monkeypatch) -> None:
+    load_worker_module()
+    provider = milmmt_translation_provider
+    host = provider._host()
+    monkeypatch.setitem(host, "TRANSLATION_RUNTIME", {})
+    monkeypatch.setitem(host, "translation_runtime_config", lambda: ("cpu", "cuda_unavailable"))
+    monkeypatch.setitem(host, "translation_model_ready", lambda _path: True)
+    with pytest.raises(RuntimeError, match="meeting_translation_required"):
+        provider.get_translation_runtime("id", "en", require_cuda=True)
+    assert not host["TRANSLATION_RUNTIME"]
+
+    resident = {
+        "model": types.SimpleNamespace(
+            device="cuda:0", dtype="torch.bfloat16", hf_device_map={"": 0}
+        ),
+        "model_id": provider.MODEL_ID,
+        "model_revision": provider.MODEL_REVISION,
+        "device": "cuda",
+        "precision": "bf16",
+        "translation_degraded": False,
+        "translation_fallback_reason": "",
+    }
+    host["TRANSLATION_RUNTIME"]["id->en"] = resident
+    assert provider.get_translation_runtime("id", "en", require_cuda=True) is resident
+    resident["model"].hf_device_map = {"": 0, "layer": "cpu"}
+    with pytest.raises(RuntimeError, match="meeting_translation_compute_unverified"):
+        provider.get_translation_runtime("id", "en", require_cuda=True)
+    resident["model"].hf_device_map = {"": 0}
+    resident["device"] = "cpu"
+    with pytest.raises(RuntimeError, match="meeting_translation_compute_unverified"):
+        provider.get_translation_runtime("id", "en", require_cuda=True)
+    with pytest.raises(RuntimeError, match="meeting_translation_compute_unverified"):
+        provider.get_translation_runtime("en", "id", require_cuda=True)
+    assert "en->id" not in host["TRANSLATION_RUNTIME"]

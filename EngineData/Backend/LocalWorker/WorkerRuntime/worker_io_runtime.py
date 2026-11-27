@@ -65,6 +65,8 @@ def asr_runtime_config(payload: dict[str, Any] | None = None) -> tuple[str, str,
         raise RuntimeError(str(gpu["cuda_probe_blocker"] or "cuda:ctranslate2_capability_unknown"))
     if selected == "cuda":
         return "cuda", "int8_float16", ""
+    if common.meeting_cuda_required(payload):
+        raise RuntimeError("cuda:meeting_asr_required")
     return "cpu", "int8", str(gpu["fallback_reason"])
 
 
@@ -77,19 +79,48 @@ def asr_blocker(exc: Exception) -> str:
     return f"asr:runtime_failed:{type(exc).__name__}"
 
 
+def require_meeting_asr_runtime(model: Any, model_id: str) -> None:
+    if model_id != ASR_PRIMARY_ID:
+        raise RuntimeError("asr:meeting_primary_model_required")
+    # CTranslate2 exposes the actual loaded backend and compute type. A
+    # constructor request alone is not proof of effective placement.
+    native = getattr(model, "model", None)
+    if (
+        getattr(native, "device", None) != "cuda"
+        or getattr(native, "compute_type", None) != "int8_float16"
+    ):
+        raise RuntimeError("cuda:meeting_asr_compute_unverified")
+
+
 def get_asr_runtime(
     payload: dict[str, Any] | None = None,
     *,
     selected_model: tuple[str, Path] | None = None,
 ) -> Any:
     global ASR_RUNTIME, ASR_RUNTIME_DEVICE, ASR_RUNTIME_COMPUTE, ASR_RUNTIME_MODEL_ID
+    strict = common.meeting_cuda_required(payload)
     if ASR_RUNTIME is not None:
+        if strict:
+            require_meeting_asr_runtime(ASR_RUNTIME, ASR_RUNTIME_MODEL_ID)
         return ASR_RUNTIME
-    from faster_whisper import WhisperModel
 
     device, compute_type, _fallback = asr_runtime_config(payload)
+    if strict:
+        if selected_model is None:
+            if not asr_model_ready(ASR_MODEL):
+                raise RuntimeError("model:faster_whisper_large_v3_turbo_missing")
+            selected_model = (ASR_PRIMARY_ID, ASR_MODEL)
+        if selected_model != (ASR_PRIMARY_ID, ASR_MODEL):
+            raise RuntimeError("asr:meeting_primary_model_required")
+        if (device, compute_type) != ("cuda", "int8_float16"):
+            raise RuntimeError("cuda:meeting_asr_required")
     model_id, model_path = selected_model if selected_model is not None else choose_asr_model()
-    ASR_RUNTIME = WhisperModel(str(model_path), device=device, compute_type=compute_type)
+    from faster_whisper import WhisperModel
+
+    model = WhisperModel(str(model_path), device=device, compute_type=compute_type)
+    if strict:
+        require_meeting_asr_runtime(model, model_id)
+    ASR_RUNTIME = model
     ASR_RUNTIME_DEVICE = device
     ASR_RUNTIME_COMPUTE = compute_type
     ASR_RUNTIME_MODEL_ID = model_id
@@ -98,8 +129,12 @@ def get_asr_runtime(
 
 def handle_asr_preload(payload: dict[str, Any]) -> dict[str, Any]:
     started = common.now_ms()
+    strict = common.meeting_cuda_required(payload)
     if ASR_RUNTIME is None:
-        model_id, model_path, ready = inspect_asr_model()
+        if strict:
+            model_id, model_path, ready = ASR_PRIMARY_ID, ASR_MODEL, asr_model_ready(ASR_MODEL)
+        else:
+            model_id, model_path, ready = inspect_asr_model()
     else:
         # Explicit preload still validates assets, but must report/check the
         # resident model rather than a newly discovered, unloaded candidate.
@@ -135,7 +170,7 @@ def handle_asr_preload(payload: dict[str, Any]) -> dict[str, Any]:
             "elapsed_ms": common.now_ms() - started,
         }
     try:
-        if ASR_RUNTIME is None:
+        if ASR_RUNTIME is None or strict:
             get_asr_runtime(payload, selected_model=(model_id, model_path))
         return {
             "ok": True,

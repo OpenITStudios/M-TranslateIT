@@ -41,7 +41,7 @@ revision 4fc480b6c58dec29c159dcdf9fde0f6d5c354995
 one resident causal model
 ID → EN and EN → ID
 CUDA BF16 primary
-CPU fallback = explicit degraded operation
+CPU fallback = legacy non-Meeting requests only; Meeting ASR/MT requires CUDA
 ```
 
 Production rules:
@@ -70,7 +70,13 @@ Meeting translation is context-free across turns: outbound ID→EN uses only the
 ## ASR and Meeting voice
 
 - ASR primary: Faster Whisper Large V3 Turbo.
-- Optional ASR fallback: Faster Whisper Medium.
+- Optional ASR fallback: Faster Whisper Medium for legacy non-Meeting calls only.
+  Meeting and the setup functional probe admit only Large V3 Turbo on CUDA.
+  Before inference, the worker refuses a missing primary, an existing backup
+  or CPU model, or an actual CTranslate2 device/compute mismatch. MiLMMT
+  Meeting requests likewise refuse CPU loading and degraded resident reuse;
+  no fallback result is promoted by Rust. This is a transitional source gate,
+  not the native CUDA migration or a change to My Voice.
 - Status observes each ASR asset candidate once and derives the preferred candidate
   from those results. Cold preload reuses its verified selection through construction;
   warm preload validates and reports the actual resident model, without switching or
