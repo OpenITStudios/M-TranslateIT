@@ -12,9 +12,10 @@
 extern "C" {
 #endif
 
-// Candidate ABI v1. All memory remains owned by its allocator; the
-// caller supplies input/output buffers. One mutable ASR handle, serialized.
+// Candidate ABI v2. All memory remains owned by its allocator; the
+// caller supplies input/output buffers. Each mutable handle is serialized.
 typedef struct ti_asr ti_asr;
+typedef struct ti_mt ti_mt;
 enum ti_status {
     TI_OK = 0,
     TI_INVALID_INPUT = 1,
@@ -45,6 +46,15 @@ TI_EXPORT void ti_asr_close(ti_asr * asr);
 TI_EXPORT int32_t ti_asr_transcribe(ti_asr * asr, const float * pcm, size_t count,
                                    uint32_t language, char * output,
                                    size_t output_cap, size_t * out_len);
+
+// Same exact CUDA device as ASR. No model or direction router.
+TI_EXPORT int32_t ti_mt_open(const char * model_path, const char * device_id, ti_mt ** out);
+TI_EXPORT void ti_mt_close(ti_mt * mt);
+// Input is UTF-8, at most 8000 bytes; Rust additionally enforces 2000 scalars.
+// Language 1=id / 2=en, different directions only. Same output contract as ASR.
+TI_EXPORT int32_t ti_mt_translate(ti_mt * mt, const char * source, size_t source_len,
+                                   uint32_t source_language, uint32_t target_language,
+                                   char * output, size_t output_cap, size_t * out_len);
 
 #ifdef __cplusplus
 }
