@@ -18,7 +18,7 @@ pub enum InferenceInput {
     Translation { source: String, from: Language, to: Language },
     // Candidate: authorized, 16 kHz mono F32 reference. Never a model path.
     BindVoice { reference: Vec<f32> },
-    Voice { normalized: String, binding: VoiceBinding },
+    Voice { text: String, binding: VoiceBinding },
 }
 
 #[derive(Debug, PartialEq)]
@@ -140,8 +140,8 @@ impl RuntimeOwner {
                             .map(|text| InferenceOutput::Text(text.to_owned())),
                     InferenceInput::BindVoice { reference } =>
                         runtime.bind_voice(&reference, &control).map(InferenceOutput::VoiceBound),
-                    InferenceInput::Voice { normalized, binding } =>
-                        runtime.synthesize(&normalized, binding, &control).map(InferenceOutput::Voice),
+                    InferenceInput::Voice { text, binding } =>
+                        runtime.synthesize(&text, binding, &control).map(InferenceOutput::Voice),
                 };
                 // Input is released before the result; the only text copy is
                 // the owned Rust result leaving reusable native scratch.

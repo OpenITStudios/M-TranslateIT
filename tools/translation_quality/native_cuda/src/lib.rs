@@ -6,6 +6,7 @@ use std::{ffi::{c_char, c_void, CString}, marker::PhantomData, path::Path,
 
 mod loader;
 mod owner;
+mod voice_text;
 pub use owner::{InferenceInput, InferenceOutput, PendingInference, RuntimeOwner};
 
 const ABI: u32 = 7;
@@ -230,14 +231,14 @@ impl Runtime {
         Ok(binding)
     }
 
-    /// Candidate only: normalized English and exact currently bound reference.
+    /// Candidate only: current English utterance and exact bound reference.
+    /// Normalize once in Rust before entering native inference; no caller bypass.
     /// Output is owned PCM, not a WAV, JSON payload or borrowed native pointer.
-    pub fn synthesize(&mut self, normalized: &str, binding: VoiceBinding,
+    pub fn synthesize(&mut self, text: &str, binding: VoiceBinding,
                       control: &RequestControl<'_>) -> Result<Vec<f32>, Error> {
-        if self.voice_binding != Some(binding) || normalized.trim().is_empty() || normalized.len() > 4000 ||
-            normalized.contains('\0') || normalized.contains("<|") {
-            return Err(Error::InvalidInput);
-        }
+        if self.voice_binding != Some(binding) { return Err(Error::InvalidInput); }
+        check_control(control)?;
+        let normalized = voice_text::normalize(text)?;
         check_control(control)?;
         let mut output = Vec::<f32>::new();
         output.try_reserve_exact(MAX_VOICE_SAMPLES).map_err(|_| Error::Native(12))?;
@@ -440,7 +441,7 @@ mod tests {
             .wait_output().expect("reference encoded");
         let InferenceOutput::VoiceBound(binding) = bound else { panic!("missing binding receipt"); };
         let pending = owner.begin(InferenceInput::Voice {
-            normalized: "Hello, this is a voice quality check.".into(), binding,
+            text: "Hello, this is a voice quality check.".into(), binding,
         }, Instant::now() + Duration::from_secs(90)).expect("admitted voice request");
         let InferenceOutput::Voice(samples) = pending.wait_output().expect("complete native PCM") else {
             panic!("voice request returned a non-PCM receipt");
@@ -448,14 +449,14 @@ mod tests {
         validate_voice_pcm(&samples).expect("bounded finite non-silent PCM");
         // A second utterance carries the same handle, no PCM reference.
         assert!(matches!(owner.begin(InferenceInput::Voice {
-            normalized: "This is the second sentence.".into(), binding,
+            text: "The second sentence starts at 10:05.".into(), binding,
         }, Instant::now() + Duration::from_secs(90)).unwrap().wait_output(),
             Ok(InferenceOutput::Voice(_))));
         // Invalid replacement revokes prior authority rather than falling back.
         assert!(owner.begin(InferenceInput::BindVoice { reference: Vec::new() },
             Instant::now() + Duration::from_secs(30)).unwrap().wait_output().is_err());
         assert_eq!(owner.begin(InferenceInput::Voice {
-            normalized: "Must not use the old voice.".into(), binding,
+            text: "Must not use the old voice.".into(), binding,
         }, Instant::now() + Duration::from_secs(30)).unwrap().wait_output(), Err(Error::InvalidInput));
         // The same owner must still execute another stage after voice completes.
         let result = owner.begin(InferenceInput::Translation {
