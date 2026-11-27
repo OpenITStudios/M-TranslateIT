@@ -672,41 +672,48 @@ pub fn observe_finalized_incoming_i16_samples(
     samples: &[i16],
     sample_rate_hz: u32,
     source_channels: u16,
+    scratch: &mut Vec<f32>,
 ) {
-    observe_i16(incoming_sync(), samples, sample_rate_hz, source_channels);
+    convert_and_downmix(samples, source_channels, scratch, |sample| {
+        (sample as f32 / i16::MAX as f32).clamp(-1.0, 1.0)
+    });
+    observe_finalized_mono_samples(incoming_sync(), scratch, sample_rate_hz);
 }
 
 pub fn observe_finalized_incoming_i32_samples(
     samples: &[i32],
     sample_rate_hz: u32,
     source_channels: u16,
+    scratch: &mut Vec<f32>,
 ) {
-    let mono = convert_and_downmix(samples, source_channels, |sample| {
+    convert_and_downmix(samples, source_channels, scratch, |sample| {
         (sample as f64 / i32::MAX as f64).clamp(-1.0, 1.0) as f32
     });
-    observe_finalized_mono_samples(incoming_sync(), &mono, sample_rate_hz);
+    observe_finalized_mono_samples(incoming_sync(), scratch, sample_rate_hz);
 }
 
 pub fn observe_finalized_incoming_i64_samples(
     samples: &[i64],
     sample_rate_hz: u32,
     source_channels: u16,
+    scratch: &mut Vec<f32>,
 ) {
-    let mono = convert_and_downmix(samples, source_channels, |sample| {
+    convert_and_downmix(samples, source_channels, scratch, |sample| {
         (sample as f64 / i64::MAX as f64).clamp(-1.0, 1.0) as f32
     });
-    observe_finalized_mono_samples(incoming_sync(), &mono, sample_rate_hz);
+    observe_finalized_mono_samples(incoming_sync(), scratch, sample_rate_hz);
 }
 
 pub fn observe_finalized_incoming_u8_samples(
     samples: &[u8],
     sample_rate_hz: u32,
     source_channels: u16,
+    scratch: &mut Vec<f32>,
 ) {
-    let mono = convert_and_downmix(samples, source_channels, |sample| {
+    convert_and_downmix(samples, source_channels, scratch, |sample| {
         ((sample as f32 / u8::MAX as f32) * 2.0 - 1.0).clamp(-1.0, 1.0)
     });
-    observe_finalized_mono_samples(incoming_sync(), &mono, sample_rate_hz);
+    observe_finalized_mono_samples(incoming_sync(), scratch, sample_rate_hz);
 }
 
 fn observe_f32(
@@ -720,18 +727,6 @@ fn observe_f32(
         return;
     }
     let mono = downmix_f32(samples, source_channels);
-    observe_finalized_mono_samples(sync, &mono, sample_rate_hz);
-}
-
-fn observe_i16(
-    sync: &FinalizedProducerSync,
-    samples: &[i16],
-    sample_rate_hz: u32,
-    source_channels: u16,
-) {
-    let mono = convert_and_downmix(samples, source_channels, |sample| {
-        (sample as f32 / i16::MAX as f32).clamp(-1.0, 1.0)
-    });
     observe_finalized_mono_samples(sync, &mono, sample_rate_hz);
 }
 
@@ -1185,25 +1180,26 @@ fn reset_current_utterance(state: &mut FinalizedProducerState) {
 fn convert_and_downmix<T: Copy>(
     samples: &[T],
     source_channels: u16,
+    output: &mut Vec<f32>,
     convert: impl Fn(T) -> f32,
-) -> Vec<f32> {
+) {
+    output.clear();
     let channel_count = usize::from(source_channels.max(1));
+    output.reserve(samples.len().div_ceil(channel_count));
     if channel_count == 1 {
-        return samples.iter().copied().map(convert).map(safe_sample).collect();
+        output.extend(samples.iter().copied().map(convert).map(safe_sample));
+        return;
     }
 
-    samples
-        .chunks(channel_count)
-        .map(|frame| {
-            let sum = frame
-                .iter()
-                .copied()
-                .map(&convert)
-                .map(safe_sample)
-                .sum::<f32>();
-            sum / frame.len().max(1) as f32
-        })
-        .collect()
+    output.extend(samples.chunks(channel_count).map(|frame| {
+        let sum = frame
+            .iter()
+            .copied()
+            .map(&convert)
+            .map(safe_sample)
+            .sum::<f32>();
+        sum / frame.len().max(1) as f32
+    }));
 }
 
 fn downmix_f32(samples: &[f32], source_channels: u16) -> Vec<f32> {

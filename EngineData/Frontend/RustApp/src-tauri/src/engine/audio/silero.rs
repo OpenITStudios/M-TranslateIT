@@ -121,7 +121,15 @@ impl SpeechWindows {
         self.pending.extend(pcm.iter().map(|s| if s.is_finite() { s.clamp(-1.0, 1.0) } else { 0.0 }));
     }
 
-    pub fn next(&mut self) -> Option<(Vec<f32>, [f32; WINDOW])> {
+    /// Maximum native samples consumed by one rational 32 ms window.
+    pub fn native_window_capacity(&self) -> usize {
+        (WINDOW * self.rate as usize).div_ceil(16_000)
+    }
+
+    /// Reuse the CPU owner's native scratch buffer without changing sample
+    /// order, interpolation, lookahead, or rational clock advancement.
+    pub fn next_into(&mut self, native: &mut Vec<f32>) -> Option<[f32; WINDOW]> {
+        native.clear();
         let target_start = self.window_index * WINDOW as u64;
         let end = (target_start + WINDOW as u64) * u64::from(self.rate) / 16_000;
         let count = (end - self.consumed) as usize;
@@ -134,10 +142,10 @@ impl SpeechWindows {
             let fraction = (numerator % 16_000) as f32 / 16_000.0;
             *value = self.pending[left] * (1.0 - fraction) + self.pending[left + 1] * fraction;
         }
-        let native = self.pending.drain(..count).collect();
+        native.extend(self.pending.drain(..count));
         self.consumed = end;
         self.window_index += 1;
-        Some((native, output))
+        Some(output)
     }
 }
 
@@ -152,18 +160,65 @@ mod tests {
             let collect = |chunk| {
                 let mut windows = SpeechWindows::new(rate).unwrap();
                 let mut result = Vec::new();
+                let mut native = Vec::with_capacity(windows.native_window_capacity());
+                let capacity = native.capacity();
                 for pcm in input.chunks(chunk) {
                     windows.push(pcm);
-                    while let Some(window) = windows.next() { result.push(window); }
+                    while let Some(frame) = windows.next_into(&mut native) {
+                        assert_eq!(native.capacity(), capacity);
+                        result.push((native.clone(), frame));
+                    }
+                    assert!(native.is_empty());
                 }
                 windows.reset();
-                assert!(windows.next().is_none());
+                assert!(windows.next_into(&mut native).is_none());
+                assert!(native.is_empty());
                 result
             };
             let whole = collect(input.len());
             assert_eq!(whole, collect(137));
             let retained = whole.iter().flat_map(|w| w.0.iter().copied()).collect::<Vec<_>>();
             assert_eq!(retained, input[..retained.len()]);
+        }
+    }
+
+    #[test]
+    fn native_window_reuse_preserves_rational_interpolation_and_lookahead() {
+        // Independent reference for each sample position, including below
+        // 16 kHz, fractional native windows and callback partition boundaries.
+        for rate in [8_000, 16_000, 44_100, 48_000, 96_000, 192_000] {
+            let input = (0..rate + 1)
+                .map(|i| if i % 37 == 0 { f32::NAN } else { (i % 257) as f32 / 128.0 - 1.0 })
+                .collect::<Vec<_>>();
+            let sanitized = input.iter().map(|s| {
+                if s.is_finite() { s.clamp(-1.0, 1.0) } else { 0.0 }
+            }).collect::<Vec<_>>();
+            let mut windows = SpeechWindows::new(rate).unwrap();
+            let mut native = Vec::with_capacity(windows.native_window_capacity());
+            let capacity = native.capacity();
+            let mut index = 0u64;
+            let mut previous_end = 0usize;
+            for chunk in input.chunks(137) {
+                windows.push(chunk);
+                while let Some(frame) = windows.next_into(&mut native) {
+                    let target_start = index * WINDOW as u64;
+                    let end = ((target_start + WINDOW as u64) * u64::from(rate) / 16_000) as usize;
+                    assert_eq!(native.as_slice(), &sanitized[previous_end..end]);
+                    assert_eq!(native.capacity(), capacity);
+                    for (i, value) in frame.iter().enumerate() {
+                        let numerator = (target_start + i as u64) * u64::from(rate);
+                        let left = (numerator / 16_000) as usize;
+                        let fraction = (numerator % 16_000) as f32 / 16_000.0;
+                        assert_eq!(*value, sanitized[left] * (1.0 - fraction) + sanitized[left + 1] * fraction);
+                    }
+                    previous_end = end;
+                    index += 1;
+                }
+            }
+            assert!(index > 0);
+            windows.reset();
+            assert!(windows.next_into(&mut native).is_none());
+            assert!(native.is_empty());
         }
     }
 

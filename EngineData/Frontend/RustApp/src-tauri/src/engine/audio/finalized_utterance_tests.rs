@@ -267,17 +267,20 @@ fn preroll_bound_resample_and_safe_retention_are_deterministic() {
     extend_safe_samples(&mut retained, &[f32::NAN, 2.0, -2.0, 0.25]);
     assert_eq!(retained, vec![0.0, 1.0, -1.0, 0.25]);
 
-    let i16_mono = convert_and_downmix(&[i16::MAX, 0, i16::MIN], 1, |sample| {
-        (sample as f32 / i16::MAX as f32).clamp(-1.0, 1.0)
-    });
-    assert_eq!(i16_mono, vec![1.0, 0.0, -1.0]);
-
-    let stereo = convert_and_downmix(&[i16::MAX, 0, 0, i16::MIN], 2, |sample| {
-        (sample as f32 / i16::MAX as f32).clamp(-1.0, 1.0)
-    });
-    assert_eq!(stereo.len(), 2);
-    assert!((stereo[0] - 0.5).abs() < 0.0001);
-    assert!((stereo[1] + 0.5).abs() < 0.0001);
+    let mut scratch = Vec::with_capacity(3);
+    let capacity = scratch.capacity();
+    let convert = |sample: i16| (sample as f32 / i16::MAX as f32).clamp(-1.0, 1.0);
+    for _ in 0..64 {
+        convert_and_downmix(&[i16::MAX, 0, i16::MIN], 1, &mut scratch, convert);
+        assert_eq!(scratch, vec![1.0, 0.0, -1.0]);
+        convert_and_downmix(&[i16::MAX, 0, 0, i16::MIN], 2, &mut scratch, convert);
+        assert_eq!(scratch.len(), 2);
+        assert!((scratch[0] - 0.5).abs() < 0.0001);
+        assert!((scratch[1] + 0.5).abs() < 0.0001);
+        assert_eq!(scratch.capacity(), capacity);
+    }
+    convert_and_downmix(&[], 2, &mut scratch, convert);
+    assert!(scratch.is_empty());
 }
 
 #[test]

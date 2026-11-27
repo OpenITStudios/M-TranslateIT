@@ -73,6 +73,18 @@ remain intact; a separate session authority design is required before reducing
 those disk reads. Existing Settings backup recovery/cleanup remains in the
 canonical Settings owner.
 
+### Capture CPU preparation
+
+The existing Silero lane CPU owner reuses one native window scratch buffer,
+sized to the maximum rational 512-sample/16 kHz window at its capture rate.
+The native sample order, interpolation phase, lookahead, model, threshold,
+speech evidence and finalized WAV ownership are unchanged. Integer Meeting
+Sound callbacks also reuse a callback-local conversion/downmix buffer just as
+the existing float callback does. The scratch buffer may grow for a larger
+callback, never for an unchanged size after allocation. The VAD gate moves
+its evidence rather than cloning it. No additional audio owner, model,
+queue, polling cadence, dependency or transport is introduced.
+
 ### Meeting Start observation boundaries
 
 The initial Start preflight returns its checked virtual-route observation to

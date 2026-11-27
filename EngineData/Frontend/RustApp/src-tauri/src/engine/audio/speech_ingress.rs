@@ -52,6 +52,7 @@ impl SpeechIngress {
             .spawn(move || {
                 let mut run = || -> Result<(), String> {
                     let mut pcm = Vec::with_capacity(rate as usize / 5);
+                    let mut native = Vec::with_capacity(windows.native_window_capacity());
                     let mut loss_epoch = 0;
                     let mut audio_epoch = 1;
                     let mut observed_transport_loss = 0;
@@ -91,7 +92,7 @@ impl SpeechIngress {
                             PcmDrain::Samples(_) => {}
                         }
                         windows.push(&pcm);
-                        while let Some((native, frame)) = windows.next() {
+                        while let Some(frame) = windows.next_into(&mut native) {
                             let probability = model.probability(&frame)?;
                             if for_worker.metrics().stopped { return Ok(()); }
                             let mut guard = sync.state.lock().map_err(|_| "silero:producer_poisoned")?;
@@ -112,13 +113,13 @@ impl SpeechIngress {
                             let gate = VadGateResult { accepted: accepted && !clipping,
                                 reason: if clipping { "rejected_clipping" } else if accepted {
                                     "silero_speech" } else { "silero_silence" }.to_string(),
-                                evidence: evidence.clone() };
+                                evidence };
                             #[cfg(test)]
                             if let Ok(mut observations) = worker_observations.lock() {
                                 observations.push(serde_json::json!({"input_end_sample": state.input_sample_cursor,
                                     "probability": probability, "gate": gate}));
                             }
-                            if ingest_observation(state, &native, &evidence, &gate) { sync.ready.notify_one(); }
+                            if ingest_observation(state, &native, &gate.evidence, &gate) { sync.ready.notify_one(); }
                         }
                         #[cfg(test)]
                         worker_processed.fetch_add(pcm.len() as u64, Ordering::Release);

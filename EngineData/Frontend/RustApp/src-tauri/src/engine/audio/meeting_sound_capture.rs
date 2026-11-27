@@ -586,6 +586,7 @@ fn build_loopback_stream(
             let suppression_flag = Arc::clone(&suppression);
             let errors = Arc::clone(&callback_errors);
             let error_epoch = Arc::clone(&callback_error_epoch);
+            let mut mono_scratch = Vec::<f32>::new();
             device
                 .build_input_stream(
                     *config,
@@ -599,7 +600,7 @@ fn build_loopback_stream(
                             // Never acquire the VAD mutex for each suppressed frame.
                             return;
                         }
-                        $observe(data, sample_rate_hz, channels);
+                        $observe(data, sample_rate_hz, channels, &mut mono_scratch);
                     },
                     move |error| {
                         error_epoch.fetch_add(1, Ordering::AcqRel);
