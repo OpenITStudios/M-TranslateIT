@@ -30,7 +30,7 @@ use super::super::helper_bridge_runtime::{
     validate_worker_response_contract,
     runtime, runtime_claim, stop_child, unix_ms,
     worker_response_deadline_for_priority,
-    HelperBridgeRuntime, HelperTaskPriority,
+    HelperBridgeRuntime, HelperTaskPriority, WorkerDeadline,
 };
 
 fn response_with_runtime(
@@ -266,6 +266,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcm
         );
     }
 
+    let deadline = WorkerDeadline::new(response_deadline_ms);
     inject_request_metadata(&mut payload, task, &request_id, priority);
 
     let (stdin_receiver, stdout_receiver, bridge_generation) = match runtime().lock() {
@@ -334,7 +335,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcm
             // before releasing it. Stop can now find a backpressured writer
             // while this task waits on the original response deadline.
             let stdin_receiver = match begin_worker_stdin_write(
-                &mut runtime, stdin, payload, response_deadline_ms,
+                &mut runtime, stdin, payload, deadline,
             ) {
                 Ok(receiver) => receiver,
                 Err(error) => {
@@ -375,7 +376,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcm
         }
     };
 
-    let stdin = match await_worker_stdin_write(stdin_receiver, response_deadline_ms) {
+    let stdin = match await_worker_stdin_write(stdin_receiver, deadline) {
         Ok(stdin) => stdin,
         Err(error) => {
             let response = match runtime().lock() {
@@ -417,7 +418,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcm
 
     let (mut worker_response, stdout) = match await_worker_stdout_read(
         stdout_receiver,
-        response_deadline_ms,
+        deadline,
     )
     .and_then(|(response, stdout)| {
         validate_worker_response_contract(task, &request_id, &response)?;

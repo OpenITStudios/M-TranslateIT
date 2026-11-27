@@ -20,11 +20,7 @@ pub const WORKER_CONTROL_RESPONSE_DEADLINE_MS: u128 = 5_000;
 pub const WORKER_STATUS_RESPONSE_DEADLINE_MS: u128 = 30_000;
 pub const WORKER_PRELOAD_RESPONSE_DEADLINE_MS: u128 = 120_000;
 pub const WORKER_INFERENCE_RESPONSE_DEADLINE_MS: u128 = 90_000;
-// Standalone Text translation gets exactly one attempt (transport retry is reserved
-// for MeetingOutbound lanes), so its host deadline must cover one full multi-chunk
-// job: realtime_local_worker_base.handle_standalone_text_translate runs sequential
-// per-chunk helper requests bounded by translation_envelope.MAX_STANDALONE_TRANSLATION_CHUNKS
-// and stops on cooperative deadline expiry between chunks.
+// Standalone translation is a single native request with its own bounded budget.
 pub const STANDALONE_TRANSLATION_DEADLINE_MS: u128 = 180_000;
 pub const WORKER_SYNTHESIS_RESPONSE_DEADLINE_MS: u128 = 45_000;
 pub const WORKER_FALLBACK_RESPONSE_DEADLINE_MS: u128 = WORKER_STATUS_RESPONSE_DEADLINE_MS;
@@ -579,24 +575,56 @@ pub fn apply_worker_response(runtime: &mut HelperBridgeRuntime, value: &Value) -
     ok
 }
 
-pub fn request_deadline_payload(payload: &Value, deadline_ms: u128) -> Value {
-    let started = unix_ms();
-    let deadline = started.saturating_add(deadline_ms);
-    let mut payload = payload.clone();
+/// One host-owned budget for a Python request, including pipe write and reply.
+#[derive(Clone, Copy)]
+pub struct WorkerDeadline {
+    end: Instant,
+    started_unix_ms: u128,
+    budget_ms: u128,
+}
+
+impl WorkerDeadline {
+    pub fn new(budget_ms: u128) -> Self {
+        let started = Instant::now();
+        let duration = Duration::from_millis(budget_ms.min(u64::MAX as u128) as u64);
+        Self {
+            end: started.checked_add(duration).unwrap_or(started),
+            started_unix_ms: unix_ms(),
+            budget_ms,
+        }
+    }
+
+    fn remaining(self) -> Duration {
+        self.end.saturating_duration_since(Instant::now())
+    }
+
+    fn expired(self) -> bool {
+        self.remaining().is_zero()
+    }
+
+    fn timeout_error(self, phase: &str) -> String {
+        format!("worker:{phase}_deadline_exceeded:{}ms", self.budget_ms)
+    }
+}
+
+pub fn request_deadline_payload(mut payload: Value, deadline: WorkerDeadline) -> Value {
     if let Some(object) = payload.as_object_mut() {
-        object.insert("request_unix_ms".to_string(), json!(started));
-        object.insert("deadline_unix_ms".to_string(), json!(deadline));
-        object.insert("deadline_ms".to_string(), json!(deadline_ms));
+        object.insert("request_unix_ms".to_string(), json!(deadline.started_unix_ms));
+        object.insert("deadline_unix_ms".to_string(), json!(deadline.started_unix_ms.saturating_add(deadline.budget_ms)));
+        object.insert("deadline_ms".to_string(), json!(deadline.budget_ms));
     }
     payload
 }
 
 pub fn write_worker_request_with_deadline<W: Write>(
     stdin: &mut W,
-    payload: &Value,
-    deadline_ms: u128,
+    payload: Value,
+    deadline: WorkerDeadline,
 ) -> Result<(), String> {
-    let payload = request_deadline_payload(payload, deadline_ms);
+    if deadline.expired() {
+        return Err(deadline.timeout_error("request_write"));
+    }
+    let payload = request_deadline_payload(payload, deadline);
     let body = serde_json::to_string(&payload).map_err(|error| error.to_string())?;
     stdin
         .write_all(body.as_bytes())
@@ -613,7 +641,7 @@ pub fn begin_worker_stdin_write<W: Write + Send + 'static>(
     runtime: &mut HelperBridgeRuntime,
     mut stdin: W,
     payload: Value,
-    deadline_ms: u128,
+    deadline: WorkerDeadline,
 ) -> Result<mpsc::Receiver<(Result<(), String>, W)>, String> {
     if runtime.stdin_writer.is_some() {
         return Err("worker:stdin_writer_still_owned".to_string());
@@ -624,7 +652,7 @@ pub fn begin_worker_stdin_write<W: Write + Send + 'static>(
     // and poisoning the canonical helper lock under thread resource pressure.
     let writer = thread::Builder::new()
         .spawn(move || {
-            let result = write_worker_request_with_deadline(&mut stdin, &payload, deadline_ms);
+            let result = write_worker_request_with_deadline(&mut stdin, payload, deadline);
             let _ = sender.send((result, stdin));
             // Once timed out, the receiver may be gone. The thread remains
             // retained on HelperBridgeRuntime until the bounded Stop reaps it.
@@ -636,15 +664,17 @@ pub fn begin_worker_stdin_write<W: Write + Send + 'static>(
 
 pub fn await_worker_stdin_write<W>(
     receiver: mpsc::Receiver<(Result<(), String>, W)>,
-    deadline_ms: u128,
+    deadline: WorkerDeadline,
 ) -> Result<W, String> {
-    let timeout = Duration::from_millis(deadline_ms.min(u64::MAX as u128) as u64);
-    match receiver.recv_timeout(timeout) {
-        Ok((Ok(()), stdin)) => Ok(stdin),
-        Ok((Err(error), _stdin)) => Err(error),
-        Err(RecvTimeoutError::Timeout) => {
-            Err(format!("worker:request_write_deadline_exceeded:{deadline_ms}ms"))
+    if deadline.expired() {
+        return Err(deadline.timeout_error("request_write"));
+    }
+    match receiver.recv_timeout(deadline.remaining()) {
+        Ok((Ok(()), stdin)) if !deadline.expired() => Ok(stdin),
+        Ok((Ok(()), _)) | Err(RecvTimeoutError::Timeout) => {
+            Err(deadline.timeout_error("request_write"))
         }
+        Ok((Err(error), _stdin)) => Err(error),
         Err(RecvTimeoutError::Disconnected) => {
             Err("worker:request_writer_disconnected".to_string())
         }
@@ -669,10 +699,10 @@ pub fn write_worker_request_direct_with_deadline(
     runtime: &mut HelperBridgeRuntime,
     stdin: ChildStdin,
     payload: Value,
-    deadline_ms: u128,
+    deadline: WorkerDeadline,
 ) -> Result<ChildStdin, String> {
-    let receiver = begin_worker_stdin_write(runtime, stdin, payload, deadline_ms)?;
-    let result = await_worker_stdin_write(receiver, deadline_ms);
+    let receiver = begin_worker_stdin_write(runtime, stdin, payload, deadline)?;
+    let result = await_worker_stdin_write(receiver, deadline);
     if result.is_ok() && !finish_received_stdin_write(runtime) {
         return Err("worker:request_writer_join_failed".to_string());
     }
@@ -763,15 +793,17 @@ pub fn begin_worker_stdout_read<R: BufRead + Send + 'static>(
 
 pub fn await_worker_stdout_read<R>(
     receiver: mpsc::Receiver<(Result<Value, String>, R)>,
-    deadline_ms: u128,
+    deadline: WorkerDeadline,
 ) -> Result<(Value, R), String> {
-    let timeout = Duration::from_millis(deadline_ms.min(u64::MAX as u128) as u64);
-    match receiver.recv_timeout(timeout) {
-        Ok((Ok(value), stdout)) => Ok((value, stdout)),
-        Ok((Err(error), _stdout)) => Err(error),
-        Err(RecvTimeoutError::Timeout) => {
-            Err(format!("worker:response_deadline_exceeded:{deadline_ms}ms"))
+    if deadline.expired() {
+        return Err(deadline.timeout_error("response"));
+    }
+    match receiver.recv_timeout(deadline.remaining()) {
+        Ok((Ok(value), stdout)) if !deadline.expired() => Ok((value, stdout)),
+        Ok((Ok(_), _)) | Err(RecvTimeoutError::Timeout) => {
+            Err(deadline.timeout_error("response"))
         }
+        Ok((Err(error), _stdout)) => Err(error),
         Err(RecvTimeoutError::Disconnected) => {
             Err("worker:response_reader_disconnected".to_string())
         }
@@ -797,10 +829,10 @@ pub fn finish_received_stdout_read(runtime: &mut HelperBridgeRuntime) -> bool {
 pub fn read_worker_response_direct_with_deadline(
     runtime: &mut HelperBridgeRuntime,
     stdout: BufReader<ChildStdout>,
-    deadline_ms: u128,
+    deadline: WorkerDeadline,
 ) -> Result<(Value, BufReader<ChildStdout>), String> {
     let receiver = begin_worker_stdout_read(runtime, stdout)?;
-    let result = await_worker_stdout_read(receiver, deadline_ms);
+    let result = await_worker_stdout_read(receiver, deadline);
     if result.is_ok() && !finish_received_stdout_read(runtime) {
         return Err("worker:response_reader_join_failed".to_string());
     }
@@ -935,16 +967,16 @@ mod stdin_write_deadline_tests {
         let mut runtime = HelperBridgeRuntime::default();
         let writer = GatedWriter { gate: Some(receiver), written: Vec::new() };
         let pending = begin_worker_stdin_write(
-            &mut runtime, writer, json!({"command": "ping"}), 5_000,
+            &mut runtime, writer, json!({"command": "ping"}), WorkerDeadline::new(5_000),
         ).expect("admit the single stdin write");
         assert!(matches!(
             begin_worker_stdin_write(
-                &mut runtime, Vec::<u8>::new(), json!({}), 5_000,
+                &mut runtime, Vec::<u8>::new(), json!({}), WorkerDeadline::new(5_000),
             ),
             Err(ref error) if error.as_str() == "worker:stdin_writer_still_owned"
         ), "a second write cannot replace the owned JoinHandle");
         assert!(matches!(
-            await_worker_stdin_write(pending, 0),
+            await_worker_stdin_write(pending, WorkerDeadline::new(0)),
             Err(ref error) if error.as_str() == "worker:request_write_deadline_exceeded:0ms"
         ));
         assert!(runtime.stdin_writer.is_some());
@@ -981,10 +1013,10 @@ mod stdin_write_deadline_tests {
         let mut runtime = HelperBridgeRuntime::default();
         let writer = GatedFlush { gate: Some(gate), written: Vec::new() };
         let pending = begin_worker_stdin_write(
-            &mut runtime, writer, json!({"command": "status"}), 30_000,
+            &mut runtime, writer, json!({"command": "status"}), WorkerDeadline::new(30_000),
         ).expect("single writer registration");
         assert!(matches!(
-            await_worker_stdin_write(pending, 0),
+            await_worker_stdin_write(pending, WorkerDeadline::new(0)),
             Err(ref error) if error.as_str() == "worker:request_write_deadline_exceeded:0ms"
         ));
         assert!(!stop_child_with_budget(&mut runtime, Duration::ZERO));
@@ -999,9 +1031,9 @@ mod stdin_write_deadline_tests {
         let mut runtime = HelperBridgeRuntime::default();
         let payload = json!({"command": "ping", "request_id": "startup-ping"});
         let write = begin_worker_stdin_write(
-            &mut runtime, Vec::<u8>::new(), payload, 5_000,
+            &mut runtime, Vec::<u8>::new(), payload, WorkerDeadline::new(5_000),
         ).expect("admit write");
-        let bytes = await_worker_stdin_write(write, 5_000)
+        let bytes = await_worker_stdin_write(write, WorkerDeadline::new(5_000))
             .expect("writer returned original pipe");
         assert!(finish_received_stdin_write(&mut runtime));
         assert!(runtime.stdin_writer.is_none());
@@ -1221,7 +1253,7 @@ mod stderr_lifecycle_tests {
             Err(ref reason) if reason.as_str() == "worker:stdout_reader_still_owned"
         ));
         assert!(matches!(
-            await_worker_stdout_read(response, 0),
+            await_worker_stdout_read(response, WorkerDeadline::new(0)),
             Err(ref error) if error.as_str() == "worker:response_deadline_exceeded:0ms"
         ));
         assert!(runtime.stdout_reader.is_some());
@@ -1242,7 +1274,7 @@ mod stderr_lifecycle_tests {
         ));
         let response = begin_worker_stdout_read(&mut runtime, line)
             .expect("registered stdout read");
-        let (value, mut remaining) = await_worker_stdout_read(response, 1_000)
+        let (value, mut remaining) = await_worker_stdout_read(response, WorkerDeadline::new(1_000))
             .expect("received the response");
         assert!(finish_received_stdout_read(&mut runtime), "must join completed read");
         assert_eq!(value["stage"], json!("ping"));
@@ -1394,11 +1426,26 @@ mod deadline_policy_tests {
     }
 
     #[test]
+    fn expired_request_cannot_accept_even_a_ready_pipe_reply() {
+        let (tx, rx) = mpsc::channel();
+        tx.send((Ok(json!({"ok": true})), ())).unwrap();
+        let expired = WorkerDeadline::new(0);
+        assert_eq!(
+            await_worker_stdout_read(rx, expired).unwrap_err(),
+            "worker:response_deadline_exceeded:0ms"
+        );
+        let mut bytes = Vec::new();
+        assert!(write_worker_request_with_deadline(&mut bytes, json!({}), expired).is_err());
+        assert!(bytes.is_empty());
+    }
+
+    #[test]
     fn request_metadata_uses_host_selected_deadline_as_authority() {
         let deadline_ms = worker_response_deadline_ms("voice_actor_synthesize");
+        let budget = WorkerDeadline::new(deadline_ms);
         let payload = request_deadline_payload(
-            &json!({"command": "voice_actor_synthesize"}),
-            deadline_ms,
+            json!({"command": "voice_actor_synthesize"}),
+            budget,
         );
         let started = payload
             .get("request_unix_ms")
@@ -1415,13 +1462,13 @@ mod deadline_policy_tests {
         assert_eq!(deadline.saturating_sub(started), deadline_ms);
 
         let overridden = request_deadline_payload(
-            &json!({
+            json!({
                 "command": "ping",
                 "request_unix_ms": 10_u64,
                 "deadline_unix_ms": 20_u64,
                 "deadline_ms": 10_u64
             }),
-            worker_response_deadline_ms("ping"),
+            WorkerDeadline::new(worker_response_deadline_ms("ping")),
         );
         let overridden_started = overridden
             .get("request_unix_ms")

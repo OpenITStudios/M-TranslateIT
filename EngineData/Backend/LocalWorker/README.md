@@ -1,6 +1,6 @@
 # Backend LocalWorker
 
-`LocalWorker` owns TranslateIT's single local Python boundary for ASR, Indonesian ↔ English translation, selected Meeting-voice inference, and the bounded My Voice build child.
+`LocalWorker` owns TranslateIT's remaining local Python boundary for selected Meeting-voice inference and the bounded My Voice build child. ASR and Indonesian ↔ English translation are Rust-owned native CUDA operations.
 
 ## Layout
 
@@ -11,7 +11,6 @@ LocalWorker/
 │  ├─ realtime_local_worker_base.py
 │  ├─ worker_runtime_common.py
 │  ├─ worker_io_runtime.py
-│  ├─ milmmt_translation_provider.py
 │  ├─ voice_lab_*.py                 # retained compatibility filenames
 │  ├─ model_manifest.json
 │  ├─ pyproject.toml
@@ -55,7 +54,7 @@ The payload contract binds app/schema identity, dependency/model pins and SHA-25
 ## Rules
 
 - Keep one Python runtime and one daily worker process.
-- Keep MiLMMT as the single production translator.
+- Keep the native ASR/MT owner as the single production speech recognition and translation route.
 - Keep one selected-Meeting-voice inference contract for built-in voices and approved My Voice.
 - Do not create a second GPT-SoVITS environment/server/provider registry.
 - Do not make system Python, pip, uv, PATH hacks or repository checkout installed-product dependencies.

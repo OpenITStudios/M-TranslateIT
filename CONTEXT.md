@@ -69,9 +69,8 @@ Alternate Meeting source: **Original Microphone** passes the selected physical m
 Tauri 2 desktop application
 ├─ Svelte 5 + Vite + TypeScript frontend
 ├─ Rust desktop/runtime backend
-└─ one canonical Python local worker
-   ├─ ASR
-   ├─ ID ↔ EN translation
+│  └─ one native CUDA owner (Qwen3-ASR + Hy-MT2 ID ↔ EN)
+└─ one Python local voice worker
    └─ GPT-SoVITS voice inference / My Voice build support
 ```
 

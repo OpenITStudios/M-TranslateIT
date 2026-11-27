@@ -12,7 +12,9 @@ realtime_local_worker.py       # bounded JSON framing, request ID and deadline
 ```
 
 The only worker commands are `ping`, `status`, `voice_actor_preflight`, and
-`voice_actor_synthesize`. Native ASR/MT remains in the same Rust scheduler and
+`voice_actor_synthesize`. The Rust host assigns one monotonic budget for each
+request, shared by pipe write and response read; Python receives its original
+wall-clock expiry and cannot renew the host budget. Native ASR/MT remains in the same Rust scheduler and
 lifecycle; the Python worker does not import or inspect ASR/MT model assets.
 See [native inference source](../../../../tools/translation_quality/native_cuda/README.md).
 
