@@ -5,8 +5,7 @@ use std::cell::{Cell, RefCell};
 mod native;
 use std::time::Instant;
 
-use crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance;
-use crate::engine::audio::live_segment_writer::finalized_asr_frame_rejection;
+use crate::engine::audio::finalized_utterance::{finalized_asr_frame_rejection, FinalizedMeetingUtterance};
 
 use crate::engine::runtime_state::runtime_generation_is_authoritative;
 
@@ -574,26 +573,6 @@ fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcm
 
 // Keep historical timing fields readable. New native-only requests record
 // exactly one attempt, excluding separately measured PCM preparation.
-#[derive(Clone, Copy)]
-struct WorkerAttemptObservation {
-    initial_attempt_ms: u64,
-    recovery_ms: Option<u64>,
-    retry_attempt_ms: Option<u64>,
-    initial_scheduler_wait_ms: Option<u64>,
-    retry_scheduler_wait_ms: Option<u64>,
-}
-
-impl WorkerAttemptObservation {
-    fn scheduler_wait_total_ms(&self) -> Option<u64> {
-        if self.retry_attempt_ms.is_some() {
-            self.initial_scheduler_wait_ms?
-                .checked_add(self.retry_scheduler_wait_ms?)
-        } else {
-            self.initial_scheduler_wait_ms
-        }
-    }
-}
-
 fn observed_elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
 }
@@ -604,15 +583,17 @@ fn response_scheduler_wait_ms(response: &HelperBridgeWorkerResponse) -> Option<u
 
 // Rust owns these measurements; never trust a worker-provided summary and
 // never turn missing/invalid response data into invented numeric evidence.
-fn add_worker_attempt_observation(response: &mut HelperBridgeWorkerResponse, timing: WorkerAttemptObservation) {
+fn add_worker_attempt_observation(response: &mut HelperBridgeWorkerResponse, initial_attempt_ms: u64) {
+    let wait = response_scheduler_wait_ms(response);
     let Some(object) = response.worker_response_json.as_object_mut() else { return };
+    // Keep archive/DTO field compatibility without a retired retry state machine.
     object.insert("worker_attempt_timing".to_string(), json!({
-        "initial_attempt_ms": timing.initial_attempt_ms,
-        "recovery_ms": timing.recovery_ms,
-        "retry_attempt_ms": timing.retry_attempt_ms,
-        "initial_scheduler_wait_ms": timing.initial_scheduler_wait_ms,
-        "retry_scheduler_wait_ms": timing.retry_scheduler_wait_ms,
-        "scheduler_wait_total_ms": timing.scheduler_wait_total_ms(),
+        "initial_attempt_ms": initial_attempt_ms,
+        "recovery_ms": null,
+        "retry_attempt_ms": null,
+        "initial_scheduler_wait_ms": wait,
+        "retry_scheduler_wait_ms": null,
+        "scheduler_wait_total_ms": wait,
     }));
 }
 
@@ -638,7 +619,7 @@ pub(super) fn send_worker_pcm_task(
     } else if let Some(rejection) = rejection {
         standalone_blocked_response(
             "transcribe", "invalid-meeting-pcm", task_priority("transcribe", &payload),
-            "error", &rejection.blocker, &rejection.note,
+            "error", rejection, "Finalized PCM is outside the admitted native ASR contract.",
         )
     } else {
         send_worker_task_with_input("transcribe", payload, Some(input))
@@ -682,14 +663,8 @@ fn send_worker_task_with_input(task: &str, payload: Value, pcm: Option<MeetingPc
 
     let first_started = Instant::now();
     let mut response = send_worker_task_inner(task, payload, pcm);
-    let timing = WorkerAttemptObservation {
-        initial_attempt_ms: observed_elapsed_ms(first_started)
-            .saturating_sub(pcm.map_or(0, |input| input.prepare_ms.get())),
-        recovery_ms: None,
-        retry_attempt_ms: None,
-        initial_scheduler_wait_ms: response_scheduler_wait_ms(&response),
-        retry_scheduler_wait_ms: None,
-    };
+    let initial_attempt_ms = observed_elapsed_ms(first_started)
+        .saturating_sub(pcm.map_or(0, |input| input.prepare_ms.get()));
 
     if let Some(generation) = outbound_generation {
         // Transport failure closes the exact native/voice owner. Stop must
@@ -706,7 +681,7 @@ fn send_worker_task_with_input(task: &str, payload: Value, pcm: Option<MeetingPc
         invalidate_required_outbound_ai_readiness();
     }
     if outbound_generation.is_some() {
-        add_worker_attempt_observation(&mut response, timing);
+        add_worker_attempt_observation(&mut response, initial_attempt_ms);
     }
     response
 }
@@ -768,7 +743,7 @@ mod scheduler_failure_receipt_tests {
 #[cfg(test)]
 mod worker_attempt_observation_tests {
     use super::{add_worker_attempt_observation, response_scheduler_wait_ms,
-        standalone_blocked_response, WorkerAttemptObservation};
+        standalone_blocked_response};
     use super::super::super::helper_bridge_runtime::HelperTaskPriority;
     use serde_json::json;
 
@@ -784,63 +759,34 @@ mod worker_attempt_observation_tests {
     }
 
     #[test]
-    fn first_attempt_without_recovery_preserves_original_wait() {
+    fn single_attempt_preserves_wait_and_has_no_retry_evidence() {
         let mut response = fake_response(Some(13));
-        add_worker_attempt_observation(&mut response, WorkerAttemptObservation {
-            initial_attempt_ms: 80, recovery_ms: None, retry_attempt_ms: None,
-            initial_scheduler_wait_ms: response_scheduler_wait_ms(&fake_response(Some(13))),
-            retry_scheduler_wait_ms: None,
-        });
-        let v = &response.worker_response_json;
-        assert_eq!(v["scheduler_wait_ms"], 13);
-        assert_eq!(v["worker_attempt_timing"]["initial_attempt_ms"], 80);
-        assert_eq!(v["worker_attempt_timing"]["scheduler_wait_total_ms"], 13);
-        assert!(v["worker_attempt_timing"]["recovery_ms"].is_null());
+        add_worker_attempt_observation(&mut response, 80);
+        let value = &response.worker_response_json;
+        assert_eq!(value["scheduler_wait_ms"], 13);
+        let timing = &value["worker_attempt_timing"];
+        assert_eq!(timing["initial_attempt_ms"], 80);
+        assert_eq!(timing["initial_scheduler_wait_ms"], 13);
+        assert_eq!(timing["scheduler_wait_total_ms"], 13);
+        for key in ["recovery_ms", "retry_attempt_ms", "retry_scheduler_wait_ms"] {
+            assert!(timing[key].is_null());
+        }
     }
 
     #[test]
-    fn recovery_retry_waits_sum_but_attempt_wall_times_stay_distinct() {
-        let mut response = fake_response(Some(7));
-        add_worker_attempt_observation(&mut response, WorkerAttemptObservation {
-            initial_attempt_ms: 140, recovery_ms: Some(250), retry_attempt_ms: Some(110),
-            initial_scheduler_wait_ms: Some(18), retry_scheduler_wait_ms: Some(7),
-        });
-        let v = &response.worker_response_json;
-        assert_eq!(v["scheduler_wait_ms"], 7);
-        let timing = &v["worker_attempt_timing"];
-        assert_eq!(timing["scheduler_wait_total_ms"], 25);
-        assert_eq!(timing["initial_attempt_ms"], 140);
-        assert_eq!(timing["recovery_ms"], 250);
-        assert_eq!(timing["retry_attempt_ms"], 110);
-    }
-
-    #[test]
-    fn incomplete_retry_wait_and_unadmitted_attempt_never_claim_total_wait() {
+    fn missing_or_invalid_wait_never_becomes_numeric_evidence() {
         let mut response = fake_response(None);
-        add_worker_attempt_observation(&mut response, WorkerAttemptObservation {
-            initial_attempt_ms: 140, recovery_ms: Some(250), retry_attempt_ms: Some(110),
-            initial_scheduler_wait_ms: Some(18), retry_scheduler_wait_ms: None,
-        });
-        let v = &response.worker_response_json;
-        assert!(v["worker_attempt_timing"]["scheduler_wait_total_ms"].is_null());
-        let no_permit = WorkerAttemptObservation {
-            initial_attempt_ms: 1, recovery_ms: None, retry_attempt_ms: None,
-            initial_scheduler_wait_ms: None, retry_scheduler_wait_ms: None,
-        };
-        assert_eq!(no_permit.scheduler_wait_total_ms(), None);
-    }
-
-    #[test]
-    fn malformed_response_does_not_become_a_trusted_measurement() {
-        let mut response = fake_response(None);
+        add_worker_attempt_observation(&mut response, 1);
+        assert!(response.worker_response_json["worker_attempt_timing"]["scheduler_wait_total_ms"].is_null());
+        response.worker_response_json["scheduler_wait_ms"] = json!("invalid");
+        add_worker_attempt_observation(&mut response, 1);
+        assert!(response.worker_response_json["worker_attempt_timing"]["scheduler_wait_total_ms"].is_null());
         response.worker_response_json = json!("non-object");
-        add_worker_attempt_observation(&mut response, WorkerAttemptObservation {
-            initial_attempt_ms: 1, recovery_ms: None, retry_attempt_ms: None,
-            initial_scheduler_wait_ms: None, retry_scheduler_wait_ms: None,
-        });
+        add_worker_attempt_observation(&mut response, 1);
         assert_eq!(response.worker_response_json, json!("non-object"));
         assert_eq!(response_scheduler_wait_ms(&response), None);
     }
+
 }
 
 #[cfg(test)]
@@ -889,8 +835,8 @@ mod finalized_pcm_handoff_tests {
         assert!(!input.matches("translate", &payload));
         let mut utterance = utterance.into_inner().unwrap();
         utterance.frame.samples.truncate(4_799);
-        assert_eq!(finalized_asr_frame_rejection(&utterance).unwrap().blocker,
-                   "finalized_utterance_writer:segment_too_short");
+        assert_eq!(finalized_asr_frame_rejection(&utterance).unwrap(),
+                   "asr:finalized_segment_too_short");
 
         // The caller transfers its original allocation; only an actual
         // scheduler deferral may return it, never a worker-supplied blocker.

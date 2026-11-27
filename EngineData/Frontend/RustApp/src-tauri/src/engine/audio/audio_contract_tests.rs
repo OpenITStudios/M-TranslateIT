@@ -13,9 +13,7 @@ use super::live_audio_buffer::{
     append_live_f32_samples, clear_live_audio_buffer, live_audio_buffer_status,
     reset_live_audio_buffer,
 };
-use super::live_segment_writer::{
-    write_finalized_incoming_utterance_wav, write_finalized_outbound_utterance_wav,
-};
+use super::finalized_utterance::finalized_asr_frame_rejection;
 use super::{duration_ms, AudioFrame, TARGET_CHANNELS, TARGET_SAMPLE_RATE_HZ};
 use crate::engine::runtime_state::{
     begin_application_meeting_session, clear_runtime_session_state,
@@ -183,71 +181,26 @@ fn finalized_incoming_queue_evicts_oldest_and_retains_shared_order() {
 }
 
 #[test]
-fn finalized_writer_rejects_lane_and_target_format_violations_before_staging() {
-    let _serial = audio_test_guard();
-    clear_audio_contract_state();
-
-    let outbound_lane_mismatch = utterance_fixture(
-        "incoming",
-        Some(1),
-        TARGET_SAMPLE_RATE_HZ,
-        TARGET_CHANNELS,
-        8_000,
-    );
-    let report = write_finalized_outbound_utterance_wav(&outbound_lane_mismatch);
-    assert!(!report.ok);
-    assert!(report.audio_path.is_none());
-    assert_eq!(report.blocker, "finalized_outbound_writer:lane_mismatch");
-
-    let incoming_generation_mismatch = utterance_fixture(
-        "incoming",
-        Some(1),
-        TARGET_SAMPLE_RATE_HZ,
-        TARGET_CHANNELS,
-        8_000,
-    );
-    let report = write_finalized_incoming_utterance_wav(&incoming_generation_mismatch);
-    assert!(!report.ok);
-    assert!(report.audio_path.is_none());
-    assert_eq!(report.blocker, "finalized_incoming_writer:lane_mismatch");
-
-    let wrong_rate = utterance_fixture("you", Some(1), 8_000, 1, 4_800);
-    let report = write_finalized_outbound_utterance_wav(&wrong_rate);
-    assert!(!report.ok);
-    assert!(report.audio_path.is_none());
-    assert_eq!(
-        report.blocker,
-        "finalized_utterance_writer:frame_not_target_format"
-    );
-
-    let too_short = utterance_fixture(
-        "you",
-        Some(1),
-        TARGET_SAMPLE_RATE_HZ,
-        TARGET_CHANNELS,
-        1_600,
-    );
-    let report = write_finalized_outbound_utterance_wav(&too_short);
-    assert!(!report.ok);
-    assert!(report.audio_path.is_none());
-    assert_eq!(report.blocker, "finalized_utterance_writer:segment_too_short");
-
-    let empty = utterance_fixture(
-        "you",
-        Some(1),
-        TARGET_SAMPLE_RATE_HZ,
-        TARGET_CHANNELS,
-        0,
-    );
-    let report = write_finalized_outbound_utterance_wav(&empty);
-    assert!(!report.ok);
-    assert!(report.audio_path.is_none());
-    assert_eq!(
-        report.blocker,
-        "finalized_utterance_writer:sample_count_out_of_range"
-    );
-
-    clear_audio_contract_state();
+fn finalized_pcm_admission_rejects_invalid_identity_format_and_length() {
+    let valid = |lane, generation, rate, channels, count| utterance_fixture(lane, generation, rate, channels, count);
+    for (utterance, expected) in [
+        (valid("incoming", Some(1), 16_000, 1, 8_000), "asr:finalized_lane_mismatch"),
+        (valid("you", None, 16_000, 1, 8_000), "asr:finalized_lane_mismatch"),
+        (valid("you", Some(0), 16_000, 1, 8_000), "asr:finalized_lane_mismatch"),
+        (valid("you", Some(1), 8_000, 1, 4_800), "asr:finalized_frame_not_target_format"),
+        (valid("you", Some(1), 16_000, 2, 8_000), "asr:finalized_frame_not_target_format"),
+        (valid("you", Some(1), 16_000, 1, 4_799), "asr:finalized_segment_too_short"),
+        (valid("you", Some(1), 16_000, 1, 0), "asr:finalized_sample_count_out_of_range"),
+        (valid("you", Some(1), 16_000, 1, 960_001), "asr:finalized_sample_count_out_of_range"),
+    ] {
+        assert_eq!(finalized_asr_frame_rejection(&utterance), Some(expected));
+    }
+    for lane in ["you", "incoming"] {
+        let mut utterance = valid(lane, (lane == "you").then_some(1), 16_000, 1, 4_800);
+        assert_eq!(finalized_asr_frame_rejection(&utterance), None);
+        utterance.sequence = 0;
+        assert_eq!(finalized_asr_frame_rejection(&utterance), Some("asr:finalized_event_identity_invalid"));
+    }
 }
 
 #[test]

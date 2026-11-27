@@ -13,7 +13,7 @@ use crate::engine::runtime_state::runtime_generation_is_authoritative;
 // Internal safety bounds only. They are not product speech-boundary policy.
 // Never force a speech boundary or truncate speech to satisfy a byte limit.
 // Allow only a short, bounded *quiet* suffix to complete natural VAD finalization
-// near the limit; that suffix is trimmed from the ASR WAV if necessary. Truly
+// near the limit; that suffix is trimmed from the finalized PCM if necessary. Truly
 // uninterrupted speech beyond the limit still fails closed and is counted.
 // Pending finalized work is separately bounded and favors recent speech.
 const MAX_IN_PROGRESS_UTTERANCE_MS: u32 = 60_000;
@@ -80,7 +80,7 @@ pub struct FinalizedCaptureProvenance {
     pub input_rate_hz: u32,
     pub input_start_sample: u64,
     pub input_end_sample: u64, // exclusive; includes pre-roll and trailing silence
-    pub asr_sample_count: u64, // actual 16-kHz frame sent to the WAV writer
+    pub asr_sample_count: u64, // actual 16-kHz frame admitted to native ASR
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +98,28 @@ pub struct FinalizedMeetingUtterance {
     pub finalization_ms: u64,
     pub capture_provenance: Option<FinalizedCaptureProvenance>,
     pub frame: AudioFrame,
+}
+
+// Pure native PCM admission. No filename, report allocation or file I/O.
+pub(crate) fn finalized_asr_frame_rejection(utterance: &FinalizedMeetingUtterance) -> Option<&'static str> {
+    if !matches!((utterance.lane.as_str(), utterance.generation),
+        ("you", Some(1..)) | ("incoming", None)) {
+        return Some("asr:finalized_lane_mismatch");
+    }
+    if utterance.session_id.is_empty() || utterance.sequence == 0 || utterance.utterance_id == 0 {
+        return Some("asr:finalized_event_identity_invalid");
+    }
+    let frame = &utterance.frame;
+    if frame.sample_rate_hz != TARGET_SAMPLE_RATE_HZ || frame.channels != TARGET_CHANNELS {
+        return Some("asr:finalized_frame_not_target_format");
+    }
+    if frame.samples.is_empty() || frame.samples.len() > TARGET_SAMPLE_RATE_HZ as usize * 60 {
+        return Some("asr:finalized_sample_count_out_of_range");
+    }
+    if frame.samples.len() < TARGET_SAMPLE_RATE_HZ as usize * 300 / 1_000 {
+        return Some("asr:finalized_segment_too_short");
+    }
+    None
 }
 
 #[derive(Debug)]

@@ -58,7 +58,8 @@ test("Meeting worker attempt attribution keeps recovery distinct and old archive
   const dto = source("src/app/bridge/runtimeApi.ts");
   const ui = source("src/components/settings/MeetingPerformanceDiagnostics.svelte");
   assert.match(transport, /"worker_attempt_timing"\.to_string\(\)/);
-  assert.match(transport, /checked_add\(self\.retry_scheduler_wait_ms\?\)/);
+  assert.match(transport, /"scheduler_wait_total_ms": wait/);
+  assert.doesNotMatch(transport, /struct WorkerAttemptObservation|checked_add\(self\.retry_scheduler_wait_ms/);
   assert.match(meeting, /pub struct MeetingWorkerAttemptTiming/);
   assert.match(meeting, /#\[serde\(default\)\]\s+pub asr_worker_attempt_timing/);
   assert.match(meeting, /get\("scheduler_wait_total_ms"\)/);
@@ -78,8 +79,9 @@ test("Meeting native-only transport never clones or replays a request", () => {
     transport.indexOf("#[cfg(test)]\nmod scheduler_failure_receipt_tests"));
   assert.equal([...send.matchAll(/send_worker_task_inner\(/g)].length, 1);
   assert.doesNotMatch(send, /payload\.clone\(|retry_payload|recover_live_meeting_helper_transport/);
-  assert.match(send, /recovery_ms: None/);
-  assert.match(send, /retry_attempt_ms: None/);
+  assert.match(transport, /"recovery_ms": null/);
+  assert.match(transport, /"retry_attempt_ms": null/);
+  assert.match(send, /add_worker_attempt_observation\(&mut response, initial_attempt_ms\)/);
   assert.match(send, /clear_meeting_outbound_pipeline\(generation\)/);
 });
 

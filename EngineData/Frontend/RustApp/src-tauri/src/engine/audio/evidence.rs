@@ -211,10 +211,8 @@ pub(super) fn condition_asr_sample(sample: f32, threshold: Option<f32>) -> f32 {
     }
 }
 
-/// Native cutover seam: condition only an already-admitted owned 16 kHz
-/// mono buffer, once, after deferral is no longer possible. No allocation,
-/// resampling, PCM16 quantization or file I/O. The legacy retry path still
-/// borrows unmodified PCM and applies the same gain while writing WAV.
+/// Condition admitted owned 16 kHz mono PCM once, after deferral is no
+/// longer possible. No allocation, resampling, quantization or file I/O.
 pub(crate) fn condition_asr_pcm(samples: &mut [f32], noise_suppression_enabled: bool) {
     let threshold = if noise_suppression_enabled {
         noise_suppression_threshold(samples)
@@ -226,7 +224,7 @@ pub(crate) fn condition_asr_pcm(samples: &mut [f32], noise_suppression_enabled: 
     }
 }
 
-fn safe_sample(value: f32) -> f32 {
+pub(super) fn safe_sample(value: f32) -> f32 {
     if value.is_finite() {
         value.clamp(-1.0, 1.0)
     } else {
@@ -378,4 +376,66 @@ mod tests {
         assert!((0.0..=1.0).contains(&report.frame_active_ratio));
         assert!(report.frame_energy_concentration > 0.5);
     }
+}
+
+#[cfg(test)]
+mod native_conditioning_tests {
+    use super::*;
+    #[test]
+    fn noise_suppression_attenuates_floor_without_reducing_strong_speech() {
+        let mut samples = vec![0.002_f32; 320];
+        samples.extend(vec![0.12_f32; 320]);
+        let threshold = noise_suppression_threshold(&samples).expect("strong speech should allow cleanup");
+        assert!(condition_asr_sample(samples[0], Some(threshold)).abs() < samples[0].abs() * 0.4);
+        assert!((condition_asr_sample(samples[400], Some(threshold)) - samples[400]).abs() <= 1e-6);
+    }
+
+    #[test]
+    fn noise_suppression_bypasses_quiet_or_clipping_audio() {
+        assert!(noise_suppression_threshold(&vec![0.002_f32; 640]).is_none());
+        let clipping = (0..640).map(|index| if index % 10 == 0 { 1.0 } else { 0.1 }).collect::<Vec<_>>();
+        assert!(noise_suppression_threshold(&clipping).is_none());
+    }
+
+    #[test]
+    fn direct_pcm_conditioning_matches_gain_without_quantization_or_allocation() {
+        let mut mixed = vec![0.002_f32; 320];
+        mixed.extend(vec![0.12_f32; 320]);
+        mixed.extend([0.004, -0.009, f32::NAN, f32::INFINITY, -0.002]);
+        let mut clipping = vec![0.1; 640];
+        clipping[..16].fill(0.98); // exact clipping boundary
+        let mut over_clipping = clipping.clone();
+        over_clipping[16] = -1.0;
+        for original in [
+            vec![], vec![0.1; 319], vec![0.012; 320],
+            vec![0.002; 640], mixed, clipping, over_clipping,
+            vec![-2.0, 2.0, f32::NAN, f32::NEG_INFINITY],
+            vec![0.12; 960_000],
+        ] {
+            // Old full-report threshold remains only as a parity oracle.
+            let evidence = AudioEvidenceReport::from_samples(&original);
+            let reference_threshold = if original.len() < 320
+                || evidence.rms < 0.012 || evidence.clipping_ratio > 0.025 {
+                None
+            } else {
+                Some((evidence.rms * 0.08).clamp(0.0015, 0.006))
+            };
+            assert_eq!(noise_suppression_threshold(&original), reference_threshold);
+            for enabled in [false, true] {
+                let mut pcm = original.clone();
+                let allocation = pcm.as_ptr();
+                let capacity = pcm.capacity();
+                let threshold = if enabled { reference_threshold } else { None };
+                condition_asr_pcm(&mut pcm, enabled);
+                assert_eq!(pcm.as_ptr(), allocation);
+                assert_eq!(pcm.capacity(), capacity);
+                assert_eq!(pcm.len(), original.len());
+                for (actual, &sample) in pcm.iter().zip(&original) {
+                    assert!(actual.is_finite() && (-1.0..=1.0).contains(actual));
+                    assert_eq!(actual.to_bits(), condition_asr_sample(sample, threshold).to_bits());
+                }
+            }
+        }
+    }
+
 }

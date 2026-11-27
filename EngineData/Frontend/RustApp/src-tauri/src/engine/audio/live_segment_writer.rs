@@ -1,207 +1,15 @@
-use serde::Serialize;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-use super::evidence::{condition_asr_sample, noise_suppression_threshold};
-use super::finalized_utterance::FinalizedMeetingUtterance;
-use super::{duration_ms, TARGET_SAMPLE_RATE_HZ};
+use super::evidence::safe_sample;
+#[cfg(test)]
+use super::TARGET_SAMPLE_RATE_HZ;
 use crate::engine::paths::ProjectPaths;
 
-const MIN_ASR_SEGMENT_DURATION_MS: u32 = 300;
-// Safety/storage ceiling for the finalized producer only; this must not be used to
-// force a speech boundary. Overlong speech is dropped by the producer rather than
-// cut into a fake final utterance.
-const MAX_FINALIZED_ASR_SEGMENT_SAMPLES: usize = TARGET_SAMPLE_RATE_HZ as usize * 60;
-const FINALIZED_SEGMENT_ROOT_LABEL: &str = "UserData/CacheData/audio_segments/";
-
-#[derive(Debug, Clone, Serialize)]
-pub struct LiveSegmentWavWriteReport {
-    pub ok: bool,
-    pub audio_path: Option<String>,
-    pub sample_rate_hz: u32,
-    pub channels: u16,
-    pub sample_count: usize,
-    pub duration_ms: u32,
-    pub blocker: String,
-    pub note: String,
-}
-
-#[cfg(test)]
-pub fn write_finalized_outbound_utterance_wav(
-    utterance: &FinalizedMeetingUtterance,
-) -> LiveSegmentWavWriteReport {
-    write_finalized_outbound_utterance_wav_with_noise_suppression(utterance, false)
-}
-
-pub fn write_finalized_outbound_utterance_wav_with_noise_suppression(
-    utterance: &FinalizedMeetingUtterance,
-    noise_suppression_enabled: bool,
-) -> LiveSegmentWavWriteReport {
-    if utterance.lane != "you" || utterance.generation.is_none() {
-        return invalid_lane_report(utterance, "you", "finalized_outbound_writer");
-    }
-    write_finalized_meeting_utterance_wav(utterance, noise_suppression_enabled)
-}
-
-#[cfg(test)]
-pub fn write_finalized_incoming_utterance_wav(
-    utterance: &FinalizedMeetingUtterance,
-) -> LiveSegmentWavWriteReport {
-    write_finalized_incoming_utterance_wav_with_noise_suppression(utterance, false)
-}
-
-pub fn write_finalized_incoming_utterance_wav_with_noise_suppression(
-    utterance: &FinalizedMeetingUtterance,
-    noise_suppression_enabled: bool,
-) -> LiveSegmentWavWriteReport {
-    if utterance.lane != "incoming" || utterance.generation.is_some() {
-        return invalid_lane_report(utterance, "incoming", "finalized_incoming_writer");
-    }
-    write_finalized_meeting_utterance_wav(utterance, noise_suppression_enabled)
-}
-
-// Shared pure frame gate: the scheduler handoff can reject invalid input
-// before queueing without creating a legacy file or changing the limits.
-pub(crate) fn finalized_asr_frame_rejection(
-    utterance: &FinalizedMeetingUtterance,
-) -> Option<LiveSegmentWavWriteReport> {
-    let frame = &utterance.frame;
-    validate_target_frame(
-        frame.sample_rate_hz,
-        frame.channels,
-        &frame.samples,
-        duration_ms(frame.samples.len(), frame.sample_rate_hz),
-        MAX_FINALIZED_ASR_SEGMENT_SAMPLES,
-        "finalized_utterance_writer",
-    )
-}
-
-fn write_finalized_meeting_utterance_wav(
-    utterance: &FinalizedMeetingUtterance,
-    noise_suppression_enabled: bool,
-) -> LiveSegmentWavWriteReport {
-    let frame = &utterance.frame;
-    let frame_duration_ms = duration_ms(frame.samples.len(), frame.sample_rate_hz);
-    if let Some(report) = finalized_asr_frame_rejection(utterance) {
-        return report;
-    }
-
-    let session_component = safe_file_component(&utterance.session_id);
-    let lane_component = safe_file_component(&utterance.lane);
-    if session_component.is_empty() || lane_component.is_empty() || utterance.sequence == 0 {
-        return LiveSegmentWavWriteReport {
-            ok: false,
-            audio_path: None,
-            sample_rate_hz: frame.sample_rate_hz,
-            channels: frame.channels,
-            sample_count: frame.samples.len(),
-            duration_ms: frame_duration_ms,
-            blocker: "finalized_utterance_writer:invalid_event_identity".to_string(),
-            note: "Finalized Meeting utterance WAV was not written because its session/lane/event identity is invalid."
-                .to_string(),
-        };
-    }
-
-    let generation_component = utterance
-        .generation
-        .map(|generation| format!("g{generation}_"))
-        .unwrap_or_default();
-    let filename = format!(
-        "final_{}_s{}_{}_{}u{}.wav",
-        session_component,
-        utterance.sequence,
-        lane_component,
-        generation_component,
-        utterance.utterance_id
-    );
-    let project_paths = ProjectPaths::discover();
-    let audio_dir = PathBuf::from(project_paths.user_cache_dir).join("audio_segments");
-    let audio_path = audio_dir.join(&filename);
-    let label = format!("{FINALIZED_SEGMENT_ROOT_LABEL}{filename}");
-
-    let noise_threshold = if noise_suppression_enabled {
-        noise_suppression_threshold(&frame.samples)
-    } else {
-        None
-    };
-
-    match write_pcm16_wav_with_promotion(
-        &audio_path,
-        frame.sample_rate_hz,
-        frame.channels,
-        &frame.samples,
-        noise_threshold,
-        |staged, destination| fs::rename(staged, destination),
-    ) {
-        Ok(()) => LiveSegmentWavWriteReport {
-            ok: true,
-            audio_path: Some(label),
-            sample_rate_hz: frame.sample_rate_hz,
-            channels: frame.channels,
-            sample_count: frame.samples.len(),
-            duration_ms: frame_duration_ms,
-            blocker: String::new(),
-            note: format!(
-                "Finalized {} utterance {} for Meeting event sequence {} was written once as temporary PCM16 WAV.",
-                utterance.lane, utterance.utterance_id, utterance.sequence
-            ),
-        },
-        Err(_error) => LiveSegmentWavWriteReport {
-            ok: false,
-            audio_path: None,
-            sample_rate_hz: frame.sample_rate_hz,
-            channels: frame.channels,
-            sample_count: frame.samples.len(),
-            duration_ms: frame_duration_ms,
-            blocker: "finalized_utterance_writer:wav_write_failed".to_string(),
-            note: "Failed to write finalized Meeting utterance WAV. No AI/output stage should consume this utterance and no finalized path is promoted."
-                .to_string(),
-        },
-    }
-}
-
-fn invalid_lane_report(
-    utterance: &FinalizedMeetingUtterance,
-    expected_lane: &str,
-    blocker_prefix: &str,
-) -> LiveSegmentWavWriteReport {
-    LiveSegmentWavWriteReport {
-        ok: false,
-        audio_path: None,
-        sample_rate_hz: utterance.frame.sample_rate_hz,
-        channels: utterance.frame.channels,
-        sample_count: utterance.frame.samples.len(),
-        duration_ms: duration_ms(utterance.frame.samples.len(), utterance.frame.sample_rate_hz),
-        blocker: format!("{blocker_prefix}:lane_mismatch"),
-        note: format!("Finalized utterance did not match the expected {expected_lane} lane contract."),
-    }
-}
-
-// Stop and optional incoming disable must distinguish a removed/missing WAV
-// from a failed filesystem deletion. A bool keeps existing best-effort event
-// callers compatible while allowing the deferred queue to retain failed work.
-pub fn remove_finalized_meeting_utterance_wav(audio_path: &str) -> bool {
-    let project_paths = ProjectPaths::discover();
-    let audio_dir = PathBuf::from(project_paths.user_cache_dir).join("audio_segments");
-    remove_finalized_meeting_utterance_wav_in_dir(&audio_dir, audio_path)
-}
-
-fn remove_finalized_meeting_utterance_wav_in_dir(
-    audio_dir: &PathBuf,
-    audio_path: &str,
-) -> bool {
-    let Some(filename) = finalized_audio_filename(audio_path) else {
-        return false;
-    };
-    match fs::remove_file(audio_dir.join(filename)) {
-        Ok(()) => true,
-        // A completed or duplicate cleanup is idempotent; no file remains.
-        Err(error) if error.kind() == io::ErrorKind::NotFound => true,
-        Err(_) => false,
-    }
-}
-
+// Only old session-owned ASR artifacts can be cleaned here. New Meeting
+// ASR uses PCM directly. The PCM16 writer below is used by My Voice
+// recordings and explicit public-audio fixture export, not Meeting inference.
 pub fn cleanup_finalized_meeting_session_wavs(session_id: &str) -> Result<usize, String> {
     let project_paths = ProjectPaths::discover();
     let audio_dir = PathBuf::from(project_paths.user_cache_dir).join("audio_segments");
@@ -273,72 +81,6 @@ fn finalized_wav_belongs_to_session(filename: &str, session: &str) -> bool {
     utterance.parse::<u64>().is_ok()
 }
 
-fn finalized_audio_filename(audio_path: &str) -> Option<String> {
-    let normalized = audio_path.trim().replace('\\', "/");
-    let filename = normalized.strip_prefix(FINALIZED_SEGMENT_ROOT_LABEL)?;
-    if filename.is_empty()
-        || filename.contains('/')
-        || filename.contains('\\')
-        || !filename.starts_with("final_")
-        || !filename.ends_with(".wav")
-    {
-        return None;
-    }
-    Some(filename.to_string())
-}
-
-fn validate_target_frame(
-    sample_rate_hz: u32,
-    channels: u16,
-    samples: &[f32],
-    frame_duration_ms: u32,
-    max_samples: usize,
-    blocker_prefix: &str,
-) -> Option<LiveSegmentWavWriteReport> {
-    if sample_rate_hz != TARGET_SAMPLE_RATE_HZ || channels != 1 {
-        return Some(LiveSegmentWavWriteReport {
-            ok: false,
-            audio_path: None,
-            sample_rate_hz,
-            channels,
-            sample_count: samples.len(),
-            duration_ms: frame_duration_ms,
-            blocker: format!("{blocker_prefix}:frame_not_target_format"),
-            note: "Finalized audio must be 16 kHz mono before worker transcription.".to_string(),
-        });
-    }
-
-    if samples.is_empty() || samples.len() > max_samples {
-        return Some(LiveSegmentWavWriteReport {
-            ok: false,
-            audio_path: None,
-            sample_rate_hz,
-            channels,
-            sample_count: samples.len(),
-            duration_ms: frame_duration_ms,
-            blocker: format!("{blocker_prefix}:sample_count_out_of_range"),
-            note: "Audio sample count is outside the safe WAV writer range.".to_string(),
-        });
-    }
-
-    if frame_duration_ms < MIN_ASR_SEGMENT_DURATION_MS {
-        return Some(LiveSegmentWavWriteReport {
-            ok: false,
-            audio_path: None,
-            sample_rate_hz,
-            channels,
-            sample_count: samples.len(),
-            duration_ms: frame_duration_ms,
-            blocker: format!("{blocker_prefix}:segment_too_short"),
-            note: format!(
-                "Finalized audio is too short for the current ASR writer contract. Minimum: {MIN_ASR_SEGMENT_DURATION_MS}ms."
-            ),
-        });
-    }
-
-    None
-}
-
 fn safe_file_component(value: &str) -> String {
     value
         .trim()
@@ -355,7 +97,7 @@ pub(crate) fn write_pcm16_wav(
     samples: &[f32],
 ) -> io::Result<()> {
     write_pcm16_wav_with_promotion(
-        path, sample_rate_hz, channels, samples, None, |staged, destination| {
+        path, sample_rate_hz, channels, samples, |staged, destination| {
             fs::rename(staged, destination)
         },
     )
@@ -368,7 +110,6 @@ fn write_pcm16_wav_with_promotion(
     sample_rate_hz: u32,
     channels: u16,
     samples: &[f32],
-    noise_threshold: Option<f32>,
     promote: impl FnOnce(&PathBuf, &PathBuf) -> io::Result<()>,
 ) -> io::Result<()> {
     if let Some(parent) = path.parent() {
@@ -400,10 +141,9 @@ fn write_pcm16_wav_with_promotion(
     wav.extend_from_slice(b"data");
     wav.extend_from_slice(&data_size.to_le_bytes());
 
-    // Apply the existing optional gain directly before PCM16 quantization.
-    // The finalized f32 frame stays unchanged and no filtered Vec is needed.
+    // Preserve existing recording quantization, without ASR-specific gain.
     for sample in samples {
-        let value = (condition_asr_sample(*sample, noise_threshold) * i16::MAX as f32).round() as i16;
+        let value = (safe_sample(*sample) * i16::MAX as f32).round() as i16;
         wav.extend_from_slice(&value.to_le_bytes());
     }
     // Exclusive creation prevents two writers from truncating the same
@@ -436,96 +176,6 @@ mod tests {
             "translateit-{label}-{}-{nonce}",
             std::process::id()
         ))
-    }
-
-    #[test]
-    fn noise_suppression_attenuates_floor_without_reducing_strong_speech() {
-        let mut samples = vec![0.002_f32; 320];
-        samples.extend(vec![0.12_f32; 320]);
-        let threshold = noise_suppression_threshold(&samples).expect("strong speech should allow cleanup");
-        assert!(condition_asr_sample(samples[0], Some(threshold)).abs() < samples[0].abs() * 0.4);
-        assert!((condition_asr_sample(samples[400], Some(threshold)) - samples[400]).abs() <= 1e-6);
-    }
-
-    #[test]
-    fn noise_suppression_bypasses_quiet_or_clipping_audio() {
-        assert!(noise_suppression_threshold(&vec![0.002_f32; 640]).is_none());
-        let clipping = (0..640).map(|index| if index % 10 == 0 { 1.0 } else { 0.1 }).collect::<Vec<_>>();
-        assert!(noise_suppression_threshold(&clipping).is_none());
-    }
-
-    #[test]
-    fn fused_noise_gain_preserves_previous_pcm16_bytes() {
-        let root = unique_test_root("wav-fused-gain");
-        let mut samples = vec![0.002_f32; 320];
-        samples.extend(vec![0.12_f32; 320]);
-        samples.extend([0.004, -0.009, f32::NAN, f32::INFINITY, -0.002]);
-        let threshold = noise_suppression_threshold(&samples).unwrap();
-        let transition_end = threshold * 2.5;
-        // Previous implementation, retained only as a byte-parity oracle.
-        let filtered: Vec<f32> = samples.iter().map(|sample| {
-            let value = condition_asr_sample(*sample, None);
-            let level = value.abs();
-            let gain = if level <= threshold {
-                0.22
-            } else if level < transition_end {
-                0.22 + 0.78 * ((level - threshold) / (transition_end - threshold))
-            } else {
-                1.0
-            };
-            value * gain
-        }).collect();
-        let reference = root.join("reference.wav");
-        let fused = root.join("fused.wav");
-        write_pcm16_wav(&reference, TARGET_SAMPLE_RATE_HZ, 1, &filtered).unwrap();
-        write_pcm16_wav_with_promotion(
-            &fused, TARGET_SAMPLE_RATE_HZ, 1, &samples, Some(threshold),
-            |staged, destination| fs::rename(staged, destination),
-        ).unwrap();
-        assert_eq!(fs::read(reference).unwrap(), fs::read(fused).unwrap());
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn direct_pcm_conditioning_matches_gain_without_quantization_or_allocation() {
-        use super::super::evidence::{condition_asr_pcm, AudioEvidenceReport};
-        let mut mixed = vec![0.002_f32; 320];
-        mixed.extend(vec![0.12_f32; 320]);
-        mixed.extend([0.004, -0.009, f32::NAN, f32::INFINITY, -0.002]);
-        let mut clipping = vec![0.1; 640];
-        clipping[..16].fill(0.98); // exact clipping boundary
-        let mut over_clipping = clipping.clone();
-        over_clipping[16] = -1.0;
-        for original in [
-            vec![], vec![0.1; 319], vec![0.012; 320],
-            vec![0.002; 640], mixed, clipping, over_clipping,
-            vec![-2.0, 2.0, f32::NAN, f32::NEG_INFINITY],
-            vec![0.12; MAX_FINALIZED_ASR_SEGMENT_SAMPLES],
-        ] {
-            // Old full-report threshold remains only as a parity oracle.
-            let evidence = AudioEvidenceReport::from_samples(&original);
-            let reference_threshold = if original.len() < 320
-                || evidence.rms < 0.012 || evidence.clipping_ratio > 0.025 {
-                None
-            } else {
-                Some((evidence.rms * 0.08).clamp(0.0015, 0.006))
-            };
-            assert_eq!(noise_suppression_threshold(&original), reference_threshold);
-            for enabled in [false, true] {
-                let mut pcm = original.clone();
-                let allocation = pcm.as_ptr();
-                let capacity = pcm.capacity();
-                let threshold = if enabled { reference_threshold } else { None };
-                condition_asr_pcm(&mut pcm, enabled);
-                assert_eq!(pcm.as_ptr(), allocation);
-                assert_eq!(pcm.capacity(), capacity);
-                assert_eq!(pcm.len(), original.len());
-                for (actual, &sample) in pcm.iter().zip(&original) {
-                    assert!(actual.is_finite() && (-1.0..=1.0).contains(actual));
-                    assert_eq!(actual.to_bits(), condition_asr_sample(sample, threshold).to_bits());
-                }
-            }
-        }
     }
 
     #[test]
@@ -593,28 +243,6 @@ mod tests {
     }
 
     #[test]
-    fn per_wav_cleanup_reports_failure_and_accepts_already_missing_file() {
-        let root = unique_test_root("per-wav-deferred-cleanup");
-        fs::create_dir_all(&root).expect("create isolated wav cleanup root");
-        let owned = "UserData/CacheData/audio_segments/final_session-a_s1_incoming_u1.wav";
-        let path = root.join("final_session-a_s1_incoming_u1.wav");
-        assert!(remove_finalized_meeting_utterance_wav_in_dir(&root, owned),
-            "an already-absent per-event WAV is clean");
-        fs::create_dir_all(&path).expect("block file removal with a directory");
-        assert!(!remove_finalized_meeting_utterance_wav_in_dir(&root, owned),
-            "failed removal must remain observable for Retry Stop");
-        assert!(path.is_dir());
-        fs::remove_dir(&path).expect("release directory blocker");
-        fs::write(&path, b"wav").expect("create owned WAV");
-        assert!(remove_finalized_meeting_utterance_wav_in_dir(&root, owned));
-        assert!(!path.exists());
-        assert!(!remove_finalized_meeting_utterance_wav_in_dir(
-            &root, "UserData/CacheData/audio_segments/not-a-final-wav.tmp",
-        ), "an invalid path cannot count as successful cleanup");
-        fs::remove_dir_all(root).expect("remove isolated test root");
-    }
-
-    #[test]
     fn successful_promotion_still_replaces_a_completed_draft() {
         let root = unique_test_root("wav-replace-success");
         fs::create_dir_all(&root).expect("create isolated WAV test root");
@@ -641,7 +269,7 @@ mod tests {
         let previous = fs::read(&destination).expect("read original WAV");
         let failed = write_pcm16_wav_with_promotion(
             &destination,
-            TARGET_SAMPLE_RATE_HZ, 1, &[0.75, -0.75], None,
+            TARGET_SAMPLE_RATE_HZ, 1, &[0.75, -0.75],
             |staged, target| {
                 assert!(staged.is_file(), "complete staging WAV exists before promotion");
                 assert_eq!(fs::read(target).unwrap(), previous);
