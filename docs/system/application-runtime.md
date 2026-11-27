@@ -57,6 +57,22 @@ The floating translation overlay remains frontend-owned. It manages window prese
 `ApplicationSnapshot` is a cheap reconciliation contract. Building it may inspect local in-process/native status, but it must not run expensive worker requests, model inference, functional probes, or recovery actions. Cheap capabilities therefore cover only what current local state can prove; directional translation capability remains an internal model fact inspected by the product readiness layer; Meeting preflight determines user-facing readiness. Deep AI readiness belongs to the product/detail query that explicitly needs it. This keeps close checks, settings mutations, and runtime events bounded and prevents orchestration from creating hidden latency.
 
 
+### Single-observation Settings and preflight
+
+Each application snapshot uses one fresh locked Settings observation containing
+both tolerant display preferences and the strict engine-admission decision.
+The latter must distinguish a clean missing installation from damaged or
+unverified persisted configuration; UI defaults alone never authorize AI.
+Input inspection and helper status are observed once and reused by uncached
+Meeting preflight. Live generation-bound Start receipts retain their existing
+behavior. Full Settings save and guarded device selection also reuse their
+single current observation. No cross-operation cache, schema change or
+authorization lifetime change is introduced. Explicit recovery/compare-and-set
+writes, fresh post-write verification, and strict per-stage route admission
+remain intact; a separate session authority design is required before reducing
+those disk reads. Existing Settings backup recovery/cleanup remains in the
+canonical Settings owner.
+
 ### Event-first Meeting reconciliation
 
 Live Meeting UI freshness uses lightweight backend change events from authoritative committed-turn state. The event payload contains only revision/reason/session/sequence metadata. Both event and 10-second fallback use the existing live transcript command with an opt-in reconciliation request: one IPC returns Meeting status and either a full bounded live snapshot or an explicit unchanged receipt. The store-owned revision covers accepted source, translation, delivery, timing, and interruption mutations; the token also binds the session and observed archive errors. Unknown archive health or a new session never authorizes unchanged reuse. No timestamp heuristic, delta log, extra command, or cross-session transcript cache. The bridge passes the explicit nullable reconciliation argument; the shared saved/export DTO remains unchanged, with live-only metadata kept in the conditional read type. Standalone full transcript reads and saved/export formats remain available. The superseded standalone Meeting-status IPC and its unused frontend wrapper are retired; internal Rust Meeting status observations remain available to runtime and diagnostics.

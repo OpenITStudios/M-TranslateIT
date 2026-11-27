@@ -100,9 +100,14 @@ impl Default for RuntimeSettings {
 
 impl RuntimeSettings {
     pub fn load_or_default(path: &Path) -> Self {
-        // UI remains tolerant, but this fallback never authorizes translated Meeting.
+        Self::load_with_admission(path).0
+    }
+
+    /// One fresh locked observation for consumers needing both preferences and
+    /// admission. A tolerant default must never authorize a damaged file.
+    pub(crate) fn load_with_admission(path: &Path) -> (Self, MeetingEngineAdmission) {
         let Ok(_guard) = settings_io_gate().lock() else {
-            return Self::default();
+            return (Self::default(), MeetingEngineAdmission::Unverified);
         };
         if let Some(settings) = read_settings_file(path) {
             // If the replacement already committed but the process stopped before
@@ -110,7 +115,8 @@ impl RuntimeSettings {
             // artifacts so an older backup cannot become a future recovery source.
             let _ = fs::remove_file(path.with_extension("json.bak"));
             let _ = fs::remove_file(path.with_extension("json.tmp"));
-            return settings;
+            let admission = persisted_engine(&settings);
+            return (settings, admission);
         }
 
         let backup_path = path.with_extension("json.bak");
@@ -121,10 +127,11 @@ impl RuntimeSettings {
             if restore_settings_backup(path, &backup_path).is_ok() {
                 let _ = fs::remove_file(path.with_extension("json.tmp"));
             }
-            return settings;
+            let admission = persisted_engine(&settings);
+            return (settings, admission);
         }
 
-        Self::default()
+        (Self::default(), missing_settings_admission(path))
     }
 
     /// The authoritative read-only route admission, unlike tolerant UI defaults.
@@ -217,6 +224,11 @@ fn meeting_engine_admission_locked(path: &Path) -> MeetingEngineAdmission {
     if let Some(settings) = read_settings_file(&backup) {
         return persisted_engine(&settings);
     }
+    missing_settings_admission(path)
+}
+
+fn missing_settings_admission(path: &Path) -> MeetingEngineAdmission {
+    let backup = path.with_extension("json.bak");
     let temporary = path.with_extension("json.tmp");
     if [path, backup.as_path(), temporary.as_path()]
         .iter()
@@ -441,6 +453,42 @@ mod tests {
         let mut unknown = RuntimeSettings::default();
         unknown.translation_engine = "apikey".to_string();
         assert_eq!(unknown.sanitized().translation_engine, "local");
+    }
+
+    #[test]
+    fn combined_settings_observation_preserves_strict_admission_and_recovery() {
+        let path = std::env::temp_dir().join(format!(
+            "translateit_combined_settings_{}.json", std::process::id()
+        ));
+        let backup = path.with_extension("json.bak");
+        let temporary = path.with_extension("json.tmp");
+        for file in [&path, &backup, &temporary] {
+            let _ = fs::remove_file(file);
+        }
+        let (fresh, admission) = RuntimeSettings::load_with_admission(&path);
+        assert_eq!(fresh, RuntimeSettings::default());
+        assert_eq!(admission, MeetingEngineAdmission::Local);
+        fs::write(&temporary, b"unfinished").unwrap();
+        assert_eq!(RuntimeSettings::load_with_admission(&path).1, MeetingEngineAdmission::Unverified);
+        fs::write(&path, r#"{"schema_version":14,"translation_engine":"codex","meeting_setup_state":"completed"}"#).unwrap();
+        let (valid, admission) = RuntimeSettings::load_with_admission(&path);
+        assert_eq!(valid.translation_engine, "codex");
+        assert_eq!(valid.meeting_setup_state, "completed");
+        assert_eq!(admission, MeetingEngineAdmission::Codex);
+        assert!(!temporary.exists());
+        fs::write(&path, r#"{"schema_version":14,"translation_engine":"invalid"}"#).unwrap();
+        let (fallback, admission) = RuntimeSettings::load_with_admission(&path);
+        assert_eq!(fallback.translation_engine, "local");
+        assert_eq!(admission, MeetingEngineAdmission::Unverified);
+        fs::write(&backup, r#"{"schema_version":14,"translation_engine":"codex"}"#).unwrap();
+        let (recovered, admission) = RuntimeSettings::load_with_admission(&path);
+        assert_eq!(recovered.translation_engine, "codex");
+        assert_eq!(admission, MeetingEngineAdmission::Codex);
+        assert_eq!(RuntimeSettings::meeting_engine_admission(&path), admission);
+        assert!(!backup.exists());
+        for file in [&path, &backup, &temporary] {
+            let _ = fs::remove_file(file);
+        }
     }
 
     #[test]

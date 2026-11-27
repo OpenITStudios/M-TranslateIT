@@ -455,6 +455,14 @@ fn process_authoritative_finalized_outbound_wav(
 pub fn get_meeting_session_status() -> MeetingSessionStatus {
     current_status()
 }
+
+pub(super) fn get_meeting_session_status_from_observations(
+    input: &crate::engine::audio::input::InputPreparationStatus,
+    admission: crate::engine::settings::MeetingEngineAdmission,
+    helper: &super::helper_bridge_runtime::HelperBridgeStatus,
+) -> MeetingSessionStatus {
+    preflight::current_status_from_observations(input, admission, helper)
+}
 #[tauri::command]
 pub fn set_meeting_audio_source(
     app: tauri::AppHandle, source: String,

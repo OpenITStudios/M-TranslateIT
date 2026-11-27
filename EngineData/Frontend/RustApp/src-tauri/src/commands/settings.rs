@@ -158,11 +158,10 @@ pub fn save_runtime_settings(
             return result;
         }
     };
-    let current = engine::load_settings();
+    let (current, admission) = engine::runtime_settings::load_settings_with_admission();
     let candidate = settings.sanitized();
     let expected = expected_settings.sanitized();
-    let unverified_engine = engine::meeting_engine_admission()
-        == MeetingEngineAdmission::Unverified;
+    let unverified_engine = admission == MeetingEngineAdmission::Unverified;
     let resources_owned = runtime_session_owns_audio_resources();
     let result = if unverified_engine {
         // A damaged primary/backup is NOT a clean first install. Even if the
@@ -415,10 +414,8 @@ pub fn select_audio_device(kind: String, device_id: Option<String>) -> AudioDevi
     };
     // Always read again after acquiring the mutation guard: a stale audio
     // snapshot must never silently overwrite a concurrently saved Codex choice.
-    let current = engine::load_settings();
-    if engine::meeting_engine_admission()
-        == crate::engine::settings::MeetingEngineAdmission::Unverified
-    {
+    let (current, admission) = engine::runtime_settings::load_settings_with_admission();
+    if admission == MeetingEngineAdmission::Unverified {
         trace_command_end("select_audio_device", started, "settings_engine_unverified");
         return AudioDeviceSelectionResult {
             ok: false,

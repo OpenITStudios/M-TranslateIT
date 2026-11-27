@@ -62,8 +62,8 @@ test("engine cannot change during an owned Meeting or pending Retry Stop", () =>
 });
 
 test("Codex preflight has no fake Local readiness or local helper probe", () => {
-  const guard = preflight.indexOf('!super::local_translated_meeting_route_admitted()');
-  const probe = preflight.indexOf("let helper = get_helper_bridge_status();");
+  const guard = preflight.indexOf('!super::local_translated_route_for_admission(admission)');
+  const probe = preflight.indexOf("fresh_helper = get_helper_bridge_status();");
   assert.ok(guard >= 0 && probe > guard, "Codex branch must precede the Local worker probe");
   assert.match(preflight, /meeting_session:codex_voice_not_admitted/);
   assert.match(preflight, /meeting_session:settings_unverified/);
@@ -95,7 +95,9 @@ test("P11 uses one Meeting-local engine admission gate, never a Codex diagnostic
   assert.match(meeting, /fn local_translated_meeting_route_admitted\(\) -> bool/);
   assert.match(meeting, /crate::engine::meeting_engine_admission\(\)/);
   assert.match(meeting, /fn only_the_installed_local_translation_route_can_run_existing_ai_pipeline/);
-  for (const owner of [preflight, lifecycle, switching, consumer, outbound, committed, playback]) {
+  assert.match(preflight, /super::local_translated_route_for_admission\(admission\)/);
+  assert.doesNotMatch(preflight, /codex_gateway::|connect_codex_gateway\(/);
+  for (const owner of [lifecycle, switching, consumer, outbound, committed, playback]) {
     assert.match(owner, /super::local_translated_meeting_route_admitted\(\)/);
     assert.doesNotMatch(owner, /codex_gateway::|connect_codex_gateway\(/);
   }
@@ -250,14 +252,14 @@ test("P14 serialized settings saves cannot race canonical Meeting Start or silen
   assert.match(meeting, /lifecycle::try_settings_mutation_guard\(\)/);
   const save = persistence.slice(persistence.indexOf("pub fn save_runtime_settings("));
   const guardIndex = save.indexOf("super::meeting_session::try_settings_mutation_guard()");
-  const settingsRead = save.indexOf("let current = engine::load_settings();");
+  const settingsRead = save.indexOf("let (current, admission) = engine::runtime_settings::load_settings_with_admission();");
   assert.ok(guardIndex >= 0 && guardIndex < settingsRead);
-  assert.match(save, /let unverified_engine = engine::meeting_engine_admission\(\)/);
+  assert.match(save, /let unverified_engine = admission == MeetingEngineAdmission::Unverified/);
   assert.match(save, /let result = if unverified_engine/);
   const device = persistence.slice(persistence.indexOf("pub fn select_audio_device("));
   assert.match(device, /settings_engine_unverified/);
   assert.match(device, /let _meeting_transition = match super::meeting_session::try_settings_mutation_guard\(\)/);
-  assert.match(device, /let current = engine::load_settings\(\);\s*if engine::meeting_engine_admission\(\)/);
+  assert.match(device, /let \(current, admission\) = engine::runtime_settings::load_settings_with_admission\(\);\s*if admission == MeetingEngineAdmission::Unverified/);
   assert.match(device, /if runtime_session_owns_audio_resources\(\)/);
   assert.match(meeting, /pub\(super\) fn translated_route_settings_unverified\(\)/);
   assert.match(preflight, /meeting_session:settings_unverified/);
@@ -308,7 +310,7 @@ test("P16 generic Settings saves cannot silently recover an Unverified engine", 
     persistence.indexOf("pub fn save_runtime_settings("),
     persistence.indexOf("pub fn confirm_unverified_translation_engine("),
   );
-  const admission = save.indexOf("let unverified_engine = engine::meeting_engine_admission()");
+  const admission = save.indexOf("let unverified_engine = admission == MeetingEngineAdmission::Unverified");
   const stop = save.indexOf("let result = if unverified_engine");
   const persist = save.indexOf("persist_runtime_settings(candidate)");
   assert.ok(admission >= 0 && stop > admission && persist > stop,

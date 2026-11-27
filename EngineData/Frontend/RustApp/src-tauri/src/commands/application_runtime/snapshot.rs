@@ -7,16 +7,20 @@ use super::problems::collect_problems;
 use super::resources::resolve_resources;
 use super::summaries::build_subsystem_summaries;
 use super::super::{
-    audio, helper_bridge, meeting_session, settings, voice_lab, voice_lab_recording,
+    audio, helper_bridge, meeting_session, voice_lab, voice_lab_recording,
 };
 
 static APPLICATION_REVISION: AtomicU64 = AtomicU64::new(0);
 
 pub fn current_application_snapshot() -> ApplicationSnapshot {
-    let settings = settings::load_runtime_settings();
-    let meeting = meeting_session::get_meeting_session_status();
+    // One observation per owner for this snapshot. Preflight may still use its
+    // generation-bound Start receipt; an idle preflight reuses these inputs.
+    let (settings, admission) = crate::engine::runtime_settings::load_settings_with_admission();
     let helper = helper_bridge::get_helper_bridge_status();
-    let native_input = audio::get_input_status();
+    let native_input = audio::get_input_status(&settings);
+    let meeting = meeting_session::get_meeting_session_status_from_observations(
+        &native_input, admission, &helper,
+    );
     let input = ApplicationInputStatus {
         ready: native_input.prepared,
         prepared: native_input.prepared,

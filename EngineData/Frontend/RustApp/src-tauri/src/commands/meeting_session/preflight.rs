@@ -4,6 +4,10 @@ use crate::engine::runtime_state::{
 
 use super::super::audio::get_input_status;
 use crate::engine::audio::original_voice_pcm;
+use crate::engine::audio::input::InputPreparationStatus;
+use crate::engine::runtime_settings::load_settings_with_admission;
+use crate::engine::settings::MeetingEngineAdmission;
+use super::super::helper_bridge_runtime::HelperBridgeStatus;
 use super::super::helper_bridge::get_helper_bridge_status;
 use super::super::virtual_mic_route::get_virtual_mic_route_selection;
 use super::session_state::{
@@ -32,7 +36,16 @@ fn helper_start_recoverable(state: &str, last_error: Option<&str>) -> bool {
 }
 
 pub(super) fn build_preflight() -> MeetingSessionPreflightStatus {
-    let input = get_input_status();
+    let (settings, admission) = load_settings_with_admission();
+    let input = get_input_status(&settings);
+    build_preflight_from_observations(&input, admission, None)
+}
+
+fn build_preflight_from_observations(
+    input: &InputPreparationStatus,
+    admission: MeetingEngineAdmission,
+    observed_helper: Option<&HelperBridgeStatus>,
+) -> MeetingSessionPreflightStatus {
     let route = get_virtual_mic_route_selection();
 
     let source_is_virtual_meeting_mic = microphone_conflicts_with_virtual_recording(
@@ -43,8 +56,8 @@ pub(super) fn build_preflight() -> MeetingSessionPreflightStatus {
     // A selected, unverified Codex Voice route MUST NOT inherit Local worker
     // readiness. Avoid even probing the local helper for this route. No
     // microphone, model load, or network session is started by preflight.
-    if !super::local_translated_meeting_route_admitted() {
-        let settings_unverified = super::translated_route_settings_unverified();
+    if !super::local_translated_route_for_admission(admission) {
+        let settings_unverified = admission == MeetingEngineAdmission::Unverified;
         let mut blockers = vec![if settings_unverified {
             "meeting_session:settings_unverified".to_string()
         } else {
@@ -91,7 +104,14 @@ pub(super) fn build_preflight() -> MeetingSessionPreflightStatus {
         };
     }
 
-    let helper = get_helper_bridge_status();
+    let fresh_helper;
+    let helper = match observed_helper {
+        Some(helper) => helper,
+        None => {
+            fresh_helper = get_helper_bridge_status();
+            &fresh_helper
+        }
+    };
     let helper_ready = helper.state == "ready";
     let provider_ready = helper.provider_ready;
     let functional_outbound_ready = helper.functional_outbound_ready;
@@ -206,7 +226,10 @@ pub(super) fn status_from_report(
     }
 }
 
-fn preflight_for_report(report: &RuntimeSessionStateReport) -> MeetingSessionPreflightStatus {
+fn preflight_for_report(
+    report: &RuntimeSessionStateReport,
+    build: impl FnOnce() -> MeetingSessionPreflightStatus,
+) -> MeetingSessionPreflightStatus {
     if let Some(snapshot) = report.snapshot.as_ref() {
         if snapshot.owner_id == APPLICATION_MEETING_OWNER_ID {
             if let Some(cached) = current_start_preflight(snapshot.generation) {
@@ -214,12 +237,23 @@ fn preflight_for_report(report: &RuntimeSessionStateReport) -> MeetingSessionPre
             }
         }
     }
-    build_preflight()
+    build()
 }
 
 pub(super) fn current_status() -> MeetingSessionStatus {
     let report = latest_runtime_session_state();
-    let preflight = preflight_for_report(&report);
+    let preflight = preflight_for_report(&report, build_preflight);
+    status_from_report(report, preflight)
+}
+
+pub(super) fn current_status_from_observations(
+    input: &InputPreparationStatus,
+    admission: MeetingEngineAdmission,
+    helper: &HelperBridgeStatus,
+) -> MeetingSessionStatus {
+    let report = latest_runtime_session_state();
+    let preflight = preflight_for_report(&report, ||
+        build_preflight_from_observations(input, admission, Some(helper)));
     status_from_report(report, preflight)
 }
 

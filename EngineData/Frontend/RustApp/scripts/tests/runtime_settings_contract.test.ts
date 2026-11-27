@@ -111,7 +111,7 @@ test("P19 Settings optimistic concurrency blocks stale non-engine DTOs before th
   assert.match(rust, /#\[derive\(Debug, Clone, Serialize, Deserialize, PartialEq, Eq\)\]/);
   assert.match(native, /pub fn save_runtime_settings\(\s*settings: RuntimeSettings,\s*expected_settings: RuntimeSettings,/);
   const fn = native.slice(native.indexOf("pub fn save_runtime_settings("), native.indexOf("pub fn confirm_unverified_translation_engine("));
-  const nativeRead = fn.indexOf("let current = engine::load_settings()");
+  const nativeRead = fn.indexOf("let (current, admission) = engine::runtime_settings::load_settings_with_admission()");
   const staleGuard = fn.indexOf("else if current != expected");
   const actualSave = fn.indexOf("persist_runtime_settings(candidate)");
   assert.ok(nativeRead >= 0 && staleGuard > nativeRead && actualSave > staleGuard);
@@ -126,4 +126,23 @@ test("P19 Settings optimistic concurrency blocks stale non-engine DTOs before th
   assert.match(noise, /await runtimeApi.saveSettings\(candidate, expected\)/);
   assert.match(meeting, /const expected = \{[\s\S]*?\.\.\.snapshot\.settings/);
   assert.match(meeting, /await runtimeApi.saveSettings\(settings, expected\)/);
+});
+
+test("settings admission and preferences come from the same fresh locked observation", () => {
+  const snapshot = readFileSync(new URL("../../src-tauri/src/commands/application_runtime/snapshot.rs", import.meta.url), "utf8");
+  const preflight = readFileSync(new URL("../../src-tauri/src/commands/meeting_session/preflight.rs", import.meta.url), "utf8");
+  const audio = readFileSync(new URL("../../src-tauri/src/commands/audio.rs", import.meta.url), "utf8");
+  assert.match(rust, /fn load_with_admission\(path: &Path\)[\s\S]*?settings_io_gate\(\)\.lock\(\)/);
+  assert.match(rust, /return \(Self::default\(\), MeetingEngineAdmission::Unverified\)/);
+  assert.match(rust, /\(Self::default\(\), missing_settings_admission\(path\)\)/);
+  assert.match(rust, /fn combined_settings_observation_preserves_strict_admission_and_recovery/);
+  assert.equal((snapshot.match(/load_settings_with_admission\(\)/g) ?? []).length, 1);
+  assert.equal((snapshot.match(/get_helper_bridge_status\(\)/g) ?? []).length, 1);
+  assert.equal((snapshot.match(/get_input_status\(&settings\)/g) ?? []).length, 1);
+  assert.match(snapshot, /get_meeting_session_status_from_observations\(\s*&native_input, admission, &helper,/);
+  assert.match(preflight, /build_preflight_from_observations\(input, admission, Some\(helper\)\)/);
+  assert.match(preflight, /Some\(helper\) => helper/);
+  assert.match(preflight, /preflight_for_report\(&report, build_preflight\)/);
+  assert.match(audio, /get_input_status\(settings: &engine::settings::RuntimeSettings\)/);
+  assert.match(audio, /inspect_input_device\(settings.audio.input_device_id.as_deref\(\)\)/);
 });

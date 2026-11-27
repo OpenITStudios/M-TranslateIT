@@ -353,8 +353,7 @@ pub fn probe_output_device_candidate(device_id: Option<String>) -> AudioDevicePr
     }
 }
 
-pub fn get_input_status() -> InputPreparationStatus {
-    let settings = engine::load_settings();
+pub(super) fn get_input_status(settings: &engine::settings::RuntimeSettings) -> InputPreparationStatus {
     InputPreparationStatus::inspect_input_device(settings.audio.input_device_id.as_deref())
 }
 

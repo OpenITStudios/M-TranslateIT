@@ -13,6 +13,10 @@ pub fn load_settings() -> RuntimeSettings {
     RuntimeSettings::load_or_default(&settings_path())
 }
 
+pub(crate) fn load_settings_with_admission() -> (RuntimeSettings, MeetingEngineAdmission) {
+    RuntimeSettings::load_with_admission(&settings_path())
+}
+
 pub fn meeting_engine_admission() -> MeetingEngineAdmission {
     RuntimeSettings::meeting_engine_admission(&settings_path())
 }
