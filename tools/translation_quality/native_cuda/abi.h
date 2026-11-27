@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-// Candidate ABI v3: one serialized owner for both resident model stages.
+// Candidate ABI v4: one serialized owner for both resident model stages.
 typedef struct ti_runtime ti_runtime;
 enum ti_status {
     TI_OK = 0,
@@ -30,8 +30,15 @@ enum ti_status {
     TI_INTERNAL = 12,
     TI_ARTIFACT = 13,
     TI_VRAM = 14,
-    TI_BUSY = 15
+    TI_BUSY = 15,
+    TI_CANCELLED = 16,
+    TI_DEADLINE = 17
 };
+
+// Synchronous, non-retained callback: return TI_OK, TI_CANCELLED or
+// TI_DEADLINE. Caller owns the data until the request returns. A stop
+// does not interrupt an already-running CUDA kernel; never close concurrently.
+typedef int32_t (*ti_stop_check)(const void * data);
 
 TI_EXPORT uint32_t ti_cuda_abi_version(void);
 // All three exact pinned GGUF files are verified before model load. Paths
@@ -45,11 +52,13 @@ TI_EXPORT void ti_runtime_close(ti_runtime * runtime);
 // Output cap >=16000 bytes. Only success authorizes *out_len bytes;
 // failure has zero length, and scratch contents are unspecified.
 TI_EXPORT int32_t ti_runtime_transcribe(ti_runtime * runtime, const float * pcm, size_t count,
-                                        uint32_t language, char * output,
+                                        uint32_t language, ti_stop_check stop, const void * stop_data,
+                                        char * output,
                                         size_t output_cap, size_t * out_len);
 // UTF-8 <=8000 bytes. Different directions only, same output contract.
 TI_EXPORT int32_t ti_runtime_translate(ti_runtime * runtime, const char * source, size_t source_len,
                                        uint32_t source_language, uint32_t target_language,
+                                       ti_stop_check stop, const void * stop_data,
                                        char * output, size_t output_cap, size_t * out_len);
 
 #ifdef __cplusplus

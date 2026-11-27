@@ -243,7 +243,7 @@ struct ti_mt : decoder {
     llama_token eos = LLAMA_TOKEN_NULL;
 };
 
-extern "C" uint32_t ti_cuda_abi_version(void) { return 3; }
+extern "C" uint32_t ti_cuda_abi_version(void) { return 4; }
 
 static int32_t open_asr(const char * model_path, const char * projector_path,
                         ggml_backend_dev_t device, ti_asr ** out) {
@@ -275,6 +275,20 @@ static int32_t open_asr(const char * model_path, const char * projector_path,
 
 
 namespace {
+// The request owns its callback only for this synchronous invocation.
+// Upstream's abort_callback is CPU-only; observe Stop at safe call
+// boundaries, and drain outstanding decoder work before clearing KV.
+struct request_control {
+    ti_stop_check stop;
+    const void * data;
+    int32_t check(llama_context * context = nullptr) const {
+        const auto status = stop(data);
+        if (status == TI_OK) return TI_OK;
+        if (context) llama_synchronize(context);
+        return status == TI_DEADLINE ? TI_DEADLINE : TI_CANCELLED;
+    }
+};
+
 struct clear_utterance {
     llama_context * context;
     ~clear_utterance() { llama_memory_clear(llama_get_memory(context), false); }
@@ -282,7 +296,7 @@ struct clear_utterance {
 
 int32_t generate(decoder & d, llama_pos next_pos, uint32_t max_tokens,
                  llama_token required_eos, std::string_view echo,
-                 char * output, size_t * out_len) {
+                 const request_control & control, char * output, size_t * out_len) {
     auto * context = d.context.get();
     const auto * vocab = llama_model_get_vocab(d.model.get());
     if (!vocab) return TI_INFERENCE;
@@ -290,8 +304,10 @@ int32_t generate(decoder & d, llama_pos next_pos, uint32_t max_tokens,
     // decoding mode, no partial transcript at the token limit.
     size_t used = 0;
     for (uint32_t i = 0; i < max_tokens; ++i) {
+        if (const auto stop = control.check(context); stop != TI_OK) return stop;
         const llama_token token = llama_sampler_sample(d.sampler.get(), context, -1);
         if (token == LLAMA_TOKEN_NULL) return TI_INFERENCE;
+        if (const auto stop = control.check(context); stop != TI_OK) return stop;
         if (llama_vocab_is_eog(vocab, token)) {
             if (required_eos != LLAMA_TOKEN_NULL && token != required_eos)
                 return TI_INCOMPLETE;
@@ -339,7 +355,7 @@ int32_t generate(decoder & d, llama_pos next_pos, uint32_t max_tokens,
 }
 
 int32_t infer(ti_asr & asr, const float * pcm, size_t count, const char * language,
-              char * output, size_t * out_len) {
+              const request_control & control, char * output, size_t * out_len) {
     auto * context = asr.context.get();
     auto * projector = asr.projector.get();
     llama_memory_clear(llama_get_memory(context), false);
@@ -360,6 +376,7 @@ int32_t infer(ti_asr & asr, const float * pcm, size_t count, const char * langua
     if (mtmd_tokenize(projector, chunks.get(), &text, bitmaps, 1) != 0 ||
         mtmd_input_chunks_size(chunks.get()) == 0) return TI_INFERENCE;
 
+    if (const auto stop = control.check(context); stop != TI_OK) return stop;
     const auto n_pos = mtmd_helper_get_n_pos(chunks.get());
     const auto n_tokens = mtmd_helper_get_n_tokens(chunks.get());
     const auto limit = llama_n_ctx_seq(context);
@@ -367,19 +384,27 @@ int32_t infer(ti_asr & asr, const float * pcm, size_t count, const char * langua
         static_cast<uint64_t>(n_pos) > limit - k_asr_max_tokens ||
         n_tokens > limit - k_asr_max_tokens) return TI_INPUT_LIMIT;
     llama_pos next_pos = 0;
-    if (mtmd_helper_eval_chunks(projector, context, chunks.get(), 0, 0,
-                               k_batch, true, &next_pos) != 0 ||
-        next_pos <= 0 || static_cast<uint64_t>(next_pos) > limit - k_asr_max_tokens) {
-        return TI_INFERENCE;
+    // Mirror the pinned upstream helper's position and final-logits contract,
+    // checking between chunks rather than duplicating its encode/decode logic.
+    const size_t chunk_count = mtmd_input_chunks_size(chunks.get());
+    for (size_t i = 0; i < chunk_count; ++i) {
+        if (const auto stop = control.check(context); stop != TI_OK) return stop;
+        const auto * chunk = mtmd_input_chunks_get(chunks.get(), i);
+        if (!chunk || mtmd_helper_eval_chunk_single(projector, context, chunk, next_pos, 0,
+                                                    k_batch, i + 1 == chunk_count, &next_pos) != 0)
+            return TI_INFERENCE;
     }
+    if (const auto stop = control.check(context); stop != TI_OK) return stop;
+    if (next_pos <= 0 || static_cast<uint64_t>(next_pos) > limit - k_asr_max_tokens)
+        return TI_INFERENCE;
 
-    return generate(asr, next_pos, k_asr_max_tokens, LLAMA_TOKEN_NULL, {}, output, out_len);
+    return generate(asr, next_pos, k_asr_max_tokens, LLAMA_TOKEN_NULL, {}, control, output, out_len);
 }
 }
 
 static int32_t transcribe_asr(ti_asr * asr, const float * pcm, size_t count,
-                                      uint32_t language, char * output, size_t output_cap,
-                                      size_t * out_len) {
+                                      uint32_t language, const request_control & control,
+                                      char * output, size_t output_cap, size_t * out_len) {
     if (!out_len) return TI_INVALID_INPUT;
     *out_len = 0;
     if (!asr || !pcm || !output || output_cap < k_max_output_bytes ||
@@ -391,7 +416,7 @@ static int32_t transcribe_asr(ti_asr * asr, const float * pcm, size_t count,
     })) return TI_INVALID_INPUT;
     try {
         const auto status = infer(*asr, pcm, count, language == 1 ? "Indonesian" : "English",
-                                  output, out_len);
+                                  control, output, out_len);
         if (status == TI_INFERENCE) asr->poisoned = true;
         return status;
     } catch (...) {
@@ -450,7 +475,7 @@ bool mt_source_admitted(std::string_view source) {
 }
 
 int32_t translate(ti_mt & mt, std::string_view source, const char * target,
-                  char * output, size_t * out_len) {
+                  const request_control & control, char * output, size_t * out_len) {
     auto * context = mt.context.get();
     const auto * vocab = llama_model_get_vocab(mt.model.get());
     if (!vocab) return TI_INFERENCE;
@@ -479,6 +504,7 @@ int32_t translate(ti_mt & mt, std::string_view source, const char * target,
     clear_utterance clear{context};
     llama_sampler_reset(mt.sampler.get());
     for (int i = 0; i < n;) {
+        if (const auto stop = control.check(context); stop != TI_OK) return stop;
         llama_batch_ext_clear(mt.batch.get());
         const int end = std::min(n, i + static_cast<int>(k_batch));
         for (; i < end; ++i) {
@@ -492,13 +518,13 @@ int32_t translate(ti_mt & mt, std::string_view source, const char * target,
             return TI_INFERENCE;
     }
     return generate(mt, n, budget, mt.eos,
-                    std::string_view(prompt).substr(body_start, body_size), output, out_len);
+                    std::string_view(prompt).substr(body_start, body_size), control, output, out_len);
 }
 }
 
 static int32_t translate_mt(ti_mt * mt, const char * source, size_t source_len,
                                    uint32_t source_language, uint32_t target_language,
-                                   char * output, size_t output_cap, size_t * out_len) {
+                                   const request_control & control, char * output, size_t output_cap, size_t * out_len) {
     if (!out_len) return TI_INVALID_INPUT;
     *out_len = 0;
     if (!mt || !source || source_len == 0 || source_len > k_max_input_bytes ||
@@ -510,7 +536,7 @@ static int32_t translate_mt(ti_mt * mt, const char * source, size_t source_len,
     if (!mt_source_admitted(input)) return TI_INVALID_INPUT;
     try {
         const auto status = translate(*mt, input, target_language == 1 ? "Indonesian" : "English",
-                                      output, out_len);
+                                      control, output, out_len);
         if (status == TI_INFERENCE) mt->poisoned = true;
         return status;
     } catch (...) {
@@ -587,32 +613,42 @@ extern "C" int32_t ti_runtime_open(const char * asr_path, const char * projector
 extern "C" void ti_runtime_close(ti_runtime * runtime) { delete runtime; }
 
 namespace {
-int32_t finish_stage(ti_runtime & runtime, int32_t status) {
+int32_t finish_stage(ti_runtime & runtime, int32_t status,
+                     const request_control & control, size_t * out_len) {
     if (status == TI_INFERENCE || status == TI_INTERNAL || status == TI_POISONED)
         runtime.invalidate();
+    // Recheck after inference cleanup, even after a complete EOG. Do not
+    // turn a real backend failure into an ordinary cancellation.
+    if (status == TI_OK) status = control.check();
+    if (status != TI_OK) *out_len = 0;
     return status;
 }
 }
 
 extern "C" int32_t ti_runtime_transcribe(ti_runtime * runtime, const float * pcm, size_t count,
-                                         uint32_t language, char * output, size_t output_cap,
-                                         size_t * out_len) {
+                                         uint32_t language, ti_stop_check stop, const void * stop_data,
+                                         char * output, size_t output_cap, size_t * out_len) {
     if (!out_len) return TI_INVALID_INPUT;
     *out_len = 0;
-    if (!runtime) return TI_INVALID_INPUT;
+    if (!runtime || !stop || !stop_data) return TI_INVALID_INPUT;
     if (runtime->poisoned) return TI_POISONED;
+    const request_control control{stop, stop_data};
+    if (const auto status = control.check(); status != TI_OK) return status;
     return finish_stage(*runtime, transcribe_asr(runtime->asr.get(), pcm, count, language,
-                                                 output, output_cap, out_len));
+                                                 control, output, output_cap, out_len), control, out_len);
 }
 
 extern "C" int32_t ti_runtime_translate(ti_runtime * runtime, const char * source, size_t source_len,
                                         uint32_t source_language, uint32_t target_language,
+                                        ti_stop_check stop, const void * stop_data,
                                         char * output, size_t output_cap, size_t * out_len) {
     if (!out_len) return TI_INVALID_INPUT;
     *out_len = 0;
-    if (!runtime) return TI_INVALID_INPUT;
+    if (!runtime || !stop || !stop_data) return TI_INVALID_INPUT;
     if (runtime->poisoned) return TI_POISONED;
+    const request_control control{stop, stop_data};
+    if (const auto status = control.check(); status != TI_OK) return status;
     return finish_stage(*runtime, translate_mt(runtime->mt.get(), source, source_len,
                                               source_language, target_language,
-                                              output, output_cap, out_len));
+                                              control, output, output_cap, out_len), control, out_len);
 }

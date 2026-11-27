@@ -1,9 +1,12 @@
 //! Source-only candidate, not linked into the production application.
 //! No third-party Rust dependencies or by-value llama.cpp ABI structs.
 use std::{ffi::{c_char, c_void, CString}, marker::PhantomData, path::Path,
-          ptr::NonNull, rc::Rc};
+          ptr::NonNull, rc::Rc, sync::atomic::{AtomicBool, Ordering}, time::Instant};
 
-const ABI: u32 = 3;
+const ABI: u32 = 4;
+const CANCELLED: i32 = 16;
+const DEADLINE: i32 = 17;
+type StopCheck = unsafe extern "C" fn(*const c_void) -> i32;
 const MAX_TRANSLATION_INPUT_CHARS: usize = 2_000;
 const MAX_TRANSLATION_OUTPUT_CHARS: usize = 4_000;
 const MAX_OUTPUT_BYTES: usize = 16_000;
@@ -17,10 +20,12 @@ extern "C" {
                        out: *mut *mut c_void) -> i32;
     fn ti_runtime_close(runtime: *mut c_void);
     fn ti_runtime_transcribe(runtime: *mut c_void, pcm: *const f32, count: usize,
-                             language: u32, output: *mut c_char, output_cap: usize,
+                             language: u32, stop: StopCheck, stop_data: *const c_void,
+                             output: *mut c_char, output_cap: usize,
                              out_len: *mut usize) -> i32;
     fn ti_runtime_translate(runtime: *mut c_void, source: *const c_char, source_len: usize,
                             source_language: u32, target_language: u32,
+                            stop: StopCheck, stop_data: *const c_void,
                             output: *mut c_char, output_cap: usize, out_len: *mut usize) -> i32;
 }
 
@@ -33,6 +38,31 @@ pub enum Error {
     InvalidInput,
     Native(i32),
     InvalidReceipt,
+    Cancelled,
+    DeadlineExceeded,
+}
+
+/// The caller supplies the existing cancellation flag and absolute deadline.
+/// No timer thread, new queue or per-stage deadline renewal.
+pub struct RequestControl<'a> {
+    pub cancelled: &'a AtomicBool,
+    pub deadline: Instant,
+}
+
+impl RequestControl<'_> {
+    fn status(&self) -> i32 {
+        if self.cancelled.load(Ordering::Acquire) { CANCELLED }
+        else if Instant::now() >= self.deadline { DEADLINE }
+        else { 0 }
+    }
+    fn data(&self) -> *const c_void { (self as *const Self).cast() }
+}
+
+// SAFETY: Rust passes a live RequestControl for the entire synchronous call.
+// The native ABI does not retain the pointer, invoke asynchronously or mutate it.
+unsafe extern "C" fn stop_check(data: *const c_void) -> i32 {
+    if data.is_null() { return CANCELLED; }
+    unsafe { &*data.cast::<RequestControl<'_>>() }.status()
 }
 
 pub struct Runtime {
@@ -74,7 +104,7 @@ impl Runtime {
     /// 16 kHz mono finalized PCM. The caller owns the bounded reusable output
     /// scratch; return a borrowed transcript, not a second String allocation.
     pub fn transcribe<'a>(&mut self, pcm: &[f32], language: Language,
-                          output: &'a mut [u8]) -> Result<&'a str, Error> {
+                          control: &RequestControl<'_>, output: &'a mut [u8]) -> Result<&'a str, Error> {
         if !(MIN_SAMPLES..=MAX_SAMPLES).contains(&pcm.len()) ||
             output.len() < MAX_OUTPUT_BYTES {
             return Err(Error::InvalidInput);
@@ -82,15 +112,17 @@ impl Runtime {
         let mut len = 0;
         let status = unsafe {
             ti_runtime_transcribe(self.handle.as_ptr(), pcm.as_ptr(), pcm.len(),
-                language as u32, output.as_mut_ptr().cast(), output.len(), &mut len)
+                language as u32, stop_check, control.data(), output.as_mut_ptr().cast(), output.len(), &mut len)
         };
-        checked_output(status, len, output, usize::MAX)
+        let text = checked_output(status, len, output, usize::MAX)?;
+        check_control(control)?;
+        Ok(text)
     }
 
     /// Translate only the current finalized source, returning a borrowed
     /// complete result. No external prompt, context, or generation options.
     pub fn translate<'a>(&mut self, source: &str, from: Language, to: Language,
-                         output: &'a mut [u8]) -> Result<&'a str, Error> {
+                         control: &RequestControl<'_>, output: &'a mut [u8]) -> Result<&'a str, Error> {
         if from == to || source.trim().is_empty() || source.contains('\0') ||
             source.chars().take(MAX_TRANSLATION_INPUT_CHARS + 1).count() > MAX_TRANSLATION_INPUT_CHARS ||
             output.len() < MAX_OUTPUT_BYTES {
@@ -99,9 +131,12 @@ impl Runtime {
         let mut len = 0;
         let status = unsafe {
             ti_runtime_translate(self.handle.as_ptr(), source.as_ptr().cast(), source.len(),
-                from as u32, to as u32, output.as_mut_ptr().cast(), output.len(), &mut len)
+                from as u32, to as u32, stop_check, control.data(),
+                output.as_mut_ptr().cast(), output.len(), &mut len)
         };
-        checked_output(status, len, output, MAX_TRANSLATION_OUTPUT_CHARS)
+        let text = checked_output(status, len, output, MAX_TRANSLATION_OUTPUT_CHARS)?;
+        check_control(control)?;
+        Ok(text)
     }
 }
 
@@ -109,10 +144,22 @@ impl Drop for Runtime {
     fn drop(&mut self) { unsafe { ti_runtime_close(self.handle.as_ptr()); } }
 }
 
+fn check_control(control: &RequestControl<'_>) -> Result<(), Error> {
+    match control.status() {
+        0 => Ok(()),
+        CANCELLED => Err(Error::Cancelled),
+        _ => Err(Error::DeadlineExceeded),
+    }
+}
+
 fn checked_output(status: i32, len: usize, output: &[u8], max_chars: usize)
     -> Result<&str, Error> {
     if status != 0 {
-        return Err(if len == 0 { Error::Native(status) } else { Error::InvalidReceipt });
+        return Err(if len != 0 { Error::InvalidReceipt } else { match status {
+            CANCELLED => Error::Cancelled,
+            DEADLINE => Error::DeadlineExceeded,
+            _ => Error::Native(status),
+        }});
     }
     if len == 0 || len > MAX_OUTPUT_BYTES || len > output.len() {
         return Err(Error::InvalidReceipt);
@@ -143,7 +190,40 @@ mod tests {
         // Swap actual pinned files: the wrong projector must fail the exact
         // identity check before either model loads, and release the lease.
         assert!(matches!(Runtime::open(&asr, &asr, &mt, &pci), Err(Error::Native(13))));
-        let pair = Runtime::open(&asr, &projector, &mt, &pci).expect("candidate resident pair");
+        let mut pair = Runtime::open(&asr, &projector, &mt, &pci).expect("candidate resident pair");
+        let cancelled = AtomicBool::new(true);
+        let mut output = vec![0; MAX_OUTPUT_BYTES];
+        let pcm = vec![0.0; MIN_SAMPLES];
+        let control = RequestControl { cancelled: &cancelled,
+            deadline: Instant::now() + std::time::Duration::from_secs(30) };
+        assert_eq!(pair.transcribe(&pcm, Language::English, &control, &mut output),
+                   Err(Error::Cancelled));
+        assert_eq!(pair.translate("Halo", Language::Indonesian, Language::English, &control, &mut output),
+                   Err(Error::Cancelled));
+        cancelled.store(false, Ordering::Release);
+        let expired = RequestControl { cancelled: &cancelled, deadline: Instant::now() };
+        assert_eq!(pair.translate("Halo", Language::Indonesian, Language::English, &expired, &mut output),
+                   Err(Error::DeadlineExceeded));
+        // Stop during MT generation or prefill, not merely before dispatch.
+        // The third callback is inside native inference; reject any partial receipt.
+        unsafe extern "C" fn stop_during(data: *const c_void) -> i32 {
+            let calls = unsafe { &*data.cast::<std::sync::atomic::AtomicUsize>() };
+            if calls.fetch_add(1, Ordering::Relaxed) >= 2 { CANCELLED } else { 0 }
+        }
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let mut len = 99;
+        let status = unsafe {
+            ti_runtime_translate(pair.handle.as_ptr(), b"Halo".as_ptr().cast(), 4,
+                Language::Indonesian as u32, Language::English as u32,
+                stop_during, (&calls as *const std::sync::atomic::AtomicUsize).cast(),
+                output.as_mut_ptr().cast(), output.len(), &mut len)
+        };
+        assert_eq!((status, len), (CANCELLED, 0));
+        assert!(calls.load(Ordering::Relaxed) >= 3);
+        let active = RequestControl { cancelled: &cancelled,
+            deadline: Instant::now() + std::time::Duration::from_secs(30) };
+        assert!(!pair.translate("Halo", Language::Indonesian, Language::English,
+                               &active, &mut output).expect("reuse after cooperative stop").is_empty());
         assert!(matches!(Runtime::open(&asr, &projector, &mt, &pci), Err(Error::Native(15))));
         drop(pair);
         let reopened = Runtime::open(&asr, &projector, &mt, &pci).expect("reopen after close");
@@ -153,6 +233,9 @@ mod tests {
     #[test]
     fn output_receipt_never_exposes_failed_or_invalid_bytes() {
         assert_eq!(checked_output(7, 0, b"partial", 4000), Err(Error::Native(7)));
+        assert_eq!(checked_output(CANCELLED, 0, b"partial", 4000), Err(Error::Cancelled));
+        assert_eq!(checked_output(DEADLINE, 0, b"partial", 4000), Err(Error::DeadlineExceeded));
+        assert_eq!(checked_output(CANCELLED, 7, b"partial", 4000), Err(Error::InvalidReceipt));
         assert_eq!(checked_output(7, 7, b"partial", 4000), Err(Error::InvalidReceipt));
         assert_eq!(checked_output(0, 2, &[0xff, 0xfe], 4000), Err(Error::InvalidReceipt));
         assert_eq!(checked_output(0, 4, b"test", 3), Err(Error::InvalidReceipt));
