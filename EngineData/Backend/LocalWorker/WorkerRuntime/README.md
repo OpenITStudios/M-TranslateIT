@@ -67,6 +67,11 @@ Meeting translation is context-free across turns: outbound ID→EN uses only the
 
 - ASR primary: Faster Whisper Large V3 Turbo.
 - Optional ASR fallback: Faster Whisper Medium.
+- Status observes each ASR asset candidate once and derives the preferred candidate
+  from those results. Cold preload reuses its verified selection through construction;
+  warm preload validates and reports the actual resident model, without switching or
+  reloading it. Explicit asset checks remain fresh, not a persistent readiness cache.
+  The status candidate and loaded model identity remain separate.
 - Meeting voice inference: one GPT-SoVITS `voice_actor_*` contract.
 - Built-in Male/Female: Rust prepares a selected actor profile from pinned LibriSpeech reference assets plus reviewed shared V2ProPlus pretrained weights; user training is not required.
 - My Voice: optional trained GPT-SoVITS V2ProPlus actor promoted only after held-out evaluation and explicit user approval.

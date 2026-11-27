@@ -9,8 +9,10 @@ from typing import Any
 import voice_lab_gpt_sovits as voice_actor_provider
 import worker_runtime_common as common
 
-ASR_MODEL = common.ASR_MODEL_ROOT / "faster-whisper-large-v3-turbo"
-ASR_BACKUP_MODEL = common.ASR_MODEL_ROOT / "faster-whisper-medium"
+ASR_PRIMARY_ID = "faster-whisper-large-v3-turbo"
+ASR_BACKUP_ID = "faster-whisper-medium"
+ASR_MODEL = common.ASR_MODEL_ROOT / ASR_PRIMARY_ID
+ASR_BACKUP_MODEL = common.ASR_MODEL_ROOT / ASR_BACKUP_ID
 ASR_RUNTIME: Any | None = None
 ASR_RUNTIME_DEVICE = "not_loaded"
 ASR_RUNTIME_COMPUTE = "not_loaded"
@@ -37,12 +39,23 @@ def asr_model_ready(path: Path) -> bool:
     )
 
 
+def select_asr_model(primary_ready: bool, backup_ready: bool) -> tuple[str, Path]:
+    # Reuse observed readiness; primary stays preferred even if both exist.
+    if not primary_ready and backup_ready:
+        return ASR_BACKUP_ID, ASR_BACKUP_MODEL
+    return ASR_PRIMARY_ID, ASR_MODEL
+
+
+def inspect_asr_model() -> tuple[str, Path, bool]:
+    primary_ready = asr_model_ready(ASR_MODEL)
+    backup_ready = not primary_ready and asr_model_ready(ASR_BACKUP_MODEL)
+    model_id, model_path = select_asr_model(primary_ready, backup_ready)
+    return model_id, model_path, primary_ready or backup_ready
+
+
 def choose_asr_model() -> tuple[str, Path]:
-    if asr_model_ready(ASR_MODEL):
-        return "faster-whisper-large-v3-turbo", ASR_MODEL
-    if asr_model_ready(ASR_BACKUP_MODEL):
-        return "faster-whisper-medium", ASR_BACKUP_MODEL
-    return "faster-whisper-large-v3-turbo", ASR_MODEL
+    model_id, model_path, _ready = inspect_asr_model()
+    return model_id, model_path
 
 
 def asr_runtime_config(payload: dict[str, Any] | None = None) -> tuple[str, str, str]:
@@ -64,14 +77,18 @@ def asr_blocker(exc: Exception) -> str:
     return f"asr:runtime_failed:{type(exc).__name__}"
 
 
-def get_asr_runtime(payload: dict[str, Any] | None = None) -> Any:
+def get_asr_runtime(
+    payload: dict[str, Any] | None = None,
+    *,
+    selected_model: tuple[str, Path] | None = None,
+) -> Any:
     global ASR_RUNTIME, ASR_RUNTIME_DEVICE, ASR_RUNTIME_COMPUTE, ASR_RUNTIME_MODEL_ID
     if ASR_RUNTIME is not None:
         return ASR_RUNTIME
     from faster_whisper import WhisperModel
 
     device, compute_type, _fallback = asr_runtime_config(payload)
-    model_id, model_path = choose_asr_model()
+    model_id, model_path = selected_model if selected_model is not None else choose_asr_model()
     ASR_RUNTIME = WhisperModel(str(model_path), device=device, compute_type=compute_type)
     ASR_RUNTIME_DEVICE = device
     ASR_RUNTIME_COMPUTE = compute_type
@@ -81,7 +98,24 @@ def get_asr_runtime(payload: dict[str, Any] | None = None) -> Any:
 
 def handle_asr_preload(payload: dict[str, Any]) -> dict[str, Any]:
     started = common.now_ms()
-    model_id, model_path = choose_asr_model()
+    if ASR_RUNTIME is None:
+        model_id, model_path, ready = inspect_asr_model()
+    else:
+        # Explicit preload still validates assets, but must report/check the
+        # resident model rather than a newly discovered, unloaded candidate.
+        model_id = ASR_RUNTIME_MODEL_ID
+        if model_id == ASR_PRIMARY_ID:
+            model_path = ASR_MODEL
+        elif model_id == ASR_BACKUP_ID:
+            model_path = ASR_BACKUP_MODEL
+        else:
+            return {
+                "ok": False,
+                "stage": "asr_preload",
+                "blocker": "asr:loaded_model_identity_unknown",
+                "elapsed_ms": common.now_ms() - started,
+            }
+        ready = asr_model_ready(model_path)
     if not common.import_ready("faster_whisper"):
         return {
             "ok": False,
@@ -91,7 +125,7 @@ def handle_asr_preload(payload: dict[str, Any]) -> dict[str, Any]:
             "blocker": "dependency:faster_whisper_missing",
             "elapsed_ms": common.now_ms() - started,
         }
-    if not asr_model_ready(model_path):
+    if not ready:
         return {
             "ok": False,
             "stage": "asr_preload",
@@ -101,7 +135,8 @@ def handle_asr_preload(payload: dict[str, Any]) -> dict[str, Any]:
             "elapsed_ms": common.now_ms() - started,
         }
     try:
-        get_asr_runtime(payload)
+        if ASR_RUNTIME is None:
+            get_asr_runtime(payload, selected_model=(model_id, model_path))
         return {
             "ok": True,
             "stage": "asr_preload",

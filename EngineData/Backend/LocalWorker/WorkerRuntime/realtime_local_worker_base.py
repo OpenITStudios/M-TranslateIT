@@ -144,7 +144,7 @@ def build_status_payload(payload: dict[str, Any] | None = None) -> dict[str, Any
     asr_primary_ready = asr_model_ready(ASR_MODEL)
     asr_backup_ready = asr_model_ready(ASR_BACKUP_MODEL)
     asr_active_ready = asr_primary_ready or asr_backup_ready
-    asr_model_id, asr_model_path = choose_asr_model()
+    asr_model_id, asr_model_path = io_runtime.select_asr_model(asr_primary_ready, asr_backup_ready)
     asr_grade = (
         "primary" if asr_primary_ready else "fallback_degraded" if asr_backup_ready else "blocked"
     )

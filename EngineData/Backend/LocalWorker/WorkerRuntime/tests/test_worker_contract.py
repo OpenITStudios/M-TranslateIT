@@ -128,7 +128,13 @@ def test_reverse_direction_uses_same_canonical_milmmt_model(monkeypatch) -> None
 def test_worker_status_reports_milmmt_revision_for_both_directions(monkeypatch) -> None:
     worker = load_worker_module()
     monkeypatch.setattr(worker, "import_ready", lambda _name: True)
-    monkeypatch.setattr(worker, "asr_model_ready", lambda _path: True)
+    asr_checks = []
+
+    def observed_asr(path):
+        asr_checks.append(path)
+        return True
+
+    monkeypatch.setattr(worker, "asr_model_ready", observed_asr)
     monkeypatch.setattr(worker, "translation_model_ready", lambda _path: True)
     monkeypatch.setattr(
         worker,
@@ -164,6 +170,8 @@ def test_worker_status_reports_milmmt_revision_for_both_directions(monkeypatch) 
     )
     status = worker.build_status_payload({})
     assert status["ok"] is True
+    assert asr_checks == [worker.ASR_MODEL, worker.ASR_BACKUP_MODEL]
+    assert status["asr_active_model_id"] == "faster-whisper-large-v3-turbo"
     assert status["gpu"]["torch_allocator"] == {
         "state": "unavailable",
         "reason": "torch_cuda_api_missing",
@@ -172,6 +180,75 @@ def test_worker_status_reports_milmmt_revision_for_both_directions(monkeypatch) 
         assert status["models"][key]["id"] == "milmmt-46-1b-v1.0"
         assert status["models"][key]["revision"] == worker.MILMMT_MODEL_REVISION
         assert status["models"][key]["path"] == str(worker.TRANSLATION_MODEL)
+
+
+@pytest.mark.parametrize("primary_ready,backup_ready,expected_id,expected_checks", [
+    (True, True, "faster-whisper-large-v3-turbo", 1),
+    (False, True, "faster-whisper-medium", 2),
+    (False, False, None, 2),
+])
+def test_asr_preload_reuses_single_asset_observation(
+    monkeypatch, primary_ready, backup_ready, expected_id, expected_checks,
+) -> None:
+    io = load_worker_module().io_runtime
+    checks = []
+    loads = []
+
+    def asset_ready(path):
+        checks.append(path)
+        return primary_ready if path == io.ASR_MODEL else backup_ready
+
+    def load_model(path, **kwargs):
+        loads.append((path, kwargs))
+        return object()
+
+    monkeypatch.setattr(io, "ASR_RUNTIME", None)
+    monkeypatch.setattr(io, "ASR_RUNTIME_MODEL_ID", "not_loaded")
+    monkeypatch.setattr(io, "ASR_RUNTIME_DEVICE", "not_loaded")
+    monkeypatch.setattr(io, "ASR_RUNTIME_COMPUTE", "not_loaded")
+    monkeypatch.setattr(io, "asr_model_ready", asset_ready)
+    monkeypatch.setattr(io.common, "import_ready", lambda _name: True)
+    monkeypatch.setattr(io, "asr_runtime_config", lambda _payload: ("cpu", "int8", ""))
+    monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=load_model))
+
+    result = io.handle_asr_preload({})
+    assert len(checks) == expected_checks
+    assert len(set(checks)) == expected_checks
+    if expected_id is None:
+        assert not result["ok"]
+        assert not loads
+        return
+    assert result["ok"]
+    assert result["model_id"] == expected_id
+    assert len(loads) == 1
+    assert loads[0][0] == result["model_path"]
+    assert loads[0][1] == {"device": "cpu", "compute_type": "int8"}
+
+
+def test_warm_asr_preload_checks_resident_model_without_loading_another(monkeypatch) -> None:
+    io = load_worker_module().io_runtime
+    resident = object()
+    checks = []
+    monkeypatch.setattr(io, "ASR_RUNTIME", resident)
+    monkeypatch.setattr(io, "ASR_RUNTIME_MODEL_ID", io.ASR_BACKUP_ID)
+    monkeypatch.setattr(io, "ASR_RUNTIME_DEVICE", "cpu")
+    monkeypatch.setattr(io, "ASR_RUNTIME_COMPUTE", "int8")
+    monkeypatch.setattr(io.common, "import_ready", lambda _name: True)
+
+    def asset_ready(path):
+        checks.append(path)
+        return True
+
+    monkeypatch.setattr(io, "asr_model_ready", asset_ready)
+    result = io.handle_asr_preload({})
+    assert result["ok"]
+    assert checks == [io.ASR_BACKUP_MODEL]
+    assert result["model_id"] == io.ASR_BACKUP_ID
+    assert result["model_path"] == str(io.ASR_BACKUP_MODEL)
+    assert io.ASR_RUNTIME is resident
+
+    monkeypatch.setattr(io, "asr_model_ready", lambda _path: False)
+    assert not io.handle_asr_preload({})["ok"]
 
 
 def test_milmmt_generate_options_are_greedy_deterministic_and_have_no_forced_bos(
