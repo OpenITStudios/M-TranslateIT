@@ -1,0 +1,6 @@
+# Authored dependency-free candidate lock; Cargo verification is held.
+version = 4
+
+[[package]]
+name = "translateit-native-cuda-candidate"
+version = "0.0.0"
