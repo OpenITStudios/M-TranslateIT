@@ -3,7 +3,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-use super::evidence::AudioEvidenceReport;
+use super::evidence::{condition_asr_sample, noise_suppression_threshold};
 use super::finalized_utterance::FinalizedMeetingUtterance;
 use super::{duration_ms, TARGET_SAMPLE_RATE_HZ};
 use crate::engine::paths::ProjectPaths;
@@ -403,11 +403,7 @@ fn write_pcm16_wav_with_promotion(
     // Apply the existing optional gain directly before PCM16 quantization.
     // The finalized f32 frame stays unchanged and no filtered Vec is needed.
     for sample in samples {
-        let filtered = match noise_threshold {
-            Some(threshold) => attenuate_low_level_sample(*sample, threshold),
-            None => *sample,
-        };
-        let value = (safe_sample(filtered) * i16::MAX as f32).round() as i16;
+        let value = (condition_asr_sample(*sample, noise_threshold) * i16::MAX as f32).round() as i16;
         wav.extend_from_slice(&value.to_le_bytes());
     }
     // Exclusive creation prevents two writers from truncating the same
@@ -424,40 +420,6 @@ fn write_pcm16_wav_with_promotion(
         let _ = fs::remove_file(&temp_path);
     }
     promoted
-}
-
-fn noise_suppression_threshold(samples: &[f32]) -> Option<f32> {
-    if samples.len() < 320 {
-        return None;
-    }
-    let evidence = AudioEvidenceReport::from_samples(samples);
-    if evidence.rms < 0.012 || evidence.clipping_ratio > 0.025 {
-        return None;
-    }
-
-    Some((evidence.rms * 0.08).clamp(0.0015, 0.006))
-}
-
-fn attenuate_low_level_sample(sample: f32, threshold: f32) -> f32 {
-    let transition_end = threshold * 2.5;
-    let value = safe_sample(sample);
-    let level = value.abs();
-    let gain = if level <= threshold {
-        0.22
-    } else if level < transition_end {
-        0.22 + 0.78 * ((level - threshold) / (transition_end - threshold))
-    } else {
-        1.0
-    };
-    value * gain
-}
-
-fn safe_sample(value: f32) -> f32 {
-    if value.is_finite() {
-        value.clamp(-1.0, 1.0)
-    } else {
-        0.0
-    }
 }
 
 #[cfg(test)]
@@ -481,8 +443,8 @@ mod tests {
         let mut samples = vec![0.002_f32; 320];
         samples.extend(vec![0.12_f32; 320]);
         let threshold = noise_suppression_threshold(&samples).expect("strong speech should allow cleanup");
-        assert!(attenuate_low_level_sample(samples[0], threshold).abs() < samples[0].abs() * 0.4);
-        assert!((attenuate_low_level_sample(samples[400], threshold) - samples[400]).abs() <= 1e-6);
+        assert!(condition_asr_sample(samples[0], Some(threshold)).abs() < samples[0].abs() * 0.4);
+        assert!((condition_asr_sample(samples[400], Some(threshold)) - samples[400]).abs() <= 1e-6);
     }
 
     #[test]
@@ -502,7 +464,7 @@ mod tests {
         let transition_end = threshold * 2.5;
         // Previous implementation, retained only as a byte-parity oracle.
         let filtered: Vec<f32> = samples.iter().map(|sample| {
-            let value = safe_sample(*sample);
+            let value = condition_asr_sample(*sample, None);
             let level = value.abs();
             let gain = if level <= threshold {
                 0.22
@@ -522,6 +484,48 @@ mod tests {
         ).unwrap();
         assert_eq!(fs::read(reference).unwrap(), fs::read(fused).unwrap());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn direct_pcm_conditioning_matches_gain_without_quantization_or_allocation() {
+        use super::super::evidence::{condition_asr_pcm, AudioEvidenceReport};
+        let mut mixed = vec![0.002_f32; 320];
+        mixed.extend(vec![0.12_f32; 320]);
+        mixed.extend([0.004, -0.009, f32::NAN, f32::INFINITY, -0.002]);
+        let mut clipping = vec![0.1; 640];
+        clipping[..16].fill(0.98); // exact clipping boundary
+        let mut over_clipping = clipping.clone();
+        over_clipping[16] = -1.0;
+        for original in [
+            vec![], vec![0.1; 319], vec![0.012; 320],
+            vec![0.002; 640], mixed, clipping, over_clipping,
+            vec![-2.0, 2.0, f32::NAN, f32::NEG_INFINITY],
+            vec![0.12; MAX_FINALIZED_ASR_SEGMENT_SAMPLES],
+        ] {
+            // Old full-report threshold remains only as a parity oracle.
+            let evidence = AudioEvidenceReport::from_samples(&original);
+            let reference_threshold = if original.len() < 320
+                || evidence.rms < 0.012 || evidence.clipping_ratio > 0.025 {
+                None
+            } else {
+                Some((evidence.rms * 0.08).clamp(0.0015, 0.006))
+            };
+            assert_eq!(noise_suppression_threshold(&original), reference_threshold);
+            for enabled in [false, true] {
+                let mut pcm = original.clone();
+                let allocation = pcm.as_ptr();
+                let capacity = pcm.capacity();
+                let threshold = if enabled { reference_threshold } else { None };
+                condition_asr_pcm(&mut pcm, enabled);
+                assert_eq!(pcm.as_ptr(), allocation);
+                assert_eq!(pcm.capacity(), capacity);
+                assert_eq!(pcm.len(), original.len());
+                for (actual, &sample) in pcm.iter().zip(&original) {
+                    assert!(actual.is_finite() && (-1.0..=1.0).contains(actual));
+                    assert_eq!(actual.to_bits(), condition_asr_sample(sample, threshold).to_bits());
+                }
+            }
+        }
     }
 
     #[test]

@@ -166,6 +166,66 @@ impl AudioEvidenceReport {
     }
 }
 
+// ASR noise suppression uses only RMS and clipping, not the full speech
+// evidence report. Keep the same f32 accumulation, sanitization and clipping
+// threshold, but calculate both metrics in a single pass.
+pub(super) fn noise_suppression_threshold(samples: &[f32]) -> Option<f32> {
+    if samples.len() < 320 {
+        return None;
+    }
+    let mut sum_square = 0.0_f32;
+    let mut clipping_count = 0usize;
+    for &sample in samples {
+        let value = safe_sample(sample);
+        sum_square += value * value;
+        if value.abs() >= 0.98 {
+            clipping_count += 1;
+        }
+    }
+    let rms = safe_metric((sum_square / samples.len() as f32).sqrt()).clamp(0.0, 1.0);
+    let clipping_ratio = safe_ratio(clipping_count, samples.len());
+    if rms < 0.012 || clipping_ratio > 0.025 {
+        return None;
+    }
+    Some((rms * 0.08).clamp(0.0015, 0.006))
+}
+
+fn attenuate_low_level_sample(sample: f32, threshold: f32) -> f32 {
+    let transition_end = threshold * 2.5;
+    let value = safe_sample(sample);
+    let level = value.abs();
+    let gain = if level <= threshold {
+        0.22
+    } else if level < transition_end {
+        0.22 + 0.78 * ((level - threshold) / (transition_end - threshold))
+    } else {
+        1.0
+    };
+    value * gain
+}
+
+pub(super) fn condition_asr_sample(sample: f32, threshold: Option<f32>) -> f32 {
+    match threshold {
+        Some(threshold) => attenuate_low_level_sample(sample, threshold),
+        None => safe_sample(sample),
+    }
+}
+
+/// Native cutover seam: condition only an already-admitted owned 16 kHz
+/// mono buffer, once, after deferral is no longer possible. No allocation,
+/// resampling, PCM16 quantization or file I/O. The legacy retry path still
+/// borrows unmodified PCM and applies the same gain while writing WAV.
+pub(crate) fn condition_asr_pcm(samples: &mut [f32], noise_suppression_enabled: bool) {
+    let threshold = if noise_suppression_enabled {
+        noise_suppression_threshold(samples)
+    } else {
+        None
+    };
+    for sample in samples {
+        *sample = condition_asr_sample(*sample, threshold);
+    }
+}
+
 fn safe_sample(value: f32) -> f32 {
     if value.is_finite() {
         value.clamp(-1.0, 1.0)
