@@ -1,5 +1,8 @@
 use serde_json::{json, Value};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+
+#[cfg(windows)]
+mod native;
 use std::time::Instant;
 
 use crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance;
@@ -232,14 +235,15 @@ fn recover_incoming_transport_failure_before_permit_release(
 
 #[derive(Clone, Copy)]
 struct MeetingPcmInput<'a> {
-    utterance: &'a FinalizedMeetingUtterance,
+    utterance: &'a RefCell<Option<FinalizedMeetingUtterance>>,
     noise_suppression_enabled: bool,
     prepare_ms: &'a Cell<u64>,
 }
 
 impl MeetingPcmInput<'_> {
     fn matches(&self, task: &str, payload: &Value) -> bool {
-        let u = self.utterance;
+        let slot = self.utterance.borrow();
+        let Some(u) = slot.as_ref() else { return false; };
         task == "transcribe"
             && payload.get("audio_path").is_none()
             && payload.get("meeting_session_id").and_then(Value::as_str) == Some(u.session_id.as_str())
@@ -302,16 +306,30 @@ fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcm
         return response;
     }
 
-    // Work rejected or deferred at admission does not create a WAV.
-    // Native cutover will consume this same borrowed PCM at this boundary.
+    // A resident native owner consumes this same scheduler permit. Never
+    // retry a selected native request through Python on any native error.
+    #[cfg(windows)]
+    if let Some(response) = native::dispatch_if_owned(task, &mut payload, pcm, priority, &permit, response_deadline_ms) {
+        return response;
+    }
+
+    // Transitional serialization only while the production legacy route is
+    // still selected. Rejected or deferred admission creates no WAV.
     let _temporary_asr_wav = if let Some(input) = pcm {
         let started = Instant::now();
-        let write = if input.utterance.lane == "you" {
+        let slot = input.utterance.borrow();
+        let Some(utterance) = slot.as_ref() else {
+            return standalone_blocked_response(
+                task, &request_id, priority, "error", "asr:finalized_pcm_missing",
+                "The owned PCM has already been consumed.",
+            );
+        };
+        let write = if utterance.lane == "you" {
             write_finalized_outbound_utterance_wav_with_noise_suppression(
-                input.utterance, input.noise_suppression_enabled)
+                utterance, input.noise_suppression_enabled)
         } else {
             write_finalized_incoming_utterance_wav_with_noise_suppression(
-                input.utterance, input.noise_suppression_enabled)
+                utterance, input.noise_suppression_enabled)
         };
         input.prepare_ms.set(input.prepare_ms.get().saturating_add(observed_elapsed_ms(started)));
         if !write.ok {
@@ -786,6 +804,8 @@ pub(super) fn send_worker_pcm_task(
     utterance: FinalizedMeetingUtterance,
     noise_suppression_enabled: bool,
 ) -> (HelperBridgeWorkerResponse, Option<FinalizedMeetingUtterance>) {
+    let rejection = finalized_asr_frame_rejection(&utterance);
+    let utterance = RefCell::new(Some(utterance));
     let prepare_ms = Cell::new(0);
     let input = MeetingPcmInput { utterance: &utterance, noise_suppression_enabled, prepare_ms: &prepare_ms };
     let mut response = if !input.matches("transcribe", &payload) {
@@ -794,7 +814,7 @@ pub(super) fn send_worker_pcm_task(
             "error", "asr:finalized_pcm_contract_invalid",
             "Finalized PCM Meeting event ownership is invalid.",
         )
-    } else if let Some(rejection) = finalized_asr_frame_rejection(&utterance) {
+    } else if let Some(rejection) = rejection {
         standalone_blocked_response(
             "transcribe", "invalid-meeting-pcm", task_priority("transcribe", &payload),
             "error", &rejection.blocker, &rejection.note,
@@ -807,7 +827,7 @@ pub(super) fn send_worker_pcm_task(
     }
     // The legacy adapter borrows the owned frame only during its bounded
     // attempt/retry. No terminal response may retain a PCM allocation.
-    let deferred = retain_deferred_pcm(&response, utterance);
+    let deferred = utterance.into_inner().and_then(|owned| retain_deferred_pcm(&response, owned));
     (response, deferred)
 }
 
@@ -1130,7 +1150,7 @@ mod finalized_pcm_handoff_tests {
 
     #[test]
     fn meeting_pcm_requires_exact_event_identity_and_reuses_frame_limits() {
-        let mut utterance = FinalizedMeetingUtterance {
+        let utterance = FinalizedMeetingUtterance {
             session_id: "session-test".into(),
             sequence: 9,
             lane: "you".into(),
@@ -1150,9 +1170,10 @@ mod finalized_pcm_handoff_tests {
             "meeting_session_id": "session-test", "meeting_lane": "you",
             "meeting_generation": 7, "meeting_sequence": 9, "utterance_id": 8,
         });
+        assert!(finalized_asr_frame_rejection(&utterance).is_none());
+        let utterance = RefCell::new(Some(utterance));
         let input = MeetingPcmInput { utterance: &utterance, noise_suppression_enabled: false, prepare_ms: &prepare_ms };
         assert!(input.matches("transcribe", &payload));
-        assert!(finalized_asr_frame_rejection(&utterance).is_none());
         for (key, value) in [
             ("meeting_session_id", json!("another")),
             ("meeting_lane", json!("incoming")),
@@ -1166,6 +1187,7 @@ mod finalized_pcm_handoff_tests {
             assert!(!input.matches("transcribe", &invalid), "{key}");
         }
         assert!(!input.matches("translate", &payload));
+        let mut utterance = utterance.into_inner().unwrap();
         utterance.frame.samples.truncate(4_799);
         assert_eq!(finalized_asr_frame_rejection(&utterance).unwrap().blocker,
                    "finalized_utterance_writer:segment_too_short");

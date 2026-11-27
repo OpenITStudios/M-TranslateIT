@@ -88,21 +88,38 @@ fn clean_helper_text(value: &str, max_chars: usize) -> String {
         .to_string()
 }
 
-// One promotion contract for the currently selected ASR/translation stack.
-// Replace these identities together with the native adapter at cutover;
-// a CPU or secondary-model receipt is never authoritative Meeting output.
-pub(super) fn meeting_asr_compute_admitted(value: &Value) -> bool {
+// Native identity is admitted only from the Rust-owned outer receipt,
+// never a JSON claim supplied by the legacy Python worker.
+pub(super) const NATIVE_INFERENCE_CLAIM: &str = "native_cuda_inference_receipt";
+pub(super) const NATIVE_ASR_MODEL: &str = "qwen3-asr-1.7b-q8_0";
+pub(super) const NATIVE_MT_MODEL: &str = "hy-mt2-1.8b-q6_k";
+pub(super) const NATIVE_MT_REVISION: &str = "a0c709d9fac510f2c807aa3af52872340dc37a4a";
+
+pub(super) fn meeting_asr_compute_admitted(response: &HelperBridgeWorkerResponse) -> bool {
+    let value = &response.worker_response_json;
+    let native = response.runtime_claim == NATIVE_INFERENCE_CLAIM;
+    let (model, compute) = if native {
+        (NATIVE_ASR_MODEL, "q8_0")
+    } else {
+        ("faster-whisper-large-v3-turbo", "int8_float16")
+    };
     value.get("device").and_then(Value::as_str) == Some("cuda")
-        && value.get("compute_type").and_then(Value::as_str) == Some("int8_float16")
-        && value.get("model_id").and_then(Value::as_str) == Some("faster-whisper-large-v3-turbo")
+        && value.get("compute_type").and_then(Value::as_str) == Some(compute)
+        && value.get("model_id").and_then(Value::as_str) == Some(model)
 }
 
-pub(super) fn meeting_translation_compute_admitted(value: &Value) -> bool {
+pub(super) fn meeting_translation_compute_admitted(response: &HelperBridgeWorkerResponse) -> bool {
+    let value = &response.worker_response_json;
+    let native = response.runtime_claim == NATIVE_INFERENCE_CLAIM;
+    let (model, precision, revision) = if native {
+        (NATIVE_MT_MODEL, "q6_k", NATIVE_MT_REVISION)
+    } else {
+        ("milmmt-46-1b-v1.0", "bf16", "4fc480b6c58dec29c159dcdf9fde0f6d5c354995")
+    };
     value.get("device").and_then(Value::as_str) == Some("cuda")
-        && value.get("precision").and_then(Value::as_str) == Some("bf16")
-        && value.get("model_id").and_then(Value::as_str) == Some("milmmt-46-1b-v1.0")
-        && value.get("model_revision").and_then(Value::as_str)
-            == Some("4fc480b6c58dec29c159dcdf9fde0f6d5c354995")
+        && value.get("precision").and_then(Value::as_str) == Some(precision)
+        && value.get("model_id").and_then(Value::as_str) == Some(model)
+        && value.get("model_revision").and_then(Value::as_str) == Some(revision)
         && value.get("translation_degraded").and_then(Value::as_bool) == Some(false)
         && value.get("translation_fallback_reason").and_then(Value::as_str) == Some("")
 }
@@ -407,6 +424,17 @@ fn start_helper_bridge_internal(
                     "stale_generation",
                     "Live Meeting helper recovery was rejected because the original Meeting generation no longer owns authority.",
                     "helper_restart_denied_stale_meeting_generation",
+                    runtime.generation_token,
+                );
+            }
+            // Native Meeting selection survives native close after a voice
+            // transport fault. Do not restart only Python and re-enter legacy
+            // ASR/MT within that same Meeting. Explicit Stop owns release.
+            if recovery_generation.is_some() && runtime.native_meeting_session_id().is_some() {
+                return helper_start_denied(
+                    "cleanup_incomplete",
+                    "Native Meeting inference requires verified Stop before another helper startup.",
+                    "helper_restart_denied_native_meeting_owner",
                     runtime.generation_token,
                 );
             }
@@ -812,6 +840,7 @@ pub(crate) fn finish_orphaned_meeting_helper_without_session() -> Result<(), &'s
     }
     // Meeting Stop (not status polling or generic worker restart) has now
     // verified the old helper and native idle ownership for this orphan.
+    owner.release_closed_native_meeting_owner();
     owner.pending_meeting_cleanup_session_id = None;
     clear_any_meeting_outbound_pipeline();
     Ok(())
@@ -915,6 +944,7 @@ pub fn cancel_helper_bridge_meeting_session(session_id: &str) -> HelperBridgeAct
                 }
                 // Only the matching Meeting Stop can release pending
                 // attribution after a verified helper resource cleanup.
+                runtime.release_closed_native_meeting_owner();
                 runtime.pending_meeting_cleanup_session_id = None;
                 runtime.state = "stopped".to_string();
                 runtime.message = "The same Meeting session's helper cleanup was verified on Retry Stop.".to_string();
@@ -947,6 +977,7 @@ pub fn cancel_helper_bridge_meeting_session(session_id: &str) -> HelperBridgeAct
                 }
                 // Only the matching Meeting Stop can release pending
                 // attribution after a verified helper resource cleanup.
+                runtime.release_closed_native_meeting_owner();
                 runtime.pending_meeting_cleanup_session_id = None;
                 runtime.state = "stopped".to_string();
                 runtime.message = format!(
@@ -1163,6 +1194,28 @@ mod c4_functional_readiness_tests {
         assert_eq!(roundtrip, receipt.worker_response_json);
         assert_eq!(serialized["generation_token"], 7);
         assert_eq!(serialized["ok"], true);
+    }
+
+    #[test]
+    fn native_model_identity_requires_host_owned_outer_receipt() {
+        use super::{meeting_asr_compute_admitted, meeting_translation_compute_admitted,
+            NATIVE_INFERENCE_CLAIM};
+        let mut asr = response(true, r#"{"device":"cuda","compute_type":"q8_0",
+            "model_id":"qwen3-asr-1.7b-q8_0","runtime_claim":"native_cuda_inference_receipt"}"#);
+        assert!(!meeting_asr_compute_admitted(&asr));
+        asr.runtime_claim = NATIVE_INFERENCE_CLAIM.into();
+        assert!(meeting_asr_compute_admitted(&asr));
+        asr.worker_response_json["device"] = serde_json::json!("cpu");
+        assert!(!meeting_asr_compute_admitted(&asr));
+
+        let mut mt = response(true, r#"{"device":"cuda","precision":"q6_k",
+            "model_id":"hy-mt2-1.8b-q6_k","model_revision":"a0c709d9fac510f2c807aa3af52872340dc37a4a",
+            "translation_degraded":false,"translation_fallback_reason":""}"#);
+        assert!(!meeting_translation_compute_admitted(&mt));
+        mt.runtime_claim = NATIVE_INFERENCE_CLAIM.into();
+        assert!(meeting_translation_compute_admitted(&mt));
+        mt.worker_response_json["model_revision"] = serde_json::json!("other");
+        assert!(!meeting_translation_compute_admitted(&mt));
     }
 
     #[test]

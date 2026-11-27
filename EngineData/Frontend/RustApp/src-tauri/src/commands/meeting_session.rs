@@ -304,7 +304,7 @@ fn validated_meeting_translation(
     }
     let value = &response.worker_response_json;
     let expected_pair = format!("{source_language}->{target_language}");
-    if !super::helper_bridge::meeting_translation_compute_admitted(value)
+    if !super::helper_bridge::meeting_translation_compute_admitted(response)
         || value.get("ok").and_then(Value::as_bool) != Some(true)
         || value.get("stage").and_then(Value::as_str) != Some("translate")
         || value.get("translation_contract").and_then(Value::as_str)
@@ -334,7 +334,7 @@ fn validated_meeting_asr_transcript(
         return None;
     }
     let value = &response.worker_response_json;
-    if !super::helper_bridge::meeting_asr_compute_admitted(value)
+    if !super::helper_bridge::meeting_asr_compute_admitted(response)
         || value.get("ok").and_then(Value::as_bool) != Some(true)
         || value.get("stage").and_then(Value::as_str) != Some("transcribe")
         || value.get("language").and_then(Value::as_str) != Some(expected_language)

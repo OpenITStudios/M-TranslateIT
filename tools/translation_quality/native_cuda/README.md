@@ -40,7 +40,18 @@ remains unchanged until coordinated cutover. My Voice is excluded.
   operation. Model open is synchronous and not interruptible. The existing
   HelperBridgeRuntime now has the resident native owner slot; Stop/restart/
   shutdown share bounded cleanup and preserve Meeting ownership between
-  requests. No production native dispatch or model download yet.
+  requests. The existing scheduler now has an admitted native dispatch
+  branch for a bound owner: transfer the actual owned PCM allocation, apply
+  existing gain in place, move current translation text into the native
+  request, wait outside the lifecycle mutex with the same permit, then
+  fence the result against exact session/generation and request ownership.
+  Native results have a Rust-owned outer receipt identity. A selected
+  native request never retries in Python, and a closed Meeting-native
+  binding remains until verified Stop, blocking Python-only recovery.
+  This is a transitional source seam; no production caller opens the pair.
+  The old route still runs, and native status/preload/file-probe, artifact
+  admission and packaging must be coordinated before activation. No model
+  download or native execution has occurred.
 
 - The import-library build script is retired. Explicit open uses the
   absolute controlled `translateit_native_cuda.dll` path, restricts the

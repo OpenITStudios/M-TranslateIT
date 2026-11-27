@@ -13,6 +13,8 @@ use crate::engine::logging::{write_jsonl_event, RuntimeLogEvent};
 mod scheduler;
 
 pub(crate) use scheduler::{acquire_helper_task_permit, HelperTaskPriority};
+#[cfg(windows)]
+pub(crate) use scheduler::HelperTaskPermit;
 
 pub const WORKER_CONTROL_RESPONSE_DEADLINE_MS: u128 = 5_000;
 pub const WORKER_STATUS_RESPONSE_DEADLINE_MS: u128 = 30_000;
@@ -187,10 +189,24 @@ impl HelperBridgeRuntime {
                 if native.owner.try_close() != Ok(true) {
                     return false;
                 }
-                self.native_inference = None;
+                // Keep a closed Meeting-owned slot until exact Stop verifies
+                // the full lifecycle. Otherwise voice-process recovery could
+                // erase native selection and silently reach legacy ASR/MT.
+                if native.session_id.is_none() {
+                    self.native_inference = None;
+                }
             }
         }
         true
+    }
+
+    // Call only after stop_child has verified all resource cleanup and the
+    // existing lifecycle has confirmed the matching Meeting or idle orphan.
+    pub(super) fn release_closed_native_meeting_owner(&mut self) {
+        #[cfg(windows)]
+        {
+            self.native_inference = None;
+        }
     }
 }
 

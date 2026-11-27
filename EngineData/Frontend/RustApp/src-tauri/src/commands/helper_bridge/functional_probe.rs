@@ -70,7 +70,7 @@ pub(super) fn run_required_outbound_ai_probe(
             "meeting_generation": meeting_generation,
         }),
     );
-    if !asr.ok || !meeting_asr_compute_admitted(&asr.worker_response_json) {
+    if !asr.ok || !meeting_asr_compute_admitted(&asr) {
         invalidate_required_outbound_ai_readiness();
         return Err("speech recognition");
     }
@@ -86,7 +86,7 @@ pub(super) fn run_required_outbound_ai_probe(
             "meeting_generation": meeting_generation,
         }),
     );
-    if !meeting_translation_compute_admitted(&translation.worker_response_json) {
+    if !meeting_translation_compute_admitted(&translation) {
         invalidate_required_outbound_ai_readiness();
         return Err("CUDA Indonesian to English translation");
     }
@@ -146,7 +146,7 @@ pub(super) fn run_required_outbound_ai_probe(
         .map(str::to_string);
     remove_probe_output_paths(output_path, reported_voice_path.as_deref());
     if !functional_asr_output(&asr_inference)
-        || !meeting_asr_compute_admitted(&asr_inference.worker_response_json)
+        || !meeting_asr_compute_admitted(&asr_inference)
     {
         invalidate_required_outbound_ai_readiness();
         return Err("speech recognition");
