@@ -10,8 +10,8 @@ use crate::engine::runtime_state::APPLICATION_MEETING_OWNER_ID;
 
 use super::audio::list_audio_devices;
 use super::incident_log::record_runtime_incident;
-use super::meeting_session::get_meeting_session_status;
-use super::virtual_mic_route::get_virtual_mic_route_selection;
+use super::meeting_session::{get_meeting_session_status, MeetingSessionStatus};
+use super::virtual_mic_route::get_virtual_mic_route_selection_with_devices;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DeviceLossGuardStatus {
@@ -175,6 +175,10 @@ fn capture_issue_status(
 #[tauri::command]
 pub fn get_device_loss_guard_status() -> DeviceLossGuardStatus {
     let meeting = get_meeting_session_status();
+    device_loss_guard_for_meeting(&meeting)
+}
+
+pub(super) fn device_loss_guard_for_meeting(meeting: &MeetingSessionStatus) -> DeviceLossGuardStatus {
     if !meeting.has_session
         || meeting.owner_id.as_deref() != Some(APPLICATION_MEETING_OWNER_ID)
     {
@@ -195,7 +199,7 @@ pub fn get_device_loss_guard_status() -> DeviceLossGuardStatus {
     let devices = list_audio_devices();
     let live = live_capture_status();
     let incoming = meeting_sound_capture_status();
-    let route = get_virtual_mic_route_selection();
+    let route = get_virtual_mic_route_selection_with_devices(&devices);
 
     if !live.stream_active {
         return record_if_needed(status(

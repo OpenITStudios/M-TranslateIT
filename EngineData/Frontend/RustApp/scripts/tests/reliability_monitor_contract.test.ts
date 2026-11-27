@@ -93,3 +93,23 @@ test("reliability warnings have typed severity and clear on their own healthy ob
   assert.match(app, /liveHealthNotice = null;/);
   assert.match(app, /longSessionNotice = null;/);
 });
+
+
+test("combined reliability reuses fresh Meeting and device observations without a cache", () => {
+  const commands = new URL("../../src-tauri/src/commands/", import.meta.url);
+  const combined = readFileSync(new URL("reliability_snapshot.rs", commands), "utf8");
+  const watchdog = readFileSync(new URL("runtime_watchdog.rs", commands), "utf8");
+  const guard = readFileSync(new URL("device_loss_guard.rs", commands), "utf8");
+  const route = readFileSync(new URL("virtual_mic_route.rs", commands), "utf8");
+  assert.equal((combined.match(/get_meeting_session_status\(\)/g) ?? []).length, 1);
+  assert.match(combined, /runtime_watchdog_for_meeting\(&meeting\)/);
+  assert.match(combined, /device_loss_guard_for_meeting\(&meeting\)/);
+  assert.match(watchdog, /let meeting = get_meeting_session_status\(\);\s*runtime_watchdog_for_meeting\(&meeting\)/);
+  assert.match(guard, /let meeting = get_meeting_session_status\(\);\s*device_loss_guard_for_meeting\(&meeting\)/);
+  assert.equal((guard.match(/list_audio_devices\(\)/g) ?? []).length, 1);
+  assert.match(guard, /get_virtual_mic_route_selection_with_devices\(&devices\)/);
+  const reusedRoute = route.slice(route.indexOf("pub(super) fn get_virtual_mic_route_selection_with_devices("));
+  assert.doesNotMatch(reusedRoute.slice(0, reusedRoute.indexOf("#[tauri::command]")), /list_audio_devices\(/);
+  assert.match(route, /get_virtual_mic_route_selection_with_devices\(&list_audio_devices\(\)\)/);
+  assert.equal((route.match(/list_audio_devices\(\)/g) ?? []).length, 2);
+});

@@ -163,11 +163,10 @@ fn with_route_evidence(mut status: VirtualMicRouteContractStatus) -> VirtualMicR
     status
 }
 
-fn build_dynamic_status() -> VirtualMicRouteContractStatus {
-    let devices = list_audio_devices();
+fn build_dynamic_status(devices: &AudioDeviceListReport) -> VirtualMicRouteContractStatus {
     let selection = reject_ambiguous_pair(
         select_route_pair(&devices.output_devices, &devices.input_devices),
-        &devices,
+        devices,
     );
     status_from_selection(
         device_names(&devices.output_devices),
@@ -180,8 +179,8 @@ fn build_dynamic_status() -> VirtualMicRouteContractStatus {
 fn build_fixed_status(
     fixed: &MeetingVirtualMicRouteSelection,
     runtime_claim: &str,
+    devices: &AudioDeviceListReport,
 ) -> VirtualMicRouteContractStatus {
-    let devices = list_audio_devices();
     let output_device_found = named_device_exists(&devices.output_devices, &fixed.output_device);
     let input_device_found = named_device_exists(&devices.input_devices, &fixed.input_device);
     let pair_still_matches = matched_pair_identity(&fixed.output_device, &fixed.input_device)
@@ -215,8 +214,10 @@ fn build_fixed_status(
     )
 }
 
-fn unbound_active_meeting_status(generation: u64) -> VirtualMicRouteContractStatus {
-    let devices = list_audio_devices();
+fn unbound_active_meeting_status(
+    generation: u64,
+    devices: &AudioDeviceListReport,
+) -> VirtualMicRouteContractStatus {
     status_from_selection(
         device_names(&devices.output_devices),
         device_names(&devices.input_devices),
@@ -239,7 +240,7 @@ pub fn clear_prepared_virtual_mic_route_selection() {
 }
 
 pub fn prepare_current_virtual_mic_route_for_meeting() -> Result<(), String> {
-    let route = build_dynamic_status();
+    let route = build_dynamic_status(&list_audio_devices());
     if !route.route_ready {
         return Err(if route.blocker.is_empty() {
             "virtual_mic:matched_route_pair_not_ready".to_string()
@@ -311,6 +312,14 @@ pub fn get_bound_virtual_mic_output_device(generation: u64) -> Result<String, St
 }
 
 pub fn get_virtual_mic_route_selection() -> VirtualMicRouteContractStatus {
+    get_virtual_mic_route_selection_with_devices(&list_audio_devices())
+}
+
+// Reuse the caller's current enumeration, but keep route generation and
+// selection authority here. The report is never retained across observations.
+pub(super) fn get_virtual_mic_route_selection_with_devices(
+    devices: &AudioDeviceListReport,
+) -> VirtualMicRouteContractStatus {
     if let Some(generation) = active_application_meeting_generation() {
         if let Ok(mut selection) = selection_runtime().lock() {
             if let Some(prepared) = selection.as_mut() {
@@ -323,11 +332,12 @@ pub fn get_virtual_mic_route_selection() -> VirtualMicRouteContractStatus {
                     return build_fixed_status(
                         &fixed,
                         "virtual_mic_generation_bound_route_pair_source_side_not_audio_delivery_proof",
+                        devices,
                     );
                 }
             }
         }
-        return unbound_active_meeting_status(generation);
+        return unbound_active_meeting_status(generation, devices);
     }
 
     if let Some(prepared) = current_meeting_selection() {
@@ -335,10 +345,11 @@ pub fn get_virtual_mic_route_selection() -> VirtualMicRouteContractStatus {
             return build_fixed_status(
                 &prepared,
                 "virtual_mic_prepared_route_pair_source_side_not_audio_delivery_proof",
+                devices,
             );
         }
     }
-    build_dynamic_status()
+    build_dynamic_status(devices)
 }
 
 #[tauri::command]

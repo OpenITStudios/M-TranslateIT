@@ -196,9 +196,13 @@ fn evaluate_meeting_watchdog(
 #[tauri::command]
 pub fn get_runtime_watchdog_status() -> RuntimeWatchdogStatus {
     let meeting = get_meeting_session_status();
+    runtime_watchdog_for_meeting(&meeting)
+}
+
+pub(super) fn runtime_watchdog_for_meeting(meeting: &MeetingSessionStatus) -> RuntimeWatchdogStatus {
     let helper = get_helper_bridge_status();
     let status = evaluate_meeting_watchdog(
-        &meeting,
+        meeting,
         helper.active_task.as_deref(),
         helper.active_meeting_session_id.as_deref(),
         helper.updated_unix_ms,

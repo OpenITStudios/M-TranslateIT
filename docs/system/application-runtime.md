@@ -61,7 +61,7 @@ The floating translation overlay remains frontend-owned. It manages window prese
 
 Live Meeting UI freshness uses lightweight backend change events from authoritative committed-turn state. The event payload contains only revision/reason/session/sequence metadata; the frontend then reads authoritative Meeting state. A 10-second Meeting poll remains only as reconciliation fallback if an event is missed.
 
-Reliability monitoring remains polling-based where the condition itself is time-dependent (watchdog, device-loss detection, long-session pressure). Watchdog + device-loss share one live reliability IPC every 8 seconds; long-session health remains on its separate 30-second cadence. UI-only advisory checks such as meeting-app detection and idle audio-quality status are on-demand/page-entry reads rather than permanent polling.
+Reliability monitoring remains polling-based where the condition itself is time-dependent (watchdog, device-loss detection, long-session pressure). Watchdog + device-loss share one live reliability IPC every 8 seconds and reuse one fresh Meeting status observation. The device-loss guard and virtual-route owner also share one current audio-device enumeration; standalone diagnostics still take their own fresh observations. No cross-poll cache or cadence change is introduced; long-session health remains on its separate 30-second cadence. UI-only advisory checks such as meeting-app detection and idle audio-quality status are on-demand/page-entry reads rather than permanent polling.
 
 
 ### Frontend application controller
