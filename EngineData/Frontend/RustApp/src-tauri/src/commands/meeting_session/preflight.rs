@@ -9,7 +9,9 @@ use crate::engine::runtime_settings::load_settings_with_admission;
 use crate::engine::settings::MeetingEngineAdmission;
 use super::super::helper_bridge_runtime::HelperBridgeStatus;
 use super::super::helper_bridge::get_helper_bridge_status;
-use super::super::virtual_mic_route::get_virtual_mic_route_selection;
+use super::super::virtual_mic_route::{
+    get_virtual_mic_route_selection, VirtualMicRouteContractStatus,
+};
 use super::session_state::{
     current_incoming_status, current_outbound_status, current_start_preflight,
 };
@@ -36,6 +38,12 @@ fn helper_start_recoverable(state: &str, last_error: Option<&str>) -> bool {
 }
 
 pub(super) fn build_preflight() -> MeetingSessionPreflightStatus {
+    build_preflight_with_route().0
+}
+
+// The Start owner needs the exact route that was checked for preflight,
+// rather than enumerating the same endpoints again before claiming resources.
+pub(super) fn build_preflight_with_route() -> (MeetingSessionPreflightStatus, VirtualMicRouteContractStatus) {
     let (settings, admission) = load_settings_with_admission();
     let input = get_input_status(&settings);
     build_preflight_from_observations(&input, admission, None)
@@ -45,7 +53,7 @@ fn build_preflight_from_observations(
     input: &InputPreparationStatus,
     admission: MeetingEngineAdmission,
     observed_helper: Option<&HelperBridgeStatus>,
-) -> MeetingSessionPreflightStatus {
+) -> (MeetingSessionPreflightStatus, VirtualMicRouteContractStatus) {
     let route = get_virtual_mic_route_selection();
 
     let source_is_virtual_meeting_mic = microphone_conflicts_with_virtual_recording(
@@ -80,7 +88,7 @@ fn build_preflight_from_observations(
         }
         blockers.sort();
         blockers.dedup();
-        return MeetingSessionPreflightStatus {
+        return (MeetingSessionPreflightStatus {
             ready_for_start: false,
             start_eligible: false,
             functional_outbound_ready: false,
@@ -101,7 +109,7 @@ fn build_preflight_from_observations(
             } else {
                 "codex_voice_unadmitted_source_contract_not_windows_runtime_proof".to_string()
             },
-        };
+        }, route);
     }
 
     let fresh_helper;
@@ -122,8 +130,9 @@ fn build_preflight_from_observations(
     let models_ready = helper_ready && provider_ready;
     let meeting_route_ready = route.route_ready;
 
+    let cleanup_pending = transient_stop_cleanup_pending();
     let mut start_blockers = Vec::new();
-    if transient_stop_cleanup_pending() {
+    if cleanup_pending {
         start_blockers.push("meeting_session:cleanup_incomplete".to_string());
     }
     if source_is_virtual_meeting_mic {
@@ -151,7 +160,7 @@ fn build_preflight_from_observations(
         blockers.push("meeting_session:functional_outbound_not_verified".to_string());
     }
 
-    MeetingSessionPreflightStatus {
+    (MeetingSessionPreflightStatus {
         ready_for_start,
         start_eligible,
         functional_outbound_ready,
@@ -162,7 +171,7 @@ fn build_preflight_from_observations(
         provider_ready,
         meeting_route_ready,
         blockers,
-        summary: if transient_stop_cleanup_pending() {
+        summary: if cleanup_pending {
             "The previous Meeting Stop still needs cleanup. Retry Stop Translation before starting again.".to_string()
         } else if ready_for_start {
             "Required outbound Meeting capabilities are functionally verified for the current local worker and current preflight prerequisites are ready. Incoming Meeting Sound remains optional/degradable."
@@ -176,7 +185,7 @@ fn build_preflight_from_observations(
         },
         runtime_claim: "meeting_start_preflight_source_contract_not_windows_runtime_proof"
             .to_string(),
-    }
+    }, route)
 }
 
 pub(super) fn status_from_report(
@@ -253,7 +262,7 @@ pub(super) fn current_status_from_observations(
 ) -> MeetingSessionStatus {
     let report = latest_runtime_session_state();
     let preflight = preflight_for_report(&report, ||
-        build_preflight_from_observations(input, admission, Some(helper)));
+        build_preflight_from_observations(input, admission, Some(helper)).0);
     status_from_report(report, preflight)
 }
 

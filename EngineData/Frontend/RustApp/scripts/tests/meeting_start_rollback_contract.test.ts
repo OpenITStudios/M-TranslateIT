@@ -88,3 +88,25 @@ test("Live commit failure uses the canonical rollback instead of a partial clean
   assert.doesNotMatch(block, /stop_live_capture_runtime\(\)/);
   assert.doesNotMatch(block, /stop_meeting_outbound_consumer\(generation\)/);
 });
+
+test("initial Start uses its own validated route and still rechecks after AI and native resource acquisition", () => {
+  const lifecycle = readFileSync(new URL("../../src-tauri/src/commands/meeting_session/lifecycle.rs", import.meta.url), "utf8");
+  const preflight = readFileSync(new URL("../../src-tauri/src/commands/meeting_session/preflight.rs", import.meta.url), "utf8");
+  const start = lifecycle.slice(lifecycle.indexOf("fn start_meeting_impl("), lifecycle.indexOf("pub(super) fn stop_meeting_translation_impl("));
+  const initial = start.indexOf("let (preflight, prepared_route) = build_preflight_with_route();");
+  const endpoint = start.indexOf("prepared_route.selected_output_device.as_deref()");
+  const claim = start.indexOf("let starting = begin_application_meeting_session()");
+  const bind = start.indexOf("bind_prepared_virtual_mic_route_to_generation(generation)");
+  const probe = start.indexOf("prepare_required_outbound_ai_runtime(generation)");
+  const afterAI = start.indexOf("let ai_preflight = build_preflight();");
+  const native = start.indexOf("probe_prepared_meeting_output_device_functionally(output_device, generation)");
+  const final = start.indexOf("let prepared_preflight = build_preflight();");
+  assert.ok(initial >= 0 && initial < endpoint && endpoint < claim && claim < bind);
+  assert.ok(bind < probe && probe < afterAI && afterAI < native && native < final);
+  assert.doesNotMatch(start, /get_virtual_mic_route_selection\(/);
+  assert.match(preflight, /build_preflight_with_route\(\)\.0/);
+  assert.equal((preflight.match(/let route = get_virtual_mic_route_selection\(\)/g) ?? []).length, 1);
+  assert.match(preflight, /let cleanup_pending = transient_stop_cleanup_pending\(\)/);
+  assert.match(preflight, /if cleanup_pending \{\s*start_blockers.push/);
+  assert.match(preflight, /summary: if cleanup_pending/);
+});

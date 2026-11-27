@@ -29,7 +29,6 @@ use crate::engine::runtime_state::{
 
 use super::super::virtual_mic_route::{
     bind_prepared_virtual_mic_route_to_generation, clear_prepared_virtual_mic_route_selection,
-    get_virtual_mic_route_selection,
 };
 use super::super::helper_bridge::{
     cancel_helper_bridge_meeting_session, finish_orphaned_meeting_helper_without_session,
@@ -58,7 +57,9 @@ use super::playback_runtime::{
     finish_orphaned_meeting_playback_without_session, inactive_meeting_playback_may_need_stop,
     start_meeting_playback_runtime, stop_meeting_playback_runtime,
 };
-use super::preflight::{blocked_result, build_preflight, status_from_report};
+use super::preflight::{
+    blocked_result, build_preflight, build_preflight_with_route, status_from_report,
+};
 use super::session_state::{
     clear_all_start_preflight, clear_incoming_status, clear_outbound_status,
     clear_start_preflight_for_generation, mark_incoming_cleanup_incomplete_status,
@@ -451,7 +452,7 @@ fn start_meeting_impl(original_requested: bool) -> MeetingSessionActionResult {
     // after the Meeting generation owns Starting authority.
     let _ = send_helper_worker_task("status", json!({ "meeting_start_prepare": true }));
     }
-    let preflight = build_preflight();
+    let (preflight, prepared_route) = build_preflight_with_route();
     let original_eligible = preflight.microphone_ready && preflight.meeting_route_ready
         && !transient_stop_cleanup_pending();
     if !(if original_requested { original_eligible } else { preflight.start_eligible }) {
@@ -473,7 +474,8 @@ fn start_meeting_impl(original_requested: bool) -> MeetingSessionActionResult {
         };
     }
 
-    let prepared_route = get_virtual_mic_route_selection();
+    // Consume the endpoint from the very observation that admitted preflight.
+    // Generation binding and functional device opening still validate ownership.
     let Some(output_device) = prepared_route.selected_output_device.as_deref() else {
         return blocked_result(
             "meeting_output_prepare_failed",

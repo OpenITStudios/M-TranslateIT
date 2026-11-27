@@ -28,10 +28,8 @@ fn required_outbound_functional_readiness_verified_unix_ms(generation_token: u64
     if generation_token == 0 {
         return None;
     }
-    required_outbound_functional_readiness_store()
-        .lock()
-        .ok()
-        .and_then(|guard| guard.as_ref().cloned())
+    let guard = required_outbound_functional_readiness_store().lock().ok()?;
+    guard.as_ref()
         .filter(|cached| cached.generation_token == generation_token && cached.verified_unix_ms > 0)
         .map(|cached| cached.verified_unix_ms)
 }
@@ -71,13 +69,10 @@ pub fn required_outbound_voice_actor_token(meeting_generation: u64) -> Option<St
     if meeting_generation == 0 || !runtime_generation_is_authoritative(meeting_generation) {
         return None;
     }
-    required_outbound_functional_readiness_store()
-        .lock()
-        .ok()
-        .and_then(|guard| guard.as_ref().cloned())
-        .filter(|cached| cached.meeting_generation == meeting_generation)
-        .map(|cached| cached.actor_token)
-        .filter(|token| !token.is_empty())
+    let guard = required_outbound_functional_readiness_store().lock().ok()?;
+    guard.as_ref()
+        .filter(|cached| cached.meeting_generation == meeting_generation && !cached.actor_token.is_empty())
+        .map(|cached| cached.actor_token.clone())
 }
 
 pub(super) fn invalidate_required_outbound_ai_readiness() {
