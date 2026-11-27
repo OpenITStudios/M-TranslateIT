@@ -645,11 +645,17 @@ fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcm
                 );
             }
 
-            let ok = apply_worker_response(&mut runtime, &worker_response);
+            #[cfg(windows)]
+            let native_status = if task == "status" {
+                super::super::helper_bridge_runtime::project_bound_native_status(&mut runtime, &mut worker_response)
+            } else { None };
+            #[cfg(not(windows))]
+            let native_status: Option<bool> = None;
+            let ok = native_status.unwrap_or_else(|| apply_worker_response(&mut runtime, &worker_response));
             clear_active_request(&mut runtime, &request_id);
             runtime.updated_unix_ms = unix_ms();
             let message = worker_message(task, &worker_response);
-            response_with_runtime(
+            let mut response = response_with_runtime(
                 ok,
                 task,
                 &request_id,
@@ -657,7 +663,11 @@ fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcm
                 message,
                 worker_response,
                 &runtime,
-            )
+            );
+            if native_status.is_some() {
+                response.runtime_claim = super::NATIVE_STATUS_CLAIM.into();
+            }
+            response
         }
         Err(_) => standalone_blocked_response(
             task,

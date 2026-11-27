@@ -266,11 +266,15 @@ pub fn runtime_claim(runtime: &HelperBridgeRuntime) -> String {
 }
 
 pub fn status_from_runtime(runtime: &HelperBridgeRuntime) -> HelperBridgeStatus {
+    #[cfg(windows)]
+    let native_available = runtime.native_inference.as_ref().is_none_or(|native| native.owner.is_available());
+    #[cfg(not(windows))]
+    let native_available = true;
     HelperBridgeStatus {
         state: runtime.state.clone(),
         message: runtime.message.clone(),
-        cuda_ready: runtime.cuda_ready,
-        provider_ready: runtime.provider_ready,
+        cuda_ready: runtime.cuda_ready && native_available,
+        provider_ready: runtime.provider_ready && native_available,
         functional_outbound_ready: false,
         functional_outbound_verified_unix_ms: None,
         degraded_mode: runtime.degraded_mode,
@@ -430,6 +434,75 @@ pub(super) fn meeting_compute_preflight_admitted(value: &Value) -> bool {
             }
             None => false,
         }
+}
+
+// Preserve the public status shape but replace legacy ASR/MT claims with
+// the actual native owner observation. Python remains authority only for voice
+// and its own allocator. This is a capability observation, not functional proof.
+#[cfg(any(windows, test))]
+fn native_status_payload(worker: &Value, pci: Option<&str>) -> Value {
+    use super::helper_bridge::{NATIVE_ASR_MODEL, NATIVE_MT_MODEL};
+    let available = pci.is_some();
+    let valid_voice_status = worker.get("stage").and_then(Value::as_str)
+        == Some("local_realtime_worker_preflight");
+    let voice_ready = valid_voice_status
+        && worker_nested_bool(worker, "readiness", "voice_actor_tts")
+        && worker_bool(worker, "torch_import_ready")
+        && worker_bool(worker, "transformers_import_ready")
+        && worker.get("voice_actor_token").and_then(Value::as_str)
+            .is_some_and(|token| !token.is_empty() && token.len() <= 512);
+    let ready = available && voice_ready;
+    let blocker = if !available { "native_inference:owner_unavailable" }
+        else if !voice_ready { "voice_actor:capability_unverified" }
+        else { "" };
+    let selected = if available { "cuda" } else { "blocked" };
+    json!({
+        "ok": ready, "stage": "local_realtime_worker_preflight",
+        "request_id": worker.get("request_id"),
+        "scheduler_priority": worker.get("scheduler_priority"),
+        "scheduler_wait_ms": worker.get("scheduler_wait_ms"),
+        "blocker": blocker, "provider_ready": ready,
+        "note": if ready { "Native ASR/MT owner and voice capability are available; functional verification is separate." }
+            else { "Native ASR/MT or required voice capability is unavailable." },
+        "readiness": {
+            "asr": available, "translation_id_en": available, "translation_en_id": available,
+            "translation_bidirectional": available, "voice_actor_tts": voice_ready, "cuda_degraded": false,
+        },
+        "cuda_pci_id": pci, "cuda_capability_known": available, "cpu_fallback_active": false,
+        "selected_device": selected, "selected_translation_device": selected,
+        "selected_compute_type": if available { "q8_0" } else { "blocked" },
+        "asr_primary_model_ready": available, "asr_model_ready": available,
+        "asr_active_model_id": NATIVE_ASR_MODEL,
+        "translation_id_en_ready": available, "translation_en_id_ready": available,
+        "translation_bidirectional_ready": available, "voice_actor_ready": voice_ready,
+        "voice_actor_token": worker.get("voice_actor_token").filter(|_| voice_ready),
+        "tts": worker.get("tts"), "dependencies": worker.get("dependencies"),
+        "gpu": {"torch_allocator": worker.get("gpu").and_then(|gpu| gpu.get("torch_allocator"))},
+        "loaded": {
+            "asr": available, "asr_model_id": NATIVE_ASR_MODEL,
+            "asr_device": selected, "asr_compute_type": if available { "q8_0" } else { "blocked" },
+            "translation_model_id": NATIVE_MT_MODEL,
+            "translation_directions": if available { vec!["id->en", "en->id"] } else { Vec::<&str>::new() },
+            "voice_actor": worker_nested_bool(worker, "loaded", "voice_actor"),
+            "voice_actor_device": worker.get("loaded").and_then(|loaded| loaded.get("voice_actor_device")),
+        },
+    })
+}
+
+#[cfg(windows)]
+pub(super) fn project_bound_native_status(runtime: &mut HelperBridgeRuntime, worker: &mut Value) -> Option<bool> {
+    let native = runtime.native_inference.as_ref()?;
+    let pci = native.owner.is_available().then(|| native.owner.device_id());
+    let projected = native_status_payload(worker, pci);
+    let available = pci.is_some();
+    let ready = worker_bool(&projected, "ok");
+    runtime.cuda_ready = available;
+    runtime.provider_ready = ready;
+    runtime.degraded_mode = projected["loaded"]["voice_actor_device"].as_str() == Some("cpu");
+    runtime.last_error = worker_text(&projected, "blocker");
+    runtime.message = worker_text(&projected, "note").unwrap_or_default();
+    *worker = projected;
+    Some(ready)
 }
 
 pub fn apply_worker_status(runtime: &mut HelperBridgeRuntime, status: &Value) {
@@ -1008,6 +1081,34 @@ mod response_framing_tests {
 #[cfg(test)]
 mod readiness_contract_tests {
     use super::*;
+
+    #[test]
+    fn native_status_does_not_inherit_legacy_model_or_cuda_claims() {
+        // Pure projection fixture, not a GPU/owner execution receipt.
+        let worker = json!({
+            "ok": false, "stage": "local_realtime_worker_preflight",
+            "readiness": {"asr": true, "translation_id_en": true, "voice_actor_tts": true},
+            "torch_import_ready": true, "transformers_import_ready": true,
+            "voice_actor_token": "fixture-actor",
+            "selected_device": "cpu", "cpu_fallback_active": true,
+            "loaded": {"asr": true, "asr_model_id": "faster-whisper-large-v3-turbo"},
+        });
+        let missing = native_status_payload(&worker, None);
+        assert_eq!(missing["ok"], false);
+        assert_eq!(missing["readiness"]["asr"], false);
+        assert_eq!(missing["loaded"]["translation_directions"], json!([]));
+        let resident = native_status_payload(&worker, Some("0000:01:00.0"));
+        assert_eq!(resident["ok"], true);
+        assert_eq!(resident["loaded"]["asr_model_id"], "qwen3-asr-1.7b-q8_0");
+        assert_eq!(resident["cpu_fallback_active"], false);
+        assert_eq!(resident["cuda_pci_id"], "0000:01:00.0");
+        let mut invalid_voice = worker;
+        invalid_voice["voice_actor_token"] = Value::Null;
+        assert_eq!(native_status_payload(&invalid_voice, Some("0000:01:00.0"))["ok"], false);
+        invalid_voice["voice_actor_token"] = json!("fixture-actor");
+        invalid_voice["stage"] = json!("worker_error");
+        assert_eq!(native_status_payload(&invalid_voice, Some("0000:01:00.0"))["ok"], false);
+    }
 
     #[test]
     fn worker_status_uses_canonical_direction_readiness_and_rejects_legacy_aliases() {

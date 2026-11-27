@@ -44,11 +44,6 @@ use request_policy::{
 const STARTUP_PING_REQUEST_ID: &str = "helper-startup-ping";
 const STARTUP_STATUS_REQUEST_ID: &str = "helper-startup-status";
 
-const REQUIRED_OUTBOUND_FUNCTIONAL_VOICE_OUTPUT: &str =
-    "UserData/CacheData/helper_functional_readiness/required_outbound_myvoice.wav";
-const REQUIRED_OUTBOUND_DIAGNOSTIC_VOICE_OUTPUT: &str =
-    "UserData/CacheData/helper_functional_readiness/diagnostic_myvoice.wav";
-
 #[derive(Debug, Clone, Serialize)]
 pub struct HelperBridgeWorkerResponse {
     pub ok: bool,
@@ -91,6 +86,7 @@ fn clean_helper_text(value: &str, max_chars: usize) -> String {
 // Native identity is admitted only from the Rust-owned outer receipt,
 // never a JSON claim supplied by the legacy Python worker.
 pub(super) const NATIVE_INFERENCE_CLAIM: &str = "native_cuda_inference_receipt";
+pub(super) const NATIVE_STATUS_CLAIM: &str = "native_cuda_status_receipt";
 pub(super) const NATIVE_ASR_MODEL: &str = "qwen3-asr-1.7b-q8_0";
 pub(super) const NATIVE_MT_MODEL: &str = "hy-mt2-1.8b-q6_k";
 pub(super) const NATIVE_MT_REVISION: &str = "a0c709d9fac510f2c807aa3af52872340dc37a4a";
@@ -193,19 +189,13 @@ pub(crate) fn invalidate_required_outbound_readiness_for_power_transition() {
 
 
 pub fn verify_required_outbound_ai_runtime() -> Result<(), &'static str> {
-    let (generation_token, actor_token) = run_required_outbound_ai_probe(
-        None,
-        REQUIRED_OUTBOUND_DIAGNOSTIC_VOICE_OUTPUT,
-    )?;
+    let (generation_token, actor_token) = run_required_outbound_ai_probe(None)?;
     remember_required_outbound_functional_readiness(generation_token, 0, actor_token);
     Ok(())
 }
 
 pub fn prepare_required_outbound_ai_runtime(meeting_generation: u64) -> Result<(), &'static str> {
-    let (generation_token, actor_token) = run_required_outbound_ai_probe(
-        Some(meeting_generation),
-        REQUIRED_OUTBOUND_FUNCTIONAL_VOICE_OUTPUT,
-    )?;
+    let (generation_token, actor_token) = run_required_outbound_ai_probe(Some(meeting_generation))?;
     if !runtime_generation_is_authoritative(meeting_generation) {
         invalidate_required_outbound_ai_readiness();
         return Err("Meeting authority");

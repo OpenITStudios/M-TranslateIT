@@ -7,28 +7,65 @@ use crate::engine::runtime_state::runtime_generation_is_authoritative;
 use super::super::helper_bridge_runtime::meeting_compute_preflight_admitted;
 
 use super::functional_readiness::{
-    functional_asr_output, functional_translation_output, functional_voice_actor_output_path,
+    functional_asr_output, functional_translation_output,
     invalidate_required_outbound_ai_readiness,
 };
 use super::{
     get_helper_bridge_status, meeting_asr_compute_admitted,
     meeting_translation_compute_admitted, send_worker_task, worker_text,
+    HelperBridgeWorkerResponse, NATIVE_INFERENCE_CLAIM, NATIVE_STATUS_CLAIM,
 };
 
 const REQUIRED_OUTBOUND_FUNCTIONAL_ID_FIXTURE: &str = "selamat pagi";
 
-fn remove_probe_output_paths(requested_path: &str, reported_path: Option<&str>) {
-    if let Some(path) = reported_path.filter(|path| !path.trim().is_empty()) {
-        let _ = fs::remove_file(path);
+// Both native dispatch and the functional probe derive the same owned
+// cache path from the host scheduler's unique preload request ID.
+pub(super) fn required_probe_output_path(meeting_generation: Option<u64>, probe_id: &str) -> Option<PathBuf> {
+    let sequence = probe_id.strip_prefix("helper-")?.parse::<u64>().ok()?;
+    if sequence == 0 || probe_id != format!("helper-{sequence}") { return None; }
+    let paths = crate::engine::paths::ProjectPaths::discover();
+    if !paths.packaged_context_initialized && !paths.development_root_verified {
+        return None;
     }
-    if reported_path.map(str::trim) != Some(requested_path.trim()) && !requested_path.trim().is_empty() {
-        let _ = fs::remove_file(requested_path);
+    let root = PathBuf::from(paths.user_cache_dir);
+    if !root.is_absolute() { return None; }
+    let label = if meeting_generation.is_some() { "required_outbound_myvoice" } else { "diagnostic_myvoice" };
+    Some(root.join("helper_functional_readiness")
+        .join(format!("{label}-{}-{probe_id}.wav", std::process::id())))
+}
+
+struct OwnedProbeOutput(PathBuf);
+
+impl OwnedProbeOutput {
+    fn reserve(path: PathBuf) -> std::io::Result<Self> {
+        if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
+        // Collision or leftover file: refuse, without deleting the other
+        // probe's output. No global lock and no cross-probe WAV reuse.
+        let reservation = fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+        drop(reservation);
+        Ok(Self(path))
     }
+}
+
+impl Drop for OwnedProbeOutput {
+    fn drop(&mut self) {
+        // The request path is owned by this probe, not a reported pathname.
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+fn same_probe_inference(response: &HelperBridgeWorkerResponse, generation: u64,
+                        native_device: Option<&str>) -> bool {
+    response.ok && response.generation_token == generation
+        && match native_device {
+            Some(pci) => response.runtime_claim == NATIVE_INFERENCE_CLAIM
+                && response.worker_response_json.get("cuda_pci_id").and_then(Value::as_str) == Some(pci),
+            None => response.runtime_claim != NATIVE_INFERENCE_CLAIM,
+        }
 }
 
 pub(super) fn run_required_outbound_ai_probe(
     meeting_generation: Option<u64>,
-    output_path: &str,
 ) -> Result<(u64, String), &'static str> {
     if meeting_generation
         .map(|generation| generation == 0 || !runtime_generation_is_authoritative(generation))
@@ -52,12 +89,24 @@ pub(super) fn run_required_outbound_ai_probe(
         invalidate_required_outbound_ai_readiness();
         return Err("local translation runtime");
     }
-    if !meeting_compute_preflight_admitted(&refreshed.worker_response_json) {
-        invalidate_required_outbound_ai_readiness();
-        return Err("CUDA speech and translation (primary models required)");
-    }
+    let native_device = if refreshed.runtime_claim == NATIVE_STATUS_CLAIM {
+        let Some(pci) = refreshed.worker_response_json.get("cuda_pci_id")
+            .and_then(Value::as_str).filter(|value| !value.is_empty()) else {
+            invalidate_required_outbound_ai_readiness();
+            return Err("native CUDA identity");
+        };
+        Some(pci)
+    } else {
+        if !meeting_compute_preflight_admitted(&refreshed.worker_response_json) {
+            invalidate_required_outbound_ai_readiness();
+            return Err("CUDA speech and translation (primary models required)");
+        }
+        None
+    };
     let helper = get_helper_bridge_status();
-    if helper.state != "ready" || !helper.provider_ready || helper.generation_token == 0 {
+    if helper.state != "ready" || !helper.provider_ready || helper.generation_token == 0
+        || refreshed.generation_token != helper.generation_token
+    {
         invalidate_required_outbound_ai_readiness();
         return Err("local translation runtime");
     }
@@ -70,7 +119,8 @@ pub(super) fn run_required_outbound_ai_probe(
             "meeting_generation": meeting_generation,
         }),
     );
-    if !asr.ok || !meeting_asr_compute_admitted(&asr) {
+    if !same_probe_inference(&asr, generation_token, native_device)
+        || !meeting_asr_compute_admitted(&asr) {
         invalidate_required_outbound_ai_readiness();
         return Err("speech recognition");
     }
@@ -86,7 +136,8 @@ pub(super) fn run_required_outbound_ai_probe(
             "meeting_generation": meeting_generation,
         }),
     );
-    if !meeting_translation_compute_admitted(&translation) {
+    if !same_probe_inference(&translation, generation_token, native_device)
+        || !meeting_translation_compute_admitted(&translation) {
         invalidate_required_outbound_ai_readiness();
         return Err("CUDA Indonesian to English translation");
     }
@@ -102,7 +153,10 @@ pub(super) fn run_required_outbound_ai_probe(
             "meeting_generation": meeting_generation,
         }),
     );
-    if !actor_preflight.ok {
+    if !actor_preflight.ok || actor_preflight.generation_token != generation_token
+        || actor_preflight.task != "voice_actor_preflight"
+        || actor_preflight.worker_response_json.get("stage").and_then(Value::as_str) != Some("voice_actor_preflight")
+    {
         invalidate_required_outbound_ai_readiness();
         return Err("My Voice");
     }
@@ -111,28 +165,40 @@ pub(super) fn run_required_outbound_ai_probe(
         return Err("My Voice");
     };
 
+    let Some(output_path) = required_probe_output_path(meeting_generation, &asr.request_id) else {
+        invalidate_required_outbound_ai_readiness();
+        return Err("voice probe output root");
+    };
+    let output = match OwnedProbeOutput::reserve(output_path) {
+        Ok(output) => output,
+        Err(_) => {
+            invalidate_required_outbound_ai_readiness();
+            return Err("voice probe output reservation");
+        }
+    };
     let voice = send_worker_task(
         "voice_actor_synthesize",
         json!({
             "text": translated_fixture,
-            "output_path": output_path,
+            "output_path": output.0.to_string_lossy(),
             "expected_actor_token": actor_token.clone(),
             "meeting_start_prepare": meeting_start_prepare,
             "meeting_generation": meeting_generation,
         }),
     );
-    let Some(functional_voice_path) =
-        functional_voice_actor_output_path(&voice, &actor_token)
-    else {
-        remove_probe_output_paths(output_path, None);
+    if voice.generation_token != generation_token
+        || !voice_only_receipt_matches(&voice, &actor_token, &output.0)
+        || !voice_only_probe_has_wav_header(&output.0)
+    {
         invalidate_required_outbound_ai_readiness();
         return Err("My Voice");
-    };
+    }
 
     let asr_inference = send_worker_task(
         "transcribe",
         json!({
-            "audio_path": functional_voice_path,
+            "audio_path": output.0.to_string_lossy(),
+            "probe_request_id": asr.request_id,
             "language": "en",
             "beam_size": 1,
             "vad_filter": false,
@@ -140,12 +206,9 @@ pub(super) fn run_required_outbound_ai_probe(
             "meeting_generation": meeting_generation,
         }),
     );
-    let reported_voice_path = voice.worker_response_json
-        .get("output_path")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    remove_probe_output_paths(output_path, reported_voice_path.as_deref());
-    if !functional_asr_output(&asr_inference)
+    drop(output);
+    if !same_probe_inference(&asr_inference, generation_token, native_device)
+        || !functional_asr_output(&asr_inference)
         || !meeting_asr_compute_admitted(&asr_inference)
     {
         invalidate_required_outbound_ai_readiness();
@@ -238,7 +301,7 @@ pub(super) fn run_codex_voice_only_probe(
 /// Compare file identity rather than Rust/Python path spelling. On Windows
 /// ProjectPaths emits forward slashes while Python Path.resolve() reports
 /// native separators. Reject missing, relative or symlinked files.
-fn voice_only_probe_path_matches(reported: &str, requested: &Path) -> bool {
+pub(super) fn voice_only_probe_path_matches(reported: &str, requested: &Path) -> bool {
     let candidate = Path::new(reported);
     if !candidate.is_absolute() || !requested.is_absolute()
         || !fs::symlink_metadata(requested)
@@ -278,7 +341,7 @@ fn voice_only_probe_has_wav_header(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{meeting_compute_preflight_admitted, remove_probe_output_paths};
+    use super::{meeting_compute_preflight_admitted, OwnedProbeOutput, same_probe_inference};
     use serde_json::json;
 
     #[test]
@@ -378,28 +441,54 @@ mod tests {
     }
 
     #[test]
+    fn functional_probe_rejects_engine_device_and_generation_changes() {
+        let mut receipt = super::super::HelperBridgeWorkerResponse {
+            ok: true, state: "ready".into(), task: "translate".into(),
+            request_id: "fixture".into(), scheduler_priority: "meeting_outbound".into(),
+            message: String::new(), generation_token: 7,
+            runtime_claim: super::NATIVE_INFERENCE_CLAIM.into(),
+            worker_response_json: json!({"cuda_pci_id":"0000:01:00.0"}),
+        };
+        assert!(same_probe_inference(&receipt, 7, Some("0000:01:00.0")));
+        assert!(!same_probe_inference(&receipt, 8, Some("0000:01:00.0")));
+        assert!(!same_probe_inference(&receipt, 7, Some("0000:02:00.0")));
+        assert!(!same_probe_inference(&receipt, 7, None));
+        receipt.runtime_claim = "helper_process_ready_ping_verified".into();
+        assert!(!same_probe_inference(&receipt, 7, Some("0000:01:00.0")));
+        assert!(same_probe_inference(&receipt, 7, None));
+    }
+
+    #[test]
+    fn probe_reservation_never_overwrites_an_existing_output() {
+        let requested = temp_path("reserved");
+        let owned = OwnedProbeOutput::reserve(requested.clone()).unwrap();
+        fs::write(&requested, b"first probe").unwrap();
+        assert!(OwnedProbeOutput::reserve(requested.clone()).is_err());
+        assert_eq!(fs::read(&requested).unwrap(), b"first probe");
+        drop(owned);
+        assert!(!requested.exists());
+    }
+
+    #[test]
     fn probe_cleanup_removes_requested_file_without_worker_report() {
         let requested = temp_path("requested");
         fs::write(&requested, b"probe").expect("write probe");
 
-        remove_probe_output_paths(requested.to_string_lossy().as_ref(), None);
+        drop(OwnedProbeOutput(requested.clone()));
 
         assert!(!requested.exists());
     }
 
     #[test]
-    fn probe_cleanup_removes_distinct_requested_and_reported_files() {
+    fn probe_cleanup_never_removes_unowned_reported_file() {
         let requested = temp_path("requested");
         let reported = temp_path("reported");
         fs::write(&requested, b"requested").expect("write requested");
         fs::write(&reported, b"reported").expect("write reported");
 
-        remove_probe_output_paths(
-            requested.to_string_lossy().as_ref(),
-            Some(reported.to_string_lossy().as_ref()),
-        );
-
+        drop(OwnedProbeOutput(requested.clone()));
         assert!(!requested.exists());
-        assert!(!reported.exists());
+        assert_eq!(fs::read(&reported).unwrap(), b"reported");
+        fs::remove_file(&reported).unwrap();
     }
 }

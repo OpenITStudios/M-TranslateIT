@@ -33,6 +33,18 @@ pub(crate) const MAX_DELIVERY_DEADLINE_MS: u64 = 120_000;
 const MIN_DELIVERY_DEADLINE_MS: u64 = 10_000;
 const DELIVERY_CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
+/// Decode the already-owned TTS probe WAV with the same bounded RIFF
+/// decoder and resampler used by delivery; never use this for live PCM.
+pub(crate) fn decode_functional_probe_asr_pcm(file: File) -> Result<Vec<f32>, String> {
+    let source = decode_wav_bytes(&read_bounded_open_wav(file)?)?;
+    let frames = source.samples.len() / usize::from(source.channels);
+    let target_frames = (frames as u128 * 16_000).div_ceil(u128::from(source.sample_rate_hz));
+    if !(4_800..=960_000).contains(&target_frames) {
+        return Err("asr:probe_pcm_length_invalid".into());
+    }
+    prepare_output_samples(&source, 16_000, 1)
+}
+
 fn current_unix_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1131,6 +1143,27 @@ mod tests {
             decode_wav_bytes(&invalid_size).err().as_deref(),
             Some("meeting_output:wav_riff_size_invalid"),
         );
+    }
+
+    #[test]
+    fn functional_probe_decodes_owned_audio_to_bounded_mono_16khz() {
+        use std::fs;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "translateit-asr-probe-{}-{nonce}.wav", std::process::id(),
+        ));
+        let samples = vec![8192i16; 24_000 * 2];
+        fs::write(&path, pcm16_wav(24_000, 2, &samples)).unwrap();
+        let pcm = super::decode_functional_probe_asr_pcm(fs::File::open(&path).unwrap()).unwrap();
+        assert_eq!(pcm.len(), 16_000);
+        assert!(pcm.iter().all(|sample| *sample == 0.25));
+        fs::write(&path, pcm16_wav(16_000, 1, &[0; 4_799])).unwrap();
+        assert_eq!(
+            super::decode_functional_probe_asr_pcm(fs::File::open(&path).unwrap()).unwrap_err(),
+            "asr:probe_pcm_length_invalid",
+        );
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

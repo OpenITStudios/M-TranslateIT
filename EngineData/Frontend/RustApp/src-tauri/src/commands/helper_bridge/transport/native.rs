@@ -1,6 +1,9 @@
 //! Native ASR/MT dispatch at the existing helper permit, not a second scheduler.
 use super::*;
 use crate::engine::audio::evidence::condition_asr_pcm;
+use crate::engine::audio::meeting_output::decode_functional_probe_asr_pcm;
+use super::super::functional_probe::{required_probe_output_path, voice_only_probe_path_matches};
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use crate::engine::runtime_state::{latest_runtime_session_state, RuntimeSessionSnapshot,
     APPLICATION_MEETING_OWNER_ID};
 use crate::commands::helper_bridge_runtime::HelperTaskPermit;
@@ -100,11 +103,34 @@ fn error_blocker(error: Error, task: &str) -> (&'static str, bool) {
     }
 }
 
-/// The current source still opens no production native owner. This is the
-/// cutover execution seam, not a user-visible engine choice. Once selected
-/// for a request, every error is terminal here; None means no native owner
-/// was admitted in the transitional build. Final cutover must remove that
-/// legacy branch and migrate status/preload/file-based probe consumers.
+// A file is permitted only for the owned TTS functional probe. Live
+// Meeting ASR must transfer its finalized PCM, not a path.
+fn probe_pcm(payload: &Value, request_scope: &Scope) -> Result<Vec<f32>, &'static str> {
+    if payload.get("meeting_lane").is_some_and(|lane| !lane.is_null())
+        || (request_scope.generation.is_some()
+            && payload.get("meeting_start_prepare").and_then(Value::as_bool) != Some(true))
+    { return Err("asr:probe_scope_invalid"); }
+    let probe_id = payload.get("probe_request_id").and_then(Value::as_str)
+        .ok_or("asr:probe_scope_invalid")?;
+    let path = required_probe_output_path(request_scope.generation, probe_id)
+        .ok_or("asr:probe_root_invalid")?;
+    let reported = payload.get("audio_path").and_then(Value::as_str).ok_or("asr:probe_path_missing")?;
+    if !voice_only_probe_path_matches(reported, &path) {
+        return Err("asr:probe_path_not_owned");
+    }
+    // Deny ordinary writes/deletes while decoding the one owned handle;
+    // reject a leaf reparse point even if it appeared after the path check.
+    let file = std::fs::OpenOptions::new().read(true).share_mode(1)
+        .custom_flags(0x00200000).open(&path).map_err(|_| "asr:probe_open_failed")?;
+    let metadata = file.metadata().map_err(|_| "asr:probe_open_failed")?;
+    if !metadata.is_file() || metadata.file_attributes() & 0x400 != 0 {
+        return Err("asr:probe_path_not_owned");
+    }
+    decode_functional_probe_asr_pcm(file).map_err(|_| "asr:probe_wav_invalid")
+}
+
+/// Once a native owner is bound, every failure is terminal here. No
+/// production owner open yet; the unbound legacy route is transitional.
 pub(super) fn dispatch_if_owned(
     task: &str, payload: &mut Value, pcm: Option<MeetingPcmInput<'_>>,
     priority: HelperTaskPriority, permit: &HelperTaskPermit, deadline_ms: u128,
@@ -139,27 +165,69 @@ pub(super) fn dispatch_if_owned(
     if priority == HelperTaskPriority::MeetingIncoming && meeting_outbound_pipeline_active() {
         return Some(incoming_deferred_response(task, request_id));
     }
-    if !matches!(task, "transcribe" | "translate") {
-        return Some(fail("native_inference:probe_not_migrated", "Native readiness/preload must use the coordinated cutover contract."));
+    let owner = &host.native_inference.as_ref().expect("checked owner").owner;
+    if !owner.is_available() {
+        return Some(fail("native_inference:owner_unavailable", "Native models are not available."));
+    }
+    if matches!(task, "asr_preload" | "translation_preload") {
+        // Open prepared both resident models atomically. Do not load either
+        // again or pretend a preload receipt proves successful inference.
+        let mut body = json!({
+            "ok": true, "stage": task, "blocker": "", "device": "cuda",
+            "cuda_pci_id": owner.device_id(), "request_id": request_id,
+            "scheduler_priority": priority.label(), "scheduler_wait_ms": permit.scheduler_wait_ms(),
+            "note": "The native model pair is resident; functional inference remains separate.",
+        });
+        if task == "asr_preload" {
+            body["model_id"] = json!(NATIVE_ASR_MODEL);
+            body["compute_type"] = json!("q8_0");
+        } else {
+            let (Some(from), Some(to)) = (language(payload, "source_language"), language(payload, "target_language")) else {
+                return Some(fail("translation:direction_not_supported", "Only Indonesian and English translation is supported."));
+            };
+            if from == to {
+                return Some(fail("translation:direction_not_supported", "Translation must change language."));
+            }
+            body["model_id"] = json!(NATIVE_MT_MODEL);
+            body["model_revision"] = json!(NATIVE_MT_REVISION);
+            body["precision"] = json!("q6_k");
+            body["direction_pair"] = json!(format!("{}->{}", language_code(from), language_code(to)));
+            body["translation_degraded"] = json!(false);
+            body["translation_fallback_reason"] = json!("");
+        }
+        let mut response = response_with_runtime(true, task, request_id, priority,
+            worker_message(task, &body), body, &host);
+        response.runtime_claim = NATIVE_INFERENCE_CLAIM.into();
+        return Some(response);
     }
     let Some(deadline) = u64::try_from(deadline_ms).ok()
         .and_then(|ms| Instant::now().checked_add(Duration::from_millis(ms))) else {
         return Some(fail("native_inference:deadline_invalid", "Native inference deadline is invalid."));
     };
     let (input, from, to) = if task == "transcribe" {
-        let (Some(pcm), Some(from)) = (pcm, language(payload, "language")) else {
-            return Some(fail("native_inference:pcm_required", "Native ASR requires an owned finalized PCM frame."));
+        let Some(from) = language(payload, "language") else {
+            return Some(fail("asr:language_invalid", "Native ASR requires Indonesian or English."));
         };
-        if !pcm.matches(task, payload) {
-            return Some(fail("asr:finalized_pcm_contract_invalid", "Finalized PCM identity is invalid."));
-        }
-        let started = Instant::now();
-        let Some(owned) = pcm.utterance.borrow_mut().take() else {
-            return Some(fail("asr:finalized_pcm_missing", "Finalized PCM was already consumed."));
+        let samples = if let Some(pcm) = pcm {
+            if !pcm.matches(task, payload) {
+                return Some(fail("asr:finalized_pcm_contract_invalid", "Finalized PCM identity is invalid."));
+            }
+            let started = Instant::now();
+            let Some(owned) = pcm.utterance.borrow_mut().take() else {
+                return Some(fail("asr:finalized_pcm_missing", "Finalized PCM was already consumed."));
+            };
+            let mut samples = owned.frame.samples;
+            condition_asr_pcm(&mut samples, pcm.noise_suppression_enabled);
+            pcm.prepare_ms.set(pcm.prepare_ms.get().saturating_add(observed_elapsed_ms(started)));
+            samples
+        } else {
+            // The existing functional readiness probe alone needs to decode
+            // synthesized audio. Never pass a WAV or decoder into live ASR.
+            match probe_pcm(payload, &request_scope) {
+                Ok(samples) => samples,
+                Err(blocker) => return Some(fail(blocker, "Owned voice probe PCM could not be decoded.")),
+            }
         };
-        let mut samples = owned.frame.samples;
-        condition_asr_pcm(&mut samples, pcm.noise_suppression_enabled);
-        pcm.prepare_ms.set(pcm.prepare_ms.get().saturating_add(observed_elapsed_ms(started)));
         (InferenceInput::Speech { pcm: samples, language: from }, from, None)
     } else {
         let (Some(from), Some(to)) = (language(payload, "source_language"), language(payload, "target_language")) else {

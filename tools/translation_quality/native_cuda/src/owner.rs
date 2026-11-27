@@ -134,10 +134,16 @@ impl RuntimeOwner {
 
     pub fn device_id(&self) -> &str { &self.device_id }
 
+    /// Resource observation, not functional inference or CUDA residency proof.
+    pub fn is_available(&self) -> bool {
+        !self.join_failed && self.sender.is_some()
+            && self.thread.as_ref().is_some_and(|thread| !thread.is_finished())
+    }
+
     /// Call only after existing scheduler admission and session/route checks.
     /// The caller retains its permit through PendingInference::wait.
     pub fn begin(&mut self, input: InferenceInput, deadline: Instant) -> Result<PendingInference, Error> {
-        if self.join_failed || self.thread.as_ref().is_none_or(|thread| thread.is_finished()) {
+        if !self.is_available() {
             return Err(Error::OwnerUnavailable);
         }
         let sender = self.sender.as_ref().ok_or(Error::OwnerUnavailable)?;
@@ -227,12 +233,14 @@ mod tests {
         let entered = entered_rx.recv_timeout(Duration::from_secs(5));
         let second = owner.begin(input(), deadline);
         let close = owner.try_close();
+        let available_after_close = owner.is_available();
         let retained = owner.thread.is_some();
         let _ = release_tx.send(());
         let result = pending.wait();
         assert!(entered.is_ok());
         assert!(matches!(second, Err(Error::OwnerBusy)));
         assert_eq!(close, Ok(false));
+        assert!(!available_after_close);
         assert!(retained);
         assert_eq!(result, Err(Error::Cancelled));
         let deadline = Instant::now() + Duration::from_secs(5);

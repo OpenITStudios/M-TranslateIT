@@ -75,8 +75,18 @@ remains unchanged until coordinated cutover. My Voice is excluded.
   (private DLLs only); `ASR/ModelData/qwen3-asr-1.7b/` and
   `Translation/ModelData/hy-mt2-1.8b/` under RuntimeAssets, with the exact
   pinned GGUF filenames. No installed manifest is trusted as a hash anchor.
-  The production owner open method now uses these paths/pins, but no
-  production lifecycle caller opens it until readiness and package cutover.
+  The production owner open method now uses these paths/pins. A bound
+  owner supplies ASR/MT preload receipts without loading twice; Rust
+  projects its actual availability and PCI identity into the existing
+  status shape while retaining Python voice capability and allocator
+  observations. The functional check requires one helper generation and
+  exact native PCI identity throughout, and decodes only its owned voice
+  probe WAV with the existing Rust decoder/resampler. The output is
+  reserved uniquely using the host preload request ID; collision fails
+  closed. Cleanup removes only that request's cache file, never an
+  arbitrary worker report.
+  This does not activate the owner: package trust admission and coordinated
+  removal of the unbound legacy branch remain prerequisites.
 
 ## Held local integration
 
