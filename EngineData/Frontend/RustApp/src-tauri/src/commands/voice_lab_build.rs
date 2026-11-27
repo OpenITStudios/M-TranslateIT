@@ -855,6 +855,16 @@ fn start_voice_lab_build_selected(
         return result(false, "voice_busy",
             "Stop the active Meeting before preparing My Voice training.");
     }
+    // Release any idle native translation weights before the real GPU
+    // headroom probe. begin_voice_lab_build rechecks under the same owner.
+    {
+        let Ok(mut helper) = super::helper_bridge_runtime::runtime().try_lock() else {
+            return result(false, "voice_busy", "Finish the active inference request before My Voice training.");
+        };
+        if !helper.release_idle_native_inference() {
+            return result(false, "voice_busy", "Native inference cleanup is not verified.");
+        }
+    }
     let compute = probe_my_voice_compute_status();
     if compute.state != "cuda_detected" || compute.admission_state != "admitted" {
         return result(false, "gpu_admission_blocked", format!(

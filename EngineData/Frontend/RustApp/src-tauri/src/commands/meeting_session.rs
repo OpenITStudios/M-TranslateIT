@@ -825,7 +825,7 @@ mod translation_delivery_contract_tests {
             scheduler_priority: "meeting_outbound".into(),
             message: String::new(),
             generation_token: 1,
-            runtime_claim: "test_fixture".into(),
+            runtime_claim: "native_cuda_inference_receipt".into(),
             worker_response_json: payload,
         }
     }
@@ -836,8 +836,8 @@ mod translation_delivery_contract_tests {
         let valid = json!({
             "ok": true, "stage": "transcribe", "language": "id",
             "blocker": "", "transcript_text": "  Selamat pagi.  ",
-            "device": "cuda", "compute_type": "int8_float16",
-            "model_id": "faster-whisper-large-v3-turbo",
+            "device": "cuda", "compute_type": "q8_0",
+            "model_id": "qwen3-asr-1.7b-q8_0",
         });
         let mut outgoing = response(valid.clone());
         outgoing.task = "transcribe".into();
@@ -931,9 +931,9 @@ mod translation_delivery_contract_tests {
             "target_language": "en",
             "direction_pair": "id->en",
             "translated_text": "  The meeting starts now.  ",
-            "device": "cuda", "precision": "bf16",
-            "model_id": "milmmt-46-1b-v1.0",
-            "model_revision": "4fc480b6c58dec29c159dcdf9fde0f6d5c354995",
+            "device": "cuda", "precision": "q6_k",
+            "model_id": "hy-mt2-1.8b-q6_k",
+            "model_revision": "a0c709d9fac510f2c807aa3af52872340dc37a4a",
             "translation_degraded": false, "translation_fallback_reason": "",
         });
         assert_eq!(

@@ -83,7 +83,7 @@ fn scope_from_snapshot(payload: &Value, snapshot: Option<&RuntimeSessionSnapshot
 
 fn scope(payload: &Value) -> Option<Scope> {
     let state = latest_runtime_session_state();
-    if state.has_active_session && state.snapshot.is_none() { return None; }
+    if state.snapshot.is_none() && (state.has_active_session || state.blocker != "runtime_session:no_active_session") { return None; }
     scope_from_snapshot(payload, state.snapshot.as_ref())
 }
 
@@ -91,6 +91,11 @@ fn error_blocker(error: Error, task: &str) -> (&'static str, bool) {
     // Fatal backend/owner faults affect both native models. A normal empty
     // transcript, input limit or cooperative Stop does not poison the pair.
     match error {
+        Error::LibraryUnavailable | Error::LibraryIdentityMismatch | Error::LibrarySymbolMissing | Error::AbiMismatch
+            => ("native_inference:library_identity_unverified", true),
+        Error::Native(2) => ("native_inference:cuda_device_unavailable", true),
+        Error::Native(13) => ("native_inference:model_identity_unverified", true),
+        Error::Native(14) => ("native_inference:insufficient_vram", true),
         Error::Cancelled => ("native_inference:cancelled", false),
         Error::DeadlineExceeded => ("native_inference:deadline_exceeded", false),
         Error::InvalidInput | Error::Native(1) => ("native_inference:invalid_input", false),
@@ -129,45 +134,70 @@ fn probe_pcm(payload: &Value, request_scope: &Scope) -> Result<Vec<f32>, &'stati
     decode_functional_probe_asr_pcm(file).map_err(|_| "asr:probe_wav_invalid")
 }
 
-/// Once a native owner is bound, every failure is terminal here. No
-/// production owner open yet; the unbound legacy route is transitional.
-pub(super) fn dispatch_if_owned(
+/// ASR/MT has one production route. Missing resources are terminal.
+pub(super) fn dispatch(
     task: &str, payload: &mut Value, pcm: Option<MeetingPcmInput<'_>>,
     priority: HelperTaskPriority, permit: &HelperTaskPermit, deadline_ms: u128,
-) -> Option<HelperBridgeWorkerResponse> {
-    if !matches!(task, "transcribe" | "translate" | "asr_preload" | "translation_preload") {
-        return None;
-    }
+) -> HelperBridgeWorkerResponse {
+    debug_assert!(matches!(task, "transcribe" | "translate" | "asr_preload" | "translation_preload"));
     let request_id = permit.request_id();
     let fail = |blocker, message| standalone_blocked_response(
         task, request_id, priority, "error", blocker, message,
     );
     let Ok(mut host) = runtime().lock() else {
-        return Some(fail("helper_bridge:lock_poisoned", "Inference owner state is unavailable."));
+        return fail("helper_bridge:lock_poisoned", "Inference owner state is unavailable.");
     };
-    if host.native_inference.is_none() {
-        // Never send ASR/MT to Python while a previous owner is being reaped.
-        if host.pending_meeting_cleanup_session_id.is_some()
-            || host.last_error.as_deref() == Some("helper_bridge:cleanup_incomplete") {
-            return Some(fail("helper_bridge:cleanup_incomplete", "Previous inference ownership has not been released."));
-        }
-        return None;
-    }
     let Some(request_scope) = scope(payload) else {
-        return Some(fail("native_inference:scope_invalid", "Native inference requires current exact session authority."));
+        return fail("native_inference:scope_invalid", "Native inference requires current exact session authority.");
     };
-    if host.native_meeting_session_id() != request_scope.session_id.as_deref()
-        || host.pending_meeting_cleanup_session_id.is_some()
-        || host.active_request_id.is_some() || host.state != "ready" || host.child.is_none()
+    if host.pending_meeting_cleanup_session_id.is_some() || host.active_request_id.is_some()
+        || host.state != "ready" || host.child.is_none()
+        || host.last_error.as_deref() == Some("helper_bridge:cleanup_incomplete")
+        || crate::commands::voice_lab::voice_lab_build_blocks_meeting()
     {
-        return Some(fail("native_inference:owner_not_admitted", "Native inference does not own the requested lifecycle."));
+        return fail("native_inference:owner_not_admitted", "Native inference cannot claim the current lifecycle.");
+    }
+    if host.native_inference.is_none() {
+        // Live PCM/MT can never load a model mid-utterance. Only an explicit
+        // preparation or standalone Text request opens the resident pair.
+        if task != "asr_preload" && !(request_scope.session_id.is_none() && task == "translate") {
+            return fail("native_inference:owner_unavailable", "Prepare the native model pair first.");
+        }
+        if !host.provider_ready {
+            return fail("native_inference:assets_or_voice_unavailable", "Native preparation requires current asset and voice capability.");
+        }
+        // Build-supplied immutable pins and the reviewed controlled runtime
+        // root are required; no request may override path, hash or GPU.
+        match unsafe { crate::commands::helper_bridge_runtime::NativeInferenceOwner::open(request_scope.session_id.clone()) } {
+            Ok(owner) => {
+                host.native_inference = Some(owner);
+                host.cuda_ready = true;
+            }
+            Err(error) => {
+                let (blocker, _) = error_blocker(error, task);
+                host.provider_ready = false;
+                host.cuda_ready = false;
+                host.last_error = Some(blocker.into());
+                invalidate_required_outbound_ai_readiness();
+                return fail(blocker, "Native model preparation failed; no fallback was attempted.");
+            }
+        }
+    } else if task == "asr_preload" && host.native_meeting_session_id().is_none()
+        && request_scope.session_id.is_some()
+    {
+        host.native_inference.as_mut().expect("checked owner").session_id = request_scope.session_id.clone();
+    }
+    if host.native_meeting_session_id() != request_scope.session_id.as_deref()
+        || scope(payload).as_ref() != Some(&request_scope)
+    {
+        return fail("native_inference:scope_revoked", "Native owner no longer matches the current session.");
     }
     if priority == HelperTaskPriority::MeetingIncoming && meeting_outbound_pipeline_active() {
-        return Some(incoming_deferred_response(task, request_id));
+        return incoming_deferred_response(task, request_id);
     }
     let owner = &host.native_inference.as_ref().expect("checked owner").owner;
     if !owner.is_available() {
-        return Some(fail("native_inference:owner_unavailable", "Native models are not available."));
+        return fail("native_inference:owner_unavailable", "Native models are not available.");
     }
     if matches!(task, "asr_preload" | "translation_preload") {
         // Open prepared both resident models atomically. Do not load either
@@ -183,10 +213,10 @@ pub(super) fn dispatch_if_owned(
             body["compute_type"] = json!("q8_0");
         } else {
             let (Some(from), Some(to)) = (language(payload, "source_language"), language(payload, "target_language")) else {
-                return Some(fail("translation:direction_not_supported", "Only Indonesian and English translation is supported."));
+                return fail("translation:direction_not_supported", "Only Indonesian and English translation is supported.");
             };
             if from == to {
-                return Some(fail("translation:direction_not_supported", "Translation must change language."));
+                return fail("translation:direction_not_supported", "Translation must change language.");
             }
             body["model_id"] = json!(NATIVE_MT_MODEL);
             body["model_revision"] = json!(NATIVE_MT_REVISION);
@@ -198,23 +228,23 @@ pub(super) fn dispatch_if_owned(
         let mut response = response_with_runtime(true, task, request_id, priority,
             worker_message(task, &body), body, &host);
         response.runtime_claim = NATIVE_INFERENCE_CLAIM.into();
-        return Some(response);
+        return response;
     }
     let Some(deadline) = u64::try_from(deadline_ms).ok()
         .and_then(|ms| Instant::now().checked_add(Duration::from_millis(ms))) else {
-        return Some(fail("native_inference:deadline_invalid", "Native inference deadline is invalid."));
+        return fail("native_inference:deadline_invalid", "Native inference deadline is invalid.");
     };
     let (input, from, to) = if task == "transcribe" {
         let Some(from) = language(payload, "language") else {
-            return Some(fail("asr:language_invalid", "Native ASR requires Indonesian or English."));
+            return fail("asr:language_invalid", "Native ASR requires Indonesian or English.");
         };
         let samples = if let Some(pcm) = pcm {
             if !pcm.matches(task, payload) {
-                return Some(fail("asr:finalized_pcm_contract_invalid", "Finalized PCM identity is invalid."));
+                return fail("asr:finalized_pcm_contract_invalid", "Finalized PCM identity is invalid.");
             }
             let started = Instant::now();
             let Some(owned) = pcm.utterance.borrow_mut().take() else {
-                return Some(fail("asr:finalized_pcm_missing", "Finalized PCM was already consumed."));
+                return fail("asr:finalized_pcm_missing", "Finalized PCM was already consumed.");
             };
             let mut samples = owned.frame.samples;
             condition_asr_pcm(&mut samples, pcm.noise_suppression_enabled);
@@ -225,19 +255,19 @@ pub(super) fn dispatch_if_owned(
             // synthesized audio. Never pass a WAV or decoder into live ASR.
             match probe_pcm(payload, &request_scope) {
                 Ok(samples) => samples,
-                Err(blocker) => return Some(fail(blocker, "Owned voice probe PCM could not be decoded.")),
+                Err(blocker) => return fail(blocker, "Owned voice probe PCM could not be decoded."),
             }
         };
         (InferenceInput::Speech { pcm: samples, language: from }, from, None)
     } else {
         let (Some(from), Some(to)) = (language(payload, "source_language"), language(payload, "target_language")) else {
-            return Some(fail("translation:direction_not_supported", "Only Indonesian and English translation is supported."));
+            return fail("translation:direction_not_supported", "Only Indonesian and English translation is supported.");
         };
         if from == to {
-            return Some(fail("translation:direction_not_supported", "Translation must change language."));
+            return fail("translation:direction_not_supported", "Translation must change language.");
         }
         let Some(Value::String(source)) = payload.as_object_mut().and_then(|object| object.remove("text")) else {
-            return Some(fail("translation:empty_text", "Translation source text is required."));
+            return fail("translation:empty_text", "Translation source text is required.");
         };
         (InferenceInput::Translation { source, from, to }, from, Some(to))
     };
@@ -245,7 +275,7 @@ pub(super) fn dispatch_if_owned(
     // failure; never requeue an already-conditioned buffer. Stop may still
     // revoke authority during conditioning, so check before beginning.
     if scope(payload).as_ref() != Some(&request_scope) {
-        return Some(fail("native_inference:scope_revoked", "Inference authority was revoked before execution."));
+        return fail("native_inference:scope_revoked", "Inference authority was revoked before execution.");
     }
     let bridge_generation = host.generation_token;
     let pending = match host.native_inference.as_mut().expect("checked owner").owner.begin(input, deadline) {
@@ -259,7 +289,7 @@ pub(super) fn dispatch_if_owned(
                 invalidate_required_outbound_ai_readiness();
                 let _ = host.native_inference.as_mut().expect("checked owner").owner.try_close();
             }
-            return Some(fail(blocker, "Native inference could not admit the request."));
+            return fail(blocker, "Native inference could not admit the request.");
         }
     };
     host.active_task = Some(task.into());
@@ -273,7 +303,7 @@ pub(super) fn dispatch_if_owned(
     // lifecycle lock; Stop can signal and retain the exact active owner.
     let result = pending.wait();
     let Ok(mut host) = runtime().lock() else {
-        return Some(fail("helper_bridge:lock_poisoned_after_native_response", "Native inference result ownership could not be verified."));
+        return fail("helper_bridge:lock_poisoned_after_native_response", "Native inference result ownership could not be verified.");
     };
     if host.generation_token != bridge_generation
         || host.active_request_id.as_deref() != Some(request_id)
@@ -284,7 +314,7 @@ pub(super) fn dispatch_if_owned(
         clear_active_request(&mut host, request_id);
         let mut response = fail("native_inference:scope_revoked", "Native inference result was discarded because its owner changed.");
         response.runtime_claim = "native_cuda_result_discarded".into();
-        return Some(response);
+        return response;
     }
     let body = match result {
         Ok(text) => {
@@ -341,7 +371,7 @@ pub(super) fn dispatch_if_owned(
     let message = worker_message(task, &body);
     let mut response = response_with_runtime(ok, task, request_id, priority, message, body, &host);
     response.runtime_claim = NATIVE_INFERENCE_CLAIM.into();
-    Some(response)
+    response
 }
 
 #[cfg(test)]

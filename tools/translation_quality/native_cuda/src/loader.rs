@@ -35,6 +35,9 @@ const GET_MODULE_HANDLE_EX_FLAG_PIN: u32 = 0x1;
 const GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS: u32 = 0x4;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x00200000;
+const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x02000000;
+const FILE_READ_ATTRIBUTES: u32 = 0x80;
+const FILE_SHARE_WRITE: u32 = 2;
 const FILE_SHARE_READ: u32 = 1;
 const MAX_DLL_BYTES: u64 = 1024 * 1024 * 1024;
 
@@ -76,6 +79,33 @@ fn controlled_path(path: &Path) -> Result<PathBuf, Error> {
         return Err(Error::LibraryIdentityMismatch);
     }
     Ok(path)
+}
+
+// Lock directory names root-to-leaf while resolving and loading the exact
+// private closure. This rejects directory junctions/reparse points before
+// canonicalization can hide them. It does not establish directory ACL trust.
+fn lock_parents(path: &Path) -> Result<Vec<File>, Error> {
+    if !path.is_absolute()
+        || !matches!(path.components().next(),
+            Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)))
+        || path.components().any(|component| matches!(component, Component::ParentDir))
+    { return Err(Error::LibraryIdentityMismatch); }
+    let mut parents: Vec<&Path> = path.parent().ok_or(Error::LibraryIdentityMismatch)?
+        .ancestors().filter(|parent| parent.parent().is_some() && parent.has_root()).collect();
+    parents.reverse();
+    let mut locked = Vec::with_capacity(parents.len());
+    for parent in parents {
+        let file = OpenOptions::new().access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(parent).map_err(|_| Error::LibraryUnavailable)?;
+        let meta = file.metadata().map_err(|_| Error::LibraryUnavailable)?;
+        if !meta.is_dir() || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(Error::LibraryIdentityMismatch);
+        }
+        locked.push(file);
+    }
+    Ok(locked)
 }
 
 // The caller supplies pins from a trusted build review, not an installed
@@ -166,6 +196,7 @@ fn verify_closure(directory: &Path, pins: &str) -> Result<Vec<File>, Error> {
 /// OS/system dependencies and the actual PE import closure remain release
 /// evidence requirements; pinning a list is not a PE dependency audit.
 pub(super) unsafe fn load(path: &Path, pins: &str) -> Result<Api, Error> {
+    let _parents = lock_parents(path)?;
     let path = controlled_path(path)?;
     let mut slot = LOADED.lock().map_err(|_| Error::LibraryUnavailable)?;
     if let Some(loaded) = slot.as_ref() {

@@ -1,9 +1,10 @@
-# Native CUDA candidate — source only
+# Native CUDA inference — source integration
 
-This is the staged Rust ↔ llama.cpp/mtmd ABI, not a second production engine.
-The Windows Tauri Cargo graph now includes this Rust crate. The native
-DLL is opened explicitly, not at app startup. Production ASR/MT dispatch
-remains unchanged until coordinated cutover. My Voice is excluded.
+This Rust ↔ llama.cpp/mtmd ABI is the sole ASR/MT route in the Windows
+application source. The existing scheduler and lifecycle own the pair.
+Explicit preparation opens the DLL/model pair, not app startup or polling.
+Python IPC carries only control/status and existing voice operations.
+My Voice synthesis, training and evaluation algorithms are unchanged.
 
 - Exact upstream: [llama.cpp 6d8a888](https://github.com/ggml-org/llama.cpp/tree/6d8a8886fa44a4a404c58ace93052ea680193981), MIT; use the upstream LICENSE in any eventual distribution.
 - Apply only the reviewed adjacent `llama-strict-cuda.patch` in a dedicated checkout at that SHA. The candidate CMake file checks SHA and reverse-patch applicability; it does not prove there are no unrelated changes. No fetch, install, patch application or build is performed by this source increment.
@@ -48,10 +49,11 @@ remains unchanged until coordinated cutover. My Voice is excluded.
   Native results have a Rust-owned outer receipt identity. A selected
   native request never retries in Python, and a closed Meeting-native
   binding remains until verified Stop, blocking Python-only recovery.
-  This is a transitional source seam; no production caller opens the pair.
-  The old route still runs, and native status/preload/file-probe, artifact
-  admission and packaging must be coordinated before activation. No model
-  download or native execution has occurred.
+  The host now opens the pair on explicit ASR preload or internal
+  standalone translation, binds the exact Meeting scope, and rejects
+  inference when the native pair is unavailable. The old Meeting WAV
+  serialization and payload-cloning replay are removed from transport.
+  Model downloads and native execution have not occurred.
 
 - The import-library build script is retired. Explicit open uses the
   absolute controlled `translateit_native_cuda.dll` path, restricts the
@@ -94,9 +96,14 @@ remains unchanged until coordinated cutover. My Voice is excluded.
   digest of those pins; install and app-only update reject mismatch, and
   Rust compilation consumes the same pin string. No third installer or
   first-use download. Neither real artifact input nor package has been
-  produced here; the native owner still has no production startup caller.
-  Legacy model staging remains temporarily required until native-only
-  activation and legacy retirement are coordinated.
+  produced here. The production source now selects native-only ASR/MT.
+  Idle diagnostic model weights close after verification; VoiceLab
+  admission releases idle native weights before GPU use. Legacy Python
+  implementations and model staging are now unreachable from Meeting
+  ASR/MT transport and remain for the next retirement pass, not fallback.
+  Parent names are locked during DLL admission and redirected directories
+  rejected. Complete reviewed PE closure and actual installed ACLs
+  remain release evidence requirements.
 
 ## Held local integration
 
@@ -121,4 +128,5 @@ recipe or authorization to run a test now.
 ASR and translation candidate paths are authored, but native compile, linkage,
 GPU execution, tokenizer/prompt parity, EOG handling, Indonesian/English quality,
 cancellation/timeout, process isolation, and combined VRAM remain unverified.
-Do not activate them in Meeting until these boundaries, production asset acquisition/packaging, lifecycle/scheduler integration and full consumer cutover are coherent.
+Do not release or claim runtime acceptance until the remaining legacy retirement,
+integrated source review and held Windows build/runtime proof are complete.

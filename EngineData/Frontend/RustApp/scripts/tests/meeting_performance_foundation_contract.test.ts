@@ -59,8 +59,6 @@ test("Meeting worker attempt attribution keeps recovery distinct and old archive
   const ui = source("src/components/settings/MeetingPerformanceDiagnostics.svelte");
   assert.match(transport, /"worker_attempt_timing"\.to_string\(\)/);
   assert.match(transport, /checked_add\(self\.retry_scheduler_wait_ms\?\)/);
-  assert.match(transport, /timing\.recovery_ms = Some\(observed_elapsed_ms\(recovery_started\)\)/);
-  assert.match(transport, /timing\.retry_attempt_ms = Some\(observed_elapsed_ms\(retry_started\)\s*\.saturating_sub\(retry_prepare_ms\)\)/);
   assert.match(meeting, /pub struct MeetingWorkerAttemptTiming/);
   assert.match(meeting, /#\[serde\(default\)\]\s+pub asr_worker_attempt_timing/);
   assert.match(meeting, /get\("scheduler_wait_total_ms"\)/);
@@ -75,43 +73,17 @@ test("Meeting worker attempt attribution keeps recovery distinct and old archive
   assert.match(ui, /inclusive initial\/retry totals are not ranked twice/);
 });
 
-test("Meeting recovery timing ends after re-proof and before an outbound retry", () => {
-  // Source-order contract: a wall-time reading after retry would count that
-  // same retry in both recovery_ms and retry_attempt_ms. These are separate.
-  const recoveryStart = transport.indexOf("let recovery_started = Instant::now();");
-  const reproof = transport.indexOf(
-    "let functional_reproof = prepare_required_outbound_ai_runtime(generation);",
-    recoveryStart,
-  );
-  const recoveryEnd = transport.indexOf(
-    "timing.recovery_ms = Some(observed_elapsed_ms(recovery_started));",
-    reproof,
-  );
-  const retryStart = transport.indexOf("let retry_started = Instant::now();", recoveryEnd);
-  const retryCall = transport.indexOf(
-    "response = send_worker_task_inner(task, retry_payload, pcm);",
-    retryStart,
-  );
-  const noReproofFallback = transport.indexOf(
-    "if timing.recovery_ms.is_none() {",
-    retryCall,
-  );
-  assert.ok(
-    recoveryStart >= 0 && reproof > recoveryStart && recoveryEnd > reproof &&
-      retryStart > recoveryEnd && retryCall > retryStart &&
-      noReproofFallback > retryCall,
-    "recovery must end before retry and failed recovery remains measured",
-  );
-  assert.match(transport, /match functional_reproof \{/);
-  assert.match(transport, /timing\.retry_attempt_ms = Some\(observed_elapsed_ms\(retry_started\)\s*\.saturating_sub\(retry_prepare_ms\)\)/);
-  assert.match(
-    transport,
-    /if timing\.recovery_ms\.is_none\(\) \{\s*timing\.recovery_ms = Some\(observed_elapsed_ms\(recovery_started\)\);/,
-    "skipped re-proof must not overwrite the already measured recovery interval",
-  );
+test("Meeting native-only transport never clones or replays a request", () => {
+  const send = transport.slice(transport.indexOf("fn send_worker_task_with_input("),
+    transport.indexOf("#[cfg(test)]\nmod scheduler_failure_receipt_tests"));
+  assert.equal([...send.matchAll(/send_worker_task_inner\(/g)].length, 1);
+  assert.doesNotMatch(send, /payload\.clone\(|retry_payload|recover_live_meeting_helper_transport/);
+  assert.match(send, /recovery_ms: None/);
+  assert.match(send, /retry_attempt_ms: None/);
+  assert.match(send, /clear_meeting_outbound_pipeline\(generation\)/);
 });
 
-test("finalized Meeting PCM enters the existing scheduler before transitional WAV serialization", () => {
+test("finalized Meeting PCM enters the existing scheduler and only native inference", () => {
   const consumers = source("src-tauri/src/commands/meeting_session/consumer_runtime.rs");
   const queue = source("src-tauri/src/commands/meeting_session/incoming_deferred.rs");
   const incoming = source("src-tauri/src/commands/meeting_session/incoming_pipeline.rs");
@@ -127,11 +99,13 @@ test("finalized Meeting PCM enters the existing scheduler before transitional WA
   const inner = transport.indexOf("fn send_worker_task_inner(");
   const permit = transport.indexOf("acquire_helper_task_permit(priority)", inner);
   const defer = transport.indexOf("return incoming_deferred_response", permit);
-  const nativeDispatch = transport.indexOf("native::dispatch_if_owned", defer);
-  const write = transport.indexOf("let _temporary_asr_wav", nativeDispatch);
-  const metadata = transport.indexOf("inject_request_metadata", write);
-  assert.ok(inner >= 0 && permit > inner && defer > permit && nativeDispatch > defer
-    && write > nativeDispatch && metadata > write);
+  const nativeDispatch = transport.indexOf("return native::dispatch(", defer);
+  const metadata = transport.indexOf("inject_request_metadata", nativeDispatch);
+  assert.ok(inner >= 0 && permit > inner && defer > permit && nativeDispatch > defer && metadata > nativeDispatch);
+  assert.doesNotMatch(transport, /TemporaryAsrWav|write_finalized_.*_wav/);
+  assert.match(transport.slice(nativeDispatch, metadata), /"native_inference:platform_unsupported"/);
+  assert.match(transport.slice(nativeDispatch, metadata), /!matches!\(task, "ping" \| "status" \| "voice_actor_preflight" \| "voice_actor_synthesize"\)/);
+  assert.doesNotMatch(transport, /dispatch_if_owned|retain_payload_for_live_retry|recover_live_meeting_helper_transport/);
   const native = source("src-tauri/src/commands/helper_bridge/transport/native.rs");
   assert.match(native, /permit: &HelperTaskPermit/);
   assert.doesNotMatch(native, /acquire_helper_task_permit\(|\.samples\.clone\(|write_finalized_.*_wav/);

@@ -47,7 +47,10 @@ fn bridge_priority_and_stale_guards_follow_production_payload_contract() {
         }),
     );
     assert_eq!(text.scheduler_priority, "text");
-    assert_eq!(response_blocker(&text), "helper_bridge:not_running");
+    #[cfg(windows)]
+    assert_eq!(response_blocker(&text), "native_inference:owner_not_admitted");
+    #[cfg(not(windows))]
+    assert_eq!(response_blocker(&text), "native_inference:platform_unsupported");
 
     reset_bridge_runtime();
     let diagnostic = send_helper_worker_task("status", json!({}));
@@ -94,7 +97,10 @@ fn bridge_priority_and_stale_guards_follow_production_payload_contract() {
         }),
     );
     assert_eq!(outbound.scheduler_priority, "meeting_outbound");
-    assert_eq!(response_blocker(&outbound), "helper_bridge:not_running");
+    #[cfg(windows)]
+    assert_eq!(response_blocker(&outbound), "native_inference:scope_invalid");
+    #[cfg(not(windows))]
+    assert_eq!(response_blocker(&outbound), "native_inference:platform_unsupported");
 
     let live = commit_application_meeting_session_live(
         generation,
@@ -113,7 +119,10 @@ fn bridge_priority_and_stale_guards_follow_production_payload_contract() {
         }),
     );
     assert_eq!(incoming.scheduler_priority, "meeting_incoming");
-    assert_eq!(response_blocker(&incoming), "helper_bridge:not_running");
+    #[cfg(windows)]
+    assert_eq!(response_blocker(&incoming), "native_inference:scope_invalid");
+    #[cfg(not(windows))]
+    assert_eq!(response_blocker(&incoming), "native_inference:platform_unsupported");
 
     let cleared = clear_runtime_session_if_generation(generation);
     assert_eq!(cleared.blocker, "runtime_session:cleared");

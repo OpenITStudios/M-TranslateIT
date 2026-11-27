@@ -17,7 +17,7 @@ use super::bridge_paths::{
     worker_python_unavailable_message, worker_root, worker_script,
 };
 use super::helper_bridge_runtime::{
-    action_result, apply_worker_status, read_worker_response_direct_with_deadline, runtime,
+    action_result, project_native_status, read_worker_response_direct_with_deadline, runtime,
     set_blocked, spawn_stderr_logger, status_from_runtime, stop_child, unix_ms,
     worker_response_deadline_ms, write_worker_request_direct_with_deadline,
     validate_worker_response_contract, HelperBridgeActionResult,
@@ -93,29 +93,19 @@ pub(super) const NATIVE_MT_REVISION: &str = "a0c709d9fac510f2c807aa3af52872340dc
 
 pub(super) fn meeting_asr_compute_admitted(response: &HelperBridgeWorkerResponse) -> bool {
     let value = &response.worker_response_json;
-    let native = response.runtime_claim == NATIVE_INFERENCE_CLAIM;
-    let (model, compute) = if native {
-        (NATIVE_ASR_MODEL, "q8_0")
-    } else {
-        ("faster-whisper-large-v3-turbo", "int8_float16")
-    };
-    value.get("device").and_then(Value::as_str) == Some("cuda")
-        && value.get("compute_type").and_then(Value::as_str) == Some(compute)
-        && value.get("model_id").and_then(Value::as_str) == Some(model)
+    response.runtime_claim == NATIVE_INFERENCE_CLAIM
+        && value.get("device").and_then(Value::as_str) == Some("cuda")
+        && value.get("compute_type").and_then(Value::as_str) == Some("q8_0")
+        && value.get("model_id").and_then(Value::as_str) == Some(NATIVE_ASR_MODEL)
 }
 
 pub(super) fn meeting_translation_compute_admitted(response: &HelperBridgeWorkerResponse) -> bool {
     let value = &response.worker_response_json;
-    let native = response.runtime_claim == NATIVE_INFERENCE_CLAIM;
-    let (model, precision, revision) = if native {
-        (NATIVE_MT_MODEL, "q6_k", NATIVE_MT_REVISION)
-    } else {
-        ("milmmt-46-1b-v1.0", "bf16", "4fc480b6c58dec29c159dcdf9fde0f6d5c354995")
-    };
-    value.get("device").and_then(Value::as_str) == Some("cuda")
-        && value.get("precision").and_then(Value::as_str) == Some(precision)
-        && value.get("model_id").and_then(Value::as_str) == Some(model)
-        && value.get("model_revision").and_then(Value::as_str) == Some(revision)
+    response.runtime_claim == NATIVE_INFERENCE_CLAIM
+        && value.get("device").and_then(Value::as_str) == Some("cuda")
+        && value.get("precision").and_then(Value::as_str) == Some("q6_k")
+        && value.get("model_id").and_then(Value::as_str) == Some(NATIVE_MT_MODEL)
+        && value.get("model_revision").and_then(Value::as_str) == Some(NATIVE_MT_REVISION)
         && value.get("translation_degraded").and_then(Value::as_bool) == Some(false)
         && value.get("translation_fallback_reason").and_then(Value::as_str) == Some("")
 }
@@ -189,7 +179,17 @@ pub(crate) fn invalidate_required_outbound_readiness_for_power_transition() {
 
 
 pub fn verify_required_outbound_ai_runtime() -> Result<(), &'static str> {
-    let (generation_token, actor_token) = run_required_outbound_ai_probe(None)?;
+    let result = run_required_outbound_ai_probe(None);
+    let mut host = runtime().lock().map_err(|_| "local translation runtime")?;
+    if !host.release_idle_native_inference() {
+        invalidate_required_outbound_ai_readiness();
+        return Err("native inference cleanup");
+    }
+    let (generation_token, actor_token) = result?;
+    if host.generation_token != generation_token || !public_worker_start_has_idle_audio_owner() {
+        invalidate_required_outbound_ai_readiness();
+        return Err("local translation runtime");
+    }
     remember_required_outbound_functional_readiness(generation_token, 0, actor_token);
     Ok(())
 }
@@ -648,7 +648,7 @@ fn start_helper_bridge_internal(
                     "helper_bridge:status_write_failed",
                 ),
             };
-            let status = match read_worker_response_direct_with_deadline(
+            let mut status = match read_worker_response_direct_with_deadline(
                 &mut runtime, stdout, status_deadline_ms,
             ) {
                 Ok((value, next_stdout)) => {
@@ -695,7 +695,7 @@ fn start_helper_bridge_internal(
             runtime.active_meeting_lane = None;
             runtime.last_error = None;
             runtime.updated_unix_ms = unix_ms();
-            apply_worker_status(&mut runtime, &status);
+            project_native_status(&mut runtime, &mut status);
             action_result(true, &runtime)
         }
         Err(_) => HelperBridgeActionResult {
@@ -1155,8 +1155,6 @@ mod c4_functional_readiness_tests {
         failed_required_outbound_task_invalidates_cache, functional_asr_output,
         functional_translation_output,
     };
-    use super::request_policy::live_outbound_stage_retry_safe;
-    use super::transport::helper_transport_failure;
     use super::super::helper_bridge_runtime::HelperTaskPriority;
 
     fn response(ok: bool, body: &str) -> HelperBridgeWorkerResponse {
@@ -1316,28 +1314,5 @@ mod c4_functional_readiness_tests {
         ));
     }
 
-    #[test]
-    fn transport_failure_and_retry_policy_remain_bounded() {
-        let write_failure = response(
-            false,
-            r#"{"ok":false,"blocker":"helper_bridge:translate_write_failed:broken_pipe"}"#,
-        );
-        assert!(helper_transport_failure(&write_failure));
-        let read_failure = response(
-            false,
-            r#"{"ok":false,"blocker":"helper_bridge:transcribe_read_failed:response_deadline"}"#,
-        );
-        assert!(helper_transport_failure(&read_failure));
-        let model_failure = response(
-            false,
-            r#"{"ok":false,"blocker":"translation:provider_failed"}"#,
-        );
-        assert!(!helper_transport_failure(&model_failure));
-
-        assert!(live_outbound_stage_retry_safe("transcribe"));
-        assert!(live_outbound_stage_retry_safe("translate"));
-        assert!(!live_outbound_stage_retry_safe("voice_actor_synthesize"));
-        assert!(!live_outbound_stage_retry_safe("status"));
-    }
 
 }

@@ -27,10 +27,6 @@ pub(super) fn live_outbound_generation_is_authoritative(generation: u64) -> bool
         .unwrap_or(false)
 }
 
-pub(super) fn live_outbound_stage_retry_safe(task: &str) -> bool {
-    matches!(task, "transcribe" | "translate")
-}
-
 pub(super) fn meeting_generation(payload: &Value) -> Option<u64> {
     payload.get("meeting_generation").and_then(Value::as_u64)
 }

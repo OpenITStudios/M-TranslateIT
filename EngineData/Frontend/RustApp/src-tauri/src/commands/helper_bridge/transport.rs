@@ -6,11 +6,7 @@ mod native;
 use std::time::Instant;
 
 use crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance;
-use crate::engine::audio::live_segment_writer::{
-    finalized_asr_frame_rejection, remove_finalized_meeting_utterance_wav,
-    write_finalized_incoming_utterance_wav_with_noise_suppression,
-    write_finalized_outbound_utterance_wav_with_noise_suppression,
-};
+use crate::engine::audio::live_segment_writer::finalized_asr_frame_rejection;
 
 use crate::engine::runtime_state::runtime_generation_is_authoritative;
 
@@ -18,16 +14,14 @@ use super::functional_readiness::{
     failed_required_outbound_task_invalidates_cache, invalidate_required_outbound_ai_readiness,
 };
 use super::request_policy::{
-    clear_meeting_outbound_pipeline, incoming_session_generation, incoming_session_is_eligible,
+    clear_meeting_outbound_pipeline, incoming_session_is_eligible,
     inject_request_metadata,
-    live_outbound_generation_is_authoritative, live_outbound_stage_retry_safe,
     mark_meeting_outbound_pipeline, meeting_generation, meeting_lane,
     meeting_outbound_pipeline_active, meeting_session_id, task_priority,
 };
 use super::{
-    get_helper_bridge_status, incoming_deferred_for_required_outbound,
-    prepare_required_outbound_ai_runtime, start_helper_bridge_internal,
-    worker_message, worker_text, HelperBridgeWorkerResponse,
+    incoming_deferred_for_required_outbound,
+    worker_message, HelperBridgeWorkerResponse,
 };
 use super::super::helper_bridge_runtime::{
     acquire_helper_task_permit, apply_worker_response, clear_active_request, set_blocked,
@@ -36,18 +30,9 @@ use super::super::helper_bridge_runtime::{
     finish_received_stdin_write, finish_received_stdout_read,
     validate_worker_response_contract,
     runtime, runtime_claim, stop_child, unix_ms,
-    worker_response_deadline_for_priority, write_worker_request_with_deadline,
-    HelperBridgeActionResult, HelperBridgeRuntime, HelperTaskPriority,
+    worker_response_deadline_for_priority,
+    HelperBridgeRuntime, HelperTaskPriority,
 };
-
-pub(super) fn helper_transport_failure(response: &HelperBridgeWorkerResponse) -> bool {
-    if response.ok {
-        return false;
-    }
-    let blocker = worker_text(&response.worker_response_json, "blocker").unwrap_or_default();
-    blocker.starts_with("helper_bridge:")
-        && (blocker.contains("_write_failed:") || blocker.contains("_read_failed:"))
-}
 
 fn response_with_runtime(
     ok: bool,
@@ -198,41 +183,6 @@ fn stale_meeting_request(
     None
 }
 
-fn recover_incoming_transport_failure_before_permit_release(
-    session_id: Option<&str>,
-    mut response: HelperBridgeWorkerResponse,
-) -> HelperBridgeWorkerResponse {
-    if !helper_transport_failure(&response) {
-        return response;
-    }
-    let Some(generation) = session_id.and_then(incoming_session_generation) else {
-        return response;
-    };
-
-    // This runs while the failed MeetingIncoming request still owns the scheduler
-    // permit. Restoring the one shared worker before that permit is released prevents
-    // a concurrently waiting required outbound request from observing the worker as
-    // stopped. The stale incoming event itself is never retried.
-    let recovery = start_helper_bridge_internal(false, Some(generation));
-    response.state = recovery.state.clone();
-    response.generation_token = recovery.generation_token;
-    if recovery.ok {
-        response.runtime_claim =
-            "meeting_incoming_transport_recovered_same_worker_event_not_retried".to_string();
-        response.message = format!(
-            "{} The same helper worker was restored before releasing incoming scheduler ownership; this stale incoming event was not retried.",
-            response.message
-        );
-    } else {
-        response.runtime_claim = "meeting_incoming_transport_recovery_failed".to_string();
-        response.message = format!(
-            "{} The helper worker could not be restored after the optional incoming transport failure: {}",
-            response.message, recovery.message
-        );
-    }
-    response
-}
-
 #[derive(Clone, Copy)]
 struct MeetingPcmInput<'a> {
     utterance: &'a RefCell<Option<FinalizedMeetingUtterance>>,
@@ -254,13 +204,6 @@ impl MeetingPcmInput<'_> {
             && matches!(u.lane.as_str(), "you" | "incoming")
             && ((u.lane == "you") == u.generation.is_some())
     }
-}
-
-// Transitional serialization only for an admitted legacy ASR call.
-// The existing scoped Stop sweep verifies any file not removed immediately.
-struct TemporaryAsrWav(String);
-impl Drop for TemporaryAsrWav {
-    fn drop(&mut self) { remove_finalized_meeting_utterance_wav(&self.0); }
 }
 
 fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcmInput<'_>>) -> HelperBridgeWorkerResponse {
@@ -306,60 +249,23 @@ fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcm
         return response;
     }
 
-    // A resident native owner consumes this same scheduler permit. Never
-    // retry a selected native request through Python on any native error.
-    #[cfg(windows)]
-    if let Some(response) = native::dispatch_if_owned(task, &mut payload, pcm, priority, &permit, response_deadline_ms) {
-        return response;
+    // ASR and MT never cross Python IPC, including on preparation errors.
+    if matches!(task, "asr_preload" | "translation_preload" | "transcribe" | "translate") {
+        #[cfg(windows)]
+        return native::dispatch(task, &mut payload, pcm, priority, &permit, response_deadline_ms);
+        #[cfg(not(windows))]
+        return standalone_blocked_response(
+            task, &request_id, priority, "error", "native_inference:platform_unsupported",
+            "Native CUDA translation requires Windows.",
+        );
     }
-
-    // Transitional serialization only while the production legacy route is
-    // still selected. Rejected or deferred admission creates no WAV.
-    let _temporary_asr_wav = if let Some(input) = pcm {
-        let started = Instant::now();
-        let slot = input.utterance.borrow();
-        let Some(utterance) = slot.as_ref() else {
-            return standalone_blocked_response(
-                task, &request_id, priority, "error", "asr:finalized_pcm_missing",
-                "The owned PCM has already been consumed.",
-            );
-        };
-        let write = if utterance.lane == "you" {
-            write_finalized_outbound_utterance_wav_with_noise_suppression(
-                utterance, input.noise_suppression_enabled)
-        } else {
-            write_finalized_incoming_utterance_wav_with_noise_suppression(
-                utterance, input.noise_suppression_enabled)
-        };
-        input.prepare_ms.set(input.prepare_ms.get().saturating_add(observed_elapsed_ms(started)));
-        if !write.ok {
-            return standalone_blocked_response(
-                task, &request_id, priority, "error", &write.blocker, &write.note,
-            );
-        }
-        let Some(path) = write.audio_path else {
-            return standalone_blocked_response(
-                task, &request_id, priority, "error", "asr:finalized_audio_path_missing",
-                "Finalized audio writer did not return an owned path.",
-            );
-        };
-        let owned = TemporaryAsrWav(path);
-        payload["audio_path"] = json!(&owned.0);
-        // An outbound claim may arrive while preparing the legacy WAV.
-        // Yield again before worker I/O; the scoped file is removed on return.
-        if priority == HelperTaskPriority::MeetingIncoming && meeting_outbound_pipeline_active() {
-            return incoming_deferred_response(task, &request_id);
-        }
-        if let Some(response) = stale_meeting_request(
-            task, &request_id, priority, meeting_generation,
-            meeting_session_id.as_deref(), meeting_lane.as_deref(),
-        ) {
-            return response;
-        }
-        Some(owned)
-    } else {
-        None
-    };
+    // Only control/status and existing voice operations may enter IPC.
+    if pcm.is_some() || !matches!(task, "ping" | "status" | "voice_actor_preflight" | "voice_actor_synthesize") {
+        return standalone_blocked_response(
+            task, &request_id, priority, "error", "helper_bridge:unsupported_task",
+            "Only voice and control tasks may enter the Python worker.",
+        );
+    }
 
     inject_request_metadata(&mut payload, task, &request_id, priority);
 
@@ -506,14 +412,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcm
                     "Helper request write failed and bridge state could not be recovered.",
                 ),
             };
-            return if priority == HelperTaskPriority::MeetingIncoming {
-                recover_incoming_transport_failure_before_permit_release(
-                    meeting_session_id.as_deref(),
-                    response,
-                )
-            } else {
-                response
-            };
+            return response;
         }
     };
 
@@ -564,14 +463,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcm
                     "Helper response failed and bridge state could not be recovered safely.",
                 ),
             };
-            return if priority == HelperTaskPriority::MeetingIncoming {
-                recover_incoming_transport_failure_before_permit_release(
-                    meeting_session_id.as_deref(),
-                    response,
-                )
-            } else {
-                response
-            };
+            return response;
         }
     };
 
@@ -645,13 +537,11 @@ fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcm
                 );
             }
 
-            #[cfg(windows)]
-            let native_status = if task == "status" {
-                super::super::helper_bridge_runtime::project_bound_native_status(&mut runtime, &mut worker_response)
-            } else { None };
-            #[cfg(not(windows))]
-            let native_status: Option<bool> = None;
-            let ok = native_status.unwrap_or_else(|| apply_worker_response(&mut runtime, &worker_response));
+            let ok = if task == "status" {
+                super::super::helper_bridge_runtime::project_native_status(&mut runtime, &mut worker_response)
+            } else {
+                apply_worker_response(&mut runtime, &worker_response)
+            };
             clear_active_request(&mut runtime, &request_id);
             runtime.updated_unix_ms = unix_ms();
             let message = worker_message(task, &worker_response);
@@ -664,7 +554,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcm
                 worker_response,
                 &runtime,
             );
-            if native_status.is_some() {
+            if task == "status" {
                 response.runtime_claim = super::NATIVE_STATUS_CLAIM.into();
             }
             response
@@ -682,87 +572,8 @@ fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcm
     attach_admitted_wait_to_failure(response, scheduler_wait_ms)
 }
 
-fn recover_live_meeting_helper_transport(
-    generation: u64,
-    retain_outbound_pipeline: bool,
-) -> HelperBridgeActionResult {
-    if !live_outbound_generation_is_authoritative(generation) {
-        return HelperBridgeActionResult {
-            ok: false,
-            state: "stale_generation".to_string(),
-            message: "Live Meeting helper recovery was skipped because the outbound generation no longer owns Live authority."
-                .to_string(),
-            generation_token: get_helper_bridge_status().generation_token,
-            runtime_claim: "meeting_live_helper_recovery_skipped_stale_generation".to_string(),
-        };
-    }
-
-    let _permit = match acquire_helper_task_permit(HelperTaskPriority::MeetingOutbound) {
-        Ok(permit) => permit,
-        Err(error) => {
-            return HelperBridgeActionResult {
-                ok: false,
-                state: "error".to_string(),
-                message: format!(
-                    "Live Meeting helper recovery could not acquire outbound scheduler priority: {error}"
-                ),
-                generation_token: get_helper_bridge_status().generation_token,
-                runtime_claim: "meeting_live_helper_recovery_scheduler_unavailable".to_string(),
-            }
-        }
-    };
-
-    if !live_outbound_generation_is_authoritative(generation) {
-        return HelperBridgeActionResult {
-            ok: false,
-            state: "stale_generation".to_string(),
-            message: "Live Meeting helper recovery stopped before restart because the outbound generation was revoked while waiting for the scheduler."
-                .to_string(),
-            generation_token: get_helper_bridge_status().generation_token,
-            runtime_claim: "meeting_live_helper_recovery_skipped_after_scheduler_wait".to_string(),
-        };
-    }
-
-    // The scheduler preflight is not atomic with helper mutex acquisition.
-    // Pin the Live Meeting generation again under the helper mutex before
-    // any restart side effects, not only at this caller's earlier checks.
-    let mut recovery = start_helper_bridge_internal(false, Some(generation));
-    if recovery.ok && live_outbound_generation_is_authoritative(generation) {
-        if retain_outbound_pipeline {
-            mark_meeting_outbound_pipeline(generation);
-        }
-        recovery.message = "The same canonical helper worker was restarted after a Live Meeting transport failure."
-            .to_string();
-        recovery.runtime_claim = "meeting_live_helper_transport_recovered_same_worker".to_string();
-        return recovery;
-    }
-
-    clear_meeting_outbound_pipeline(generation);
-    if recovery.ok {
-        recovery.ok = false;
-        recovery.state = "stale_generation".to_string();
-        recovery.message = "The helper worker restarted, but the Meeting generation was revoked before the failed stage could be retried."
-            .to_string();
-        recovery.runtime_claim =
-            "meeting_live_helper_recovery_completed_after_generation_revoke".to_string();
-    }
-    recovery
-}
-
-fn retain_payload_for_live_retry(
-    task: &str,
-    priority: HelperTaskPriority,
-    outbound_generation: Option<u64>,
-) -> bool {
-    priority == HelperTaskPriority::MeetingOutbound
-        && outbound_generation.is_some()
-        && live_outbound_stage_retry_safe(task)
-}
-
-// One request's observed wall-clock partitions. Attempts include their own
-// permit waits, but exclude separately measured PCM preparation. Recovery
-// includes the worker restart and functional re-proof.
-// This is transient measurement, not another scheduler, retry owner, or cache.
+// Keep historical timing fields readable. New native-only requests record
+// exactly one attempt, excluding separately measured PCM preparation.
 #[derive(Clone, Copy)]
 struct WorkerAttemptObservation {
     initial_attempt_ms: u64,
@@ -835,8 +646,8 @@ pub(super) fn send_worker_pcm_task(
     if let Some(object) = response.worker_response_json.as_object_mut() {
         object.insert("audio_prepare_ms".into(), json!(prepare_ms.get()));
     }
-    // The legacy adapter borrows the owned frame only during its bounded
-    // attempt/retry. No terminal response may retain a PCM allocation.
+    // Native execution consumes the allocation; only an admitted incoming
+    // deferral before execution can return the original frame.
     let deferred = utterance.into_inner().and_then(|owned| retain_deferred_pcm(&response, owned));
     (response, deferred)
 }
@@ -858,9 +669,6 @@ fn send_worker_task_with_input(task: &str, payload: Value, pcm: Option<MeetingPc
     } else {
         None
     };
-    let mut retry_payload = retain_payload_for_live_retry(task, priority, outbound_generation)
-        .then(|| payload.clone());
-
     // Reject new optional incoming stages immediately while a required outbound
     // utterance owns the helper pipeline. The post-permit check in the inner path
     // also catches incoming work that was already queued before this claim existed.
@@ -874,7 +682,7 @@ fn send_worker_task_with_input(task: &str, payload: Value, pcm: Option<MeetingPc
 
     let first_started = Instant::now();
     let mut response = send_worker_task_inner(task, payload, pcm);
-    let mut timing = WorkerAttemptObservation {
+    let timing = WorkerAttemptObservation {
         initial_attempt_ms: observed_elapsed_ms(first_started)
             .saturating_sub(pcm.map_or(0, |input| input.prepare_ms.get())),
         recovery_ms: None,
@@ -884,85 +692,8 @@ fn send_worker_task_with_input(task: &str, payload: Value, pcm: Option<MeetingPc
     };
 
     if let Some(generation) = outbound_generation {
-        if helper_transport_failure(&response)
-            && live_outbound_generation_is_authoritative(generation)
-        {
-            let retry_current_stage = live_outbound_stage_retry_safe(task);
-            let recovery_started = Instant::now();
-            let recovery = recover_live_meeting_helper_transport(generation, retry_current_stage);
-            if recovery.ok && live_outbound_generation_is_authoritative(generation) {
-                // Restarting the worker intentionally invalidates functional readiness
-                // and the generation-bound actor token. Re-prove the exact required
-                // outbound path before retrying a side-effect-safe stage or claiming
-                // the recovered worker is usable for later utterances.
-                let functional_reproof = prepare_required_outbound_ai_runtime(generation);
-                // Re-proof is the final recovery step. Retry has its own
-                // separately measured wall interval and must not inflate
-                // recovery_ms or be subtracted twice in Meeting Diagnostics.
-                timing.recovery_ms = Some(observed_elapsed_ms(recovery_started));
-                match functional_reproof {
-                    Ok(()) if retry_current_stage => {
-                        // Only retry-safe Live outbound stages retain a payload clone.
-                        // ASR and translation have no Meeting playback side effect, so
-                        // the same finalized input may be attempted exactly once after
-                        // transport recovery + generation-bound functional re-proof.
-                        // The retry itself is not recursive.
-                        if let Some(retry_payload) = retry_payload.take() {
-                            let retry_started = Instant::now();
-                            let prepared_before_retry = pcm.map_or(0, |input| input.prepare_ms.get());
-                            response = send_worker_task_inner(task, retry_payload, pcm);
-                            let retry_prepare_ms = pcm.map_or(0, |input| input.prepare_ms.get())
-                                .saturating_sub(prepared_before_retry);
-                            timing.retry_attempt_ms = Some(observed_elapsed_ms(retry_started)
-                                .saturating_sub(retry_prepare_ms));
-                            timing.retry_scheduler_wait_ms = response_scheduler_wait_ms(&response);
-                        } else {
-                            clear_meeting_outbound_pipeline(generation);
-                            response.ok = false;
-                            response.state = "error".to_string();
-                            response.runtime_claim =
-                                "meeting_live_helper_retry_payload_contract_missing".to_string();
-                            response.message =
-                                "Live Meeting helper recovery completed, but the retry-safe payload contract was unavailable."
-                                    .to_string();
-                        }
-                    }
-                    Ok(()) => {
-                        // Synthesis can have uncertain child-process/file state after a
-                        // transport failure. The worker and actor binding are restored
-                        // for subsequent utterances, but this phrase is not synthesized
-                        // again automatically.
-                        response.state = recovery.state;
-                        response.generation_token = recovery.generation_token;
-                        response.runtime_claim =
-                            "meeting_live_helper_recovered_current_stage_not_retried".to_string();
-                        response.message = format!(
-                            "{} The helper worker and Meeting voice authority were restored for subsequent utterances; this synthesis stage was not retried.",
-                            response.message
-                        );
-                    }
-                    Err(stage) => {
-                        clear_meeting_outbound_pipeline(generation);
-                        let current = get_helper_bridge_status();
-                        response.state = current.state;
-                        response.generation_token = current.generation_token;
-                        response.runtime_claim =
-                            "meeting_live_helper_recovery_functional_reproof_failed".to_string();
-                        response.message = format!(
-                            "{} The helper process restarted, but required outbound functional re-proof failed at {stage}. Stop and start Translation before producing more voice output.",
-                            response.message
-                        );
-                    }
-                }
-            }
-            // A failed restart or revoked generation skips functional re-proof.
-            // Preserve the failed recovery interval, but do not invent retry
-            // work or overwrite the already-closed successful recovery timer.
-            if timing.recovery_ms.is_none() {
-                timing.recovery_ms = Some(observed_elapsed_ms(recovery_started));
-            }
-        }
-
+        // Transport failure closes the exact native/voice owner. Stop must
+        // verify cleanup; never replay a phrase or restart only Python.
         if task == "voice_actor_synthesize"
             || !response.ok
             || !runtime_generation_is_authoritative(generation)
@@ -978,47 +709,6 @@ fn send_worker_task_with_input(task: &str, payload: Value, pcm: Option<MeetingPc
         add_worker_attempt_observation(&mut response, timing);
     }
     response
-}
-
-#[cfg(test)]
-mod request_payload_retention_tests {
-    use super::retain_payload_for_live_retry;
-    use super::super::super::helper_bridge_runtime::HelperTaskPriority;
-
-    #[test]
-    fn only_retry_safe_live_outbound_stages_retain_payload_clone() {
-        assert!(retain_payload_for_live_retry(
-            "transcribe",
-            HelperTaskPriority::MeetingOutbound,
-            Some(7),
-        ));
-        assert!(retain_payload_for_live_retry(
-            "translate",
-            HelperTaskPriority::MeetingOutbound,
-            Some(7),
-        ));
-
-        assert!(!retain_payload_for_live_retry(
-            "voice_actor_synthesize",
-            HelperTaskPriority::MeetingOutbound,
-            Some(7),
-        ));
-        assert!(!retain_payload_for_live_retry(
-            "status",
-            HelperTaskPriority::MeetingOutbound,
-            Some(7),
-        ));
-        assert!(!retain_payload_for_live_retry(
-            "translate",
-            HelperTaskPriority::Text,
-            None,
-        ));
-        assert!(!retain_payload_for_live_retry(
-            "transcribe",
-            HelperTaskPriority::MeetingIncoming,
-            None,
-        ));
-    }
 }
 
 #[cfg(test)]

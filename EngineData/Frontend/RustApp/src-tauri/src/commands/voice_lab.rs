@@ -270,6 +270,14 @@ pub fn begin_voice_lab_build() -> Result<VoiceLabBuildSnapshot, String> {
     if meeting_blocks_voice_lab() {
         return Err("voice_lab:meeting_active".to_string());
     }
+    // Same lock order as native model admission: helper -> VoiceLab.
+    // Release idle inference models before training or quick preview.
+    let mut helper = super::helper_bridge_runtime::runtime().try_lock()
+        .map_err(|_| "voice_lab:inference_owner_busy".to_string())?;
+    if !helper.release_idle_native_inference() || meeting_blocks_voice_lab() {
+        return Err("voice_lab:inference_owner_busy".into());
+    }
+    super::helper_bridge::invalidate_required_outbound_readiness_for_voice_change();
     build_store()
         .lock()
         .map_err(|_| "voice_lab:build_state_unavailable".to_string())?

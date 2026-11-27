@@ -4,7 +4,6 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::engine::runtime_state::runtime_generation_is_authoritative;
-use super::super::helper_bridge_runtime::meeting_compute_preflight_admitted;
 
 use super::functional_readiness::{
     functional_asr_output, functional_translation_output,
@@ -55,13 +54,10 @@ impl Drop for OwnedProbeOutput {
 }
 
 fn same_probe_inference(response: &HelperBridgeWorkerResponse, generation: u64,
-                        native_device: Option<&str>) -> bool {
+                        native_device: &str) -> bool {
     response.ok && response.generation_token == generation
-        && match native_device {
-            Some(pci) => response.runtime_claim == NATIVE_INFERENCE_CLAIM
-                && response.worker_response_json.get("cuda_pci_id").and_then(Value::as_str) == Some(pci),
-            None => response.runtime_claim != NATIVE_INFERENCE_CLAIM,
-        }
+        && response.runtime_claim == NATIVE_INFERENCE_CLAIM
+        && response.worker_response_json.get("cuda_pci_id").and_then(Value::as_str) == Some(native_device)
 }
 
 pub(super) fn run_required_outbound_ai_probe(
@@ -89,20 +85,10 @@ pub(super) fn run_required_outbound_ai_probe(
         invalidate_required_outbound_ai_readiness();
         return Err("local translation runtime");
     }
-    let native_device = if refreshed.runtime_claim == NATIVE_STATUS_CLAIM {
-        let Some(pci) = refreshed.worker_response_json.get("cuda_pci_id")
-            .and_then(Value::as_str).filter(|value| !value.is_empty()) else {
-            invalidate_required_outbound_ai_readiness();
-            return Err("native CUDA identity");
-        };
-        Some(pci)
-    } else {
-        if !meeting_compute_preflight_admitted(&refreshed.worker_response_json) {
-            invalidate_required_outbound_ai_readiness();
-            return Err("CUDA speech and translation (primary models required)");
-        }
-        None
-    };
+    if refreshed.runtime_claim != NATIVE_STATUS_CLAIM {
+        invalidate_required_outbound_ai_readiness();
+        return Err("native CUDA capability");
+    }
     let helper = get_helper_bridge_status();
     if helper.state != "ready" || !helper.provider_ready || helper.generation_token == 0
         || refreshed.generation_token != helper.generation_token
@@ -119,8 +105,16 @@ pub(super) fn run_required_outbound_ai_probe(
             "meeting_generation": meeting_generation,
         }),
     );
+    let Some(native_device) = asr.worker_response_json.get("cuda_pci_id").and_then(Value::as_str)
+        .filter(|pci| !pci.is_empty()) else {
+        invalidate_required_outbound_ai_readiness();
+        return Err("native CUDA identity");
+    };
     if !same_probe_inference(&asr, generation_token, native_device)
-        || !meeting_asr_compute_admitted(&asr) {
+        || !meeting_asr_compute_admitted(&asr)
+        || refreshed.worker_response_json.get("cuda_pci_id").and_then(Value::as_str)
+            .is_some_and(|observed| observed != native_device)
+    {
         invalidate_required_outbound_ai_readiness();
         return Err("speech recognition");
     }
@@ -341,42 +335,9 @@ fn voice_only_probe_has_wav_header(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{meeting_compute_preflight_admitted, OwnedProbeOutput, same_probe_inference};
+    use super::{OwnedProbeOutput, same_probe_inference};
     use serde_json::json;
 
-    #[test]
-    fn meeting_compute_preflight_refuses_cpu_backup_and_unknown_resident_identity() {
-        let valid = json!({
-            "cuda_capability_known": true, "cpu_fallback_active": false,
-            "readiness": {"cuda_degraded": false},
-            "selected_device": "cuda", "selected_translation_device": "cuda",
-            "asr_primary_model_ready": true,
-            "asr_active_model_id": "faster-whisper-large-v3-turbo",
-            "loaded": {"asr": false}
-        });
-        assert!(meeting_compute_preflight_admitted(&valid));
-        for (key, replacement) in [
-            ("cuda_capability_known", json!(null)),
-            ("cpu_fallback_active", json!(true)),
-            ("selected_device", json!("cpu")),
-            ("selected_translation_device", json!("cpu")),
-            ("asr_primary_model_ready", json!(false)),
-            ("asr_active_model_id", json!("faster-whisper-medium")),
-            ("loaded", json!({"asr": true})),
-        ] {
-            let mut invalid = valid.clone();
-            invalid[key] = replacement;
-            assert!(!meeting_compute_preflight_admitted(&invalid), "{key}");
-        }
-        let mut resident = valid;
-        resident["loaded"] = json!({
-            "asr": true, "asr_device": "cuda", "asr_compute_type": "int8_float16",
-            "asr_model_id": "faster-whisper-large-v3-turbo"
-        });
-        assert!(meeting_compute_preflight_admitted(&resident));
-        resident["loaded"]["asr_model_id"] = json!("faster-whisper-medium");
-        assert!(!meeting_compute_preflight_admitted(&resident));
-    }
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -449,13 +410,13 @@ mod tests {
             runtime_claim: super::NATIVE_INFERENCE_CLAIM.into(),
             worker_response_json: json!({"cuda_pci_id":"0000:01:00.0"}),
         };
-        assert!(same_probe_inference(&receipt, 7, Some("0000:01:00.0")));
-        assert!(!same_probe_inference(&receipt, 8, Some("0000:01:00.0")));
-        assert!(!same_probe_inference(&receipt, 7, Some("0000:02:00.0")));
-        assert!(!same_probe_inference(&receipt, 7, None));
+        assert!(same_probe_inference(&receipt, 7, "0000:01:00.0"));
+        assert!(!same_probe_inference(&receipt, 8, "0000:01:00.0"));
+        assert!(!same_probe_inference(&receipt, 7, "0000:02:00.0"));
+
         receipt.runtime_claim = "helper_process_ready_ping_verified".into();
-        assert!(!same_probe_inference(&receipt, 7, Some("0000:01:00.0")));
-        assert!(same_probe_inference(&receipt, 7, None));
+        assert!(!same_probe_inference(&receipt, 7, "0000:01:00.0"));
+
     }
 
     #[test]

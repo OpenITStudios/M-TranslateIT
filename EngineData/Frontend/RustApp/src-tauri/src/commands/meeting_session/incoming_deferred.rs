@@ -389,8 +389,8 @@ mod tests {
         let valid = serde_json::json!({
             "ok": true, "stage": "transcribe", "language": "en",
             "blocker": "", "transcript_text": "  The meeting is open. ",
-            "device": "cuda", "compute_type": "int8_float16",
-            "model_id": "faster-whisper-large-v3-turbo",
+            "device": "cuda", "compute_type": "q8_0",
+            "model_id": "qwen3-asr-1.7b-q8_0",
         });
         let mut response = HelperBridgeWorkerResponse {
             ok: true,
@@ -400,7 +400,7 @@ mod tests {
             scheduler_priority: "meeting_incoming".into(),
             message: String::new(),
             generation_token: 1,
-            runtime_claim: "test_fixture".into(),
+            runtime_claim: "native_cuda_inference_receipt".into(),
             worker_response_json: valid.clone(),
         };
         assert_eq!(

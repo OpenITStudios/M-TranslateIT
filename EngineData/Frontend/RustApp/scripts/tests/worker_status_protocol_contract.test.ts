@@ -31,13 +31,12 @@ test("worker readiness keys stay aligned across Python Rust and TypeScript", () 
     assert.match(frontend, new RegExp(`readiness\\["${key}"\\]`), `TypeScript missing ${key}`);
   }
 
-  for (const key of ["asr", "translation_id_en", "voice_actor_tts"]) {
-    assert.match(
-      rust,
-      new RegExp(`worker_nested_bool\\(status, "readiness", "${key}"\\)`),
-      `Rust missing ${key}`,
-    );
+  for (const key of readinessKeys) {
+    assert.match(rust, new RegExp(`"${key}"\\s*:`), `Rust missing ${key}`);
   }
+  assert.match(rust, /fn native_status_payload\(/);
+  assert.match(rust, /worker_nested_bool\(worker, "readiness", "voice_actor_tts"\)/);
+  assert.doesNotMatch(rust, /fn meeting_compute_preflight_admitted\(/);
 });
 
 test("worker preflight stage remains the capability response discriminator", () => {

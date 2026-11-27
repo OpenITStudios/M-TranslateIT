@@ -97,6 +97,33 @@ pub(super) struct NativeInferenceOwner {
 
 #[cfg(windows)]
 impl NativeInferenceOwner {
+    fn asset_paths() -> Result<(PathBuf, PathBuf, PathBuf, PathBuf, &'static str), translateit_native_cuda::Error> {
+        use crate::engine::paths::ProjectPaths;
+        use translateit_native_cuda::Error;
+        let pins = option_env!("TRANSLATEIT_NATIVE_DLL_PINS")
+            .filter(|value| !value.is_empty()).ok_or(Error::LibraryIdentityMismatch)?;
+        let paths = ProjectPaths::discover();
+        if !paths.packaged_context_initialized && !paths.development_root_verified {
+            return Err(Error::InvalidInput);
+        }
+        let assets = PathBuf::from(&paths.runtime_root).join("EngineData/Backend/RuntimeAssets");
+        Ok((
+            assets.join("NativeCuda/bin/translateit_native_cuda.dll"),
+            PathBuf::from(&paths.asr_model_dir).join("qwen3-asr-1.7b/Qwen3-ASR-1.7B-Q8_0.gguf"),
+            PathBuf::from(&paths.asr_model_dir).join("qwen3-asr-1.7b/mmproj-Qwen3-ASR-1.7B-Q8_0.gguf"),
+            PathBuf::from(&paths.translation_model_dir).join("hy-mt2-1.8b/Hy-MT2-1.8B-Q6_K.gguf"),
+            pins,
+        ))
+    }
+
+    fn assets_present() -> bool {
+        Self::asset_paths().is_ok_and(|(dll, asr, projector, mt, _)| {
+            [dll, asr, projector, mt].iter().all(|path| {
+                std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0)
+            })
+        })
+    }
+
     /// The package/build owner must authenticate the pins and establish a
     /// controlled runtime root before this lifecycle admission is used.
     /// A runtime manifest, arbitrary PATH or user-provided PCI index is not
@@ -107,24 +134,9 @@ impl NativeInferenceOwner {
     /// Windows system dependency closure. No untrusted private DLL loader
     /// may race this admission.
     pub(super) unsafe fn open(session_id: Option<String>) -> Result<Self, translateit_native_cuda::Error> {
-        use crate::engine::paths::ProjectPaths;
-        use translateit_native_cuda::{Error, RuntimeOwner};
-        let pins = option_env!("TRANSLATEIT_NATIVE_DLL_PINS")
-            .filter(|value| !value.is_empty()).ok_or(Error::LibraryIdentityMismatch)?;
-        let paths = ProjectPaths::discover();
-        if !paths.packaged_context_initialized && !paths.development_root_verified {
-            return Err(Error::InvalidInput);
-        }
-        let dll = PathBuf::from(&paths.runtime_root)
-            .join("EngineData/Backend/RuntimeAssets/NativeCuda/bin/translateit_native_cuda.dll");
-        let asr = PathBuf::from(&paths.asr_model_dir).join("qwen3-asr-1.7b");
-        let mt = PathBuf::from(&paths.translation_model_dir).join("hy-mt2-1.8b");
-        let owner = unsafe { RuntimeOwner::open(
-            &dll, pins,
-            &asr.join("Qwen3-ASR-1.7B-Q8_0.gguf"),
-            &asr.join("mmproj-Qwen3-ASR-1.7B-Q8_0.gguf"),
-            &mt.join("Hy-MT2-1.8B-Q6_K.gguf"), None,
-        )? };
+        use translateit_native_cuda::RuntimeOwner;
+        let (dll, asr, projector, mt, pins) = Self::asset_paths()?;
+        let owner = unsafe { RuntimeOwner::open(&dll, pins, &asr, &projector, &mt, None)? };
         Ok(Self { session_id, owner })
     }
 }
@@ -214,6 +226,20 @@ impl HelperBridgeRuntime {
         self.pending_meeting_cleanup_session_id.is_some()
             || self.active_meeting_session_id.is_some()
             || self.native_meeting_session_id().is_some()
+    }
+
+    // No Meeting owner may be released by idle diagnostic/voice admission.
+    pub(super) fn release_idle_native_inference(&mut self) -> bool {
+        if self.native_meeting_session_id().is_some() || self.active_request_id.is_some() {
+            return false;
+        }
+        let started = Instant::now();
+        while !self.try_close_native_inference() {
+            if started.elapsed() >= HELPER_CLEANUP_BUDGET { return false; }
+            thread::sleep(Duration::from_millis(10));
+        }
+        self.cuda_ready = false;
+        true
     }
 
     fn try_close_native_inference(&mut self) -> bool {
@@ -407,40 +433,10 @@ pub fn worker_text(value: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-// This observation is already returned by the required status request.
-// Do not load a candidate whose current capability/asset identity is degraded.
-fn meeting_cuda_capability_admitted(value: &Value) -> bool {
-    value.get("cuda_capability_known").and_then(Value::as_bool) == Some(true)
-        && value.get("cpu_fallback_active").and_then(Value::as_bool) == Some(false)
-        && value.get("selected_device").and_then(Value::as_str) == Some("cuda")
-        && value.get("selected_translation_device").and_then(Value::as_str) == Some("cuda")
-        && value.get("readiness").and_then(|readiness| readiness.get("cuda_degraded"))
-            .and_then(Value::as_bool) == Some(false)
-}
-
-pub(super) fn meeting_compute_preflight_admitted(value: &Value) -> bool {
-    meeting_cuda_capability_admitted(value)
-        && value.get("asr_primary_model_ready").and_then(Value::as_bool) == Some(true)
-        && value.get("asr_active_model_id").and_then(Value::as_str)
-            == Some("faster-whisper-large-v3-turbo")
-        && match value.get("loaded").and_then(|loaded| loaded.get("asr")).and_then(Value::as_bool) {
-            Some(false) => true,
-            Some(true) => {
-                let loaded = &value["loaded"];
-                loaded.get("asr_device").and_then(Value::as_str) == Some("cuda")
-                    && loaded.get("asr_compute_type").and_then(Value::as_str) == Some("int8_float16")
-                    && loaded.get("asr_model_id").and_then(Value::as_str)
-                        == Some("faster-whisper-large-v3-turbo")
-            }
-            None => false,
-        }
-}
-
 // Preserve the public status shape but replace legacy ASR/MT claims with
 // the actual native owner observation. Python remains authority only for voice
 // and its own allocator. This is a capability observation, not functional proof.
-#[cfg(any(windows, test))]
-fn native_status_payload(worker: &Value, pci: Option<&str>) -> Value {
+fn native_status_payload(worker: &Value, pci: Option<&str>, assets_present: bool) -> Value {
     use super::helper_bridge::{NATIVE_ASR_MODEL, NATIVE_MT_MODEL};
     let available = pci.is_some();
     let valid_voice_status = worker.get("stage").and_then(Value::as_str)
@@ -451,30 +447,32 @@ fn native_status_payload(worker: &Value, pci: Option<&str>) -> Value {
         && worker_bool(worker, "transformers_import_ready")
         && worker.get("voice_actor_token").and_then(Value::as_str)
             .is_some_and(|token| !token.is_empty() && token.len() <= 512);
-    let ready = available && voice_ready;
-    let blocker = if !available { "native_inference:owner_unavailable" }
+    // Cold presence is eligibility for explicit preparation, NOT CUDA proof.
+    let ready = assets_present && voice_ready;
+    let blocker = if !assets_present { "native_inference:assets_or_owner_unavailable" }
         else if !voice_ready { "voice_actor:capability_unverified" }
         else { "" };
-    let selected = if available { "cuda" } else { "blocked" };
+    let selected = if available { "cuda" } else if assets_present { "not_loaded" } else { "blocked" };
     json!({
         "ok": ready, "stage": "local_realtime_worker_preflight",
         "request_id": worker.get("request_id"),
         "scheduler_priority": worker.get("scheduler_priority"),
         "scheduler_wait_ms": worker.get("scheduler_wait_ms"),
         "blocker": blocker, "provider_ready": ready,
-        "note": if ready { "Native ASR/MT owner and voice capability are available; functional verification is separate." }
+        "note": if ready && available { "Native models are resident and voice capability is available; functional proof is separate." }
+            else if ready { "Native assets are present; explicit preparation must verify hashes, CUDA and model loading." }
             else { "Native ASR/MT or required voice capability is unavailable." },
         "readiness": {
-            "asr": available, "translation_id_en": available, "translation_en_id": available,
-            "translation_bidirectional": available, "voice_actor_tts": voice_ready, "cuda_degraded": false,
+            "asr": assets_present, "translation_id_en": assets_present, "translation_en_id": assets_present,
+            "translation_bidirectional": assets_present, "voice_actor_tts": voice_ready, "cuda_degraded": false,
         },
         "cuda_pci_id": pci, "cuda_capability_known": available, "cpu_fallback_active": false,
         "selected_device": selected, "selected_translation_device": selected,
         "selected_compute_type": if available { "q8_0" } else { "blocked" },
-        "asr_primary_model_ready": available, "asr_model_ready": available,
+        "asr_primary_model_ready": assets_present, "asr_model_ready": assets_present,
         "asr_active_model_id": NATIVE_ASR_MODEL,
-        "translation_id_en_ready": available, "translation_en_id_ready": available,
-        "translation_bidirectional_ready": available, "voice_actor_ready": voice_ready,
+        "translation_id_en_ready": assets_present, "translation_en_id_ready": assets_present,
+        "translation_bidirectional_ready": assets_present, "voice_actor_ready": voice_ready,
         "voice_actor_token": worker.get("voice_actor_token").filter(|_| voice_ready),
         "tts": worker.get("tts"), "dependencies": worker.get("dependencies"),
         "gpu": {"torch_allocator": worker.get("gpu").and_then(|gpu| gpu.get("torch_allocator"))},
@@ -489,11 +487,18 @@ fn native_status_payload(worker: &Value, pci: Option<&str>) -> Value {
     })
 }
 
-#[cfg(windows)]
-pub(super) fn project_bound_native_status(runtime: &mut HelperBridgeRuntime, worker: &mut Value) -> Option<bool> {
-    let native = runtime.native_inference.as_ref()?;
-    let pci = native.owner.is_available().then(|| native.owner.device_id());
-    let projected = native_status_payload(worker, pci);
+pub(super) fn project_native_status(runtime: &mut HelperBridgeRuntime, worker: &mut Value) -> bool {
+    #[cfg(windows)]
+    let (pci, present) = match runtime.native_inference.as_ref() {
+        Some(native) if native.owner.is_available() => (Some(native.owner.device_id()), true),
+        Some(_) => (None, false),
+        None => (None, runtime.pending_meeting_cleanup_session_id.is_none()
+            && runtime.last_error.as_deref() != Some("helper_bridge:cleanup_incomplete")
+            && NativeInferenceOwner::assets_present()),
+    };
+    #[cfg(not(windows))]
+    let (pci, present): (Option<&str>, bool) = (None, false);
+    let projected = native_status_payload(worker, pci, present);
     let available = pci.is_some();
     let ready = worker_bool(&projected, "ok");
     runtime.cuda_ready = available;
@@ -502,35 +507,7 @@ pub(super) fn project_bound_native_status(runtime: &mut HelperBridgeRuntime, wor
     runtime.last_error = worker_text(&projected, "blocker");
     runtime.message = worker_text(&projected, "note").unwrap_or_default();
     *worker = projected;
-    Some(ready)
-}
-
-pub fn apply_worker_status(runtime: &mut HelperBridgeRuntime, status: &Value) {
-    let worker_ok = worker_bool(status, "ok");
-    let asr_ready = worker_nested_bool(status, "readiness", "asr");
-    let outbound_translation_ready = worker_nested_bool(status, "readiness", "translation_id_en");
-    let tts_ready = worker_nested_bool(status, "readiness", "voice_actor_tts");
-    let cuda_degraded = worker_nested_bool(status, "readiness", "cuda_degraded");
-
-    runtime.cuda_ready = meeting_cuda_capability_admitted(status);
-    let capabilities_present = worker_ok && asr_ready && outbound_translation_ready && tts_ready;
-    runtime.provider_ready = capabilities_present && meeting_compute_preflight_admitted(status);
-    runtime.degraded_mode = worker_ok && cuda_degraded;
-    runtime.last_error = worker_text(status, "blocker").filter(|value| !value.is_empty());
-    if capabilities_present && !runtime.provider_ready && runtime.last_error.is_none() {
-        runtime.last_error = Some("cuda:meeting_primary_compute_unverified".to_string());
-    }
-    runtime.message = if runtime.provider_ready {
-        "Python helper process is running and current worker status reports the required outbound AI capabilities available."
-            .to_string()
-    } else if let Some(blocker) = &runtime.last_error {
-        format!(
-            "Python helper process is running, but one or more required outbound AI capabilities are unavailable: {blocker}"
-        )
-    } else {
-        "Python helper process is running. Capability status is incomplete; inspect the worker capability response instead of inferring readiness from process state."
-            .to_string()
-    };
+    ready
 }
 
 pub fn apply_worker_response(runtime: &mut HelperBridgeRuntime, value: &Value) -> bool {
@@ -541,7 +518,8 @@ pub fn apply_worker_response(runtime: &mut HelperBridgeRuntime, value: &Value) -
         .unwrap_or_default();
 
     if stage == "local_realtime_worker_preflight" {
-        apply_worker_status(runtime, value);
+        // Status belongs to the explicit host projection, never worker JSON.
+        return project_native_status(runtime, &mut value.clone());
     } else {
         let blocker = worker_text(value, "blocker").unwrap_or_default();
         let hard_voice_actor_failure = stage == "voice_actor_synthesize"
@@ -1093,108 +1071,48 @@ mod readiness_contract_tests {
             "selected_device": "cpu", "cpu_fallback_active": true,
             "loaded": {"asr": true, "asr_model_id": "faster-whisper-large-v3-turbo"},
         });
-        let missing = native_status_payload(&worker, None);
+        let missing = native_status_payload(&worker, None, false);
+        let cold = native_status_payload(&worker, None, true);
+        assert_eq!(cold["ok"], true);
+        assert_eq!(cold["loaded"]["asr"], false);
+        assert_eq!(cold["cuda_capability_known"], false);
         assert_eq!(missing["ok"], false);
         assert_eq!(missing["readiness"]["asr"], false);
         assert_eq!(missing["loaded"]["translation_directions"], json!([]));
-        let resident = native_status_payload(&worker, Some("0000:01:00.0"));
+        let resident = native_status_payload(&worker, Some("0000:01:00.0"), true);
         assert_eq!(resident["ok"], true);
         assert_eq!(resident["loaded"]["asr_model_id"], "qwen3-asr-1.7b-q8_0");
         assert_eq!(resident["cpu_fallback_active"], false);
         assert_eq!(resident["cuda_pci_id"], "0000:01:00.0");
         let mut invalid_voice = worker;
         invalid_voice["voice_actor_token"] = Value::Null;
-        assert_eq!(native_status_payload(&invalid_voice, Some("0000:01:00.0"))["ok"], false);
+        assert_eq!(native_status_payload(&invalid_voice, Some("0000:01:00.0"), true)["ok"], false);
         invalid_voice["voice_actor_token"] = json!("fixture-actor");
         invalid_voice["stage"] = json!("worker_error");
-        assert_eq!(native_status_payload(&invalid_voice, Some("0000:01:00.0"))["ok"], false);
+        assert_eq!(native_status_payload(&invalid_voice, Some("0000:01:00.0"), true)["ok"], false);
     }
 
     #[test]
-    fn worker_status_uses_canonical_direction_readiness_and_rejects_legacy_aliases() {
-        let mut runtime = HelperBridgeRuntime::default();
-        apply_worker_status(
-            &mut runtime,
-            &json!({
-                "ok": true,
-                "cuda_capability_known": true,
-                "cpu_fallback_active": false,
-                "selected_device": "cuda",
-                "selected_translation_device": "cuda",
-                "asr_primary_model_ready": true,
-                "asr_active_model_id": "faster-whisper-large-v3-turbo",
-                "loaded": {"asr": false},
-                "readiness": {
-                    "asr": true,
-                    "translation_id_en": true,
-                    "translation_en_id": false,
-                    "translation_bidirectional": false,
-                    "voice_actor_tts": true,
-                    "cuda_degraded": false
-                }
-            }),
-        );
-        assert!(runtime.provider_ready);
-        assert!(runtime.cuda_ready);
-        assert!(!runtime.degraded_mode);
-
-        let mut legacy_only = HelperBridgeRuntime::default();
-        apply_worker_status(
-            &mut legacy_only,
-            &json!({
-                "ok": true,
-                "readiness": {
-                    "asr": true,
-                    "translation_realtime": true,
-                    "translation_quality": true,
-                    "voice_actor_tts": true,
-                    "cuda_degraded": false
-                }
-            }),
-        );
-        assert!(!legacy_only.provider_ready);
-        assert!(!legacy_only.cuda_ready);
-    }
-
-    #[test]
-    fn helper_status_never_advertises_fallback_as_meeting_ready() {
-        let valid = json!({
-            "ok": true,
-            "cuda_capability_known": true,
-            "cpu_fallback_active": false,
-            "selected_device": "cuda",
-            "selected_translation_device": "cuda",
-            "asr_primary_model_ready": true,
-            "asr_active_model_id": "faster-whisper-large-v3-turbo",
-            "loaded": {"asr": false},
-            "readiness": {
-                "asr": true, "translation_id_en": true,
-                "voice_actor_tts": true, "cuda_degraded": false
-            }
+    fn absent_native_assets_never_promote_legacy_cuda_status() {
+        let worker = json!({
+            "ok": true, "stage": "local_realtime_worker_preflight",
+            "cuda_capability_known": true, "selected_device": "cuda",
+            "selected_translation_device": "cuda", "cpu_fallback_active": false,
+            "readiness": {"asr":true, "translation_id_en":true, "voice_actor_tts":true},
+            "torch_import_ready":true, "transformers_import_ready":true,
+            "voice_actor_token":"fixture-actor"
         });
-        let mut runtime = HelperBridgeRuntime::default();
-        apply_worker_status(&mut runtime, &valid);
-        assert!(runtime.provider_ready && runtime.cuda_ready);
-        for (key, replacement) in [
-            ("cuda_capability_known", json!(null)),
-            ("cpu_fallback_active", json!(true)),
-            ("selected_device", json!("cpu")),
-            ("selected_translation_device", json!("cpu")),
-            ("asr_primary_model_ready", json!(false)),
-            ("asr_active_model_id", json!("faster-whisper-medium")),
-            ("loaded", json!({"asr": true, "asr_device": "cpu"})),
-        ] {
-            let mut rejected = valid.clone();
-            rejected[key] = replacement;
-            apply_worker_status(&mut runtime, &rejected);
-            assert!(!runtime.provider_ready, "{key}");
-            assert_eq!(runtime.last_error.as_deref(), Some("cuda:meeting_primary_compute_unverified"));
-        }
-        let mut unknown = valid;
-        unknown["readiness"]["cuda_degraded"] = Value::Null;
-        apply_worker_status(&mut runtime, &unknown);
-        assert!(!runtime.provider_ready && !runtime.cuda_ready);
+        let blocked = native_status_payload(&worker, None, false);
+        assert_eq!(blocked["provider_ready"], false);
+        assert_eq!(blocked["cuda_capability_known"], false);
+        assert_eq!(blocked["readiness"]["translation_id_en"], false);
+        let cold = native_status_payload(&worker, None, true);
+        assert_eq!(cold["provider_ready"], true);
+        assert_eq!(cold["selected_device"], "not_loaded");
+        assert_eq!(cold["loaded"]["asr"], false);
+        assert_eq!(cold["cuda_pci_id"], Value::Null);
     }
+
 }
 
 #[cfg(test)]
