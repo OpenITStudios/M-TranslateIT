@@ -43,6 +43,14 @@ test("Check Again refreshes the existing Reliability panel without background po
   assert.doesNotMatch(reliability, /setInterval|setTimeout/);
 });
 
+test("Diagnostics shares one fresh Meeting observation for watchdog and device loss", () => {
+  assert.match(reliability, /getMeetingReliabilitySnapshot\(\)\.catch\(\(\) => null\)/);
+  assert.doesNotMatch(reliability, /getRuntimeWatchdogStatus\(|getDeviceLossGuardStatus\(/);
+  assert.match(reliability, /watchdog = meetingHealth\?\.watchdog \?\? null/);
+  assert.match(reliability, /devices = meetingHealth\?\.devices \?\? null/);
+  assert.match(reliability, /if \(!isCurrent\(\)\) return/);
+});
+
 test("unavailable recovery never appears as clean, and audio diagnosis uses actual stages", () => {
   assert.match(reliability, /loading \|\| !recovery \? "Not checked"/);
   assert.match(reliability, /!recovery\.cleanup_ok \? "Not verified"/);

@@ -2,9 +2,8 @@
   import { sanitizeDiagnosticText } from "../../app/shared/diagnosticPrivacy";
   import {
     exportDiagnosticSupportBundle,
-    getDeviceLossGuardStatus,
+    getMeetingReliabilitySnapshot,
     getLongSessionHealthStatus,
-    getRuntimeWatchdogStatus,
     getStartupRecoveryStatus,
     getRecentRuntimeIncidents,
     type DeviceLossGuardStatus,
@@ -42,15 +41,18 @@
   );
 
   async function refresh(isCurrent: () => boolean): Promise<void> {
-    const next = await Promise.all([
-      getRuntimeWatchdogStatus().catch(() => null),
+    const [meetingHealth, nextRecovery, nextIncidents, nextLongSession] = await Promise.all([
+      getMeetingReliabilitySnapshot().catch(() => null),
       getStartupRecoveryStatus().catch(() => null),
-      getDeviceLossGuardStatus().catch(() => null),
       getRecentRuntimeIncidents().catch(() => null),
       getLongSessionHealthStatus().catch(() => null),
     ]);
     if (!isCurrent()) return;
-    [watchdog, recovery, devices, incidents, longSession] = next;
+    watchdog = meetingHealth?.watchdog ?? null;
+    devices = meetingHealth?.devices ?? null;
+    recovery = nextRecovery;
+    incidents = nextIncidents;
+    longSession = nextLongSession;
     loading = false;
   }
 

@@ -278,6 +278,17 @@
     disposed = false;
     const currentWindow = getCurrentWindow();
     let unlistenRuntime: (() => void) | null = null;
+    let polling: number | null = null;
+    const stopPolling = () => {
+      if (polling !== null) window.clearInterval(polling);
+      polling = null;
+    };
+    const startPolling = () => {
+      if (disposed || polling !== null || !document.hasFocus()) return;
+      polling = window.setInterval(() => {
+        if (!disposed && !busy && document.hasFocus()) void refresh();
+      }, 5000);
+    };
     const connect = async () => {
       try {
         const unlisten = await applicationRuntimeApi.subscribe((event) => {
@@ -293,9 +304,11 @@
       if (!busy) resultMessage = "";
       // Preserve an unacknowledged error across close/reopen. New actions
       // explicitly clear it, so the user never loses a failed-switch reason.
+      startPolling();
       void refresh();
     };
     const onBlur = () => {
+      stopPolling();
       // Never hold a floating panel on top of a call while AI is preparing.
       // Hiding does not cancel or alter the authoritative Meeting action.
       void hide();
@@ -314,15 +327,16 @@
     window.addEventListener("focus", onFocus);
     window.addEventListener("blur", onBlur);
     window.addEventListener("keydown", onKeydown);
-    const polling = window.setInterval(() => {
-      if (!disposed && !busy && document.hasFocus()) void refresh();
-    }, 5000);
     void connect();
+    // Preserve the initial observation and event subscription for a native
+    // Show whose foreground focus request Windows may deny. Only focused
+    // popup invocations need the periodic recovery read.
+    startPolling();
     void refresh();
     return () => {
       disposed = true;
       cancelAutoClose();
-      window.clearInterval(polling);
+      stopPolling();
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("blur", onBlur);
       window.removeEventListener("keydown", onKeydown);

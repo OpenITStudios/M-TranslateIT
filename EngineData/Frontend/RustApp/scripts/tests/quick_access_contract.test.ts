@@ -116,6 +116,17 @@ test("Quick Access never pins itself over an unfocused call during a slow switch
 });
 
 
+test("Quick Access owns at most one focused recovery timer and releases it on blur", () => {
+  assert.match(popup, /let polling: number \| null = null/);
+  assert.match(popup, /if \(disposed \|\| polling !== null \|\| !document\.hasFocus\(\)\) return/);
+  assert.match(popup, /const onFocus = \(\) => \{[\s\S]*?startPolling\(\);[\s\S]*?void refresh\(\);/);
+  assert.match(popup, /const onBlur = \(\) => \{\s*stopPolling\(\);/);
+  assert.match(popup, /if \(polling !== null\) window\.clearInterval\(polling\);\s*polling = null/);
+  assert.match(popup, /disposed = true;\s*cancelAutoClose\(\);\s*stopPolling\(\);/);
+  assert.equal((popup.match(/window\.setInterval\(/g) ?? []).length, 1);
+  assert.match(popup, /startPolling\(\);\s*void refresh\(\);\s*return \(\) =>/);
+});
+
 test("Popup success from a hidden operation cannot dismiss a later invocation", () => {
   assert.match(popup, /if \(!document\.hasFocus\(\)\) return/);
   assert.match(popup, /const token = \+\+actionRevision/);
