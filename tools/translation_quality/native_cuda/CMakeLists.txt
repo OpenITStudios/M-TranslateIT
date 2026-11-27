@@ -52,5 +52,5 @@ add_subdirectory("${LLAMA_SOURCE_DIR}" llama-build EXCLUDE_FROM_ALL)
 add_library(translateit_native_cuda SHARED inference.cpp)
 # UTF-8 literal token markers are part of the model contract on MSVC.
 target_compile_options(translateit_native_cuda PRIVATE /utf-8)
-target_link_libraries(translateit_native_cuda PRIVATE llama mtmd ggml)
+target_link_libraries(translateit_native_cuda PRIVATE llama mtmd ggml bcrypt)
 target_compile_features(translateit_native_cuda PRIVATE cxx_std_17)

@@ -12,10 +12,8 @@
 extern "C" {
 #endif
 
-// Candidate ABI v2. All memory remains owned by its allocator; the
-// caller supplies input/output buffers. Each mutable handle is serialized.
-typedef struct ti_asr ti_asr;
-typedef struct ti_mt ti_mt;
+// Candidate ABI v3: one serialized owner for both resident model stages.
+typedef struct ti_runtime ti_runtime;
 enum ti_status {
     TI_OK = 0,
     TI_INVALID_INPUT = 1,
@@ -29,32 +27,30 @@ enum ti_status {
     TI_EMPTY = 9,
     TI_OUTPUT_LIMIT = 10,
     TI_POISONED = 11,
-    TI_INTERNAL = 12
+    TI_INTERNAL = 12,
+    TI_ARTIFACT = 13,
+    TI_VRAM = 14,
+    TI_BUSY = 15
 };
 
 TI_EXPORT uint32_t ti_cuda_abi_version(void);
-// device_id is the exact CUDA PCI identifier from ggml_backend_dev_props.
-// Model paths are UTF-8, verified by the caller before opening. On failure
-// *out remains null. Loading alone is not proof of inference or residency.
-TI_EXPORT int32_t ti_asr_open(const char * model_path, const char * projector_path,
-                             const char * device_id, ti_asr ** out);
-TI_EXPORT void ti_asr_close(ti_asr * asr);
-// 16 kHz mono normalized f32, 300ms..60s, language 1=id / 2=en.
-// On success *out_len is the byte length of a complete UTF-8 transcript.
-// On failure *out_len is zero and scratch bytes are unspecified; never
-// consume them. Caller supplies at least 16000 bytes.
-TI_EXPORT int32_t ti_asr_transcribe(ti_asr * asr, const float * pcm, size_t count,
-                                   uint32_t language, char * output,
-                                   size_t output_cap, size_t * out_len);
-
-// Same exact CUDA device as ASR. No model or direction router.
-TI_EXPORT int32_t ti_mt_open(const char * model_path, const char * device_id, ti_mt ** out);
-TI_EXPORT void ti_mt_close(ti_mt * mt);
-// Input is UTF-8, at most 8000 bytes; Rust additionally enforces 2000 scalars.
-// Language 1=id / 2=en, different directions only. Same output contract as ASR.
-TI_EXPORT int32_t ti_mt_translate(ti_mt * mt, const char * source, size_t source_len,
-                                   uint32_t source_language, uint32_t target_language,
-                                   char * output, size_t output_cap, size_t * out_len);
+// All three exact pinned GGUF files are verified before model load. Paths
+// are UTF-8 in a controlled directory; device_id is the exact CUDA PCI ID.
+// On failure *out is null. On success the caller owns the one runtime.
+TI_EXPORT int32_t ti_runtime_open(const char * asr_path, const char * projector_path,
+                                   const char * mt_path, const char * device_id,
+                                   ti_runtime ** out);
+TI_EXPORT void ti_runtime_close(ti_runtime * runtime);
+// 16 kHz mono normalized F32, 300ms..60s, language 1=id / 2=en.
+// Output cap >=16000 bytes. Only success authorizes *out_len bytes;
+// failure has zero length, and scratch contents are unspecified.
+TI_EXPORT int32_t ti_runtime_transcribe(ti_runtime * runtime, const float * pcm, size_t count,
+                                        uint32_t language, char * output,
+                                        size_t output_cap, size_t * out_len);
+// UTF-8 <=8000 bytes. Different directions only, same output contract.
+TI_EXPORT int32_t ti_runtime_translate(ti_runtime * runtime, const char * source, size_t source_len,
+                                       uint32_t source_language, uint32_t target_language,
+                                       char * output, size_t output_cap, size_t * out_len);
 
 #ifdef __cplusplus
 }

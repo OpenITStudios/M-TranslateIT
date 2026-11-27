@@ -6,12 +6,21 @@
 
 #include <cmath>
 #include <cstring>
+#include <cwchar>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <vector>
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <bcrypt.h>
 
 namespace {
 constexpr uint32_t k_context = 2048;
@@ -28,6 +37,128 @@ constexpr size_t k_min_samples = 4800;
 constexpr size_t k_max_samples = 960000;
 
 std::once_flag backend_once;
+std::atomic<bool> runtime_open{false};
+constexpr uint64_t k_reserve_bytes = 1536ull * 1024 * 1024;
+
+// Lease is destroyed last, after both model contexts and file handles.
+struct runtime_lease {
+    bool acquired = false;
+    bool acquire() {
+        bool expected = false;
+        acquired = runtime_open.compare_exchange_strong(expected, true);
+        return acquired;
+    }
+    ~runtime_lease() { if (acquired) runtime_open.store(false); }
+};
+
+struct locked_asset {
+    HANDLE file = INVALID_HANDLE_VALUE;
+    std::string path;
+    uint64_t bytes = 0;
+    ~locked_asset() { if (file != INVALID_HANDLE_VALUE) CloseHandle(file); }
+    locked_asset() = default;
+    locked_asset(const locked_asset &) = delete;
+    locked_asset & operator=(const locked_asset &) = delete;
+};
+
+struct hash_algorithm {
+    BCRYPT_ALG_HANDLE handle = nullptr;
+    ~hash_algorithm() { if (handle) BCryptCloseAlgorithmProvider(handle, 0); }
+};
+struct hash_state {
+    BCRYPT_HASH_HANDLE handle = nullptr;
+    ~hash_state() { if (handle) BCryptDestroyHash(handle); }
+};
+
+// Hash the exact locked read handle in bounded chunks. Keep it open for
+// the model lifetime to deny normal writes/deletes, including while mapped.
+bool verify_asset(locked_asset & asset, const char * path, const char * expected,
+                  uint64_t expected_size, BCRYPT_ALG_HANDLE algorithm,
+                  std::vector<unsigned char> & scratch) {
+    const int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, nullptr, 0);
+    if (n < 4) return false;
+    std::wstring wide(static_cast<size_t>(n), L'\0');
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide.data(), n) != n)
+        return false;
+    // Reject UNC, device paths, relative names and non-fixed drives before
+    // opening. Accept ordinary DOS paths and their extended-length form.
+    const wchar_t * dos = wide.c_str();
+    if (wide.rfind(L"\\\\?\\", 0) == 0) dos += 4;
+    if (std::wcslen(dos) < 3 ||
+        !((dos[0] >= L'A' && dos[0] <= L'Z') ||
+          (dos[0] >= L'a' && dos[0] <= L'z')) ||
+        dos[1] != L':' || dos[2] != L'\\') return false;
+    wchar_t drive[] = {dos[0], L':', L'\\', L'\0'};
+    if (GetDriveTypeW(drive) != DRIVE_FIXED) return false;
+    asset.file = CreateFileW(wide.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                            OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (asset.file == INVALID_HANDLE_VALUE || GetFileType(asset.file) != FILE_TYPE_DISK) return false;
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (!GetFileInformationByHandle(asset.file, &info) ||
+        (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) return false;
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(asset.file, &size) || size.QuadPart <= 0 ||
+        size.QuadPart > 3ll * 1024 * 1024 * 1024) return false;
+    asset.bytes = static_cast<uint64_t>(size.QuadPart);
+    if (expected_size && asset.bytes != expected_size) return false;
+
+    // Pass the resolved DOS path to llama.cpp rather than the original
+    // spelling. The controlled parent directory must remain trusted.
+    const DWORD needed = GetFinalPathNameByHandleW(asset.file, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (!needed) return false;
+    std::wstring resolved(needed, L'\0');
+    const DWORD written = GetFinalPathNameByHandleW(asset.file, resolved.data(), needed,
+                                                   FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (!written || written >= needed) return false;
+    // The resolved volume must also be a local fixed drive, not UNC.
+    if (written < 7 || resolved.rfind(L"\\\\?\\", 0) != 0 ||
+        !((resolved[4] >= L'A' && resolved[4] <= L'Z') ||
+          (resolved[4] >= L'a' && resolved[4] <= L'z')) ||
+        resolved[5] != L':' || resolved[6] != L'\\') return false;
+    wchar_t resolved_drive[] = {resolved[4], L':', L'\\', L'\0'};
+    if (GetDriveTypeW(resolved_drive) != DRIVE_FIXED) return false;
+    const int utf8 = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, resolved.data(),
+                                        static_cast<int>(written), nullptr, 0, nullptr, nullptr);
+    if (utf8 <= 0) return false;
+    asset.path.resize(static_cast<size_t>(utf8));
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, resolved.data(),
+                           static_cast<int>(written), asset.path.data(), utf8, nullptr, nullptr) != utf8)
+        return false;
+
+    DWORD object_bytes = 0, returned = 0;
+    if (BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&object_bytes),
+                          sizeof(object_bytes), &returned, 0) < 0 ||
+        returned != sizeof(object_bytes) || !object_bytes) return false;
+    std::vector<unsigned char> object(object_bytes);
+    hash_state hash;
+    if (BCryptCreateHash(algorithm, &hash.handle, object.data(), object_bytes, nullptr, 0, 0) < 0)
+        return false;
+    uint64_t total = 0;
+    for (;;) {
+        DWORD count = 0;
+        if (!ReadFile(asset.file, scratch.data(), static_cast<DWORD>(scratch.size()), &count, nullptr))
+            return false;
+        if (!count) break;
+        if (BCryptHashData(hash.handle, scratch.data(), count, 0) < 0) return false;
+        total += count;
+        if (total > asset.bytes) return false;
+    }
+    std::array<unsigned char, 32> digest{};
+    if (total != asset.bytes || BCryptFinishHash(hash.handle, digest.data(),
+                                                static_cast<ULONG>(digest.size()), 0) < 0) return false;
+    constexpr char hex[] = "0123456789abcdef";
+    for (size_t i = 0; i < digest.size(); ++i) {
+        if (expected[2*i] != hex[digest[i] >> 4] || expected[2*i+1] != hex[digest[i] & 15])
+            return false;
+    }
+    return true;
+}
+
+bool memory_admitted(ggml_backend_dev_t device, uint64_t required) {
+    size_t available = 0, total = 0;
+    ggml_backend_dev_memory(device, &available, &total);
+    return total > 0 && available <= total && available >= required;
+}
 
 ggml_backend_dev_t exact_cuda_device(const char * wanted) {
     ggml_backend_dev_t selected = nullptr;
@@ -112,17 +243,15 @@ struct ti_mt : decoder {
     llama_token eos = LLAMA_TOKEN_NULL;
 };
 
-extern "C" uint32_t ti_cuda_abi_version(void) { return 2; }
+extern "C" uint32_t ti_cuda_abi_version(void) { return 3; }
 
-extern "C" int32_t ti_asr_open(const char * model_path, const char * projector_path,
-                                const char * device_id, ti_asr ** out) {
+static int32_t open_asr(const char * model_path, const char * projector_path,
+                        ggml_backend_dev_t device, ti_asr ** out) {
     if (!out) return TI_INVALID_INPUT;
     *out = nullptr;
     if (!model_path || !*model_path || !projector_path || !*projector_path ||
-        !device_id || !*device_id) return TI_INVALID_INPUT;
+        !device) return TI_INVALID_INPUT;
     try {
-        const auto device = initialize_cuda(device_id);
-        if (!device) return TI_CUDA_DEVICE;
         auto asr = std::make_unique<ti_asr>();
         const auto status = open_decoder(*asr, model_path, device, "qwen3vl");
         if (status != TI_OK) return status;
@@ -143,7 +272,7 @@ extern "C" int32_t ti_asr_open(const char * model_path, const char * projector_p
     }
 }
 
-extern "C" void ti_asr_close(ti_asr * asr) { delete asr; }
+
 
 namespace {
 struct clear_utterance {
@@ -248,7 +377,7 @@ int32_t infer(ti_asr & asr, const float * pcm, size_t count, const char * langua
 }
 }
 
-extern "C" int32_t ti_asr_transcribe(ti_asr * asr, const float * pcm, size_t count,
+static int32_t transcribe_asr(ti_asr * asr, const float * pcm, size_t count,
                                       uint32_t language, char * output, size_t output_cap,
                                       size_t * out_len) {
     if (!out_len) return TI_INVALID_INPUT;
@@ -272,13 +401,11 @@ extern "C" int32_t ti_asr_transcribe(ti_asr * asr, const float * pcm, size_t cou
     }
 }
 
-extern "C" int32_t ti_mt_open(const char * model_path, const char * device_id, ti_mt ** out) {
+static int32_t open_mt(const char * model_path, ggml_backend_dev_t device, ti_mt ** out) {
     if (!out) return TI_INVALID_INPUT;
     *out = nullptr;
-    if (!model_path || !*model_path || !device_id || !*device_id) return TI_INVALID_INPUT;
+    if (!model_path || !*model_path || !device) return TI_INVALID_INPUT;
     try {
-        const auto device = initialize_cuda(device_id);
-        if (!device) return TI_CUDA_DEVICE;
         auto mt = std::make_unique<ti_mt>();
         const auto status = open_decoder(*mt, model_path, device, "hunyuan-dense");
         if (status != TI_OK) return status;
@@ -306,7 +433,7 @@ extern "C" int32_t ti_mt_open(const char * model_path, const char * device_id, t
     }
 }
 
-extern "C" void ti_mt_close(ti_mt * mt) { delete mt; }
+
 
 namespace {
 bool mt_source_admitted(std::string_view source) {
@@ -369,7 +496,7 @@ int32_t translate(ti_mt & mt, std::string_view source, const char * target,
 }
 }
 
-extern "C" int32_t ti_mt_translate(ti_mt * mt, const char * source, size_t source_len,
+static int32_t translate_mt(ti_mt * mt, const char * source, size_t source_len,
                                    uint32_t source_language, uint32_t target_language,
                                    char * output, size_t output_cap, size_t * out_len) {
     if (!out_len) return TI_INVALID_INPUT;
@@ -391,4 +518,101 @@ extern "C" int32_t ti_mt_translate(ti_mt * mt, const char * source, size_t sourc
         *out_len = 0;
         return TI_INTERNAL;
     }
+}
+
+// The only public owner of the two resident model stages. No public partial
+// opens. A failure to prepare either model releases all acquired resources.
+struct ti_runtime {
+    runtime_lease lease;
+    std::array<locked_asset, 3> assets;
+    std::unique_ptr<ti_asr> asr;
+    std::unique_ptr<ti_mt> mt;
+    bool poisoned = false;
+    void invalidate() {
+        poisoned = true;
+        mt.reset();
+        asr.reset();
+    }
+};
+
+extern "C" int32_t ti_runtime_open(const char * asr_path, const char * projector_path,
+                                   const char * mt_path, const char * device_id,
+                                   ti_runtime ** out) {
+    if (!out) return TI_INVALID_INPUT;
+    *out = nullptr;
+    if (!asr_path || !*asr_path || !projector_path || !*projector_path ||
+        !mt_path || !*mt_path || !device_id || !*device_id) return TI_INVALID_INPUT;
+    try {
+        auto runtime = std::make_unique<ti_runtime>();
+        if (!runtime->lease.acquire()) return TI_BUSY;
+        const auto device = initialize_cuda(device_id);
+        if (!device) return TI_CUDA_DEVICE;
+        // Hash all three before any model allocation, one shared 1 MiB buffer.
+        {
+            hash_algorithm algorithm;
+            if (BCryptOpenAlgorithmProvider(&algorithm.handle, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
+                return TI_ARTIFACT;
+            std::vector<unsigned char> scratch(1024 * 1024);
+            if (!verify_asset(runtime->assets[0], asr_path,
+                              "cd5f5ce9d7c9c03ff47d54d7f2726e63a39e61e3001640c5d08b6e4d3aed1e6d",
+                              2165035232ull, algorithm.handle, scratch) ||
+                !verify_asset(runtime->assets[1], projector_path,
+                              "24eaf9a96fa94fe36ed0c1de68d44cccdb3f2229ee614e5b1b5bab951bc37883",
+                              355709376ull, algorithm.handle, scratch) ||
+                !verify_asset(runtime->assets[2], mt_path,
+                              "d98fe604dec1f28f58f80d7d560f7177e584d3b8e5835862687660e5ff97cb40",
+                              0, algorithm.handle, scratch)) return TI_ARTIFACT;
+        }
+        // Device-global free bytes are a coarse admission signal, not app
+        // peak VRAM or residency proof. Check only at lifecycle boundaries.
+        uint64_t required = k_reserve_bytes;
+        for (const auto & asset : runtime->assets) required += asset.bytes;
+        if (!memory_admitted(device, required)) return TI_VRAM;
+        ti_asr * speech = nullptr;
+        const auto speech_status = open_asr(runtime->assets[0].path.c_str(),
+                                            runtime->assets[1].path.c_str(), device, &speech);
+        if (speech_status != TI_OK) return speech_status;
+        runtime->asr.reset(speech);
+        if (!memory_admitted(device, runtime->assets[2].bytes + k_reserve_bytes)) return TI_VRAM;
+        ti_mt * mt = nullptr;
+        const auto mt_status = open_mt(runtime->assets[2].path.c_str(), device, &mt);
+        if (mt_status != TI_OK) return mt_status;
+        runtime->mt.reset(mt);
+        if (!memory_admitted(device, k_reserve_bytes)) return TI_VRAM;
+        *out = runtime.release();
+        return TI_OK;
+    } catch (...) { return TI_INTERNAL; }
+}
+
+extern "C" void ti_runtime_close(ti_runtime * runtime) { delete runtime; }
+
+namespace {
+int32_t finish_stage(ti_runtime & runtime, int32_t status) {
+    if (status == TI_INFERENCE || status == TI_INTERNAL || status == TI_POISONED)
+        runtime.invalidate();
+    return status;
+}
+}
+
+extern "C" int32_t ti_runtime_transcribe(ti_runtime * runtime, const float * pcm, size_t count,
+                                         uint32_t language, char * output, size_t output_cap,
+                                         size_t * out_len) {
+    if (!out_len) return TI_INVALID_INPUT;
+    *out_len = 0;
+    if (!runtime) return TI_INVALID_INPUT;
+    if (runtime->poisoned) return TI_POISONED;
+    return finish_stage(*runtime, transcribe_asr(runtime->asr.get(), pcm, count, language,
+                                                 output, output_cap, out_len));
+}
+
+extern "C" int32_t ti_runtime_translate(ti_runtime * runtime, const char * source, size_t source_len,
+                                        uint32_t source_language, uint32_t target_language,
+                                        char * output, size_t output_cap, size_t * out_len) {
+    if (!out_len) return TI_INVALID_INPUT;
+    *out_len = 0;
+    if (!runtime) return TI_INVALID_INPUT;
+    if (runtime->poisoned) return TI_POISONED;
+    return finish_stage(*runtime, translate_mt(runtime->mt.get(), source, source_len,
+                                              source_language, target_language,
+                                              output, output_cap, out_len));
 }
