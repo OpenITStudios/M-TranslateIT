@@ -298,9 +298,9 @@ pub(super) fn prepare_output_samples(
             cached_lower = Some(lower);
         }
         let fraction = (source_position - lower as f64) as f32;
-        let value = lower_mono + (upper_mono - lower_mono) * fraction;
+        let value = (lower_mono + (upper_mono - lower_mono) * fraction).clamp(-1.0, 1.0);
         for _ in 0..target_channels {
-            output.push(value.clamp(-1.0, 1.0));
+            output.push(value);
         }
     }
     Ok(output)

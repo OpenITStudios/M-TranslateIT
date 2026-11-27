@@ -157,7 +157,7 @@ pub fn clear_prepared_meeting_output_device() {
 }
 
 struct PlaybackCursor {
-    samples: Arc<Vec<f32>>,
+    samples: Vec<f32>,
     index: usize,
     completed: bool,
     first_playback_signalled: bool,
@@ -169,6 +169,24 @@ struct PlaybackCursor {
     source_epoch: Option<u64>,
     sample_rate_hz: u32,
     channels: u16,
+}
+
+// Copy the bounded available prefix and silence only the unused tail.
+// Conversion and index advancement retain the existing interleaved sample order.
+fn write_playback_buffer<T: Copy>(
+    source: &[f32],
+    target: &mut [T],
+    convert: &impl Fn(f32) -> T,
+) -> usize {
+    let count = source.len().min(target.len());
+    let (audio, silence) = target.split_at_mut(count);
+    for (slot, sample) in audio.iter_mut().zip(&source[..count]) {
+        *slot = convert(*sample);
+    }
+    if !silence.is_empty() {
+        silence.fill(convert(0.0));
+    }
+    count
 }
 
 impl PlaybackCursor {
@@ -195,17 +213,11 @@ impl PlaybackCursor {
             return;
         }
 
-        for target in data.iter_mut() {
-            if let Some(value) = self.samples.get(self.index).copied() {
-                if !self.first_playback_signalled {
-                    self.signal_first_playback(callback_info);
-                }
-                *target = convert(value);
-                self.index += 1;
-            } else {
-                *target = convert(0.0);
-            }
+        if !self.first_playback_signalled && !data.is_empty() && self.index < self.samples.len() {
+            self.signal_first_playback(callback_info);
         }
+        let copied = write_playback_buffer(&self.samples[self.index..], data, &convert);
+        self.index += copied;
 
         // The device may report a failure during this callback buffer. Do
         // not submit that already-prepared buffer after the fault is known.
@@ -314,7 +326,7 @@ fn build_output_stream(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     sample_format: cpal::SampleFormat,
-    samples: Arc<Vec<f32>>,
+    samples: Vec<f32>,
     cancel_requested: Arc<AtomicBool>,
     generation: u64,
     source_epoch: Option<u64>,
@@ -323,7 +335,7 @@ fn build_output_stream(
     callback_failed: Arc<AtomicBool>,
 ) -> Result<cpal::Stream, String> {
     let make_cursor = |tx: mpsc::SyncSender<Duration>| PlaybackCursor {
-        samples: Arc::clone(&samples),
+        samples,
         index: 0,
         completed: false,
         first_playback_signalled: false,
@@ -421,7 +433,7 @@ pub fn probe_prepared_meeting_output_device_functionally(
     // its callback without emitting speech. Zero-valued frames are sufficient: C5
     // verifies endpoint execution, not meeting-app reception or audible content.
     let sample_count = usize::from(config.channels).saturating_mul(FUNCTIONAL_OUTPUT_PROBE_FRAMES);
-    let samples = Arc::new(vec![0.0_f32; sample_count]);
+    let samples = vec![0.0_f32; sample_count];
     let cancel_requested = Arc::new(AtomicBool::new(false));
     let (completion_tx, _completion_rx) = mpsc::sync_channel(1);
     let (first_playback_tx, first_playback_rx) = mpsc::sync_channel(1);
@@ -652,10 +664,14 @@ fn deliver_meeting_output_wav_inner(
     let sample_format = supported.sample_format();
     let config: cpal::StreamConfig = supported.into();
     let samples = match prepare_output_samples(&wav, config.sample_rate, config.channels) {
-        Ok(value) => Arc::new(value),
+        Ok(value) => value,
         Err(blocker) => return blocked(&blocker, false),
     };
-    if samples.is_empty() {
+    // Only the prepared device-format samples are needed by native playback.
+    // Release the decoded source before opening or waiting on the stream.
+    drop(wav);
+    let sample_count = samples.len();
+    if sample_count == 0 {
         return blocked("meeting_output:prepared_audio_empty", false);
     }
 
@@ -686,7 +702,7 @@ fn deliver_meeting_output_wav_inner(
         &device,
         &config,
         sample_format,
-        Arc::clone(&samples),
+        samples,
         Arc::clone(&cancel_requested),
         generation,
         source_epoch,
@@ -716,7 +732,7 @@ fn deliver_meeting_output_wav_inner(
     }
 
     let deadline = Duration::from_millis(delivery_deadline_ms(
-        samples.len(),
+        sample_count,
         config.channels,
         config.sample_rate,
     ));
@@ -787,7 +803,7 @@ mod tests {
         stream_start_to_first_audio_ms, wait_for_output_completion, wait_for_output_tail,
         install_cancel_control, clear_cancel_control, cancel_meeting_output_for_generation,
         cancel_control, release_output_stream, signal_output_callback_failure,
-        output_completion_blocker, PlaybackCursor,
+        output_completion_blocker, write_playback_buffer, PlaybackCursor,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{mpsc, Arc};
@@ -796,13 +812,40 @@ mod tests {
 
 
     #[test]
+    fn playback_buffer_preserves_partial_progress_and_format_silence() {
+        let source = [-1.0_f32, 0.25, 1.0];
+        let mut first = [9.0_f32; 2];
+        let copied = write_playback_buffer(&source, &mut first, &|value| value);
+        assert_eq!(copied, 2);
+        assert_eq!(first, [-1.0, 0.25]);
+
+        let mut last = [9.0_f32; 3];
+        assert_eq!(write_playback_buffer(&source[copied..], &mut last, &|value| value), 1);
+        assert_eq!(last, [1.0, 0.0, 0.0]);
+
+        let mut idle = [0_u16; 3];
+        let unsigned = |value: f32| (((value.clamp(-1.0, 1.0) + 1.0) * 0.5)
+            * u16::MAX as f32).round() as u16;
+        assert_eq!(write_playback_buffer(&[], &mut idle, &unsigned), 0);
+        assert_eq!(idle, [32_768; 3]);
+        assert_eq!(write_playback_buffer(&source, &mut [], &unsigned), 0);
+        assert_eq!(write_playback_buffer(&source[..2], &mut idle, &unsigned), 2);
+        assert_eq!(idle, [0, 40_959, 32_768]);
+
+        let mut signed = [1_i16; 4];
+        let i16_pcm = |value: f32| (value.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16;
+        assert_eq!(write_playback_buffer(&source, &mut signed, &i16_pcm), 3);
+        assert_eq!(signed, [-32_767, 8_192, 32_767, 0]);
+    }
+
+    #[test]
     fn device_error_discards_callback_buffer_without_claiming_stop() {
         let callback_failed = Arc::new(AtomicBool::new(false));
         let cancel_requested = Arc::new(AtomicBool::new(false));
         let (completion_tx, completion_rx) = mpsc::sync_channel(1);
         let (first_playback_tx, _first_playback_rx) = mpsc::sync_channel(1);
         let mut cursor = PlaybackCursor {
-            samples: Arc::new(vec![0.7_f32, 0.8]),
+            samples: vec![0.7_f32, 0.8],
             index: 0,
             completed: false,
             first_playback_signalled: false,

@@ -473,6 +473,7 @@ pub(super) fn enqueue_meeting_playback(mut job: PreparedPlaybackJob) -> Result<(
     // Only the canonical source/turn owner may admit a Local prepared WAV.
     // Unverified Codex assistant text never enters this queue.
     if !super::local_translated_meeting_route_admitted() {
+        cleanup_job(&mut job);
         return Err("meeting_playback:codex_voice_not_admitted".to_string());
     }
     let generation = job.generation;
