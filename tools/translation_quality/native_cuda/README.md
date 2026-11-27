@@ -25,6 +25,20 @@ worker remains unchanged until the coordinated cutover. My Voice is excluded.
   must return from the call before close; callers must fence generation
   and retain incomplete cleanup on timeout. No extra timer or scheduler.
 
+- `RuntimeOwner` opens, executes and closes the thread-bound pair on one
+  persistent Rust thread. `begin` receives owned PCM/text only after the
+  existing host scheduler admits work. A single guarded handoff slot
+  refuses a second active request; it is not a priority or waiting queue.
+  One reusable output scratch lives on that thread. The caller holds the
+  existing permit through the owned reply's `wait`; dropping an unfinished
+  reply cancels and waits rather than detaching work. Wait/drop must run
+  outside the host lifecycle lock. The host retains exact generation/session
+  authority, signals `cancel_active` only for its matching request, and
+  retains the owner if nonblocking `try_close` reports incomplete cleanup
+  or a failed join. Owner Drop joins as a safety backstop, not a UI Stop
+  operation. Model open is synchronous and not interruptible. No production
+  caller, model download, dependency or Tauri Cargo graph change yet.
+
 ## Held local integration
 
 Only the separately authorized integrated PC phase may configure/build or execute.
@@ -37,7 +51,9 @@ The held ignored Rust lifecycle fixture requires explicit ASR/projector/MT GGUF
 paths and CUDA PCI ID from the target; missing input is not PASS. It covers wrong
 asset admission, exclusive ownership, pre-cancellation, expired deadline,
 cooperative MT cancellation with no partial output, subsequent MT reuse,
-close and reopen. It is not comprehensive inference or latency proof.
+owner-thread translation, close and reopen. A separate mechanical fixture
+checks the one-slot admission and incomplete close without model execution.
+Neither fixture is comprehensive inference or latency proof.
 Record actual compiler/CUDA toolkit, dependency closure, patch diff, build
 identity, DLL identity, model hashes and target GPU. This is not a packaging
 recipe or authorization to run a test now.

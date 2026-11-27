@@ -3,6 +3,9 @@
 use std::{ffi::{c_char, c_void, CString}, marker::PhantomData, path::Path,
           ptr::NonNull, rc::Rc, sync::atomic::{AtomicBool, Ordering}, time::Instant};
 
+mod owner;
+pub use owner::{InferenceInput, PendingInference, RuntimeOwner};
+
 const ABI: u32 = 4;
 const CANCELLED: i32 = 16;
 const DEADLINE: i32 = 17;
@@ -40,6 +43,9 @@ pub enum Error {
     InvalidReceipt,
     Cancelled,
     DeadlineExceeded,
+    OwnerBusy,
+    OwnerUnavailable,
+    OwnerThreadFailed,
 }
 
 /// The caller supplies the existing cancellation flag and absolute deadline.
@@ -226,7 +232,15 @@ mod tests {
                                &active, &mut output).expect("reuse after cooperative stop").is_empty());
         assert!(matches!(Runtime::open(&asr, &projector, &mt, &pci), Err(Error::Native(15))));
         drop(pair);
-        let reopened = Runtime::open(&asr, &projector, &mt, &pci).expect("reopen after close");
+        let mut reopened = RuntimeOwner::open(&asr, &projector, &mt, &pci).expect("open on owner thread");
+        let pending = reopened.begin(InferenceInput::Translation {
+            source: "Halo".into(), from: Language::Indonesian, to: Language::English,
+        }, Instant::now() + std::time::Duration::from_secs(30)).expect("admitted native request");
+        assert!(!pending.wait().expect("owned native translation").is_empty());
+        // Drop joins the idle owner. Production Stop instead retains any
+        // incomplete try_close result and does not block the UI.
+        drop(reopened);
+        let reopened = Runtime::open(&asr, &projector, &mt, &pci).expect("lease released after owner close");
         drop(reopened);
     }
 
