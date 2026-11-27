@@ -88,6 +88,25 @@ fn clean_helper_text(value: &str, max_chars: usize) -> String {
         .to_string()
 }
 
+// One promotion contract for the currently selected ASR/translation stack.
+// Replace these identities together with the native adapter at cutover;
+// a CPU or secondary-model receipt is never authoritative Meeting output.
+pub(super) fn meeting_asr_compute_admitted(value: &Value) -> bool {
+    value.get("device").and_then(Value::as_str) == Some("cuda")
+        && value.get("compute_type").and_then(Value::as_str) == Some("int8_float16")
+        && value.get("model_id").and_then(Value::as_str) == Some("faster-whisper-large-v3-turbo")
+}
+
+pub(super) fn meeting_translation_compute_admitted(value: &Value) -> bool {
+    value.get("device").and_then(Value::as_str) == Some("cuda")
+        && value.get("precision").and_then(Value::as_str) == Some("bf16")
+        && value.get("model_id").and_then(Value::as_str) == Some("milmmt-46-1b-v1.0")
+        && value.get("model_revision").and_then(Value::as_str)
+            == Some("4fc480b6c58dec29c159dcdf9fde0f6d5c354995")
+        && value.get("translation_degraded").and_then(Value::as_bool) == Some(false)
+        && value.get("translation_fallback_reason").and_then(Value::as_str) == Some("")
+}
+
 fn worker_text(value: &Value, key: &str) -> Option<String> {
     value
         .get(key)

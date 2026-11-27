@@ -304,7 +304,8 @@ fn validated_meeting_translation(
     }
     let value = &response.worker_response_json;
     let expected_pair = format!("{source_language}->{target_language}");
-    if value.get("ok").and_then(Value::as_bool) != Some(true)
+    if !super::helper_bridge::meeting_translation_compute_admitted(value)
+        || value.get("ok").and_then(Value::as_bool) != Some(true)
         || value.get("stage").and_then(Value::as_str) != Some("translate")
         || value.get("translation_contract").and_then(Value::as_str)
             != Some("canonical_bidirectional_id_en")
@@ -333,7 +334,8 @@ fn validated_meeting_asr_transcript(
         return None;
     }
     let value = &response.worker_response_json;
-    if value.get("ok").and_then(Value::as_bool) != Some(true)
+    if !super::helper_bridge::meeting_asr_compute_admitted(value)
+        || value.get("ok").and_then(Value::as_bool) != Some(true)
         || value.get("stage").and_then(Value::as_str) != Some("transcribe")
         || value.get("language").and_then(Value::as_str) != Some(expected_language)
         || value.get("blocker").and_then(Value::as_str) != Some("")
@@ -846,6 +848,8 @@ mod translation_delivery_contract_tests {
         let valid = json!({
             "ok": true, "stage": "transcribe", "language": "id",
             "blocker": "", "transcript_text": "  Selamat pagi.  ",
+            "device": "cuda", "compute_type": "int8_float16",
+            "model_id": "faster-whisper-large-v3-turbo",
         });
         let mut outgoing = response(valid.clone());
         outgoing.task = "transcribe".into();
@@ -862,6 +866,9 @@ mod translation_delivery_contract_tests {
             ("blocker", json!("asr:provider_failed")),
             ("transcript_text", json!("  ")),
             ("transcript_text", json!(12)),
+            ("device", json!("cpu")),
+            ("compute_type", json!(null)),
+            ("model_id", json!("faster-whisper-medium")),
         ] {
             let mut invalid = outgoing.clone();
             let mut payload = valid.clone();
@@ -936,6 +943,10 @@ mod translation_delivery_contract_tests {
             "target_language": "en",
             "direction_pair": "id->en",
             "translated_text": "  The meeting starts now.  ",
+            "device": "cuda", "precision": "bf16",
+            "model_id": "milmmt-46-1b-v1.0",
+            "model_revision": "4fc480b6c58dec29c159dcdf9fde0f6d5c354995",
+            "translation_degraded": false, "translation_fallback_reason": "",
         });
         assert_eq!(
             validated_meeting_translation(&response(valid.clone()), "id", "en"),
@@ -956,6 +967,12 @@ mod translation_delivery_contract_tests {
             ("direction_pair", json!(null)),
             ("translated_text", json!("  ")),
             ("translated_text", json!(123)),
+            ("device", json!("cpu")),
+            ("precision", json!("fp32")),
+            ("model_id", json!("other-model")),
+            ("model_revision", json!(null)),
+            ("translation_degraded", json!(true)),
+            ("translation_fallback_reason", json!("torch_cuda_unavailable")),
         ] {
             let mut broken = valid.clone();
             broken[key] = replacement;

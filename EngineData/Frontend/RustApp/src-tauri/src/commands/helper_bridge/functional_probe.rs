@@ -9,9 +9,35 @@ use super::functional_readiness::{
     functional_asr_output, functional_translation_output, functional_voice_actor_output_path,
     invalidate_required_outbound_ai_readiness,
 };
-use super::{get_helper_bridge_status, send_worker_task, worker_text};
+use super::{
+    get_helper_bridge_status, meeting_asr_compute_admitted,
+    meeting_translation_compute_admitted, send_worker_task, worker_text,
+};
 
 const REQUIRED_OUTBOUND_FUNCTIONAL_ID_FIXTURE: &str = "selamat pagi";
+
+// This observation is already returned by the required status request.
+// Do not load a candidate whose current capability/asset identity is degraded.
+fn meeting_compute_preflight_admitted(value: &Value) -> bool {
+    value.get("cuda_capability_known").and_then(Value::as_bool) == Some(true)
+        && value.get("cpu_fallback_active").and_then(Value::as_bool) == Some(false)
+        && value.get("selected_device").and_then(Value::as_str) == Some("cuda")
+        && value.get("selected_translation_device").and_then(Value::as_str) == Some("cuda")
+        && value.get("asr_primary_model_ready").and_then(Value::as_bool) == Some(true)
+        && value.get("asr_active_model_id").and_then(Value::as_str)
+            == Some("faster-whisper-large-v3-turbo")
+        && match value.get("loaded").and_then(|loaded| loaded.get("asr")).and_then(Value::as_bool) {
+            Some(false) => true,
+            Some(true) => {
+                let loaded = &value["loaded"];
+                loaded.get("asr_device").and_then(Value::as_str) == Some("cuda")
+                    && loaded.get("asr_compute_type").and_then(Value::as_str) == Some("int8_float16")
+                    && loaded.get("asr_model_id").and_then(Value::as_str)
+                        == Some("faster-whisper-large-v3-turbo")
+            }
+            None => false,
+        }
+}
 
 fn remove_probe_output_paths(requested_path: &str, reported_path: Option<&str>) {
     if let Some(path) = reported_path.filter(|path| !path.trim().is_empty()) {
@@ -48,6 +74,10 @@ pub(super) fn run_required_outbound_ai_probe(
         invalidate_required_outbound_ai_readiness();
         return Err("local translation runtime");
     }
+    if !meeting_compute_preflight_admitted(&refreshed.worker_response_json) {
+        invalidate_required_outbound_ai_readiness();
+        return Err("CUDA speech and translation (primary models required)");
+    }
     let helper = get_helper_bridge_status();
     if helper.state != "ready" || !helper.provider_ready || helper.generation_token == 0 {
         invalidate_required_outbound_ai_readiness();
@@ -62,7 +92,7 @@ pub(super) fn run_required_outbound_ai_probe(
             "meeting_generation": meeting_generation,
         }),
     );
-    if !asr.ok {
+    if !asr.ok || !meeting_asr_compute_admitted(&asr.worker_response_json) {
         invalidate_required_outbound_ai_readiness();
         return Err("speech recognition");
     }
@@ -78,6 +108,10 @@ pub(super) fn run_required_outbound_ai_probe(
             "meeting_generation": meeting_generation,
         }),
     );
+    if !meeting_translation_compute_admitted(&translation.worker_response_json) {
+        invalidate_required_outbound_ai_readiness();
+        return Err("CUDA Indonesian to English translation");
+    }
     let Some(translated_fixture) = functional_translation_output(&translation) else {
         invalidate_required_outbound_ai_readiness();
         return Err("Indonesian to English translation");
@@ -133,7 +167,9 @@ pub(super) fn run_required_outbound_ai_probe(
         .and_then(Value::as_str)
         .map(str::to_string);
     remove_probe_output_paths(output_path, reported_voice_path.as_deref());
-    if !functional_asr_output(&asr_inference) {
+    if !functional_asr_output(&asr_inference)
+        || !meeting_asr_compute_admitted(&asr_inference.worker_response_json)
+    {
         invalidate_required_outbound_ai_readiness();
         return Err("speech recognition");
     }
@@ -264,7 +300,41 @@ fn voice_only_probe_has_wav_header(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::remove_probe_output_paths;
+    use super::{meeting_compute_preflight_admitted, remove_probe_output_paths};
+    use serde_json::json;
+
+    #[test]
+    fn meeting_compute_preflight_refuses_cpu_backup_and_unknown_resident_identity() {
+        let valid = json!({
+            "cuda_capability_known": true, "cpu_fallback_active": false,
+            "selected_device": "cuda", "selected_translation_device": "cuda",
+            "asr_primary_model_ready": true,
+            "asr_active_model_id": "faster-whisper-large-v3-turbo",
+            "loaded": {"asr": false}
+        });
+        assert!(meeting_compute_preflight_admitted(&valid));
+        for (key, replacement) in [
+            ("cuda_capability_known", json!(null)),
+            ("cpu_fallback_active", json!(true)),
+            ("selected_device", json!("cpu")),
+            ("selected_translation_device", json!("cpu")),
+            ("asr_primary_model_ready", json!(false)),
+            ("asr_active_model_id", json!("faster-whisper-medium")),
+            ("loaded", json!({"asr": true})),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[key] = replacement;
+            assert!(!meeting_compute_preflight_admitted(&invalid), "{key}");
+        }
+        let mut resident = valid;
+        resident["loaded"] = json!({
+            "asr": true, "asr_device": "cuda", "asr_compute_type": "int8_float16",
+            "asr_model_id": "faster-whisper-large-v3-turbo"
+        });
+        assert!(meeting_compute_preflight_admitted(&resident));
+        resident["loaded"]["asr_model_id"] = json!("faster-whisper-medium");
+        assert!(!meeting_compute_preflight_admitted(&resident));
+    }
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 

@@ -418,6 +418,8 @@ mod tests {
         let valid = serde_json::json!({
             "ok": true, "stage": "transcribe", "language": "en",
             "blocker": "", "transcript_text": "  The meeting is open. ",
+            "device": "cuda", "compute_type": "int8_float16",
+            "model_id": "faster-whisper-large-v3-turbo",
         });
         let mut response = HelperBridgeWorkerResponse {
             ok: true,
