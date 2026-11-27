@@ -98,7 +98,8 @@ export function parseWorkerCapabilities(
         ? `Loaded · ${String(loaded["voice_actor_device"] ?? "unknown")}`
         : "Not loaded",
       executionDisplay: `ASR ${asrSelected} · Translation ${translationSelected}`,
-      torchMemoryDisplay: torchMemoryDisplay(gpu, validStatus),
+      torchMemoryDisplay: validStatus && payload["runtime_backend"] === "native_cuda"
+        ? "Not used (native CUDA)" : torchMemoryDisplay(gpu, validStatus),
       deviceMemoryDisplay: deviceMemoryDisplay(gpu, validStatus),
     };
   } catch {

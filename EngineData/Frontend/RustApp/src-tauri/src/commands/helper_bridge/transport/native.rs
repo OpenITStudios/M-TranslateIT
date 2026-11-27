@@ -134,6 +134,48 @@ fn probe_pcm(payload: &Value, request_scope: &Scope) -> Result<Vec<f32>, &'stati
     decode_functional_probe_asr_pcm(file).map_err(|_| "asr:probe_wav_invalid")
 }
 
+// Same scheduler permit as inference. Control requests observe the Rust
+// lifecycle and asset eligibility; never load models or claim a functional pass.
+pub(super) fn control(task: &str, payload: &Value, permit: &HelperTaskPermit, priority: HelperTaskPriority)
+    -> HelperBridgeWorkerResponse
+{
+    let request_id = permit.request_id();
+    if !matches!(task, "ping" | "status") {
+        return standalone_blocked_response(task, request_id, priority, "error",
+            "native_voice:typed_request_required", "This caller has not migrated to the native voice contract.");
+    }
+    let Ok(mut host) = runtime().lock() else {
+        return standalone_blocked_response(task, request_id, priority, "error",
+            "helper_bridge:lock_poisoned", "Native lifecycle state is unavailable.");
+    };
+    if (payload.get("meeting_start_prepare").and_then(Value::as_bool) == Some(true)
+        || payload.get("meeting_generation").is_some_and(|value| !value.is_null())
+        || payload.get("meeting_session_id").is_some_and(|value| !value.is_null()))
+        && scope(payload).is_none()
+    {
+        return standalone_blocked_response(task, request_id, priority, "error",
+            "native_inference:scope_revoked", "Native control request has no current Meeting authority.");
+    }
+    if !host.native_lifecycle_ready() || !host.native_owner_healthy() || host.active_request_id.is_some() {
+        return standalone_blocked_response(task, request_id, priority, "error",
+            "native_inference:lifecycle_not_ready", "Native lifecycle is stopped, busy or requires cleanup.");
+    }
+    let mut body = if task == "status" {
+        crate::commands::helper_bridge_runtime::project_candidate_status(&mut host)
+    } else {
+        json!({"ok": true, "stage": "ping", "blocker": "",
+            "note": "Native Rust lifecycle initialized; no model execution was attempted."})
+    };
+    body["request_id"] = json!(request_id);
+    body["scheduler_priority"] = json!(priority.label());
+    body["scheduler_wait_ms"] = json!(permit.scheduler_wait_ms());
+    let ok = body.get("ok").and_then(Value::as_bool) == Some(true);
+    let message = worker_message(task, &body);
+    let mut response = response_with_runtime(ok, task, request_id, priority, message, body, &host);
+    if task == "status" { response.runtime_claim = super::super::NATIVE_STATUS_CLAIM.into(); }
+    response
+}
+
 /// ASR/MT has one production route. Missing resources are terminal.
 pub(super) fn dispatch(
     task: &str, payload: &mut Value, pcm: Option<MeetingPcmInput<'_>>,
@@ -166,7 +208,9 @@ pub(super) fn dispatch(
         return fail("native_inference:scope_invalid", "Native inference requires current exact session authority.");
     };
     if host.pending_meeting_cleanup_session_id.is_some() || host.active_request_id.is_some()
-        || host.state != "ready" || host.child.is_none()
+        || (if super::super::native_voice_candidate_enabled() {
+            !host.native_lifecycle_ready() || !host.native_owner_healthy()
+        } else { host.state != "ready" || host.child.is_none() })
         || host.last_error.as_deref() == Some("helper_bridge:cleanup_incomplete")
         || crate::commands::voice_lab::voice_lab_build_blocks_meeting()
     {
@@ -214,7 +258,12 @@ pub(super) fn dispatch(
         if task != "asr_preload" && !(request_scope.session_id.is_none() && task == "translate") {
             return fail("native_inference:owner_unavailable", "Prepare the native model pair first.");
         }
-        if !host.provider_ready {
+        // Standalone Text needs only the ASR/MT pair, not an approved voice.
+        // Preserve the existing full-stack requirement for Meeting.
+        let standalone_candidate_text = super::super::native_voice_candidate_enabled()
+            && request_scope.session_id.is_none() && task == "translate"
+            && crate::commands::helper_bridge_runtime::NativeInferenceOwner::assets_present();
+        if !host.provider_ready && !standalone_candidate_text {
             return fail("native_inference:assets_or_voice_unavailable", "Native preparation requires current asset and voice capability.");
         }
         // Build-supplied immutable pins and the reviewed controlled runtime

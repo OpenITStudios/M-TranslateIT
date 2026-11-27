@@ -266,7 +266,13 @@ fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcm
             "Native CUDA translation requires Windows.",
         );
     }
-    // Only control/status and existing voice operations may enter IPC.
+    // In the explicit native candidate build, control/status never crosses
+    // Python IPC, and unmigrated voice callers fail closed instead of falling back.
+    #[cfg(windows)]
+    if super::native_voice_candidate_enabled() {
+        return native::control(task, &payload, &permit, priority);
+    }
+    // Legacy build only: control/status and existing voice operations.
     if pcm.is_some() || !matches!(task, "ping" | "status" | "voice_actor_preflight" | "voice_actor_synthesize") {
         return standalone_blocked_response(
             task, &request_id, priority, "error", "helper_bridge:unsupported_task",

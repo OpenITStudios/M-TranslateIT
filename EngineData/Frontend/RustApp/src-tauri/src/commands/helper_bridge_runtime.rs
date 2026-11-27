@@ -122,7 +122,7 @@ impl NativeInferenceOwner {
         ))
     }
 
-    fn assets_present() -> bool {
+    pub(super) fn assets_present() -> bool {
         Self::asset_paths().is_ok_and(|(dll, asr, projector, mt, _)| {
             [dll, asr, projector, mt].iter().all(|path| {
                 std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0)
@@ -146,6 +146,21 @@ impl NativeInferenceOwner {
         Ok(Self { session_id, owner, native_voice: None })
     }
 
+    fn voice_asset_paths(paths: &crate::engine::paths::ProjectPaths) -> (PathBuf, PathBuf) {
+        let voice = PathBuf::from(&paths.voice_runtime_dir).join("ModelData/zonos3-mini");
+        (voice.join("ZONOS3-Mini-Q8_0.gguf"), voice.join("mmproj-ZONOS3-Mini-F32.gguf"))
+    }
+
+    fn voice_assets_present(paths: &crate::engine::paths::ProjectPaths) -> bool {
+        use std::os::windows::fs::MetadataExt;
+        let (model, codec) = Self::voice_asset_paths(paths);
+        [(model, 854726208_u64), (codec, 1142502880_u64)].iter().all(|(path, bytes)| {
+            std::fs::symlink_metadata(path).is_ok_and(|meta| {
+                meta.is_file() && meta.file_attributes() & 0x400 == 0 && meta.len() == *bytes
+            })
+        })
+    }
+
     /// Candidate open, used only by explicit selected-voice preparation,
     /// not by live synthesis or the current pair-only production admission.
     /// All model paths are derived from the controlled runtime root.
@@ -159,9 +174,7 @@ impl NativeInferenceOwner {
         if session_id.as_deref() == Some("") { return Err(Error::InvalidInput); }
         let (dll, asr, projector, mt, pins) = Self::asset_paths()?;
         let paths = crate::engine::paths::ProjectPaths::discover();
-        let voice = PathBuf::from(&paths.voice_runtime_dir).join("ModelData/zonos3-mini");
-        let model = voice.join("ZONOS3-Mini-Q8_0.gguf");
-        let codec = voice.join("mmproj-ZONOS3-Mini-F32.gguf");
+        let (model, codec) = Self::voice_asset_paths(&paths);
         let owner = unsafe {
             RuntimeOwner::open_with_voice(&dll, pins, &asr, &projector, &mt, None,
                 Some((&model, &codec)))?
@@ -179,7 +192,8 @@ impl NativeInferenceOwner {
             (Some(generation), Some(session_id)) if generation != 0 => state.snapshot.is_some_and(|snapshot| {
                 snapshot.owner_id == APPLICATION_MEETING_OWNER_ID && snapshot.authority_active
                     && snapshot.generation == generation && snapshot.session_id == session_id
-                    && (if preparing { snapshot.phase == "starting" } else { snapshot.phase == "live" })
+                    && (if preparing { matches!(snapshot.phase.as_str(), "starting" | "live") }
+                        else { snapshot.phase == "live" })
             }),
             _ => false,
         }
@@ -305,6 +319,24 @@ impl Default for HelperBridgeRuntime {
 }
 
 impl HelperBridgeRuntime {
+    // In the candidate build, Ready denotes initialized Rust lifecycle,
+    // not a running child, loaded model, or successful inference.
+    pub(super) fn native_lifecycle_ready(&self) -> bool {
+        self.state == "ready" && self.generation_token != 0
+            && self.child.is_none() && self.stdin.is_none() && self.stdout.is_none()
+            && self.stdin_writer.is_none() && self.stdout_reader.is_none()
+            && self.stderr_logger.is_none() && !self.io_thread_join_failed
+            && self.pending_meeting_cleanup_session_id.is_none()
+            && self.last_error.as_deref() != Some("helper_bridge:cleanup_incomplete")
+    }
+
+    pub(super) fn native_owner_healthy(&self) -> bool {
+        #[cfg(windows)]
+        { self.native_inference.as_ref().is_none_or(|native| native.owner.is_available()) }
+        #[cfg(not(windows))]
+        { false }
+    }
+
     pub(super) fn native_meeting_session_id(&self) -> Option<&str> {
         #[cfg(windows)]
         {
@@ -377,7 +409,13 @@ pub fn unix_ms() -> u128 {
 }
 
 pub fn runtime_claim(runtime: &HelperBridgeRuntime) -> String {
-    if runtime.child.is_some() && runtime.state == "ready" {
+    if super::helper_bridge::native_voice_candidate_enabled() {
+        if runtime.native_lifecycle_ready() && runtime.native_owner_healthy() {
+            "native_rust_lifecycle_initialized".to_string()
+        } else {
+            "native_rust_lifecycle_not_ready".to_string()
+        }
+    } else if runtime.child.is_some() && runtime.state == "ready" {
         "helper_process_ready_ping_verified".to_string()
     } else {
         "bridge_lifecycle_visible_process_not_ready".to_string()
@@ -390,7 +428,9 @@ pub fn status_from_runtime(runtime: &HelperBridgeRuntime) -> HelperBridgeStatus 
     #[cfg(not(windows))]
     let native_available = true;
     HelperBridgeStatus {
-        state: runtime.state.clone(),
+        state: if super::helper_bridge::native_voice_candidate_enabled() && runtime.state == "ready"
+            && (!runtime.native_lifecycle_ready() || !native_available) { "blocked".into() }
+            else { runtime.state.clone() },
         message: runtime.message.clone(),
         cuda_ready: runtime.cuda_ready && native_available,
         provider_ready: runtime.provider_ready && native_available,
@@ -580,6 +620,85 @@ fn native_status_payload(worker: &Value, pci: Option<&str>, assets_present: bool
     })
 }
 
+
+// Pure candidate projection. Cold file presence is eligibility only;
+// a loaded pair is not evidence that a voice is bound or synthesis worked.
+fn candidate_status_payload(lifecycle_ready: bool, pair_present: bool,
+                            voice_assets_present: bool, selected: Result<&str, &str>,
+                            pci: Option<&str>, bound_token: Option<&str>) -> Value {
+    use super::helper_bridge::{NATIVE_ASR_MODEL, NATIVE_MT_MODEL};
+    let pair_ready = lifecycle_ready && pair_present;
+    let voice_ready = lifecycle_ready && voice_assets_present && selected.is_ok();
+    let ready = pair_ready && voice_ready;
+    let resident = pair_ready && pci.is_some();
+    let bound = ready && resident && bound_token.is_some();
+    let blocker = if !lifecycle_ready { "native_inference:lifecycle_not_ready" }
+        else if !pair_present { "native_inference:assets_or_owner_unavailable" }
+        else if !voice_assets_present { "native_voice:model_assets_unavailable" }
+        else { selected.err().unwrap_or("") };
+    let device = if resident { "cuda" } else if pair_ready { "not_loaded" } else { "blocked" };
+    json!({
+        "ok": ready, "stage": "local_realtime_worker_preflight",
+        "runtime_backend": "native_cuda", "blocker": blocker, "provider_ready": ready,
+        "note": if ready && bound { "Native model owner and selected voice are bound; functional inference proof is separate." }
+            else if ready { "Native assets and selected reference are eligible; explicit preparation must verify hashes, CUDA and inference." }
+            else { "Native runtime prerequisites are unavailable." },
+        "readiness": {
+            "asr": pair_ready, "translation_id_en": pair_ready,
+            "translation_en_id": pair_ready, "translation_bidirectional": pair_ready,
+            "voice_actor_tts": voice_ready, "cuda_degraded": false,
+        },
+        "cuda_pci_id": pci.filter(|_| resident), "cuda_capability_known": resident,
+        "cpu_fallback_active": false, "selected_device": device, "selected_translation_device": device,
+        "selected_compute_type": if resident { "q8_0" } else { "blocked" },
+        "asr_primary_model_ready": pair_ready, "asr_model_ready": pair_ready,
+        "asr_active_model_id": NATIVE_ASR_MODEL,
+        "translation_id_en_ready": pair_ready, "translation_en_id_ready": pair_ready,
+        "translation_bidirectional_ready": pair_ready, "voice_actor_ready": voice_ready,
+        "voice_actor_token": bound_token.filter(|_| bound),
+        "tts": {"model_id": "zonos3-mini-q8_0", "sample_rate_hz": 44100},
+        "dependencies": {"python_required": false, "torch_required": false},
+        "gpu": {},
+        "loaded": {
+            "asr": resident, "asr_model_id": NATIVE_ASR_MODEL,
+            "asr_device": device, "asr_compute_type": if resident { "q8_0" } else { "blocked" },
+            "translation_model_id": NATIVE_MT_MODEL,
+            "translation_directions": if resident { vec!["id->en", "en->id"] } else { Vec::<&str>::new() },
+            "voice_actor": bound, "voice_actor_device": if bound { "cuda" } else { "not_loaded" },
+        },
+    })
+}
+
+#[cfg(windows)]
+pub(super) fn project_candidate_status(runtime: &mut HelperBridgeRuntime) -> Value {
+    let admitted = runtime.native_lifecycle_ready() && runtime.native_owner_healthy()
+        && runtime.active_request_id.is_none();
+    let paths = crate::engine::paths::ProjectPaths::discover();
+    let pair = admitted && NativeInferenceOwner::assets_present();
+    let voice = admitted && NativeInferenceOwner::voice_assets_present(&paths);
+    let owner = runtime.native_inference.as_ref().filter(|native| native.owner.is_available());
+    let selected = if admitted {
+        crate::commands::voice_lab::selected_native_builtin_identity(&paths).map(|(id, _)| id)
+    } else { Err("native_inference:lifecycle_not_ready") };
+    let binding = owner.and_then(|native| native.native_voice.as_ref());
+    let selected = if binding.is_some_and(|bound| selected.is_ok_and(|id| id != bound.voice_id)) {
+        Err("native_voice:selected_reference_changed")
+    } else { selected };
+    let pci = owner.map(|native| native.owner.device_id());
+    let token = binding.filter(|bound| selected.is_ok_and(|id| id == bound.voice_id))
+        .map(|bound| bound.actor_token.as_str());
+    let projected = candidate_status_payload(admitted, pair, voice, selected, pci, token);
+    runtime.cuda_ready = worker_bool(&projected, "cuda_capability_known");
+    runtime.provider_ready = worker_bool(&projected, "ok");
+    runtime.degraded_mode = false;
+    if runtime.last_error.as_deref() != Some("helper_bridge:cleanup_incomplete") {
+        runtime.last_error = worker_text(&projected, "blocker");
+    }
+    runtime.message = worker_text(&projected, "note").unwrap_or_default();
+    runtime.updated_unix_ms = unix_ms();
+    projected
+}
+
 pub(super) fn project_native_status(runtime: &mut HelperBridgeRuntime, worker: &mut Value) -> bool {
     #[cfg(windows)]
     let (pci, present) = match runtime.native_inference.as_ref() {
@@ -666,7 +785,8 @@ pub fn apply_worker_response(runtime: &mut HelperBridgeRuntime, value: &Value) -
             });
     }
 
-    if runtime.child.is_some() {
+    // Native response application must not manufacture a lifecycle start.
+    if runtime.child.is_some() && !super::helper_bridge::native_voice_candidate_enabled() {
         runtime.state = "ready".to_string();
     }
     runtime.updated_unix_ms = unix_ms();
@@ -1226,6 +1346,33 @@ mod readiness_contract_tests {
         invalid_voice["voice_actor_token"] = json!("fixture-actor");
         invalid_voice["stage"] = json!("worker_error");
         assert_eq!(native_status_payload(&invalid_voice, Some("0000:01:00.0"), true)["ok"], false);
+    }
+
+    #[test]
+    fn candidate_status_separates_lifecycle_asset_presence_and_voice_binding() {
+        let stopped = candidate_status_payload(false, true, true, Ok("MaleVoice"), None, None);
+        assert_eq!(stopped["provider_ready"], false);
+        let cold = candidate_status_payload(true, true, true, Ok("MaleVoice"), None, None);
+        assert_eq!(cold["provider_ready"], true);
+        assert_eq!(cold["loaded"]["asr"], false);
+        assert_eq!(cold["loaded"]["voice_actor"], false);
+        assert_eq!(cold["cuda_capability_known"], false);
+        assert_eq!(cold["voice_actor_token"], Value::Null);
+        assert_eq!(cold["dependencies"]["python_required"], false);
+        let pair = candidate_status_payload(true, true, true, Ok("MaleVoice"),
+            Some("0000:01:00.0"), None);
+        assert_eq!(pair["loaded"]["asr"], true);
+        assert_eq!(pair["loaded"]["voice_actor"], false);
+        let bound = candidate_status_payload(true, true, true, Ok("MaleVoice"),
+            Some("0000:01:00.0"), Some("bound"));
+        assert_eq!(bound["loaded"]["voice_actor"], true);
+        let missing = candidate_status_payload(true, true, false, Ok("MaleVoice"), None, None);
+        assert_eq!(missing["provider_ready"], false);
+        assert_eq!(missing["readiness"]["translation_id_en"], true);
+        let personal = candidate_status_payload(true, true, true,
+            Err("native_voice:personal_clone_approval_required"), None, None);
+        assert_eq!(personal["provider_ready"], false);
+        assert_eq!(personal["blocker"], "native_voice:personal_clone_approval_required");
     }
 
     #[test]

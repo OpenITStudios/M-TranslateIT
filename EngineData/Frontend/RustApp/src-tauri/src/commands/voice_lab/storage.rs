@@ -198,7 +198,9 @@ fn read_pinned_builtin_reference(path: &Path, expected: &str) -> Result<Vec<f32>
 }
 
 #[cfg(windows)]
-pub(crate) fn selected_native_builtin_reference(paths: &ProjectPaths) -> Result<NativeBuiltinReference, &'static str> {
+pub(crate) fn selected_native_builtin_identity(paths: &ProjectPaths)
+    -> Result<(&'static str, &'static str), &'static str>
+{
     if !paths.packaged_context_initialized && !paths.development_root_verified {
         return Err("native_voice:runtime_root_unverified");
     }
@@ -209,8 +211,15 @@ pub(crate) fn selected_native_builtin_reference(paths: &ProjectPaths) -> Result<
         ActorKind::Personal => return Err("native_voice:personal_clone_approval_required"),
         _ => return Err("native_voice:selected_reference_unverified"),
     };
-    let (voice_id, expected) = builtin_reference_pin(&id)
-        .ok_or("native_voice:selected_reference_unverified")?;
+    // Metadata/legacy selected actor validation is eligibility, not a hash
+    // or a new clone approval. Bind rechecks the exact reference bytes.
+    builtin_reference_pin(&id).ok_or("native_voice:selected_reference_unverified")
+}
+
+#[cfg(windows)]
+pub(crate) fn selected_native_builtin_reference(paths: &ProjectPaths) -> Result<NativeBuiltinReference, &'static str> {
+    let (voice_id, expected) = selected_native_builtin_identity(paths)?;
+    let storage = VoiceLabStoragePaths::from_project_paths(paths);
     let pcm = read_pinned_builtin_reference(&storage.approved_actor_dir.join(REFERENCE_WAV_FILE), expected)?;
     Ok(NativeBuiltinReference { voice_id, pcm })
 }

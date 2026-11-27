@@ -244,6 +244,9 @@ pub(crate) fn prepare_codex_voice_only_runtime(
     {
         return Err("codex_voice:engine_not_selected");
     }
+    if native_voice_candidate_enabled() {
+        return Err("codex_voice:native_voice_integration_pending");
+    }
     run_codex_voice_only_probe(meeting_generation)
 }
 
@@ -469,9 +472,13 @@ fn start_helper_bridge_internal(
                 );
             }
             // A competing Start may have completed while this caller waited.
-            // Recheck process liveness under the single authoritative mutex.
-            if runtime.state == "ready"
-                && runtime.child.as_mut().is_some_and(|child| matches!(child.try_wait(), Ok(None)))
+            // Recheck the selected lifecycle under the single authoritative mutex.
+            if runtime.state == "ready" && (
+                if native_voice_candidate_enabled() {
+                    runtime.native_lifecycle_ready() && runtime.native_owner_healthy()
+                } else {
+                    runtime.child.as_mut().is_some_and(|child| matches!(child.try_wait(), Ok(None)))
+                })
             {
                 return action_result(true, &runtime);
             }
@@ -526,6 +533,18 @@ fn start_helper_bridge_internal(
             // clear it on a stale/losing helper start admission.
             if clear_outbound_pipeline {
                 clear_any_meeting_outbound_pipeline();
+            }
+
+            #[cfg(windows)]
+            if native_voice_candidate_enabled() {
+                // No worker script lookup, Python launch, ping or imports.
+                // Cold status is only an eligibility observation; the existing
+                // functional probe still opens and executes the selected stack.
+                runtime.state = "ready".into();
+                runtime.last_error = None;
+                runtime.stderr_log_path = None;
+                super::helper_bridge_runtime::project_candidate_status(&mut runtime);
+                return action_result(true, &runtime);
             }
 
             let worker = worker_script();
@@ -770,7 +789,9 @@ pub fn start_helper_bridge() -> HelperBridgeActionResult {
         return HelperBridgeActionResult {
             ok: true,
             state: current.state,
-            message: "Python helper worker is already running and ready.".to_string(),
+            message: if native_voice_candidate_enabled() {
+                "Native Rust helper lifecycle is already initialized.".into()
+            } else { "Python helper worker is already running and ready.".into() },
             generation_token: current.generation_token,
             runtime_claim: current.runtime_claim,
         };
@@ -880,7 +901,7 @@ pub(crate) fn shutdown_helper_bridge_for_app_exit() -> bool {
     if !stop_child(&mut runtime) {
         set_blocked(
             &mut runtime,
-            "TranslateIT cannot confirm Python worker and stderr cleanup yet. The application remains open so shutdown can be retried safely.",
+            "TranslateIT cannot confirm inference owner and I/O cleanup yet. The application remains open so shutdown can be retried safely.",
             "helper_bridge:cleanup_incomplete",
         );
         return false;
@@ -1021,7 +1042,7 @@ pub fn cancel_helper_bridge_meeting_session(session_id: &str) -> HelperBridgeAct
         }
         Err(TryLockError::WouldBlock) => helper_start_denied(
             "helper_busy",
-            "The Python helper is owned by startup or another request. Meeting Stop retained its session for Retry Stop; helper cleanup is not yet verified.",
+            "The local inference lifecycle is owned by startup or another request. Meeting Stop retained its session for Retry Stop; helper cleanup is not yet verified.",
             "helper_cancel_deferred_owned_mutex",
             0,
         ),
