@@ -60,7 +60,7 @@ test("Meeting worker attempt attribution keeps recovery distinct and old archive
   assert.match(transport, /"worker_attempt_timing"\.to_string\(\)/);
   assert.match(transport, /checked_add\(self\.retry_scheduler_wait_ms\?\)/);
   assert.match(transport, /timing\.recovery_ms = Some\(observed_elapsed_ms\(recovery_started\)\)/);
-  assert.match(transport, /timing\.retry_attempt_ms = Some\(observed_elapsed_ms\(retry_started\)\)/);
+  assert.match(transport, /timing\.retry_attempt_ms = Some\(observed_elapsed_ms\(retry_started\)\s*\.saturating_sub\(retry_prepare_ms\)\)/);
   assert.match(meeting, /pub struct MeetingWorkerAttemptTiming/);
   assert.match(meeting, /#\[serde\(default\)\]\s+pub asr_worker_attempt_timing/);
   assert.match(meeting, /get\("scheduler_wait_total_ms"\)/);
@@ -89,7 +89,7 @@ test("Meeting recovery timing ends after re-proof and before an outbound retry",
   );
   const retryStart = transport.indexOf("let retry_started = Instant::now();", recoveryEnd);
   const retryCall = transport.indexOf(
-    "response = send_worker_task_inner(task, retry_payload);",
+    "response = send_worker_task_inner(task, retry_payload, pcm);",
     retryStart,
   );
   const noReproofFallback = transport.indexOf(
@@ -103,10 +103,28 @@ test("Meeting recovery timing ends after re-proof and before an outbound retry",
     "recovery must end before retry and failed recovery remains measured",
   );
   assert.match(transport, /match functional_reproof \{/);
-  assert.match(transport, /timing\.retry_attempt_ms = Some\(observed_elapsed_ms\(retry_started\)\)/);
+  assert.match(transport, /timing\.retry_attempt_ms = Some\(observed_elapsed_ms\(retry_started\)\s*\.saturating_sub\(retry_prepare_ms\)\)/);
   assert.match(
     transport,
     /if timing\.recovery_ms\.is_none\(\) \{\s*timing\.recovery_ms = Some\(observed_elapsed_ms\(recovery_started\)\);/,
     "skipped re-proof must not overwrite the already measured recovery interval",
   );
+});
+
+test("finalized Meeting PCM enters the existing scheduler before transitional WAV serialization", () => {
+  const consumers = source("src-tauri/src/commands/meeting_session/consumer_runtime.rs");
+  const queue = source("src-tauri/src/commands/meeting_session/incoming_deferred.rs");
+  const incoming = source("src-tauri/src/commands/meeting_session/incoming_pipeline.rs");
+  assert.doesNotMatch(consumers, /write_finalized_.*_wav/);
+  assert.match(queue, /utterance: FinalizedMeetingUtterance/);
+  assert.doesNotMatch(queue, /audio_path: String|retain_failed_wav_cleanup/);
+  assert.match(incoming, /send_helper_worker_pcm_task\(/);
+  assert.match(outbound, /send_helper_worker_pcm_task\(/);
+  const inner = transport.indexOf("fn send_worker_task_inner(");
+  const permit = transport.indexOf("acquire_helper_task_permit(priority)", inner);
+  const defer = transport.indexOf("return incoming_deferred_response", permit);
+  const write = transport.indexOf("let _temporary_asr_wav", defer);
+  const metadata = transport.indexOf("inject_request_metadata", write);
+  assert.ok(inner >= 0 && permit > inner && defer > permit && write > defer && metadata > write);
+  assert.match(outbound, /asr_wall_ms\.saturating_sub\(timing\.metrics\.audio_prepare_ms\)/);
 });

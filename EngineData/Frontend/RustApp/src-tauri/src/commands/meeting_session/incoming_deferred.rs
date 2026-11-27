@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use crate::engine::audio::live_segment_writer::remove_finalized_meeting_utterance_wav;
+use crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance;
 
 use super::{validated_meeting_asr_transcript, worker_blocker, worker_text};
 use super::committed_turns::finish_meeting_turn_translation;
@@ -19,10 +19,10 @@ pub(super) enum IncomingAsrDisposition {
     Transcript(String),
 }
 
-#[derive(Clone)]
 pub(super) enum DeferredIncomingStage {
     NeedsAsr {
-        audio_path: String,
+        utterance: FinalizedMeetingUtterance,
+        noise_suppression_enabled: bool,
         source_language: String,
         target_language: String,
     },
@@ -90,9 +90,8 @@ pub(super) fn deferred_enqueue_unix_ms(
 
 fn cleanup_deferred_incoming_job(job: DeferredIncomingJob) {
     match job.stage {
-        DeferredIncomingStage::NeedsAsr { audio_path, .. } => {
-            remove_finalized_meeting_utterance_wav(&audio_path);
-        }
+        // Dropping a queued PCM requires no filesystem cleanup.
+        DeferredIncomingStage::NeedsAsr { .. } => {}
         DeferredIncomingStage::NeedsTranslation { .. } => {
             // A stable ASR source has already been committed. Expiration or
             // queue eviction must not leave its translation forever "pending".
@@ -116,7 +115,7 @@ fn enqueue_with_admission(
         return 0;
     };
     // Admission and state mutation remain serialized with Stop/queue clear.
-    // All file cleanup and transcript updates happen AFTER releasing the lock.
+    // Drop PCM and finalize pending transcript updates AFTER releasing the lock.
     if !admitted(&job.session_id) {
         drop(guard);
         cleanup_deferred_incoming_job(job);
@@ -233,48 +232,6 @@ fn drain_session_jobs(
     removed
 }
 
-// Stop must not claim successful deferred cleanup if an owned ASR WAV could
-// not be removed. Failed NeedsAsr jobs remain in the same bounded queue as
-// Retry Stop obligations. Hold the existing queue mutex only for the few
-// file-removal checks; finalize transcript-only jobs after unlock to avoid
-// taking transcript/writer locks under the deferred queue mutex.
-fn retain_failed_wav_cleanup(
-    pending: &mut VecDeque<DeferredIncomingJob>,
-    removed: Vec<DeferredIncomingJob>,
-    mut remove_wav: impl FnMut(&str) -> bool,
-) -> (Vec<DeferredIncomingJob>, bool) {
-    let mut transcription_done = Vec::new();
-    let mut cleanup_failed = false;
-    for job in removed {
-        match &job.stage {
-            DeferredIncomingStage::NeedsAsr { audio_path, .. } => {
-                if !remove_wav(audio_path) {
-                    pending.push_back(job);
-                    cleanup_failed = true;
-                }
-            }
-            DeferredIncomingStage::NeedsTranslation { .. } => {
-                transcription_done.push(job);
-            }
-        }
-    }
-    (transcription_done, cleanup_failed)
-}
-
-fn finish_deferred_clear(
-    transcript_jobs: Vec<DeferredIncomingJob>,
-    wav_cleanup_failed: bool,
-) -> Result<(), String> {
-    for job in transcript_jobs {
-        cleanup_deferred_incoming_job(job);
-    }
-    if wav_cleanup_failed {
-        Err("meeting_incoming:deferred_wav_cleanup_failed".to_string())
-    } else {
-        Ok(())
-    }
-}
-
 pub(super) fn clear_deferred_incoming_queue_for_session(session_id: &str) -> Result<(), String> {
     if session_id.is_empty() {
         return Err("meeting_incoming:deferred_queue_session_missing".to_string());
@@ -283,10 +240,11 @@ pub(super) fn clear_deferred_incoming_queue_for_session(session_id: &str) -> Res
         .lock()
         .map_err(|_| "meeting_incoming:deferred_queue_lock_failed".to_string())?;
     let removed = drain_session_jobs(&mut guard, session_id);
-    let (transcript_jobs, wav_cleanup_failed) =
-        retain_failed_wav_cleanup(&mut guard, removed, remove_finalized_meeting_utterance_wav);
     drop(guard);
-    finish_deferred_clear(transcript_jobs, wav_cleanup_failed)
+    for job in removed {
+        cleanup_deferred_incoming_job(job);
+    }
+    Ok(())
 }
 
 pub(super) fn clear_deferred_incoming_queue() -> Result<(), String> {
@@ -294,10 +252,11 @@ pub(super) fn clear_deferred_incoming_queue() -> Result<(), String> {
         .lock()
         .map_err(|_| "meeting_incoming:deferred_queue_lock_failed".to_string())?;
     let removed: Vec<_> = guard.drain(..).collect();
-    let (transcript_jobs, wav_cleanup_failed) =
-        retain_failed_wav_cleanup(&mut guard, removed, remove_finalized_meeting_utterance_wav);
     drop(guard);
-    finish_deferred_clear(transcript_jobs, wav_cleanup_failed)
+    for job in removed {
+        cleanup_deferred_incoming_job(job);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -352,40 +311,59 @@ mod tests {
         assert!(drain_session_jobs(&mut pending, "absent").is_empty());
         assert_eq!(pending.len(), 2);
 
-        // Stop may not discard ownership of a WAV it failed to remove.
-        // The failed record is kept for Retry Stop; foreign-session FIFO and
-        // transcript-only cleanup are unaffected. No actual model/device IO.
-        let mut retry_queue = VecDeque::from([
-            job("new", 10, "keep next session", 100),
-            DeferredIncomingJob {
-                session_id: "old".to_string(),
-                event_sequence: 11,
-                utterance_id: 11,
-                stage: DeferredIncomingStage::NeedsAsr {
-                    audio_path: "owned.wav".to_string(),
-                    source_language: "en".to_string(),
-                    target_language: "id".to_string(),
+        // A late Stop can drop only the retired session's owned PCM.
+        // Moving a job does not clone its potentially large sample buffer.
+        let pcm_job = |session: &str, sequence: u64| DeferredIncomingJob {
+            session_id: session.into(),
+            event_sequence: sequence,
+            utterance_id: sequence,
+            stage: DeferredIncomingStage::NeedsAsr {
+                utterance: FinalizedMeetingUtterance {
+                    session_id: session.into(),
+                    sequence,
+                    lane: "incoming".into(),
+                    generation: None,
+                    utterance_id: sequence,
+                    finalized_at: std::time::Instant::now(),
+                    enqueued_at: std::time::Instant::now(),
+                    finalized_unix_ms: 1,
+                    speech_boundary_ms: 300,
+                    speech_duration_ms: 300,
+                    finalization_ms: 0,
+                    capture_provenance: None,
+                    frame: crate::engine::audio::AudioFrame {
+                        sample_rate_hz: 16_000,
+                        channels: 1,
+                        samples: vec![0.2; 4_800],
+                    },
                 },
-                enqueued_unix_ms: 101,
+                noise_suppression_enabled: true,
+                source_language: "en".into(),
+                target_language: "id".into(),
             },
-            job("old", 12, "source-first translation pending", 102),
-        ]);
-        let removed = drain_session_jobs(&mut retry_queue, "old");
-        let (translated, failed) =
-            retain_failed_wav_cleanup(&mut retry_queue, removed, |path| path != "owned.wav");
-        assert!(failed);
-        assert_eq!(translated.len(), 1, "translation finalization is returned for post-unlock cleanup");
-        assert_eq!(translated[0].event_sequence, 12);
-        assert_eq!(retry_queue.len(), 2);
-        assert_eq!(retry_queue[0].session_id, "new");
-        assert_eq!(retry_queue[1].event_sequence, 11);
-        let retry = drain_session_jobs(&mut retry_queue, "old");
-        let (translated, failed) =
-            retain_failed_wav_cleanup(&mut retry_queue, retry, |_| true);
-        assert!(!failed);
-        assert!(translated.is_empty());
-        assert_eq!(retry_queue.len(), 1);
-        assert_eq!(retry_queue[0].session_id, "new");
+            enqueued_unix_ms: 101,
+        };
+        let pcm = pcm_job("next", 20);
+        let storage = match &pcm.stage {
+            DeferredIncomingStage::NeedsAsr { utterance, .. } => utterance.frame.samples.as_ptr(),
+            _ => unreachable!(),
+        };
+        let mut queue = VecDeque::from([pcm_job("previous", 19), pcm]);
+        let retired = drain_session_jobs(&mut queue, "previous");
+        assert_eq!(retired.len(), 1);
+        cleanup_deferred_incoming_job(retired.into_iter().next().unwrap());
+        let retained = queue.pop_front().unwrap();
+        match retained.stage {
+            DeferredIncomingStage::NeedsAsr { utterance, noise_suppression_enabled, source_language, target_language } => {
+                assert_eq!(utterance.frame.samples.as_ptr(), storage);
+                assert_eq!(utterance.sequence, 20);
+                assert_eq!(utterance.session_id, "next");
+                assert!(noise_suppression_enabled);
+                assert_eq!((source_language.as_str(), target_language.as_str()), ("en", "id"));
+            }
+            _ => unreachable!(),
+        }
+        assert!(queue.is_empty());
     }
 
     #[test]

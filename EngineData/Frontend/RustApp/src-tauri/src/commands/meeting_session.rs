@@ -41,7 +41,7 @@ use committed_turns::{current_committed_turn_snapshot, exportable_committed_turn
 pub(super) fn current_outbound_latency_distribution() -> Option<(usize, u64, u64)> {
     committed_turns::current_outbound_latency_distribution()
 }
-use outbound_pipeline::process_outbound_wav;
+use outbound_pipeline::process_outbound_pcm;
 use preflight::current_status;
 use session_state::{incoming_lane_enabled, OutboundTimingContext};
 
@@ -428,24 +428,12 @@ fn incoming_session_is_eligible(session_id: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn process_authoritative_finalized_outbound_wav(
-    generation: u64,
-    session_id: &str,
-    event_sequence: u64,
-    utterance_id: u64,
-    speech_duration_ms: u64,
-    audio_path: String,
+fn process_authoritative_finalized_outbound_pcm(
+    utterance: crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance,
+    noise_suppression_enabled: bool,
     timing: OutboundTimingContext,
 ) -> MeetingOutboundProcessResult {
-    process_outbound_wav(
-        generation,
-        session_id,
-        event_sequence,
-        utterance_id,
-        speech_duration_ms,
-        audio_path,
-        timing,
-    )
+    process_outbound_pcm(utterance, noise_suppression_enabled, timing)
 }
 
 // Internal observation shared by the existing runtime and diagnostic owners.

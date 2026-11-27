@@ -1,5 +1,13 @@
 use serde_json::{json, Value};
+use std::cell::Cell;
 use std::time::Instant;
+
+use crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance;
+use crate::engine::audio::live_segment_writer::{
+    finalized_asr_frame_rejection, remove_finalized_meeting_utterance_wav,
+    write_finalized_incoming_utterance_wav_with_noise_suppression,
+    write_finalized_outbound_utterance_wav_with_noise_suppression,
+};
 
 use crate::engine::runtime_state::runtime_generation_is_authoritative;
 
@@ -221,7 +229,36 @@ fn recover_incoming_transport_failure_before_permit_release(
     response
 }
 
-fn send_worker_task_inner(task: &str, mut payload: Value) -> HelperBridgeWorkerResponse {
+#[derive(Clone, Copy)]
+struct MeetingPcmInput<'a> {
+    utterance: &'a FinalizedMeetingUtterance,
+    noise_suppression_enabled: bool,
+    prepare_ms: &'a Cell<u64>,
+}
+
+impl MeetingPcmInput<'_> {
+    fn matches(&self, task: &str, payload: &Value) -> bool {
+        let u = self.utterance;
+        task == "transcribe"
+            && payload.get("audio_path").is_none()
+            && payload.get("meeting_session_id").and_then(Value::as_str) == Some(u.session_id.as_str())
+            && payload.get("meeting_lane").and_then(Value::as_str) == Some(u.lane.as_str())
+            && payload.get("meeting_sequence").and_then(Value::as_u64) == Some(u.sequence)
+            && payload.get("utterance_id").and_then(Value::as_u64) == Some(u.utterance_id)
+            && meeting_generation(payload) == u.generation
+            && matches!(u.lane.as_str(), "you" | "incoming")
+            && ((u.lane == "you") == u.generation.is_some())
+    }
+}
+
+// Transitional serialization only for an admitted legacy ASR call.
+// The existing scoped Stop sweep verifies any file not removed immediately.
+struct TemporaryAsrWav(String);
+impl Drop for TemporaryAsrWav {
+    fn drop(&mut self) { remove_finalized_meeting_utterance_wav(&self.0); }
+}
+
+fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcmInput<'_>>) -> HelperBridgeWorkerResponse {
     let priority = task_priority(task, &payload);
     let meeting_generation = meeting_generation(&payload);
     let meeting_session_id = meeting_session_id(&payload);
@@ -263,6 +300,47 @@ fn send_worker_task_inner(task: &str, mut payload: Value) -> HelperBridgeWorkerR
     ) {
         return response;
     }
+
+    // Work rejected or deferred at admission does not create a WAV.
+    // Native cutover will consume this same borrowed PCM at this boundary.
+    let _temporary_asr_wav = if let Some(input) = pcm {
+        let started = Instant::now();
+        let write = if input.utterance.lane == "you" {
+            write_finalized_outbound_utterance_wav_with_noise_suppression(
+                input.utterance, input.noise_suppression_enabled)
+        } else {
+            write_finalized_incoming_utterance_wav_with_noise_suppression(
+                input.utterance, input.noise_suppression_enabled)
+        };
+        input.prepare_ms.set(input.prepare_ms.get().saturating_add(observed_elapsed_ms(started)));
+        if !write.ok {
+            return standalone_blocked_response(
+                task, &request_id, priority, "error", &write.blocker, &write.note,
+            );
+        }
+        let Some(path) = write.audio_path else {
+            return standalone_blocked_response(
+                task, &request_id, priority, "error", "asr:finalized_audio_path_missing",
+                "Finalized audio writer did not return an owned path.",
+            );
+        };
+        let owned = TemporaryAsrWav(path);
+        payload["audio_path"] = json!(&owned.0);
+        // An outbound claim may arrive while preparing the legacy WAV.
+        // Yield again before worker I/O; the scoped file is removed on return.
+        if priority == HelperTaskPriority::MeetingIncoming && meeting_outbound_pipeline_active() {
+            return incoming_deferred_response(task, &request_id);
+        }
+        if let Some(response) = stale_meeting_request(
+            task, &request_id, priority, meeting_generation,
+            meeting_session_id.as_deref(), meeting_lane.as_deref(),
+        ) {
+            return response;
+        }
+        Some(owned)
+    } else {
+        None
+    };
 
     inject_request_metadata(&mut payload, task, &request_id, priority);
 
@@ -653,7 +731,8 @@ fn retain_payload_for_live_retry(
 }
 
 // One request's observed wall-clock partitions. Attempts include their own
-// permit waits; recovery includes the worker restart and functional re-proof.
+// permit waits, but exclude separately measured PCM preparation. Recovery
+// includes the worker restart and functional re-proof.
 // This is transient measurement, not another scheduler, retry owner, or cache.
 #[derive(Clone, Copy)]
 struct WorkerAttemptObservation {
@@ -698,6 +777,37 @@ fn add_worker_attempt_observation(response: &mut HelperBridgeWorkerResponse, tim
 }
 
 pub(super) fn send_worker_task(task: &str, payload: Value) -> HelperBridgeWorkerResponse {
+    send_worker_task_with_input(task, payload, None)
+}
+
+pub(super) fn send_worker_pcm_task(
+    payload: Value,
+    utterance: &FinalizedMeetingUtterance,
+    noise_suppression_enabled: bool,
+) -> HelperBridgeWorkerResponse {
+    let prepare_ms = Cell::new(0);
+    let input = MeetingPcmInput { utterance, noise_suppression_enabled, prepare_ms: &prepare_ms };
+    let mut response = if !input.matches("transcribe", &payload) {
+        standalone_blocked_response(
+            "transcribe", "invalid-meeting-pcm", task_priority("transcribe", &payload),
+            "error", "asr:finalized_pcm_contract_invalid",
+            "Finalized PCM Meeting event ownership is invalid.",
+        )
+    } else if let Some(rejection) = finalized_asr_frame_rejection(utterance) {
+        standalone_blocked_response(
+            "transcribe", "invalid-meeting-pcm", task_priority("transcribe", &payload),
+            "error", &rejection.blocker, &rejection.note,
+        )
+    } else {
+        send_worker_task_with_input("transcribe", payload, Some(input))
+    };
+    if let Some(object) = response.worker_response_json.as_object_mut() {
+        object.insert("audio_prepare_ms".into(), json!(prepare_ms.get()));
+    }
+    response
+}
+
+fn send_worker_task_with_input(task: &str, payload: Value, pcm: Option<MeetingPcmInput<'_>>) -> HelperBridgeWorkerResponse {
     let priority = task_priority(task, &payload);
     let outbound_generation = if priority == HelperTaskPriority::MeetingOutbound
         && meeting_lane(&payload).as_deref() == Some("you")
@@ -721,9 +831,10 @@ pub(super) fn send_worker_task(task: &str, payload: Value) -> HelperBridgeWorker
     }
 
     let first_started = Instant::now();
-    let mut response = send_worker_task_inner(task, payload);
+    let mut response = send_worker_task_inner(task, payload, pcm);
     let mut timing = WorkerAttemptObservation {
-        initial_attempt_ms: observed_elapsed_ms(first_started),
+        initial_attempt_ms: observed_elapsed_ms(first_started)
+            .saturating_sub(pcm.map_or(0, |input| input.prepare_ms.get())),
         recovery_ms: None,
         retry_attempt_ms: None,
         initial_scheduler_wait_ms: response_scheduler_wait_ms(&response),
@@ -756,8 +867,12 @@ pub(super) fn send_worker_task(task: &str, payload: Value) -> HelperBridgeWorker
                         // The retry itself is not recursive.
                         if let Some(retry_payload) = retry_payload.take() {
                             let retry_started = Instant::now();
-                            response = send_worker_task_inner(task, retry_payload);
-                            timing.retry_attempt_ms = Some(observed_elapsed_ms(retry_started));
+                            let prepared_before_retry = pcm.map_or(0, |input| input.prepare_ms.get());
+                            response = send_worker_task_inner(task, retry_payload, pcm);
+                            let retry_prepare_ms = pcm.map_or(0, |input| input.prepare_ms.get())
+                                .saturating_sub(prepared_before_retry);
+                            timing.retry_attempt_ms = Some(observed_elapsed_ms(retry_started)
+                                .saturating_sub(retry_prepare_ms));
                             timing.retry_scheduler_wait_ms = response_scheduler_wait_ms(&response);
                         } else {
                             clear_meeting_outbound_pipeline(generation);
@@ -993,5 +1108,54 @@ mod worker_attempt_observation_tests {
         });
         assert_eq!(response.worker_response_json, json!("non-object"));
         assert_eq!(response_scheduler_wait_ms(&response), None);
+    }
+}
+
+#[cfg(test)]
+mod finalized_pcm_handoff_tests {
+    use super::*;
+    use crate::engine::audio::AudioFrame;
+
+    #[test]
+    fn meeting_pcm_requires_exact_event_identity_and_reuses_frame_limits() {
+        let mut utterance = FinalizedMeetingUtterance {
+            session_id: "session-test".into(),
+            sequence: 9,
+            lane: "you".into(),
+            generation: Some(7),
+            utterance_id: 8,
+            finalized_at: Instant::now(),
+            enqueued_at: Instant::now(),
+            finalized_unix_ms: 1,
+            speech_boundary_ms: 300,
+            speech_duration_ms: 300,
+            finalization_ms: 0,
+            capture_provenance: None,
+            frame: AudioFrame { sample_rate_hz: 16_000, channels: 1, samples: vec![0.1; 4_800] },
+        };
+        let prepare_ms = Cell::new(0);
+        let payload = json!({
+            "meeting_session_id": "session-test", "meeting_lane": "you",
+            "meeting_generation": 7, "meeting_sequence": 9, "utterance_id": 8,
+        });
+        let input = MeetingPcmInput { utterance: &utterance, noise_suppression_enabled: false, prepare_ms: &prepare_ms };
+        assert!(input.matches("transcribe", &payload));
+        assert!(finalized_asr_frame_rejection(&utterance).is_none());
+        for (key, value) in [
+            ("meeting_session_id", json!("another")),
+            ("meeting_lane", json!("incoming")),
+            ("meeting_generation", json!(6)),
+            ("meeting_sequence", json!(10)),
+            ("utterance_id", json!(9)),
+            ("audio_path", json!("unowned.wav")),
+        ] {
+            let mut invalid = payload.clone();
+            invalid[key] = value;
+            assert!(!input.matches("transcribe", &invalid), "{key}");
+        }
+        assert!(!input.matches("translate", &payload));
+        utterance.frame.samples.truncate(4_799);
+        assert_eq!(finalized_asr_frame_rejection(&utterance).unwrap().blocker,
+                   "finalized_utterance_writer:segment_too_short");
     }
 }

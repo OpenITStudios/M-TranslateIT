@@ -146,6 +146,15 @@ pub fn send_helper_worker_task(task: &str, payload: Value) -> HelperBridgeWorker
     send_worker_task(task, payload)
 }
 
+// Internal Meeting-only PCM handoff; PCM never enters JSON.
+pub(crate) fn send_helper_worker_pcm_task(
+    payload: Value,
+    utterance: &crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance,
+    noise_suppression_enabled: bool,
+) -> HelperBridgeWorkerResponse {
+    transport::send_worker_pcm_task(payload, utterance, noise_suppression_enabled)
+}
+
 pub(crate) fn invalidate_required_outbound_readiness_for_voice_change() {
     invalidate_required_outbound_ai_readiness();
 }

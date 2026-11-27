@@ -61,20 +61,29 @@ pub fn write_finalized_incoming_utterance_wav_with_noise_suppression(
     write_finalized_meeting_utterance_wav(utterance, noise_suppression_enabled)
 }
 
+// Shared pure frame gate: the scheduler handoff can reject invalid input
+// before queueing without creating a legacy file or changing the limits.
+pub(crate) fn finalized_asr_frame_rejection(
+    utterance: &FinalizedMeetingUtterance,
+) -> Option<LiveSegmentWavWriteReport> {
+    let frame = &utterance.frame;
+    validate_target_frame(
+        frame.sample_rate_hz,
+        frame.channels,
+        &frame.samples,
+        duration_ms(frame.samples.len(), frame.sample_rate_hz),
+        MAX_FINALIZED_ASR_SEGMENT_SAMPLES,
+        "finalized_utterance_writer",
+    )
+}
+
 fn write_finalized_meeting_utterance_wav(
     utterance: &FinalizedMeetingUtterance,
     noise_suppression_enabled: bool,
 ) -> LiveSegmentWavWriteReport {
     let frame = &utterance.frame;
     let frame_duration_ms = duration_ms(frame.samples.len(), frame.sample_rate_hz);
-    if let Some(report) = validate_target_frame(
-        frame.sample_rate_hz,
-        frame.channels,
-        &frame.samples,
-        frame_duration_ms,
-        MAX_FINALIZED_ASR_SEGMENT_SAMPLES,
-        "finalized_utterance_writer",
-    ) {
+    if let Some(report) = finalized_asr_frame_rejection(utterance) {
         return report;
     }
 

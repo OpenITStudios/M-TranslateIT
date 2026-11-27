@@ -136,6 +136,17 @@ during the existing PCM16 encoding pass, preserving the gain formula,
 quantization, single buffered write, exclusive staging and atomic promotion.
 No extra filtered audio vector, callback owner, transport or model is added.
 
+Finalized Meeting PCM now moves from the producer to its existing outbound
+or incoming consumer and is borrowed at the existing helper scheduler's
+admitted ASR boundary. The bounded deferred incoming queue owns the original
+PCM allocation, not a file path. Legacy ASR still requires PCM16 WAV; its
+transitional file is created only after admission and authority checks and
+released at the end of the ASR attempt, not after MT/TTS. A late outbound
+claim during file preparation yields before worker I/O. Existing scoped Stop
+file cleanup remains authoritative. Audio-preparation timing is separated
+from ASR attempt timing. The native CUDA candidate is not yet dispatched
+here; actual Windows execution, memory use and latency are unverified.
+
 ### Demand-scoped playback, archive and auxiliary work
 
 The native playback callback directly owns the prepared device PCM. Decoded

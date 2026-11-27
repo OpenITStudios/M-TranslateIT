@@ -9,27 +9,20 @@ use crate::engine::audio::finalized_utterance::{
     wait_take_finalized_incoming_utterance_for, wait_take_finalized_outbound_utterance,
     IncomingTimedWait,
 };
-use crate::engine::audio::live_segment_writer::{
-    remove_finalized_meeting_utterance_wav,
-    write_finalized_incoming_utterance_wav_with_noise_suppression,
-    write_finalized_outbound_utterance_wav_with_noise_suppression,
-};
 use crate::engine::runtime_state::runtime_generation_is_authoritative;
 use crate::engine::audio::original_voice_pcm;
 use crate::engine;
 
 use super::incoming_deferred::clear_deferred_incoming_queue_for_session;
 use super::incoming_pipeline::{
-    drain_due_deferred_incoming, process_authoritative_finalized_incoming_wav,
-    IncomingAudioProcessResult,
+    drain_due_deferred_incoming, process_authoritative_finalized_incoming_pcm,
 };
 use super::session_state::{
-    elapsed_millis, set_outbound_timing, timing_context_from_utterance, update_incoming_status,
-    update_outbound_status,
+    elapsed_millis, timing_context_from_utterance, update_outbound_status,
 };
 use super::{
     generation_is_live, incoming_session_is_eligible,
-    process_authoritative_finalized_outbound_wav,
+    process_authoritative_finalized_outbound_pcm,
 };
 
 // Only wait on a short interval when deferred incoming work exists. Normal
@@ -154,68 +147,13 @@ pub(super) fn start_meeting_outbound_consumer(generation: u64, session_id: &str)
                     break;
                 }
 
-                let audio_prepare_started_at = Instant::now();
-                let write = write_finalized_outbound_utterance_wav_with_noise_suppression(
-                    &utterance,
-                    noise_suppression_enabled,
-                );
-                let audio_prepare_ms = elapsed_millis(audio_prepare_started_at, Instant::now());
-                let timing = timing_context_from_utterance(&utterance, queue_ms, audio_prepare_ms);
-                if !write.ok {
-                    update_outbound_status(
-                        generation,
-                        &thread_session_id,
-                        "attention_needed",
-                        utterance.sequence,
-                        false,
-                        false,
-                        &write.blocker,
-                        "Finalized speech could not be written to its temporary ASR WAV. No AI/output stage consumed it.",
-                    );
-                    set_outbound_timing(
-                        generation,
-                        &thread_session_id,
-                        utterance.sequence,
-                        &timing.metrics,
-                    );
-                    continue;
-                }
-
-                let Some(audio_path) = write.audio_path else {
-                    update_outbound_status(
-                        generation,
-                        &thread_session_id,
-                        "attention_needed",
-                        utterance.sequence,
-                        false,
-                        false,
-                        "meeting_outbound:finalized_audio_path_missing",
-                        "Finalized speech writer returned no temporary audio path. No AI/output stage consumed it.",
-                    );
-                    set_outbound_timing(
-                        generation,
-                        &thread_session_id,
-                        utterance.sequence,
-                        &timing.metrics,
-                    );
-                    continue;
-                };
-
+                let timing = timing_context_from_utterance(&utterance, queue_ms, 0);
                 if !generation_is_live(generation) {
-                    remove_finalized_meeting_utterance_wav(&audio_path);
                     break;
                 }
-
-                let _ = process_authoritative_finalized_outbound_wav(
-                    generation,
-                    &utterance.session_id,
-                    utterance.sequence,
-                    utterance.utterance_id,
-                    utterance.speech_duration_ms,
-                    audio_path.clone(),
-                    timing,
+                let _ = process_authoritative_finalized_outbound_pcm(
+                    utterance, noise_suppression_enabled, timing,
                 );
-                remove_finalized_meeting_utterance_wav(&audio_path);
 
                 if !runtime_generation_is_authoritative(generation) {
                     break;
@@ -350,45 +288,9 @@ pub(super) fn start_meeting_incoming_consumer(session_id: &str) -> Result<(), St
                     continue;
                 }
 
-                let write = write_finalized_incoming_utterance_wav_with_noise_suppression(
-                    &utterance,
-                    noise_suppression_enabled,
+                let _ = process_authoritative_finalized_incoming_pcm(
+                    utterance, noise_suppression_enabled,
                 );
-                if !write.ok {
-                    update_incoming_status(
-                        &thread_session_id,
-                        "degraded",
-                        true,
-                        &write.blocker,
-                        "Finalized incoming speech could not be written to its temporary ASR WAV. Outbound remains available.",
-                    );
-                    continue;
-                }
-                let Some(audio_path) = write.audio_path else {
-                    update_incoming_status(
-                        &thread_session_id,
-                        "degraded",
-                        true,
-                        "meeting_incoming:finalized_audio_path_missing",
-                        "Finalized incoming speech writer returned no temporary audio path.",
-                    );
-                    continue;
-                };
-
-                if !incoming_session_is_eligible(&thread_session_id) {
-                    remove_finalized_meeting_utterance_wav(&audio_path);
-                    break;
-                }
-                let result = process_authoritative_finalized_incoming_wav(
-                    &thread_session_id,
-                    utterance.sequence,
-                    utterance.utterance_id,
-                    &audio_path,
-                    None,
-                );
-                if result != IncomingAudioProcessResult::DeferredAsr {
-                    remove_finalized_meeting_utterance_wav(&audio_path);
-                }
             }
         })
         .map_err(|error| format!("meeting_incoming:consumer_spawn_failed:{error}"))?;

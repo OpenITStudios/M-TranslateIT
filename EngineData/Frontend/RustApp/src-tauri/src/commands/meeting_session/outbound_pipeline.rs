@@ -12,7 +12,10 @@ use super::committed_turns::{
     update_committed_turn_delivery_state,
     update_committed_turn_outbound_timing,
 };
-use super::super::helper_bridge::{required_outbound_voice_actor_token, send_helper_worker_task};
+use super::super::helper_bridge::{
+    required_outbound_voice_actor_token, send_helper_worker_pcm_task, send_helper_worker_task,
+};
+use crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance;
 use super::{
     generation_is_live, validated_meeting_asr_transcript, validated_meeting_translation,
     validated_meeting_voice_output_path, worker_blocker, worker_number,
@@ -336,15 +339,16 @@ fn unadmitted_outbound_result(
     }
 }
 
-pub(super) fn process_outbound_wav(
-    generation: u64,
-    session_id: &str,
-    event_sequence: u64,
-    utterance_id: u64,
-    speech_duration_ms: u64,
-    audio_path: String,
+pub(super) fn process_outbound_pcm(
+    utterance: FinalizedMeetingUtterance,
+    noise_suppression_enabled: bool,
     mut timing: OutboundTimingContext,
 ) -> MeetingOutboundProcessResult {
+    let generation = utterance.generation.unwrap_or_default();
+    let session_id = utterance.session_id.as_str();
+    let event_sequence = utterance.sequence;
+    let utterance_id = utterance.utterance_id;
+    let speech_duration_ms = utterance.speech_duration_ms;
     // Defense in depth: a direct/late consumer request cannot invoke local
     // Whisper, MiLMMT or GPT-SoVITS for an unverified Codex preference,
     // even if an old Meeting generation was previously Live.
@@ -372,10 +376,8 @@ pub(super) fn process_outbound_wav(
     );
     set_outbound_timing(generation, session_id, event_sequence, &timing.metrics);
     let asr_started_at = Instant::now();
-    let asr = send_helper_worker_task(
-        "transcribe",
+    let asr = send_helper_worker_pcm_task(
         json!({
-            "audio_path": audio_path,
             "language": "id",
             "beam_size": 1,
             "vad_filter": super::FINALIZED_MEETING_ASR_WORKER_VAD,
@@ -386,8 +388,13 @@ pub(super) fn process_outbound_wav(
             "utterance_id": utterance_id,
             "source_speech_duration_ms": speech_duration_ms,
         }),
+        &utterance,
+        noise_suppression_enabled,
     );
-    timing.metrics.asr_ms = Some(elapsed_millis(asr_started_at, Instant::now()));
+    let asr_wall_ms = elapsed_millis(asr_started_at, Instant::now());
+    timing.metrics.audio_prepare_ms = asr.worker_response_json.get("audio_prepare_ms")
+        .and_then(serde_json::Value::as_u64).unwrap_or(0);
+    timing.metrics.asr_ms = Some(asr_wall_ms.saturating_sub(timing.metrics.audio_prepare_ms));
     timing.metrics.asr_scheduler_wait_ms = super::worker_scheduler_wait_ms(&asr);
     timing.metrics.asr_worker_attempt_timing = super::worker_attempt_timing(&asr);
     set_outbound_timing(generation, session_id, event_sequence, &timing.metrics);
@@ -437,9 +444,12 @@ pub(super) fn process_outbound_wav(
         };
     }
     let transcript = transcript.unwrap_or_default();
+    // Release the PCM allocation before MT and TTS.
+    let session_id = utterance.session_id;
+    drop(utterance.frame);
     process_outbound_transcript(
         generation,
-        session_id,
+        &session_id,
         event_sequence,
         utterance_id,
         source_epoch,

@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use crate::engine::audio::live_segment_writer::remove_finalized_meeting_utterance_wav;
+use crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance;
 use crate::engine::runtime_settings::load_settings;
 
 use super::committed_turns::{
@@ -14,7 +14,7 @@ use super::incoming_deferred::{
 };
 use super::{incoming_session_is_eligible, validated_meeting_translation, worker_blocker};
 use super::session_state::update_incoming_status;
-use super::super::helper_bridge::send_helper_worker_task;
+use super::super::helper_bridge::{send_helper_worker_pcm_task, send_helper_worker_task};
 use super::super::helper_bridge_runtime::unix_ms;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -24,31 +24,22 @@ pub(super) enum IncomingAudioProcessResult {
     DeferredTranslation,
 }
 
-pub(super) fn process_authoritative_finalized_incoming_wav(
-    session_id: &str,
-    event_sequence: u64,
-    utterance_id: u64,
-    audio_path: &str,
-    deferred_enqueued_unix_ms: Option<u64>,
+pub(super) fn process_authoritative_finalized_incoming_pcm(
+    utterance: FinalizedMeetingUtterance,
+    noise_suppression_enabled: bool,
 ) -> IncomingAudioProcessResult {
-    process_incoming_wav_with_direction(
-        session_id,
-        event_sequence,
-        utterance_id,
-        audio_path,
-        deferred_enqueued_unix_ms,
-        None,
-    )
+    process_incoming_pcm_with_direction(utterance, noise_suppression_enabled, None, None)
 }
 
-fn process_incoming_wav_with_direction(
-    session_id: &str,
-    event_sequence: u64,
-    utterance_id: u64,
-    audio_path: &str,
+fn process_incoming_pcm_with_direction(
+    utterance: FinalizedMeetingUtterance,
+    noise_suppression_enabled: bool,
     deferred_enqueued_unix_ms: Option<u64>,
     deferred_direction: Option<(String, String)>,
 ) -> IncomingAudioProcessResult {
+    let session_id = utterance.session_id.as_str();
+    let event_sequence = utterance.sequence;
+    let utterance_id = utterance.utterance_id;
     let retrying_deferred = deferred_enqueued_unix_ms.is_some();
     // Codex selection must not borrow Local Faster-Whisper even for optional
     // incoming captions. Check outside deferred queue ownership so no
@@ -72,10 +63,8 @@ fn process_incoming_wav_with_direction(
         "",
         "Finalized Meeting Sound is being transcribed locally.",
     );
-    let asr = send_helper_worker_task(
-        "transcribe",
+    let asr = send_helper_worker_pcm_task(
         json!({
-            "audio_path": audio_path,
             "language": source_language,
             "beam_size": 1,
             "vad_filter": super::FINALIZED_MEETING_ASR_WORKER_VAD,
@@ -84,6 +73,8 @@ fn process_incoming_wav_with_direction(
             "meeting_sequence": event_sequence,
             "utterance_id": utterance_id,
         }),
+        &utterance,
+        noise_suppression_enabled,
     );
     if !incoming_session_is_eligible(session_id) {
         return IncomingAudioProcessResult::Complete;
@@ -93,31 +84,26 @@ fn process_incoming_wav_with_direction(
         IncomingAsrDisposition::Deferred => {
             let enqueued_unix_ms =
                 deferred_enqueue_unix_ms(deferred_enqueued_unix_ms, unix_ms() as u64);
-            let held = if retrying_deferred {
-                requeue_deferred_incoming_front(DeferredIncomingJob {
-                    session_id: session_id.to_string(),
-                    event_sequence,
-                    utterance_id,
-                    stage: DeferredIncomingStage::NeedsAsr {
-                        audio_path: audio_path.to_string(),
-                        source_language: source_language.clone(),
-                        target_language: target_language.clone(),
-                    },
-                    enqueued_unix_ms,
-                })
-            } else {
-                enqueue_deferred_incoming(DeferredIncomingJob {
-                    session_id: session_id.to_string(),
-                    event_sequence,
-                    utterance_id,
-                    stage: DeferredIncomingStage::NeedsAsr {
-                        audio_path: audio_path.to_string(),
-                        source_language: source_language.clone(),
-                        target_language: target_language.clone(),
-                    },
-                    enqueued_unix_ms,
-                })
+            // Move the PCM into the existing bounded deferred queue.
+            let status_session_id = session_id.to_string();
+            let job = DeferredIncomingJob {
+                session_id: status_session_id.clone(),
+                event_sequence,
+                utterance_id,
+                stage: DeferredIncomingStage::NeedsAsr {
+                    utterance,
+                    noise_suppression_enabled,
+                    source_language,
+                    target_language,
+                },
+                enqueued_unix_ms,
             };
+            let held = if retrying_deferred {
+                requeue_deferred_incoming_front(job)
+            } else {
+                enqueue_deferred_incoming(job)
+            };
+            let session_id = status_session_id.as_str();
             if held == 0 {
                 update_incoming_status(
                     session_id,
@@ -162,6 +148,9 @@ fn process_incoming_wav_with_direction(
         IncomingAsrDisposition::Transcript(transcript) => transcript,
     };
 
+    let session_id = utterance.session_id;
+    drop(utterance.frame);
+    let session_id = session_id.as_str();
     // Retain a source-first mixed incoming-audio turn even if MiLMMT later fails,
     // is deferred, or the helper becomes unavailable.
     if !commit_meeting_turn(
@@ -361,27 +350,19 @@ pub(super) fn drain_due_deferred_incoming(session_id: &str) {
         } = job;
         match stage {
             DeferredIncomingStage::NeedsAsr {
-                audio_path,
+                utterance,
+                noise_suppression_enabled,
                 source_language,
                 target_language,
             } => {
-                let result = process_incoming_wav_with_direction(
-                    session_id,
-                    event_sequence,
-                    utterance_id,
-                    &audio_path,
+                let result = process_incoming_pcm_with_direction(
+                    utterance,
+                    noise_suppression_enabled,
                     Some(enqueued_unix_ms),
                     Some((source_language, target_language)),
                 );
-                match result {
-                    IncomingAudioProcessResult::DeferredAsr => break,
-                    IncomingAudioProcessResult::DeferredTranslation => {
-                        remove_finalized_meeting_utterance_wav(&audio_path);
-                        break;
-                    }
-                    IncomingAudioProcessResult::Complete => {
-                        remove_finalized_meeting_utterance_wav(&audio_path);
-                    }
+                if result != IncomingAudioProcessResult::Complete {
+                    break;
                 }
             }
             DeferredIncomingStage::NeedsTranslation {
