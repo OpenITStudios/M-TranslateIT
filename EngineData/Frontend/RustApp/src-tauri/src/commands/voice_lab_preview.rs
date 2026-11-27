@@ -17,6 +17,9 @@ use super::voice_lab::{
 };
 use super::voice_lab_recording::{accepted_guided_recordings, voice_lab_recording_active};
 
+#[cfg(windows)]
+mod native;
+
 const TIMEOUT: Duration = Duration::from_secs(180);
 static ACTIVE_PREVIEW_GENERATION: AtomicU64 = AtomicU64::new(0);
 const PREVIEW_WAV: &str = "quick_voice_preview.wav";
@@ -46,6 +49,10 @@ fn generate_once() -> QuickVoicePreviewResult {
     let accepted = accepted_guided_recordings();
     if accepted.is_empty() {
         return outcome(false, "reference_required", "Accept one clear 3–10 second recording first.");
+    }
+    #[cfg(windows)]
+    if super::helper_bridge::native_voice_candidate_enabled() {
+        return native::generate(accepted);
     }
     let Some(python) = resolve_worker_python_command() else {
         return outcome(false, "python_unavailable", "The local voice runtime is not installed.");

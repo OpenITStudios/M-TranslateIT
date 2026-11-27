@@ -33,6 +33,15 @@ pub(super) fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, String> {
 }
 
 pub(super) fn decode_wav_bytes(bytes: &[u8]) -> Result<DecodedWav, String> {
+    decode_wav_bytes_inner(bytes, false)
+}
+
+#[cfg(windows)]
+pub(super) fn decode_pcm16_wav_bytes(bytes: &[u8]) -> Result<DecodedWav, String> {
+    decode_wav_bytes_inner(bytes, true)
+}
+
+fn decode_wav_bytes_inner(bytes: &[u8], require_pcm16: bool) -> Result<DecodedWav, String> {
     if bytes.len() < 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
         return Err("meeting_output:wav_invalid_riff".to_string());
     }
@@ -117,6 +126,9 @@ pub(super) fn decode_wav_bytes(bytes: &[u8]) -> Result<DecodedWav, String> {
     let (audio_format, channels, sample_rate_hz, block_align, bits_per_sample) =
         format.ok_or_else(|| "meeting_output:wav_fmt_missing".to_string())?;
     let data = data.ok_or_else(|| "meeting_output:wav_data_missing".to_string())?;
+    if require_pcm16 && (audio_format != 1 || bits_per_sample != 16) {
+        return Err("native_voice:reference_not_pcm16".into());
+    }
 
     if channels == 0 || channels > MAX_OUTPUT_CHANNELS {
         return Err("meeting_output:wav_channels_unsupported".to_string());

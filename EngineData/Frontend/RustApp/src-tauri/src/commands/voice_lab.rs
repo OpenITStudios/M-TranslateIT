@@ -331,6 +331,20 @@ pub fn finish_voice_lab_build(generation: u64) -> Result<VoiceLabBuildSnapshot, 
         .finish(generation)
 }
 
+// Preview is not a completed trained actor or an approval. Serialize
+// its final success against the same build cancellation authority.
+#[cfg(windows)]
+pub(super) fn finish_native_voice_preview(generation: u64) -> Result<(), String> {
+    let mut state = build_store().lock().map_err(|_| "voice_lab:build_state_unavailable")?;
+    let active = state.active.as_ref().ok_or("voice_lab:no_active_build")?;
+    if active.generation != generation || active.phase != BuildPhase::Preparing
+        || active.cancel_requested {
+        return Err("preview_cancelled_or_stale".into());
+    }
+    state.fail(generation)?;
+    Ok(())
+}
+
 pub fn fail_voice_lab_build(generation: u64) -> Result<VoiceLabBuildSnapshot, String> {
     build_store()
         .lock()

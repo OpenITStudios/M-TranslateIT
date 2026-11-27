@@ -809,6 +809,12 @@ fn start_voice_lab_build_selected(
         return result(false, "voice_busy",
             "Stop Meeting or Quick Preview before improving My Voice.");
     }
+    // The native candidate's full Create/Improve review is not yet wired.
+    // Do not launch the old training provider as a fallback in this build.
+    if super::helper_bridge::native_voice_candidate_enabled() {
+        return result(false, "native_review_pending",
+            "Native Quick Preview is available, but full My Voice creation and approval are not yet available in this candidate build. Saved recordings and the previous approved voice are unchanged.");
+    }
     // Inspect archive selection BEFORE claiming build ownership. The hard
     // per-run maximum is 128; a 600+ prompt library is not a training cap.
     let selection = if let Some(ids) = selected_archives.as_ref() {

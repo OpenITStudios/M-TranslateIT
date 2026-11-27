@@ -57,6 +57,33 @@ impl PendingInference {
         }
     }
 
+    /// VoiceLab shares the existing request slot and scheduler, but its
+    /// cancellation authority is a build generation rather than Meeting Stop.
+    /// Poll only that authority while awaiting the owned receipt; after a
+    /// cancellation signal, still join the cooperative request before return.
+    pub fn wait_output_with_cancel(mut self, mut cancelled: impl FnMut() -> bool)
+        -> Result<InferenceOutput, Error>
+    {
+        let reply = self.reply.take().expect("one owned inference reply");
+        let result = loop {
+            if cancelled() || Instant::now() >= self.deadline {
+                self.state.cancelled.store(true, Ordering::Release);
+                break reply.recv().map_err(|_| Error::OwnerThreadFailed)?;
+            }
+            match reply.recv_timeout(std::time::Duration::from_millis(50)) {
+                Ok(result) => break result,
+                Err(mpsc::RecvTimeoutError::Timeout) => {},
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Err(Error::OwnerThreadFailed),
+            }
+        };
+        let result = result?;
+        if cancelled() { return Err(Error::Cancelled); }
+        super::check_control(&RequestControl {
+            cancelled: &self.state.cancelled, deadline: self.deadline,
+        })?;
+        Ok(result)
+    }
+
     pub fn wait_output(mut self) -> Result<InferenceOutput, Error> {
         let reply = self.reply.take().expect("one owned inference reply");
         let result = reply.recv().map_err(|_| Error::OwnerThreadFailed)??;

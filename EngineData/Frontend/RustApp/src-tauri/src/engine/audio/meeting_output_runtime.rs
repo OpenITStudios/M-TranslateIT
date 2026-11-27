@@ -49,13 +49,28 @@ pub(crate) fn decode_functional_probe_asr_pcm(file: File) -> Result<Vec<f32>, St
 /// voice selection owner. Reuse the canonical WAV decoder and existing
 /// anti-aliased FFT resampler, not a second decoder or a linear downsample.
 #[cfg(windows)]
-pub(crate) fn decode_native_voice_reference(bytes: &[u8]) -> Result<Vec<f32>, String> {
-    let source = decode_wav_bytes(bytes)?;
+pub(crate) fn decode_native_voice_source(bytes: &[u8]) -> Result<Vec<f32>, String> {
+    let source = audio_format::decode_pcm16_wav_bytes(bytes)?;
     if source.channels != 1 || source.sample_rate_hz != 32_000
         || !(32_000 * 3..=32_000 * 30).contains(&source.samples.len()) {
         return Err("native_voice:reference_format_invalid".into());
     }
-    let pcm = crate::engine::audio::guided_take::resample_mono_fft(&source.samples, 32_000, 16_000)?;
+    Ok(source.samples)
+}
+
+#[cfg(windows)]
+pub(crate) fn decode_native_voice_reference(bytes: &[u8]) -> Result<Vec<f32>, String> {
+    let source = decode_native_voice_source(bytes)?;
+    prepare_native_voice_reference(&source)
+}
+
+#[cfg(windows)]
+pub(crate) fn prepare_native_voice_reference(source: &[f32]) -> Result<Vec<f32>, String> {
+    if !(32_000 * 3..=32_000 * 30).contains(&source.len())
+        || source.iter().any(|sample| !sample.is_finite() || sample.abs() > 1.0) {
+        return Err("native_voice:reference_format_invalid".into());
+    }
+    let pcm = crate::engine::audio::guided_take::resample_mono_fft(source, 32_000, 16_000)?;
     if !(16_000 * 3..=16_000 * 30).contains(&pcm.len())
         || pcm.iter().any(|sample| !sample.is_finite() || sample.abs() > 1.0)
         || !pcm.iter().any(|sample| sample.abs() >= 0.0001) {
