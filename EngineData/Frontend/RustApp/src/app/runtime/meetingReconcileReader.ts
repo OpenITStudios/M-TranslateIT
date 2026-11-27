@@ -5,61 +5,45 @@ import { APPLICATION_MEETING_OWNER_ID } from "../shared/types";
 export type MeetingReconcileResult = {
   status: MeetingSessionStatus;
   turns: MeetingCommittedTurnsSnapshot | null;
-  transcriptStatusKey: string;
   unavailable: boolean;
 };
 
-function transcriptStatusKey(status: MeetingSessionStatus): string {
-  return [
-    status.session_id ?? "none",
-    status.outbound.updated_unix_ms,
-    status.incoming.updated_unix_ms,
-    status.outbound.utterance_sequence,
-  ].join(":");
-}
-
 export async function readMeetingReconciliation(
   currentTurns: MeetingCommittedTurnsSnapshot | null,
-  previousStatusKey: string,
-  forceTurns = false,
 ): Promise<MeetingReconcileResult | null> {
   try {
-    const status = await runtimeApi.getMeetingSessionStatus();
+    // The existing live read carries status and either a fresh snapshot or
+    // an explicit unchanged receipt. Every event/fallback uses the same path.
+    const { status, unchanged, ...nextTurns } = await runtimeApi.getMeetingCommittedTurns(
+      currentTurns?.ok && currentTurns.has_session ? currentTurns.live_revision ?? null : null,
+    );
+    if (!status) return null;
     if (meetingBridgeUnavailable(status)) {
-      return { status, turns: null, transcriptStatusKey: "", unavailable: true };
+      return { status, turns: null, unavailable: true };
     }
-
-    if (
-      !status.has_session
-      || status.owner_id !== APPLICATION_MEETING_OWNER_ID
-    ) {
-      return { status, turns: null, transcriptStatusKey: "", unavailable: false };
+    if (!status.has_session || status.owner_id !== APPLICATION_MEETING_OWNER_ID) {
+      return { status, turns: null, unavailable: false };
     }
-
-    const statusKey = transcriptStatusKey(status);
-    // A stale or failed transcript snapshot must never cross session identity.
-    // This also covers an unchanged status key after a previously failed read.
+    // A changed session between observations never retains private old turns.
+    if (!nextTurns.has_session || nextTurns.session_id !== status.session_id) {
+      return { status, turns: null, unavailable: false };
+    }
     const retainedTurns = currentTurns?.ok && currentTurns.has_session
       && currentTurns.session_id === status.session_id ? currentTurns : null;
-    if (statusKey === previousStatusKey && !forceTurns && retainedTurns) {
-      return { status, turns: retainedTurns, transcriptStatusKey: previousStatusKey, unavailable: false };
+    if (nextTurns.ok) {
+      if (!unchanged) return { status, turns: nextTurns, unavailable: false };
+      // An unchanged receipt is not an empty transcript. Reuse only the
+      // exact verified session and token that the backend acknowledged.
+      if (retainedTurns && nextTurns.live_revision
+          && nextTurns.live_revision === retainedTurns.live_revision) {
+        return { status, turns: retainedTurns, unavailable: false };
+      }
+      return { status, turns: null, unavailable: false };
     }
-
-    const nextTurns = await runtimeApi.getMeetingCommittedTurns();
-    if (nextTurns.ok && nextTurns.has_session && nextTurns.session_id === status.session_id) {
-      return { status, turns: nextTurns, transcriptStatusKey: statusKey, unavailable: false };
-    }
-
-    return {
-      status,
-      // Do not fall back to another session's turns or an unverified bridge
-      // response. Retry on the next reconciliation when no valid turns remain.
-      turns: retainedTurns,
-      transcriptStatusKey: retainedTurns ? previousStatusKey : "",
-      unavailable: false,
-    };
+    // A failed observation never supplies a new token. Retaining the last
+    // same-session view allows the next read to retry, never foreign captions.
+    return { status, turns: retainedTurns, unavailable: false };
   } catch {
-    // A failed reconciliation read provides no authoritative replacement state.
     return null;
   }
 }

@@ -7,7 +7,6 @@ import { clearLatestMeetingOverlay, publishLatestMeetingOverlay } from "./transl
 
 export type MeetingLiveViewState = {
   turns: MeetingCommittedTurnsSnapshot | null;
-  transcriptStatusKey: string;
   overlayRevision: string;
   inFlight: boolean;
   revision: number;
@@ -33,12 +32,10 @@ export function createMeetingLiveController(): {
   reconcile: (
     context: MeetingReconcileContext,
     callbacks: MeetingReconcileCallbacks,
-    forceTurns?: boolean,
   ) => Promise<MeetingLiveViewState>;
 } {
   let state: MeetingLiveViewState = {
     turns: null,
-    transcriptStatusKey: "",
     overlayRevision: "",
     inFlight: false,
     revision: 0,
@@ -54,7 +51,6 @@ export function createMeetingLiveController(): {
       state = {
         ...state,
         turns: null,
-        transcriptStatusKey: "",
         overlayRevision: "",
         revision: state.revision + 1,
       };
@@ -69,7 +65,6 @@ export function createMeetingLiveController(): {
     async reconcile(
       context: MeetingReconcileContext,
       callbacks: MeetingReconcileCallbacks,
-      forceTurns = false,
     ): Promise<MeetingLiveViewState> {
       if (state.inFlight || context.booting || context.setupRequired) return publish();
       if (context.ownerKind !== "meeting" && !context.closeAfterExistingStop) return publish();
@@ -79,8 +74,6 @@ export function createMeetingLiveController(): {
       try {
         const result = await readMeetingReconciliation(
           state.turns,
-          state.transcriptStatusKey,
-          forceTurns,
         );
         if (!result || revision !== state.revision) return publish();
 
@@ -101,7 +94,6 @@ export function createMeetingLiveController(): {
         state = {
           ...state,
           turns: result.turns,
-          transcriptStatusKey: result.transcriptStatusKey,
           overlayRevision,
         };
 

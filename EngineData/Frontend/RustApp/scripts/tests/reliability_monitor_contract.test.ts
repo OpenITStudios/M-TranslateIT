@@ -41,8 +41,9 @@ test("Meeting freshness is event-first with slow reconciliation fallback", () =>
   assert.match(monitor, /listen<MeetingRuntimeEvent>/);
   assert.match(monitor, /MEETING_EVENT_DEBOUNCE_MS = 80/);
   assert.match(monitor, /MEETING_RECONCILIATION_POLL_MS = 10_000/);
-  assert.match(monitor, /pollMeeting\(true\)/);
-  assert.match(monitor, /pollMeeting\(false\)/);
+  assert.match(monitor, /if \(!disposed\) void pollMeeting\(\)/);
+  assert.match(monitor, /\(\) => void pollMeeting\(\)/);
+  assert.doesNotMatch(monitor, /forceTurns|pollMeeting\((?:true|false)\)/);
   assert.doesNotMatch(monitor, /setInterval\([^)]*1_200/);
 });
 

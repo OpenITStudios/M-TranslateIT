@@ -499,7 +499,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     }
   }
 
-  async function pollMeeting(forceTurns = false): Promise<void> {
+  async function pollMeeting(): Promise<void> {
     const pollControllerRevision = applicationController.read().revision;
     try {
       meetingViewState = await meetingLiveController.reconcile(
@@ -524,7 +524,6 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
             closeState = await closeController.closeWindow();
           },
         },
-        forceTurns,
       );
     } catch {
       setKnownNotice("Couldn't refresh the meeting display. Translation status is unknown; open Help if this continues.", "unverified");

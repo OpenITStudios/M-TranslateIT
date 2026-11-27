@@ -7,7 +7,7 @@ use crate::engine::runtime_state::{latest_runtime_session_state, RuntimeSessionS
 use super::super::helper_bridge_runtime::unix_ms;
 use super::transcript_archive;
 use super::{
-    MeetingCommittedTurn, MeetingCommittedTurnsSnapshot, MeetingOutboundTiming,
+    MeetingCommittedTurn, MeetingCommittedTurnsSnapshot, MeetingLiveTurnsRead, MeetingOutboundTiming,
     APPLICATION_MEETING_OWNER_ID,
 };
 
@@ -24,6 +24,8 @@ fn turn_text_bytes(turn: &MeetingCommittedTurn) -> usize {
 struct MeetingCommittedTurnStore {
     session_id: String,
     dropped_turn_count: u64,
+    // Only the authoritative store changes this revision, under its existing lock.
+    revision: u64,
     retained_text_bytes: usize,
     // Compact replay fence independent of bounded transcript retention.
     retired_sequence: u64,
@@ -35,6 +37,7 @@ impl MeetingCommittedTurnStore {
         Self {
             session_id: session_id.to_string(),
             dropped_turn_count: 0,
+            revision: 0,
             retained_text_bytes: 0,
             retired_sequence: 0,
             turns: VecDeque::new(),
@@ -140,6 +143,7 @@ impl MeetingCommittedTurnStore {
         let archived = turn.clone();
         self.turns.insert(insert_at, turn);
         self.enforce_session_limits();
+        self.revision += 1;
         Some(archived)
     }
 
@@ -192,6 +196,7 @@ impl MeetingCommittedTurnStore {
             .saturating_sub(previous_bytes)
             .saturating_add(turn.translated_text.len());
         self.enforce_session_limits();
+        self.revision += 1;
         Some(archived)
     }
 
@@ -262,6 +267,7 @@ impl MeetingCommittedTurnStore {
         }
         turn.delivery_state = Some(delivery_state.to_string());
         turn.updated_unix_ms = now_unix_ms;
+        self.revision += 1;
         true
     }
 
@@ -292,6 +298,7 @@ impl MeetingCommittedTurnStore {
         // Claim queued -> speaking exactly once before native audio is attempted.
         turn.delivery_state = Some("speaking".to_string());
         turn.updated_unix_ms = now_unix_ms;
+        self.revision += 1;
         true
     }
 
@@ -316,6 +323,7 @@ impl MeetingCommittedTurnStore {
         };
         turn.outbound_timing = Some(timing.clone());
         turn.updated_unix_ms = now_unix_ms;
+        self.revision += 1;
         true
     }
 
@@ -344,6 +352,9 @@ impl MeetingCommittedTurnStore {
                 // Only actual changed entries need a durable update.
                 changed.push(turn.clone());
             }
+        }
+        if !changed.is_empty() {
+            self.revision += 1;
         }
         changed
     }
@@ -397,15 +408,29 @@ impl MeetingCommittedTurnStore {
         }
     }
 
+    #[cfg(test)]
     fn snapshot(&self) -> MeetingCommittedTurnsSnapshot {
-        // Fast path for live UI refresh: clone only the last visible turns,
-        // not thousands of retained turns on every runtime event/poll.
-        let mut turns: Vec<_> = self.turns.iter().rev()
-            .take(MAX_LIVE_COMMITTED_TURNS).cloned().collect();
-        turns.reverse();
-        let archive_errors = transcript_archive::active_write_errors(&self.session_id);
+        self.read_live(None, transcript_archive::active_write_errors(&self.session_id)).snapshot
+    }
+
+    fn read_live(
+        &self,
+        known_revision: Option<&str>,
+        archive_errors: Result<u64, String>,
+    ) -> MeetingLiveTurnsRead {
+        // Archive health can change independently of the turn store. An
+        // unknown observation never authorizes an unchanged receipt.
+        let revision = archive_errors.as_ref().ok().map(|errors|
+            format!("{}:{}:{}", self.session_id, self.revision, errors));
+        let unchanged = revision.as_deref().is_some_and(|value| known_revision == Some(value));
+        let mut turns = Vec::new();
+        if !unchanged {
+            // Clone only the visible tail, and only when the observation changed.
+            turns.extend(self.turns.iter().rev().take(MAX_LIVE_COMMITTED_TURNS).cloned());
+            turns.reverse();
+        }
         let archive_unverified = archive_errors.is_err();
-        MeetingCommittedTurnsSnapshot {
+        let snapshot = MeetingCommittedTurnsSnapshot {
             ok: !archive_unverified,
             has_session: true,
             session_id: Some(self.session_id.clone()),
@@ -426,7 +451,8 @@ impl MeetingCommittedTurnStore {
                 "Live Meeting transcription reflects the latest retained recognized source and available translations.".to_string()
             },
             runtime_claim: "meeting_committed_turn_snapshot_source_contract_not_rendered_runtime_proof".to_string(),
-        }
+        };
+        MeetingLiveTurnsRead { snapshot, live_revision: revision, unchanged, status: None }
     }
 }
 
@@ -843,52 +869,65 @@ pub(super) fn current_outbound_latency_distribution() -> Option<(usize, u64, u64
     store.outbound_latency_distribution()
 }
 
-pub(super) fn current_committed_turn_snapshot() -> MeetingCommittedTurnsSnapshot {
+pub(super) fn current_committed_turn_snapshot(
+    known_revision: Option<&str>,
+    expected_status: Option<&super::MeetingSessionStatus>,
+) -> MeetingLiveTurnsRead {
     let session = latest_runtime_session_state().snapshot;
     let Some(session) = session else {
-        return empty_committed_turn_snapshot(
+        return MeetingLiveTurnsRead::full(empty_committed_turn_snapshot(
             false,
             None,
             "",
             "No application Meeting session currently owns committed transcript turns.",
-        );
+        ));
     };
     if session.owner_id != APPLICATION_MEETING_OWNER_ID {
-        return empty_committed_turn_snapshot(
+        return MeetingLiveTurnsRead::full(empty_committed_turn_snapshot(
             true,
             Some(session.session_id),
             "meeting_committed_turns:owner_conflict",
             "Committed Meeting turns are unavailable because another runtime owner holds the active session.",
-        );
+        ));
     }
 
     let session_id = session.session_id;
+    if expected_status.is_some_and(|status| !status.has_session
+        || status.owner_id.as_deref() != Some(APPLICATION_MEETING_OWNER_ID)
+        || status.session_id.as_deref() != Some(session_id.as_str())
+        || status.generation != Some(session.generation))
+    {
+        return MeetingLiveTurnsRead::full(empty_committed_turn_snapshot(
+            true, Some(session_id), "meeting_committed_turns:session_mismatch",
+            "Meeting identity changed during reconciliation; refresh the current session.",
+        ));
+    }
     let Ok(guard) = committed_turn_store().lock() else {
-        return empty_committed_turn_snapshot(
+        return MeetingLiveTurnsRead::full(empty_committed_turn_snapshot(
             true,
             Some(session_id),
             "meeting_committed_turns:state_lock_failed",
             "Committed Meeting turn state is temporarily unavailable.",
-        );
+        ));
     };
     let Some(store) = guard.as_ref() else {
-        return empty_committed_turn_snapshot(
+        return MeetingLiveTurnsRead::full(empty_committed_turn_snapshot(
             true,
             Some(session_id),
             "",
             "The active Meeting session has not committed any translated turns yet.",
-        );
+        ));
     };
     if store.session_id != session_id {
-        return empty_committed_turn_snapshot(
+        return MeetingLiveTurnsRead::full(empty_committed_turn_snapshot(
             true,
             Some(session_id),
             "meeting_committed_turns:session_mismatch",
             "Committed Meeting turn state does not belong to the current application Meeting session.",
-        );
+        ));
     }
 
-    store.snapshot()
+    store.read_live(known_revision, transcript_archive::active_write_errors(&store.session_id))
 }
 
 #[cfg(test)]
@@ -930,6 +969,59 @@ mod tests {
             output_stream_build_ms: None,
             output_stream_start_to_first_audio_ms: None,
         }
+    }
+
+    #[test]
+    fn live_read_reuses_only_exact_session_revision_and_known_archive_health() {
+        let mut store = MeetingCommittedTurnStore::new("session-a");
+        let first = store.read_live(None, Ok(0));
+        let token = first.live_revision.as_deref().unwrap();
+        assert!(!first.unchanged);
+        assert!(store.read_live(Some(token), Ok(0)).unchanged);
+        assert!(!store.read_live(Some(token), Ok(1)).unchanged);
+        assert!(!store.read_live(Some(token), Err("unknown".into())).unchanged);
+        assert!(!MeetingCommittedTurnStore::new("session-b").read_live(Some(token), Ok(0)).unchanged);
+        assert!(store.commit_at("session-a", 1, None, 11, "incoming", "en", "id",
+            "Hello", "", None, None, 1).is_some());
+        let changed = store.read_live(Some(token), Ok(0));
+        assert!(!changed.unchanged);
+        assert_eq!(changed.snapshot.turns.len(), 1);
+        let changed_token = changed.live_revision.as_deref().unwrap();
+        let unchanged = store.read_live(Some(changed_token), Ok(0));
+        assert!(unchanged.unchanged);
+        assert!(unchanged.snapshot.turns.is_empty());
+        // Same-millisecond translation is a change, independent of timestamps.
+        assert!(store.finish_translation_at("session-a", 1, None, 11, "incoming", Some("Halo"), 1).is_some());
+        let translated = store.read_live(Some(changed_token), Ok(0));
+        assert!(!translated.unchanged);
+        assert_eq!(translated.snapshot.turns[0].translated_text, "Halo");
+    }
+
+    #[test]
+    fn live_revision_tracks_delivery_timing_and_interruption_not_rejected_updates() {
+        let mut store = MeetingCommittedTurnStore::new("s1");
+        assert!(store.commit_at("s1", 1, Some(7), 51, "you", "id", "en",
+            "Halo", "Hello", Some("preparing_voice"), Some(timing(1)), 1).is_some());
+        let token = |store: &MeetingCommittedTurnStore| store.read_live(None, Ok(0)).live_revision.unwrap();
+        let before = token(&store);
+        assert!(!store.begin_playback_at("s1", 7, 1, 51, 1));
+        assert_eq!(token(&store), before);
+        assert!(store.update_delivery_state_at("s1", 7, 51, "queued", 1));
+        let queued = token(&store);
+        assert_ne!(queued, before);
+        assert!(store.begin_playback_at("s1", 7, 1, 51, 1));
+        let speaking = token(&store);
+        assert_ne!(speaking, queued);
+        let mut measured = timing(1);
+        measured.first_playback_unix_ms = Some(2);
+        assert!(store.update_outbound_timing_at("s1", 7, 51, &measured, 1));
+        let measured_token = token(&store);
+        assert_ne!(measured_token, speaking);
+        assert_eq!(store.interrupt_generation_at(7, 1).len(), 1);
+        let interrupted = token(&store);
+        assert_ne!(interrupted, measured_token);
+        assert!(store.update_delivery_state_at("s1", 7, 51, "interrupted", 1));
+        assert_eq!(token(&store), interrupted);
     }
 
     #[test]

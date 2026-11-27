@@ -256,6 +256,29 @@ pub struct MeetingCommittedTurnsSnapshot {
     pub runtime_claim: String,
 }
 
+// Extra metadata is limited to this live read. Saved/export snapshots keep
+// their existing contract. No opt-in means the original full snapshot.
+#[derive(Debug, Clone, Serialize)]
+pub struct MeetingLiveTurnsRead {
+    #[serde(flatten)]
+    pub snapshot: MeetingCommittedTurnsSnapshot,
+    pub live_revision: Option<String>,
+    pub unchanged: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<MeetingSessionStatus>,
+}
+
+impl MeetingLiveTurnsRead {
+    fn full(snapshot: MeetingCommittedTurnsSnapshot) -> Self {
+        Self { snapshot, live_revision: None, unchanged: false, status: None }
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct MeetingLiveReadRequest {
+    known_revision: Option<String>,
+}
+
 fn worker_json(response: &HelperBridgeWorkerResponse) -> Value {
     serde_json::from_str::<Value>(&response.worker_response_json).unwrap_or_else(|_| json!({}))
 }
@@ -476,8 +499,14 @@ pub(crate) fn committed_turn_health_counts() -> (usize, u64, bool) {
 }
 
 #[tauri::command]
-pub fn get_meeting_committed_turns() -> MeetingCommittedTurnsSnapshot {
-    current_committed_turn_snapshot()
+pub fn get_meeting_committed_turns(reconcile: Option<MeetingLiveReadRequest>) -> MeetingLiveTurnsRead {
+    let status = reconcile.as_ref().map(|_| current_status());
+    let mut result = current_committed_turn_snapshot(
+        reconcile.as_ref().and_then(|request| request.known_revision.as_deref()),
+        status.as_ref(),
+    );
+    result.status = status;
+    result
 }
 
 #[tauri::command]

@@ -275,6 +275,8 @@ export type SavedMeetingHtmlPreview = {
   message: string;
 };
 export type MeetingCommittedTurnsSnapshot = {
+  // Live reads only; saved and legacy snapshots need no revision.
+  live_revision?: string | null;
   ok: boolean;
   has_session: boolean;
   session_id: string | null;
@@ -285,6 +287,11 @@ export type MeetingCommittedTurnsSnapshot = {
   blocker: string;
   note: string;
   runtime_claim: string;
+};
+
+export type MeetingLiveTurnsRead = MeetingCommittedTurnsSnapshot & {
+  unchanged: boolean;
+  status?: MeetingSessionStatus;
 };
 
 const MAX_COMMAND_ERRORS = 12;
@@ -535,11 +542,16 @@ export const runtimeApi = {
     );
   },
 
-  async getMeetingCommittedTurns(): Promise<MeetingCommittedTurnsSnapshot> {
-    return invokeOr<MeetingCommittedTurnsSnapshot>(
+  async getMeetingCommittedTurns(knownRevision?: string | null): Promise<MeetingLiveTurnsRead> {
+    const message = "Meeting transcript is temporarily unavailable because the frontend bridge could not call Tauri.";
+    return invokeOr<MeetingLiveTurnsRead>(
       "get_meeting_committed_turns",
-      undefined,
-      meetingCommittedTurnsFallback("Meeting transcript is temporarily unavailable because the frontend bridge could not call Tauri."),
+      knownRevision === undefined ? undefined : { reconcile: { known_revision: knownRevision } },
+      {
+        ...meetingCommittedTurnsFallback(message),
+        unchanged: false,
+        status: meetingSessionStatusFallback(message),
+      },
     );
   },
 
