@@ -136,6 +136,25 @@ during the existing PCM16 encoding pass, preserving the gain formula,
 quantization, single buffered write, exclusive staging and atomic promotion.
 No extra filtered audio vector, callback owner, transport or model is added.
 
+### Demand-scoped playback, archive and auxiliary work
+
+The native playback callback directly owns the prepared device PCM. Decoded
+source PCM is released before stream creation; the callback processes the
+available bounded prefix and silent tail while preserving first-audio timing,
+generation/Mute/source and failure checks. The current one-pending-slot queue
+and per-utterance stream lifecycle remain unchanged.
+
+The archive scanner retains one filename/type validation pass. Count-only
+finalization, History and warning reads do not collect or sort turn paths;
+Preview and Export opt into the ordered inventory. Atomic archive receipts,
+actual disk observations and scoped Stop/Retry Stop ownership remain intact.
+
+Explicit Reliability Diagnostics uses the existing combined watchdog and
+device-loss observation; recovery, incident and long-session reads remain
+independent. Quick Access retains event subscription and immediate refresh,
+but schedules periodic recovery only while focused and releases its timer
+on blur/disposal. No new controller, storage index or background manager.
+
 ### Frontend application controller
 
 The frontend shell consumes one `ProductRuntimeSnapshot` through `src/app/runtime/applicationController.ts`. The controller owns refresh sequencing, setup-state transitions, settings projection, and Meeting-session projection. `App.svelte` owns only UI-shell concerns such as route, transient notices, busy flags, close-dialog state, and the live transcript view.

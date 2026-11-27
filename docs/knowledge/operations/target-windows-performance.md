@@ -142,6 +142,36 @@ existing privacy and product semantics. This source work does not close
 unrelated outstanding product work, package signing, installation or release
 acceptance.
 
+### End-to-End Flow Optimization — held integrated acceptance
+
+**Scope:** reopened end-to-end optimization from
+`Local@6440f2f98d6e273011ed13a873aea2f02265127d` through the nine source increments at
+`7bdcc32027b497ff3563239521531f5288772f05` and this closure. Use the actual
+closure SHA or explicitly reconciled successor. This extends the preceding
+Zero Waste acceptance; it does not introduce another test phase, runner or
+runtime monitor. Local validation is deferred until separately authorized
+on the actual Windows PC. No test has been executed for this closure.
+
+| Existing flow | Additional acceptance observation |
+| --- | --- |
+| Startup and Settings | New, returning, damaged and recoverable Settings preserve admission. Start with the one application snapshot; check event/receipt ordering, Mic Test ownership and background My Voice terminal notices. |
+| Meeting Start | Initial route is reused; post-AI and final pre-Live checks remain fresh. Cold/warm Start, device changes, failed rollback and Retry Stop remain fail-closed. |
+| Capture / VAD | Existing rational native-window and integer conversion fixtures preserve sample order, interpolation, lookahead, clipping, and discontinuity; fixed-format scratch capacity stays bounded. |
+| ASR / MT / TTS | Direct translation output contract executes once; standalone aggregate and chunks retain guards. Actor package change during load blocks publication. Preserve model identity, language, EOS and selected actor. |
+| Worker scheduling / IPC | Existing JSON-string frontend receipt round-trips parsed Rust payload, including retry timing and failure; preserve queue priority, deadlines, correlation and unknown timing. |
+| Playback | Existing format/partial-buffer fixtures, first callback timing and cancellation/fault gates. Compare actual receiver audio; Mute, source switch and Stop must never leak stale samples or replay. |
+| Storage / Stop | Count-only scan agrees with ordered inventory; empty, incomplete and damaged archives remain visible and honest; exported order and scoped cleanup unchanged. |
+| Auxiliary | Explicit Diagnostics uses four requests for the reliability panel, including the combined watchdog/device read. Quick Access has one focused recovery timer, releases it on blur/dispose, and refreshes on focus; verify native focus denial and reopen. |
+
+Reuse the preceding matched baseline protocol and existing timing/resource
+metrics. Distinguish source-derived removed work from measured CPU/RAM/VRAM,
+disk/IPC or latency improvements. No new metrics, dependency or persistent
+cache is required. If there is no matched measured baseline, performance
+improvement remains UNKNOWN. The existing Phase B persistent stream and
+Phase C proof rebinding gates, strict engine admission and capture wake
+safety remain independent evidence requirements; do not expand the closed
+source scope merely to reduce check counts.
+
 ### Five Meeting flows — baseline order
 
 These rows group existing acceptance scenarios; they are not new scenario IDs or
