@@ -35,7 +35,13 @@ $PayloadRoots=@(
     'EngineData\Backend\RuntimeAssets\AudioProvider\VBCABLE\Package'
 )
 
-function Fail([int]$Code,[string]$Message){[Console]::Error.WriteLine("[translateit-r3-installer] $Message");exit $Code}
+# Never exit inside a validation helper: failures after promotion must
+# unwind through the owning transaction and restore the previous runtime.
+function Fail([int]$Code,[string]$Message){
+    $failure=[System.InvalidOperationException]::new($Message)
+    $failure.Data['TranslateITExitCode']=$Code
+    throw $failure
+}
 function NeedFile([string]$Path,[int]$Code,[string]$Label){if(-not(Test-Path -LiteralPath $Path -PathType Leaf)){Fail $Code "$Label missing: $Path"}}
 function NeedMarker([string]$Path,[string]$Expected,[int]$Code,[string]$Label){NeedFile $Path $Code $Label;if((Get-Content -LiteralPath $Path -Raw).Trim()-ne$Expected){Fail $Code "$Label mismatch"}}
 
@@ -186,10 +192,14 @@ function Rollback-Payload([string]$Root,[string]$Backup,[System.Collections.ILis
         $state=$States[$i]
         $target=Join-Path $Root $state.relative
         $saved=Join-Path $Backup $state.relative
-        if($state.new_moved){Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue}
-        if($state.backup_moved-and(Test-Path -LiteralPath $saved)){
+        if($state.new_moved-and(Test-Path -LiteralPath $target)){
+            Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop
+        }
+        if($state.backup_moved){
+            if(-not(Test-Path -LiteralPath $saved)){throw "Rollback backup missing: $($state.relative)"}
+            if(Test-Path -LiteralPath $target){throw "Rollback destination still occupied: $($state.relative)"}
             New-Item -ItemType Directory -Force -Path(Split-Path $target -Parent)|Out-Null
-            Move-Item -LiteralPath $saved -Destination $target -Force
+            Move-Item -LiteralPath $saved -Destination $target -ErrorAction Stop
         }
     }
 }
@@ -201,22 +211,29 @@ function Install-Payload([string]$Tar){
     Ensure-FreeSpace $root
     $stage=Join-Path $root '.translateit-r3-stage'
     $backup=Join-Path $root '.translateit-r3-backup'
-    Remove-Item -LiteralPath $stage,$backup -Recurse -Force -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory -Force -Path $stage,$backup|Out-Null
-
-    &$Tar -xf $script:PayloadPath -C $stage
-    if($LASTEXITCODE-ne 0){Fail 71 'Payload extraction failed.'}
-    $contract=Get-Content -LiteralPath (Join-Path $stage $PayloadContract) -Raw | ConvertFrom-Json
-    Assert-Contract $contract
-    $nativePins=[string]$contract.native_dll_pins
-    Assert-Runtime $stage $nativePins
-
-    # The driver is installed from the verified staging tree before application
-    # runtime replacement. If the vendor/system flow fails, the existing app runtime
-    # remains untouched. Driver consent is owned by Windows and is never bypassed.
-    $restartRequired=Install-VBCableIfNeeded $stage
+    # A prior failed rollback may own the only copy of the old runtime.
+    # Do not delete or reuse either transaction directory automatically.
+    if((Test-Path -LiteralPath $stage)-or(Test-Path -LiteralPath $backup)){
+        Fail 72 'An earlier payload transaction remains. Preserve its stage/backup for recovery.'
+    }
     $states=New-Object Collections.Generic.List[object]
+    $cleanupVerified=$false
+    $stageCreated=$false
+    $backupCreated=$false
     try{
+        New-Item -ItemType Directory -Path $stage -ErrorAction Stop|Out-Null
+        $stageCreated=$true
+        New-Item -ItemType Directory -Path $backup -ErrorAction Stop|Out-Null
+        $backupCreated=$true
+        &$Tar -xf $script:PayloadPath -C $stage
+        if($LASTEXITCODE-ne 0){Fail 71 'Payload extraction failed.'}
+        $contract=Get-Content -LiteralPath (Join-Path $stage $PayloadContract) -Raw | ConvertFrom-Json
+        Assert-Contract $contract
+        $nativePins=[string]$contract.native_dll_pins
+        Assert-Runtime $stage $nativePins
+
+        # Vendor/system flow precedes runtime replacement; consent stays with Windows.
+        $restartRequired=Install-VBCableIfNeeded $stage
         foreach($relative in $PayloadRoots){
             $source=Join-Path $stage $relative
             $target=Join-Path $root $relative
@@ -251,19 +268,42 @@ function Install-Payload([string]$Tar){
             user_data_policy='preserve_app_local_user_data'
             installed_utc=[DateTime]::UtcNow.ToString('o')
         }
+        # The installed receipt is part of the same transaction, not an
+        # in-place write that could leave the old runtime with a new receipt.
         $manifestPath=Join-Path $root $InstalledManifest
-        New-Item -ItemType Directory -Force -Path(Split-Path $manifestPath -Parent)|Out-Null
-        $manifest|ConvertTo-Json -Depth 5|Set-Content -LiteralPath $manifestPath -Encoding UTF8
-        Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue
-        if($restartRequired){exit 3010}
-        exit 0
+        $newManifest=Join-Path $stage $InstalledManifest
+        $savedManifest=Join-Path $backup $InstalledManifest
+        New-Item -ItemType Directory -Force -Path(Split-Path $newManifest -Parent),(Split-Path $savedManifest -Parent),(Split-Path $manifestPath -Parent)|Out-Null
+        $manifest|ConvertTo-Json -Depth 5|Set-Content -LiteralPath $newManifest -Encoding UTF8
+        $state=[pscustomobject]@{relative=$InstalledManifest;backup_moved=$false;new_moved=$false}
+        $states.Add($state)
+        if(Test-Path -LiteralPath $manifestPath){
+            Move-Item -LiteralPath $manifestPath -Destination $savedManifest -ErrorAction Stop
+            $state.backup_moved=$true
+        }
+        Move-Item -LiteralPath $newManifest -Destination $manifestPath -ErrorAction Stop
+        $state.new_moved=$true
+        $cleanupVerified=$true
     }catch{
+        $originalFailure=$_
         [Console]::Error.WriteLine("[translateit-r3-installer] install failed; rolling back application runtime: $($_.Exception.Message)")
-        Rollback-Payload $root $backup $states
-        exit 80
+        try{
+            Rollback-Payload $root $backup $states
+            $cleanupVerified=$true
+        }catch{
+            [Console]::Error.WriteLine("[translateit-r3-installer] rollback incomplete; stage and backup retained: $($_.Exception.Message)")
+            Fail 81 'Payload rollback incomplete; recovery files retained.'
+        }
+        if($states.Count-eq 0){throw $originalFailure}
+        Fail 80 'Payload replacement failed; previous runtime restored.'
     }finally{
-        Remove-Item -LiteralPath $stage,$backup -Recurse -Force -ErrorAction SilentlyContinue
+        if($cleanupVerified){
+            if($stageCreated){Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue}
+            if($backupCreated){Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue}
+        }
     }
+    if($restartRequired){exit 3010}
+    exit 0
 }
 
 try{
@@ -280,5 +320,8 @@ try{
     Install-Payload $tar
 }catch{
     [Console]::Error.WriteLine("[translateit-r3-installer] $($_.Exception.Message)")
+    if($_.Exception.Data.Contains('TranslateITExitCode')){
+        exit ([int]$_.Exception.Data['TranslateITExitCode'])
+    }
     exit 90
 }

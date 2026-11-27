@@ -382,8 +382,6 @@ pub(super) fn process_outbound_pcm(
     let (asr, _) = send_helper_worker_pcm_task(
         json!({
             "language": "id",
-            "beam_size": 1,
-            "vad_filter": super::FINALIZED_MEETING_ASR_WORKER_VAD,
             "meeting_session_id": session_id,
             "meeting_lane": "you",
             "meeting_generation": generation,
@@ -533,7 +531,6 @@ fn process_outbound_transcript(
             "text": transcript,
             "source_language": "id",
             "target_language": "en",
-            "max_new_tokens": 96,
             "meeting_session_id": session_id,
             "meeting_lane": "you",
             "meeting_generation": generation,

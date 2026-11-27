@@ -65,6 +65,21 @@ struct Loaded {
 }
 static LOADED: Mutex<Option<Loaded>> = Mutex::new(None);
 
+// ProjectPaths reports forward slashes. Convert at the Windows ABI boundary
+// before checking disk prefixes, opening handles or passing paths to C++.
+// Do not canonicalize away a redirected parent or a parent traversal.
+pub(super) fn dos_path(path: &Path) -> Result<PathBuf, Error> {
+    let path = PathBuf::from(path.to_str().ok_or(Error::LibraryIdentityMismatch)?.replace('/', "\\"));
+    if !path.is_absolute()
+        || !matches!(path.components().next(),
+            Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)))
+        || path.components().any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(Error::LibraryIdentityMismatch);
+    }
+    Ok(path)
+}
+
 fn controlled_path(path: &Path) -> Result<PathBuf, Error> {
     if !path.is_absolute() || path.file_name().and_then(|name| name.to_str()) != Some(DLL_NAME) {
         return Err(Error::LibraryIdentityMismatch);
@@ -84,7 +99,7 @@ fn controlled_path(path: &Path) -> Result<PathBuf, Error> {
 // Lock directory names root-to-leaf while resolving and loading the exact
 // private closure. This rejects directory junctions/reparse points before
 // canonicalization can hide them. It does not establish directory ACL trust.
-fn lock_parents(path: &Path) -> Result<Vec<File>, Error> {
+pub(super) fn lock_parents(path: &Path) -> Result<Vec<File>, Error> {
     if !path.is_absolute()
         || !matches!(path.components().next(),
             Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)))
@@ -196,8 +211,9 @@ fn verify_closure(directory: &Path, pins: &str) -> Result<Vec<File>, Error> {
 /// OS/system dependencies and the actual PE import closure remain release
 /// evidence requirements; pinning a list is not a PE dependency audit.
 pub(super) unsafe fn load(path: &Path, pins: &str) -> Result<Api, Error> {
-    let _parents = lock_parents(path)?;
-    let path = controlled_path(path)?;
+    let path = dos_path(path)?;
+    let _parents = lock_parents(&path)?;
+    let path = controlled_path(&path)?;
     let mut slot = LOADED.lock().map_err(|_| Error::LibraryUnavailable)?;
     if let Some(loaded) = slot.as_ref() {
         return if loaded.path == path && loaded.pins == pins {

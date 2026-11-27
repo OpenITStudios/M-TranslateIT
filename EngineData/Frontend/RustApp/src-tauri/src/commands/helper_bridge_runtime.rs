@@ -250,8 +250,7 @@ impl HelperBridgeRuntime {
                     return false;
                 }
                 // Keep a closed Meeting-owned slot until exact Stop verifies
-                // the full lifecycle. Otherwise voice-process recovery could
-                // erase native selection and silently reach legacy ASR/MT.
+                // full lifecycle cleanup; no polling or restart may erase it.
                 if native.session_id.is_none() {
                     self.native_inference = None;
                 }
@@ -490,7 +489,10 @@ fn native_status_payload(worker: &Value, pci: Option<&str>, assets_present: bool
 pub(super) fn project_native_status(runtime: &mut HelperBridgeRuntime, worker: &mut Value) -> bool {
     #[cfg(windows)]
     let (pci, present) = match runtime.native_inference.as_ref() {
-        Some(native) if native.owner.is_available() => (Some(native.owner.device_id()), true),
+        Some(native) if native.owner.is_available()
+            && runtime.pending_meeting_cleanup_session_id.is_none()
+            && runtime.last_error.as_deref() != Some("helper_bridge:cleanup_incomplete")
+            => (Some(native.owner.device_id()), true),
         Some(_) => (None, false),
         None => (None, runtime.pending_meeting_cleanup_session_id.is_none()
             && runtime.last_error.as_deref() != Some("helper_bridge:cleanup_incomplete")
@@ -504,7 +506,11 @@ pub(super) fn project_native_status(runtime: &mut HelperBridgeRuntime, worker: &
     runtime.cuda_ready = available;
     runtime.provider_ready = ready;
     runtime.degraded_mode = projected["loaded"]["voice_actor_device"].as_str() == Some("cpu");
-    runtime.last_error = worker_text(&projected, "blocker");
+    // Preserve an unresolved cleanup blocker instead of replacing it with
+    // a less specific capability observation from a later status request.
+    if runtime.last_error.as_deref() != Some("helper_bridge:cleanup_incomplete") {
+        runtime.last_error = worker_text(&projected, "blocker");
+    }
     runtime.message = worker_text(&projected, "note").unwrap_or_default();
     *worker = projected;
     ready

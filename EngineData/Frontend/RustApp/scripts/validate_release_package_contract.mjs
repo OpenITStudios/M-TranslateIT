@@ -191,10 +191,16 @@ requireMarkers(helper, "installer helper", [
   "Rollback-Payload", "Read-PythonMetadata", "pnputil.exe", "VBCABLE_Setup_x64.exe", "@('-i','-h')", "exit 3010",
   "ExpectedNativeDllPinsSha256", "Assert-NativeRuntime", "Get-NativePins",
   "ExpectedInstalledRuntimeSchema", "preserve_system_driver", "preserve_app_local_user_data",
+  "TranslateITExitCode", "throw $failure", "$cleanupVerified", "Payload rollback incomplete; recovery files retained.",
+  "$newManifest", "$savedManifest", "Rollback-Payload $root $backup $states",
   "BuiltInVoices\\MaleVoice\\reference.wav",
   "BuiltInVoices\\FemaleVoice\\reference.wav",
   "BuiltInVoices\\SOURCES.json",
 ]);
+const failHelper = helper.slice(helper.indexOf("function Fail("), helper.indexOf("function NeedFile("));
+if (!failHelper.includes("throw $failure") || /\bexit\b/i.test(failHelper.replace(/#.*$/gm, ""))) fail("Installer validation must unwind through rollback.");
+const transaction = helper.slice(helper.indexOf("function Install-Payload("), helper.lastIndexOf("\ntry{"));
+if (!transaction.includes("if($cleanupVerified)") || !transaction.includes("$state=[pscustomobject]@{relative=$InstalledManifest;")) fail("Installed receipt and backup cleanup must belong to the payload transaction.");
 forbidMarkers(helper.toLowerCase(), "installer helper network/bootstrap", ["invoke-webrequest", "start-bitstransfer", "webclient", "http://", "https://", "pip install", "pnputil /delete-driver"]);
 
 requireMarkers(build, "release build", [

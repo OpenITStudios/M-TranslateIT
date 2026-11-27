@@ -291,21 +291,24 @@ static int32_t open_asr(const char * model_path, const char * projector_path,
 namespace {
 // The request owns its callback only for this synchronous invocation.
 // Upstream's abort_callback is CPU-only; observe Stop at safe call
-// boundaries, and drain outstanding decoder work before clearing KV.
+// boundaries. The per-utterance guard drains the decoder on every exit,
+// including inference failure, exceptions and token-limit rejection.
 struct request_control {
     ti_stop_check stop;
     const void * data;
-    int32_t check(llama_context * context = nullptr) const {
+    int32_t check() const {
         const auto status = stop(data);
         if (status == TI_OK) return TI_OK;
-        if (context) llama_synchronize(context);
         return status == TI_DEADLINE ? TI_DEADLINE : TI_CANCELLED;
     }
 };
 
 struct clear_utterance {
     llama_context * context;
-    ~clear_utterance() { llama_memory_clear(llama_get_memory(context), false); }
+    ~clear_utterance() {
+        llama_synchronize(context);
+        llama_memory_clear(llama_get_memory(context), false);
+    }
 };
 
 int32_t generate(decoder & d, llama_pos next_pos, uint32_t max_tokens,
@@ -318,10 +321,10 @@ int32_t generate(decoder & d, llama_pos next_pos, uint32_t max_tokens,
     // decoding mode, no partial transcript at the token limit.
     size_t used = 0;
     for (uint32_t i = 0; i < max_tokens; ++i) {
-        if (const auto stop = control.check(context); stop != TI_OK) return stop;
+        if (const auto stop = control.check(); stop != TI_OK) return stop;
         const llama_token token = llama_sampler_sample(d.sampler.get(), context, -1);
         if (token == LLAMA_TOKEN_NULL) return TI_INFERENCE;
-        if (const auto stop = control.check(context); stop != TI_OK) return stop;
+        if (const auto stop = control.check(); stop != TI_OK) return stop;
         if (llama_vocab_is_eog(vocab, token)) {
             if (required_eos != LLAMA_TOKEN_NULL && token != required_eos)
                 return TI_INCOMPLETE;
@@ -390,7 +393,7 @@ int32_t infer(ti_asr & asr, const float * pcm, size_t count, const char * langua
     if (mtmd_tokenize(projector, chunks.get(), &text, bitmaps, 1) != 0 ||
         mtmd_input_chunks_size(chunks.get()) == 0) return TI_INFERENCE;
 
-    if (const auto stop = control.check(context); stop != TI_OK) return stop;
+    if (const auto stop = control.check(); stop != TI_OK) return stop;
     const auto n_pos = mtmd_helper_get_n_pos(chunks.get());
     const auto n_tokens = mtmd_helper_get_n_tokens(chunks.get());
     const auto limit = llama_n_ctx_seq(context);
@@ -402,13 +405,13 @@ int32_t infer(ti_asr & asr, const float * pcm, size_t count, const char * langua
     // checking between chunks rather than duplicating its encode/decode logic.
     const size_t chunk_count = mtmd_input_chunks_size(chunks.get());
     for (size_t i = 0; i < chunk_count; ++i) {
-        if (const auto stop = control.check(context); stop != TI_OK) return stop;
+        if (const auto stop = control.check(); stop != TI_OK) return stop;
         const auto * chunk = mtmd_input_chunks_get(chunks.get(), i);
         if (!chunk || mtmd_helper_eval_chunk_single(projector, context, chunk, next_pos, 0,
                                                     k_batch, i + 1 == chunk_count, &next_pos) != 0)
             return TI_INFERENCE;
     }
-    if (const auto stop = control.check(context); stop != TI_OK) return stop;
+    if (const auto stop = control.check(); stop != TI_OK) return stop;
     if (next_pos <= 0 || static_cast<uint64_t>(next_pos) > limit - k_asr_max_tokens)
         return TI_INFERENCE;
 
@@ -518,7 +521,7 @@ int32_t translate(ti_mt & mt, std::string_view source, const char * target,
     clear_utterance clear{context};
     llama_sampler_reset(mt.sampler.get());
     for (int i = 0; i < n;) {
-        if (const auto stop = control.check(context); stop != TI_OK) return stop;
+        if (const auto stop = control.check(); stop != TI_OK) return stop;
         llama_batch_ext_clear(mt.batch.get());
         const int end = std::min(n, i + static_cast<int>(k_batch));
         for (; i < end; ++i) {

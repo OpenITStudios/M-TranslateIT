@@ -140,10 +140,15 @@ pub(super) fn dispatch(
     priority: HelperTaskPriority, permit: &HelperTaskPermit, deadline_ms: u128,
 ) -> HelperBridgeWorkerResponse {
     debug_assert!(matches!(task, "transcribe" | "translate" | "asr_preload" | "translation_preload"));
+    let admitted_at = Instant::now();
     let request_id = permit.request_id();
     let fail = |blocker, message| standalone_blocked_response(
         task, request_id, priority, "error", blocker, message,
     );
+    let Some(deadline) = u64::try_from(deadline_ms).ok()
+        .and_then(|ms| admitted_at.checked_add(Duration::from_millis(ms))) else {
+        return fail("native_inference:deadline_invalid", "Native inference deadline is invalid.");
+    };
     let Ok(mut host) = runtime().lock() else {
         return fail("helper_bridge:lock_poisoned", "Inference owner state is unavailable.");
     };
@@ -156,6 +161,9 @@ pub(super) fn dispatch(
         || crate::commands::voice_lab::voice_lab_build_blocks_meeting()
     {
         return fail("native_inference:owner_not_admitted", "Native inference cannot claim the current lifecycle.");
+    }
+    if Instant::now() >= deadline {
+        return fail("native_inference:deadline_exceeded", "Native request expired before model admission.");
     }
     if host.native_inference.is_none() {
         // Live PCM/MT can never load a model mid-utterance. Only an explicit
@@ -199,6 +207,11 @@ pub(super) fn dispatch(
     if !owner.is_available() {
         return fail("native_inference:owner_unavailable", "Native models are not available.");
     }
+    // Cold open is not interruptible. Its owner remains attributable for
+    // cleanup, but an expired preparation may not issue a success receipt.
+    if Instant::now() >= deadline {
+        return fail("native_inference:deadline_exceeded", "Native request expired during model preparation.");
+    }
     if matches!(task, "asr_preload" | "translation_preload") {
         // Open prepared both resident models atomically. Do not load either
         // again or pretend a preload receipt proves successful inference.
@@ -230,10 +243,6 @@ pub(super) fn dispatch(
         response.runtime_claim = NATIVE_INFERENCE_CLAIM.into();
         return response;
     }
-    let Some(deadline) = u64::try_from(deadline_ms).ok()
-        .and_then(|ms| Instant::now().checked_add(Duration::from_millis(ms))) else {
-        return fail("native_inference:deadline_invalid", "Native inference deadline is invalid.");
-    };
     let (input, from, to) = if task == "transcribe" {
         let Some(from) = language(payload, "language") else {
             return fail("asr:language_invalid", "Native ASR requires Indonesian or English.");

@@ -65,6 +65,9 @@ pub struct Runtime {
     handle: NonNull<c_void>,
     api: loader::Api,
     device_id: String,
+    // Keep the verified model parent names stable for the native lifetime.
+    // The C++ owner independently pins and hashes each exact file handle.
+    _asset_parents: Vec<std::fs::File>,
     // A single caller thread owns the mutable native context; do not
     // implicitly make this handle Send/Sync or add a second scheduler.
     _thread_bound: PhantomData<Rc<()>>,
@@ -97,10 +100,20 @@ impl Runtime {
     /// hashes read from the installed DLL directory itself.
     pub unsafe fn open(dll: &Path, pins: &str, asr: &Path, projector: &Path, mt: &Path,
                        pci_id: Option<&str>) -> Result<Self, Error> {
+        let asr_path = loader::dos_path(asr)?;
+        let projector_path = loader::dos_path(projector)?;
+        let mt_path = loader::dos_path(mt)?;
+        let mut asset_parents = loader::lock_parents(&asr_path)?;
+        if projector_path.parent() != asr_path.parent() {
+            asset_parents.extend(loader::lock_parents(&projector_path)?);
+        }
+        if mt_path.parent() != asr_path.parent() && mt_path.parent() != projector_path.parent() {
+            asset_parents.extend(loader::lock_parents(&mt_path)?);
+        }
+        let asr = native_path(&asr_path)?;
+        let projector = native_path(&projector_path)?;
+        let mt = native_path(&mt_path)?;
         let api = unsafe { loader::load(dll, pins)? };
-        let asr = native_path(asr)?;
-        let projector = native_path(projector)?;
-        let mt = native_path(mt)?;
         if pci_id == Some("") { return Err(Error::InvalidInput); }
         let device = CString::new(pci_id.unwrap_or_default()).map_err(|_| Error::InvalidInput)?;
         let mut raw = std::ptr::null_mut();
@@ -122,7 +135,8 @@ impl Runtime {
             unsafe { (api.close)(handle.as_ptr()); }
             return Err(Error::InvalidReceipt);
         };
-        Ok(Self { handle, api, device_id: actual.to_owned(), _thread_bound: PhantomData })
+        Ok(Self { handle, api, device_id: actual.to_owned(),
+            _asset_parents: asset_parents, _thread_bound: PhantomData })
     }
 
     pub fn device_id(&self) -> &str { &self.device_id }
@@ -266,6 +280,20 @@ mod tests {
         drop(reopened);
         let reopened = unsafe { Runtime::open(&dll, &pins, &asr, &projector, &mt, Some(&pci)) }.expect("lease released after owner close");
         drop(reopened);
+    }
+
+    #[test]
+    fn project_paths_use_native_windows_separators_without_hiding_traversal() {
+        for (reported, expected) in [
+            ("C:/TranslateIT/Models/test.gguf", r"C:\TranslateIT\Models\test.gguf"),
+            ("//?/C:/TranslateIT/Models/test.gguf", r"\\?\C:\TranslateIT\Models\test.gguf"),
+        ] {
+            let path = loader::dos_path(Path::new(reported)).unwrap();
+            assert_eq!(native_path(&path).unwrap().to_str().unwrap(), expected);
+        }
+        for invalid in ["C:relative.gguf", "relative.gguf", "C:/root/../test.gguf", "//server/share/test.gguf"] {
+            assert!(loader::dos_path(Path::new(invalid)).is_err(), "{invalid}");
+        }
     }
 
     #[test]

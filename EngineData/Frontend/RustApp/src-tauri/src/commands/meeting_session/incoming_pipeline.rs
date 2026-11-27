@@ -71,8 +71,6 @@ fn process_incoming_pcm_with_direction(
     let (asr, deferred_utterance) = send_helper_worker_pcm_task(
         json!({
             "language": source_language,
-            "beam_size": 1,
-            "vad_filter": super::FINALIZED_MEETING_ASR_WORKER_VAD,
             "meeting_session_id": session_id,
             "meeting_lane": "incoming",
             "meeting_sequence": event_sequence,
@@ -254,7 +252,6 @@ fn translate_and_commit_incoming_transcript(
             "text": transcript,
             "source_language": source_language,
             "target_language": target_language,
-            "max_new_tokens": 96,
             "meeting_session_id": session_id,
             "meeting_lane": "incoming",
             "meeting_sequence": event_sequence,
