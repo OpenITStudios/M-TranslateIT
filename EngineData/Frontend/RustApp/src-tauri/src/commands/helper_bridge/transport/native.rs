@@ -11,7 +11,7 @@ use crate::commands::helper_bridge::{
     NATIVE_INFERENCE_CLAIM, NATIVE_ASR_MODEL, NATIVE_MT_MODEL, NATIVE_MT_REVISION,
 };
 use std::time::Duration;
-use translateit_native_cuda::{Error, InferenceInput, Language};
+use translateit_native_cuda::{Error, InferenceInput, InferenceOutput, Language};
 
 fn language(value: &Value, key: &str) -> Option<Language> {
     match value.get(key).and_then(Value::as_str) {
@@ -137,14 +137,24 @@ fn probe_pcm(payload: &Value, request_scope: &Scope) -> Result<Vec<f32>, &'stati
 /// ASR/MT has one production route. Missing resources are terminal.
 pub(super) fn dispatch(
     task: &str, payload: &mut Value, pcm: Option<MeetingPcmInput<'_>>,
+    mut voice: Option<NativeVoiceIo<'_>>,
     priority: HelperTaskPriority, permit: &HelperTaskPermit, deadline_ms: u128,
 ) -> HelperBridgeWorkerResponse {
-    debug_assert!(matches!(task, "transcribe" | "translate" | "asr_preload" | "translation_preload"));
     let admitted_at = Instant::now();
     let request_id = permit.request_id();
     let fail = |blocker, message| standalone_blocked_response(
         task, request_id, priority, "error", blocker, message,
     );
+    let is_bind = matches!(voice.as_ref(), Some(NativeVoiceIo::Bind));
+    let is_voice = matches!(voice.as_ref(), Some(NativeVoiceIo::Synthesize(_)));
+    let is_probe_speech = matches!(voice.as_ref(), Some(NativeVoiceIo::ProbeSpeech(_)));
+    if voice.is_some() && (!super::super::native_voice_candidate_enabled() || pcm.is_some()
+        || !matches!((task, voice.as_ref()),
+            ("voice_actor_preflight", Some(NativeVoiceIo::Bind))
+            | ("voice_actor_synthesize", Some(NativeVoiceIo::Synthesize(_)))
+            | ("transcribe", Some(NativeVoiceIo::ProbeSpeech(_))))) {
+        return fail("native_voice:typed_request_invalid", "Native voice requires the explicit candidate build and typed input.");
+    }
     let Some(deadline) = u64::try_from(deadline_ms).ok()
         .and_then(|ms| admitted_at.checked_add(Duration::from_millis(ms))) else {
         return fail("native_inference:deadline_invalid", "Native inference deadline is invalid.");
@@ -165,6 +175,39 @@ pub(super) fn dispatch(
     if Instant::now() >= deadline {
         return fail("native_inference:deadline_exceeded", "Native request expired before model admission.");
     }
+    let preparing = request_scope.generation.is_none()
+        || payload.get("meeting_start_prepare").and_then(Value::as_bool) == Some(true);
+    if (is_bind || is_probe_speech) && !preparing {
+        return fail("native_voice:preparation_required", "Voice preparation and probe PCM require preparation authority.");
+    }
+    let reference = if is_bind {
+        if !host.provider_ready { return fail("native_voice:owner_not_ready", "Prepare the admitted helper first."); }
+        // A stale idle Text pair has no voice context. Release it through the
+        // existing cleanup owner before opening the exact five-asset closure.
+        if host.native_inference.is_some() && !host.release_idle_native_inference() {
+            return fail("native_voice:owner_busy", "Existing inference ownership could not be released.");
+        }
+        let paths = crate::engine::paths::ProjectPaths::discover();
+        let reference = match crate::commands::voice_lab::selected_native_builtin_reference(&paths) {
+            Ok(reference) => reference,
+            Err(blocker) => return fail(blocker, "Selected native reference is not approved or verified."),
+        };
+        if scope(payload).as_ref() != Some(&request_scope) || Instant::now() >= deadline {
+            return fail("native_voice:scope_revoked", "Voice preparation authority expired.");
+        }
+        match unsafe { crate::commands::helper_bridge_runtime::NativeInferenceOwner::open_voice_candidate(request_scope.session_id.clone()) } {
+            Ok(owner) => { host.native_inference = Some(owner); host.cuda_ready = true; }
+            Err(error) => {
+                let (blocker, _) = error_blocker(error, task);
+                host.provider_ready = false;
+                host.cuda_ready = false;
+                host.last_error = Some(blocker.into());
+                invalidate_required_outbound_ai_readiness();
+                return fail(blocker, "Native voice model preparation failed; no fallback was attempted.");
+            }
+        }
+        Some(reference)
+    } else { None };
     if host.native_inference.is_none() {
         // Live PCM/MT can never load a model mid-utterance. Only an explicit
         // preparation or standalone Text request opens the resident pair.
@@ -243,11 +286,32 @@ pub(super) fn dispatch(
         response.runtime_claim = NATIVE_INFERENCE_CLAIM.into();
         return response;
     }
-    let (input, from, to) = if task == "transcribe" {
+    let mut bound_id = None;
+    let mut actor_token = None;
+    let (input, from, to) = if is_bind || is_voice {
+        if is_voice {
+            let Some(token) = payload.get("expected_actor_token").and_then(Value::as_str)
+                .filter(|token| !token.is_empty() && token.len() <= 512).map(str::to_owned) else {
+                return fail("native_voice:actor_authority_missing", "Selected native voice authority is required.");
+            };
+            actor_token = Some(token);
+        }
+        (None, Language::English, None)
+    } else if task == "transcribe" {
         let Some(from) = language(payload, "language") else {
             return fail("asr:language_invalid", "Native ASR requires Indonesian or English.");
         };
-        let samples = if let Some(pcm) = pcm {
+        let samples = if is_probe_speech {
+            let Some(NativeVoiceIo::ProbeSpeech(samples)) = voice.take() else { unreachable!("checked typed probe") };
+            if samples.is_empty() || samples.len() > 44_100 * 60
+                || samples.iter().any(|sample| !sample.is_finite() || sample.abs() > 1.0) {
+                return fail("native_voice:probe_pcm_invalid", "Invalid native voice probe PCM.");
+            }
+            match crate::engine::audio::guided_take::resample_mono_fft(&samples, 44_100, 16_000) {
+                Ok(samples) if (4_800..=960_000).contains(&samples.len()) => samples,
+                _ => return fail("native_voice:probe_pcm_invalid", "Native voice probe PCM could not be prepared."),
+            }
+        } else if let Some(pcm) = pcm {
             if !pcm.matches(task, payload) {
                 return fail("asr:finalized_pcm_contract_invalid", "Finalized PCM identity is invalid.");
             }
@@ -267,7 +331,7 @@ pub(super) fn dispatch(
                 Err(blocker) => return fail(blocker, "Owned voice probe PCM could not be decoded."),
             }
         };
-        (InferenceInput::Speech { pcm: samples, language: from }, from, None)
+        (Some(InferenceInput::Speech { pcm: samples, language: from }), from, None)
     } else {
         let (Some(from), Some(to)) = (language(payload, "source_language"), language(payload, "target_language")) else {
             return fail("translation:direction_not_supported", "Only Indonesian and English translation is supported.");
@@ -278,7 +342,7 @@ pub(super) fn dispatch(
         let Some(Value::String(source)) = payload.as_object_mut().and_then(|object| object.remove("text")) else {
             return fail("translation:empty_text", "Translation source text is required.");
         };
-        (InferenceInput::Translation { source, from, to }, from, Some(to))
+        (Some(InferenceInput::Translation { source, from, to }), from, Some(to))
     };
     // After taking PCM, the request is committed to execution or terminal
     // failure; never requeue an already-conditioned buffer. Stop may still
@@ -287,7 +351,22 @@ pub(super) fn dispatch(
         return fail("native_inference:scope_revoked", "Inference authority was revoked before execution.");
     }
     let bridge_generation = host.generation_token;
-    let pending = match host.native_inference.as_mut().expect("checked owner").owner.begin(input, deadline) {
+    let pending_result = {
+        let owner = host.native_inference.as_mut().expect("checked owner");
+        if let Some(reference) = reference {
+            owner.begin_selected_builtin_voice(request_scope.generation, request_scope.session_id.as_deref(),
+                reference, deadline).map(|(id, pending)| { bound_id = Some(id); pending })
+        } else if is_voice {
+            let Some(Value::String(text)) = payload.as_object_mut().and_then(|object| object.remove("text")) else {
+                return fail("voice_actor:empty_text", "Current English synthesis text is required.");
+            };
+            owner.begin_bound_voice(request_scope.generation, request_scope.session_id.as_deref(),
+                actor_token.as_deref().expect("checked token"), preparing, text, deadline)
+        } else {
+            owner.owner.begin(input.expect("checked text or speech input"), deadline)
+        }
+    };
+    let pending = match pending_result {
         Ok(pending) => pending,
         Err(error) => {
             let (blocker, fatal) = error_blocker(error, task);
@@ -310,7 +389,7 @@ pub(super) fn dispatch(
     drop(host);
     // The original permit outlives the native reply. Do not wait under the
     // lifecycle lock; Stop can signal and retain the exact active owner.
-    let result = pending.wait();
+    let result = pending.wait_output();
     let Ok(mut host) = runtime().lock() else {
         return fail("helper_bridge:lock_poisoned_after_native_response", "Native inference result ownership could not be verified.");
     };
@@ -325,8 +404,41 @@ pub(super) fn dispatch(
         response.runtime_claim = "native_cuda_result_discarded".into();
         return response;
     }
+    // Reject a late successful receipt without disguising genuine backend
+    // failures as cancellation or revocation.
+    let result = if result.is_ok() && Instant::now() >= deadline {
+        Err(Error::DeadlineExceeded)
+    } else { result };
+    // Bind publication is itself scoped and uses the scheduler's unique
+    // request identity, not a voice ID supplied by JSON.
+    let result = match (bound_id, result) {
+        (Some(id), Ok(output @ InferenceOutput::VoiceBound(_))) => {
+            host.native_inference.as_mut().expect("checked owner")
+                .finish_selected_builtin_voice(request_scope.generation, request_scope.session_id.as_deref(),
+                    id, request_id, output)
+                .map(InferenceOutput::Text)
+        }
+        (Some(_), Ok(_)) => Err(Error::InvalidReceipt),
+        (_, result) => result,
+    };
     let body = match result {
-        Ok(text) => {
+        Ok(InferenceOutput::Text(text)) if is_bind && bound_id.is_some() => {
+            json!({"ok": true, "stage": task, "blocker": "", "device": "cuda",
+                "cuda_pci_id": host.native_inference.as_ref().expect("checked owner").owner.device_id(),
+                "actor_token": text, "model_id": "zonos3-mini-q8_0",
+                "note": "Selected native voice reference bound; synthesis proof remains separate."})
+        }
+        Ok(InferenceOutput::Voice(samples)) if is_voice => {
+            let Some(NativeVoiceIo::Synthesize(slot)) = voice.as_mut() else { unreachable!("checked output slot") };
+            let sample_count = samples.len();
+            **slot = Some(samples);
+            json!({"ok": true, "stage": task, "blocker": "", "device": "cuda",
+                "cuda_pci_id": host.native_inference.as_ref().expect("checked owner").owner.device_id(),
+                "actor_token": actor_token, "model_id": "zonos3-mini-q8_0",
+                "sample_rate_hz": 44_100, "sample_count": sample_count,
+                "note": "Native synthesis returned owned complete PCM."})
+        }
+        Ok(InferenceOutput::Text(text)) if !is_voice && !is_bind => {
             let mut body = json!({
                 "ok": true, "stage": task, "blocker": "", "device": "cuda",
                 "cuda_pci_id": host.native_inference.as_ref().expect("checked owner").owner.device_id(),
@@ -356,7 +468,8 @@ pub(super) fn dispatch(
             }
             body
         }
-        Err(error) => {
+        unexpected => {
+            let error = unexpected.err().unwrap_or(Error::InvalidReceipt);
             let (blocker, fatal) = error_blocker(error, task);
             if fatal {
                 host.provider_ready = false;

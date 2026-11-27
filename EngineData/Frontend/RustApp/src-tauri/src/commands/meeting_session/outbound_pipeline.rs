@@ -14,6 +14,7 @@ use super::committed_turns::{
 };
 use super::super::helper_bridge::{
     required_outbound_voice_actor_token, send_helper_worker_pcm_task, send_helper_worker_task,
+    native_voice_candidate_enabled, synthesize_native_voice, native_voice_pcm_receipt_matches,
 };
 use crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance;
 use super::{
@@ -648,23 +649,37 @@ fn process_outbound_transcript(
             generation, session_id, event_sequence, utterance_id,
         );
     }
-    let requested_tts_path = tts_output_path(session_id, generation, event_sequence);
+    let native_candidate = native_voice_candidate_enabled();
+    let requested_tts_path = if native_candidate { String::new() }
+        else { tts_output_path(session_id, generation, event_sequence) };
     let tts_started_at = Instant::now();
-    let tts = send_helper_worker_task(
-        "voice_actor_synthesize",
-        json!({
-            "text": translated_text.clone(),
-            "source_text": transcript,
-            "source_speech_duration_ms": speech_duration_ms,
-            "output_path": requested_tts_path,
+    let (tts, native_pcm) = if native_candidate {
+        synthesize_native_voice(json!({
+            "text": translated_text,
             "expected_actor_token": actor_token,
             "meeting_session_id": session_id,
             "meeting_lane": "you",
             "meeting_generation": generation,
             "meeting_sequence": event_sequence,
             "utterance_id": utterance_id,
-        }),
-    );
+        }))
+    } else {
+        (send_helper_worker_task(
+            "voice_actor_synthesize",
+            json!({
+                "text": translated_text.clone(),
+                "source_text": transcript,
+                "source_speech_duration_ms": speech_duration_ms,
+                "output_path": requested_tts_path,
+                "expected_actor_token": actor_token,
+                "meeting_session_id": session_id,
+                "meeting_lane": "you",
+                "meeting_generation": generation,
+                "meeting_sequence": event_sequence,
+                "utterance_id": utterance_id,
+            }),
+        ), None)
+    };
     timing.metrics.tts_ms = Some(elapsed_millis(tts_started_at, Instant::now()));
     timing.metrics.tts_scheduler_wait_ms = super::worker_scheduler_wait_ms(&tts);
     timing.metrics.tts_worker_attempt_timing = super::worker_attempt_timing(&tts);
@@ -675,18 +690,22 @@ fn process_outbound_transcript(
         utterance_id,
         &timing.metrics,
     );
-    let tts_path = validated_meeting_voice_output_path(&tts, &actor_token).unwrap_or_default();
+    let tts_path = if native_candidate { String::new() }
+        else { validated_meeting_voice_output_path(&tts, &actor_token).unwrap_or_default() };
+    let valid_output = if native_candidate {
+        native_voice_pcm_receipt_matches(&tts, &actor_token, native_pcm.as_deref())
+    } else { !tts_path.is_empty() };
     if !generation_is_live(generation) || !original_voice_pcm::translated_epoch_matches(generation, source_epoch) {
-        remove_temporary_tts_paths(&requested_tts_path, &tts_path);
+        if !native_candidate { remove_temporary_tts_paths(&requested_tts_path, &tts_path); }
         return stale_outbound_result(generation, session_id, event_sequence, utterance_id);
     }
-    if tts_path.is_empty() {
+    if !valid_output {
         let blocker = if tts.ok {
             "voice_actor:invalid_synthesis_response".to_string()
         } else {
             worker_blocker(&tts, "voice_actor:missing_output")
         };
-        remove_temporary_tts_paths(&requested_tts_path, &tts_path);
+        if !native_candidate { remove_temporary_tts_paths(&requested_tts_path, &tts_path); }
         let _ = update_committed_turn_delivery_state(
             session_id,
             generation,
@@ -715,31 +734,40 @@ fn process_outbound_transcript(
         };
     }
 
-    let Some((verified_tts_path, opened_tts_file)) = open_verified_tts_output_in_dir(
-        &meeting_tts_directory(),
-        &requested_tts_path,
-        &tts_path,
-    ) else {
-        remove_temporary_tts_paths(&requested_tts_path, &tts_path);
-        let blocker = "voice_actor:output_path_mismatch";
-        let _ = update_committed_turn_delivery_state(
-            session_id, generation, utterance_id, "output_failed",
-        );
-        update_outbound_status(
-            generation, session_id, "attention_needed", event_sequence, false, false,
-            blocker,
-            "Meeting voice output did not match the owned session WAV. No playback was attempted.",
-        );
-        return MeetingOutboundProcessResult {
-            ok: false,
-            delivered: false,
-            state: "tts_failed".to_string(),
-            blocker: blocker.to_string(),
-            note: "Worker output was not the requested Meeting session WAV.".to_string(),
-            generation,
-            utterance_sequence: event_sequence,
-            runtime_claim: "meeting_outbound_tts_output_identity_mismatch".to_string(),
+    let audio = if native_candidate {
+        PreparedPlaybackAudio::NativePcm(native_pcm.expect("checked native receipt"))
+    } else {
+        let Some((verified_tts_path, opened_tts_file)) = open_verified_tts_output_in_dir(
+            &meeting_tts_directory(),
+            &requested_tts_path,
+            &tts_path,
+        ) else {
+            remove_temporary_tts_paths(&requested_tts_path, &tts_path);
+            let blocker = "voice_actor:output_path_mismatch";
+            let _ = update_committed_turn_delivery_state(
+                session_id, generation, utterance_id, "output_failed",
+            );
+            update_outbound_status(
+                generation, session_id, "attention_needed", event_sequence, false, false,
+                blocker,
+                "Meeting voice output did not match the owned session WAV. No playback was attempted.",
+            );
+            return MeetingOutboundProcessResult {
+                ok: false,
+                delivered: false,
+                state: "tts_failed".to_string(),
+                blocker: blocker.to_string(),
+                note: "Worker output was not the requested Meeting session WAV.".to_string(),
+                generation,
+                utterance_sequence: event_sequence,
+                runtime_claim: "meeting_outbound_tts_output_identity_mismatch".to_string(),
+            };
         };
+        PreparedPlaybackAudio::Wav {
+            requested_tts_path,
+            actual_tts_path: verified_tts_path.to_string_lossy().into_owned(),
+            opened_tts_file: Some(opened_tts_file),
+        }
     };
     let mut playback_job = PreparedPlaybackJob {
         generation,
@@ -747,11 +775,7 @@ fn process_outbound_transcript(
         session_id: session_id.to_string(),
         event_sequence,
         utterance_id,
-        audio: PreparedPlaybackAudio::Wav {
-            requested_tts_path,
-            actual_tts_path: verified_tts_path.to_string_lossy().into_owned(),
-            opened_tts_file: Some(opened_tts_file),
-        },
+        audio,
         timing,
         prepared_at: Instant::now(),
     };

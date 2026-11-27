@@ -205,7 +205,15 @@ impl MeetingPcmInput<'_> {
     }
 }
 
-fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcmInput<'_>>) -> HelperBridgeWorkerResponse {
+// PCM stays in Rust ownership, never in the public worker JSON.
+enum NativeVoiceIo<'a> {
+    Bind,
+    Synthesize(&'a mut Option<Vec<f32>>),
+    ProbeSpeech(Vec<f32>),
+}
+
+fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcmInput<'_>>,
+                          voice: Option<NativeVoiceIo<'_>>) -> HelperBridgeWorkerResponse {
     let priority = task_priority(task, &payload);
     let meeting_generation = meeting_generation(&payload);
     let meeting_session_id = meeting_session_id(&payload);
@@ -249,9 +257,9 @@ fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcm
     }
 
     // ASR and MT never cross Python IPC, including on preparation errors.
-    if matches!(task, "asr_preload" | "translation_preload" | "transcribe" | "translate") {
+    if voice.is_some() || matches!(task, "asr_preload" | "translation_preload" | "transcribe" | "translate") {
         #[cfg(windows)]
-        return native::dispatch(task, &mut payload, pcm, priority, &permit, response_deadline_ms);
+        return native::dispatch(task, &mut payload, pcm, voice, priority, &permit, response_deadline_ms);
         #[cfg(not(windows))]
         return standalone_blocked_response(
             task, &request_id, priority, "error", "native_inference:platform_unsupported",
@@ -599,7 +607,23 @@ fn add_worker_attempt_observation(response: &mut HelperBridgeWorkerResponse, ini
 }
 
 pub(super) fn send_worker_task(task: &str, payload: Value) -> HelperBridgeWorkerResponse {
-    send_worker_task_with_input(task, payload, None)
+    send_worker_task_with_input(task, payload, None, None)
+}
+
+pub(super) fn bind_native_voice(payload: Value) -> HelperBridgeWorkerResponse {
+    send_worker_task_with_input("voice_actor_preflight", payload, None, Some(NativeVoiceIo::Bind))
+}
+
+pub(super) fn synthesize_native_voice(payload: Value) -> (HelperBridgeWorkerResponse, Option<Vec<f32>>) {
+    let mut samples = None;
+    let response = send_worker_task_with_input("voice_actor_synthesize", payload, None,
+        Some(NativeVoiceIo::Synthesize(&mut samples)));
+    if !response.ok { samples = None; }
+    (response, samples)
+}
+
+pub(super) fn transcribe_native_voice_probe(payload: Value, samples: Vec<f32>) -> HelperBridgeWorkerResponse {
+    send_worker_task_with_input("transcribe", payload, None, Some(NativeVoiceIo::ProbeSpeech(samples)))
 }
 
 pub(super) fn send_worker_pcm_task(
@@ -623,7 +647,7 @@ pub(super) fn send_worker_pcm_task(
             "error", rejection, "Finalized PCM is outside the admitted native ASR contract.",
         )
     } else {
-        send_worker_task_with_input("transcribe", payload, Some(input))
+        send_worker_task_with_input("transcribe", payload, Some(input), None)
     };
     if let Some(object) = response.worker_response_json.as_object_mut() {
         object.insert("audio_prepare_ms".into(), json!(prepare_ms.get()));
@@ -642,7 +666,8 @@ fn retain_deferred_pcm(
         .then_some(utterance)
 }
 
-fn send_worker_task_with_input(task: &str, payload: Value, pcm: Option<MeetingPcmInput<'_>>) -> HelperBridgeWorkerResponse {
+fn send_worker_task_with_input(task: &str, payload: Value, pcm: Option<MeetingPcmInput<'_>>,
+                               voice: Option<NativeVoiceIo<'_>>) -> HelperBridgeWorkerResponse {
     let priority = task_priority(task, &payload);
     let outbound_generation = if priority == HelperTaskPriority::MeetingOutbound
         && meeting_lane(&payload).as_deref() == Some("you")
@@ -663,7 +688,7 @@ fn send_worker_task_with_input(task: &str, payload: Value, pcm: Option<MeetingPc
     }
 
     let first_started = Instant::now();
-    let mut response = send_worker_task_inner(task, payload, pcm);
+    let mut response = send_worker_task_inner(task, payload, pcm, voice);
     let initial_attempt_ms = observed_elapsed_ms(first_started)
         .saturating_sub(pcm.map_or(0, |input| input.prepare_ms.get()));
 

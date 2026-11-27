@@ -98,6 +98,22 @@ pub(super) fn run_required_outbound_ai_probe(
     }
     let generation_token = helper.generation_token;
 
+    let native_candidate = super::native_voice_candidate_enabled();
+    // Open/bind the full resident stack before either ASR or MT preparation.
+    // A failed candidate bind is terminal, never a Python voice fallback.
+    let native_preflight = if native_candidate {
+        let result = super::transport::bind_native_voice(json!({
+            "meeting_start_prepare": meeting_start_prepare,
+            "meeting_generation": meeting_generation,
+        }));
+        if !result.ok || result.generation_token != generation_token
+            || result.runtime_claim != NATIVE_INFERENCE_CLAIM {
+            invalidate_required_outbound_ai_readiness();
+            return Err("native selected voice");
+        }
+        Some(result)
+    } else { None };
+
     let asr = send_worker_task(
         "asr_preload",
         json!({
@@ -139,13 +155,13 @@ pub(super) fn run_required_outbound_ai_probe(
         return Err("Indonesian to English translation");
     };
 
-    let actor_preflight = send_worker_task(
+    let actor_preflight = native_preflight.unwrap_or_else(|| send_worker_task(
         "voice_actor_preflight",
         json!({
             "meeting_start_prepare": meeting_start_prepare,
             "meeting_generation": meeting_generation,
         }),
-    );
+    ));
     if !actor_preflight.ok || actor_preflight.generation_token != generation_token
         || actor_preflight.task != "voice_actor_preflight"
         || actor_preflight.worker_response_json.get("stage").and_then(Value::as_str) != Some("voice_actor_preflight")
@@ -158,46 +174,70 @@ pub(super) fn run_required_outbound_ai_probe(
         return Err("My Voice");
     };
 
-    let Some(output_path) = required_probe_output_path(meeting_generation, &asr.request_id) else {
-        invalidate_required_outbound_ai_readiness();
-        return Err("voice probe output root");
-    };
-    let output = match OwnedProbeOutput::reserve(output_path) {
-        Ok(output) => output,
-        Err(_) => {
+    let asr_inference = if native_candidate {
+        if !same_probe_inference(&actor_preflight, generation_token, native_device) {
             invalidate_required_outbound_ai_readiness();
-            return Err("voice probe output reservation");
+            return Err("native selected voice");
         }
-    };
-    let voice = send_worker_task(
-        "voice_actor_synthesize",
-        json!({
+        let (voice, samples) = super::transport::synthesize_native_voice(json!({
             "text": translated_fixture,
-            "output_path": output.0.to_string_lossy(),
             "expected_actor_token": actor_token.clone(),
             "meeting_start_prepare": meeting_start_prepare,
             "meeting_generation": meeting_generation,
-        }),
-    );
-    if voice.generation_token != generation_token
-        || !voice_only_receipt_matches(&voice, &actor_token, &output.0)
-        || !voice_only_probe_has_wav_header(&output.0)
-    {
-        invalidate_required_outbound_ai_readiness();
-        return Err("My Voice");
-    }
-
-    let asr_inference = send_worker_task(
-        "transcribe",
-        json!({
-            "audio_path": output.0.to_string_lossy(),
-            "probe_request_id": asr.request_id,
+        }));
+        if !same_probe_inference(&voice, generation_token, native_device)
+            || !super::native_voice_pcm_receipt_matches(&voice, &actor_token, samples.as_deref()) {
+            invalidate_required_outbound_ai_readiness();
+            return Err("native voice synthesis");
+        }
+        super::transport::transcribe_native_voice_probe(json!({
             "language": "en",
             "meeting_start_prepare": meeting_start_prepare,
             "meeting_generation": meeting_generation,
-        }),
-    );
-    drop(output);
+        }), samples.expect("checked PCM receipt"))
+    } else {
+        let Some(output_path) = required_probe_output_path(meeting_generation, &asr.request_id) else {
+            invalidate_required_outbound_ai_readiness();
+            return Err("voice probe output root");
+        };
+        let output = match OwnedProbeOutput::reserve(output_path) {
+            Ok(output) => output,
+            Err(_) => {
+                invalidate_required_outbound_ai_readiness();
+                return Err("voice probe output reservation");
+            }
+        };
+        let voice = send_worker_task(
+            "voice_actor_synthesize",
+            json!({
+                "text": translated_fixture,
+                "output_path": output.0.to_string_lossy(),
+                "expected_actor_token": actor_token.clone(),
+                "meeting_start_prepare": meeting_start_prepare,
+                "meeting_generation": meeting_generation,
+            }),
+        );
+        if voice.generation_token != generation_token
+            || !voice_only_receipt_matches(&voice, &actor_token, &output.0)
+            || !voice_only_probe_has_wav_header(&output.0)
+        {
+            invalidate_required_outbound_ai_readiness();
+            return Err("My Voice");
+        }
+
+        let asr_inference = send_worker_task(
+            "transcribe",
+            json!({
+                "audio_path": output.0.to_string_lossy(),
+                "probe_request_id": asr.request_id,
+                "language": "en",
+                "meeting_start_prepare": meeting_start_prepare,
+                "meeting_generation": meeting_generation,
+            }),
+        );
+        drop(output);
+        asr_inference
+    };
     if !same_probe_inference(&asr_inference, generation_token, native_device)
         || !functional_asr_output(&asr_inference)
         || !meeting_asr_compute_admitted(&asr_inference)
@@ -207,7 +247,7 @@ pub(super) fn run_required_outbound_ai_probe(
     }
 
     // Synthesis already proves the exact actor token remained authoritative and the
-    // ASR round-trip above proves the generated WAV is consumable. Avoid a second
+    // ASR round-trip above proves the generated audio is consumable. Avoid a second
     // full worker status scan here; it repeats dependency/model/actor inspection on
     // every functional probe without adding stronger evidence than these executed
     // stages. The host bridge generation and Meeting authority are still checked.

@@ -149,6 +149,32 @@ pub fn send_helper_worker_task(task: &str, payload: Value) -> HelperBridgeWorker
     send_worker_task(task, payload)
 }
 
+// Temporary source-build selection, not a user-facing provider setting.
+// A candidate build never falls back to legacy synthesis on failure.
+pub(crate) fn native_voice_candidate_enabled() -> bool {
+    cfg!(windows) && option_env!("TRANSLATEIT_NATIVE_VOICE_CANDIDATE") == Some("1")
+}
+
+pub(crate) fn synthesize_native_voice(payload: Value) -> (HelperBridgeWorkerResponse, Option<Vec<f32>>) {
+    transport::synthesize_native_voice(payload)
+}
+
+pub(crate) fn native_voice_pcm_receipt_matches(response: &HelperBridgeWorkerResponse,
+                                              token: &str, samples: Option<&[f32]>) -> bool {
+    let body = &response.worker_response_json;
+    response.ok && response.task == "voice_actor_synthesize"
+        && response.runtime_claim == NATIVE_INFERENCE_CLAIM
+        && !token.is_empty() && body.get("actor_token").and_then(Value::as_str) == Some(token)
+        && body.get("stage").and_then(Value::as_str) == Some("voice_actor_synthesize")
+        && response.generation_token != 0
+        && body.get("device").and_then(Value::as_str) == Some("cuda")
+        && body.get("cuda_pci_id").and_then(Value::as_str).is_some_and(|id| !id.is_empty())
+        && body.get("sample_rate_hz").and_then(Value::as_u64) == Some(44_100)
+        && body.get("model_id").and_then(Value::as_str) == Some("zonos3-mini-q8_0")
+        && samples.is_some_and(|samples| !samples.is_empty() && samples.len() <= 44_100 * 60
+            && body.get("sample_count").and_then(Value::as_u64) == Some(samples.len() as u64))
+}
+
 // Internal Meeting-only owned PCM handoff; PCM never enters JSON. Only
 // a pre-execution incoming deferral returns its original owned frame.
 pub(crate) fn send_helper_worker_pcm_task(
@@ -1169,6 +1195,24 @@ mod c4_functional_readiness_tests {
             runtime_claim: "test".to_string(),
             worker_response_json: serde_json::from_str(body).expect("valid worker fixture"),
         }
+    }
+
+    #[test]
+    fn native_voice_requires_typed_pcm_and_exact_receipt() {
+        use super::{native_voice_pcm_receipt_matches, NATIVE_INFERENCE_CLAIM};
+        let mut receipt = response(true, r#"{"stage":"voice_actor_synthesize","actor_token":"bound",
+            "device":"cuda","cuda_pci_id":"0000:01:00.0","sample_rate_hz":44100,
+            "model_id":"zonos3-mini-q8_0","sample_count":2}"#);
+        receipt.task = "voice_actor_synthesize".into();
+        let pcm = [0.25, -0.25];
+        assert!(!native_voice_pcm_receipt_matches(&receipt, "bound", Some(&pcm)));
+        receipt.runtime_claim = NATIVE_INFERENCE_CLAIM.into();
+        assert!(native_voice_pcm_receipt_matches(&receipt, "bound", Some(&pcm)));
+        assert!(!native_voice_pcm_receipt_matches(&receipt, "stale", Some(&pcm)));
+        assert!(!native_voice_pcm_receipt_matches(&receipt, "bound", None));
+        assert!(!native_voice_pcm_receipt_matches(&receipt, "bound", Some(&pcm[..1])));
+        receipt.worker_response_json["device"] = serde_json::json!("cpu");
+        assert!(!native_voice_pcm_receipt_matches(&receipt, "bound", Some(&pcm)));
     }
 
     #[test]
