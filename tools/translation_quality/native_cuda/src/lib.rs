@@ -1,6 +1,6 @@
 //! Native CUDA binding; execution is admitted by the host.
 #![cfg(windows)]
-//! No third-party Rust dependencies or by-value llama.cpp ABI structs.
+//! Reuse the application's SHA-256 dependency; no by-value llama.cpp ABI structs.
 use std::{ffi::{c_char, c_void, CString}, marker::PhantomData, path::Path,
           ptr::NonNull, rc::Rc, sync::atomic::{AtomicBool, Ordering}, time::Instant};
 
@@ -8,7 +8,7 @@ mod loader;
 mod owner;
 pub use owner::{InferenceInput, PendingInference, RuntimeOwner};
 
-const ABI: u32 = 4;
+const ABI: u32 = 5;
 const CANCELLED: i32 = 16;
 const DEADLINE: i32 = 17;
 type StopCheck = unsafe extern "C" fn(*const c_void) -> i32;
@@ -64,9 +64,21 @@ unsafe extern "C" fn stop_check(data: *const c_void) -> i32 {
 pub struct Runtime {
     handle: NonNull<c_void>,
     api: loader::Api,
+    device_id: String,
     // A single caller thread owns the mutable native context; do not
     // implicitly make this handle Send/Sync or add a second scheduler.
     _thread_bound: PhantomData<Rc<()>>,
+}
+
+fn valid_pci_id(id: &str) -> bool {
+    let bytes = id.as_bytes();
+    let domain = match bytes.len() { 12 => 4, 16 => 8, _ => return false };
+    bytes[domain] == b':' && bytes[domain + 3] == b':'
+        && bytes[domain + 6] == b'.' && (b'0'..=b'7').contains(&bytes[domain + 7])
+        && bytes[..bytes.len() - 1].iter().enumerate().all(|(i, &b)| {
+            matches!(i, x if x == domain || x == domain + 3 || x == domain + 6)
+                || b.is_ascii_digit() || (b'a'..=b'f').contains(&b)
+        })
 }
 
 fn native_path(path: &Path) -> Result<CString, Error> {
@@ -80,28 +92,40 @@ impl Runtime {
     /// and checks free VRAM before publication. No partial model opens.
     ///
     /// # Safety
-    /// The caller must authenticate the exact DLL and its dependency closure
-    /// in a controlled directory. Path and ABI checks are not authentication.
-    pub unsafe fn open(dll: &Path, asr: &Path, projector: &Path, mt: &Path, pci_id: &str)
-        -> Result<Self, Error> {
-        let api = unsafe { loader::load(dll)? };
+    /// Supply reviewed build pins for the entire private DLL closure, a
+    /// trusted parent and verified system dependency policy. Never trust
+    /// hashes read from the installed DLL directory itself.
+    pub unsafe fn open(dll: &Path, pins: &str, asr: &Path, projector: &Path, mt: &Path,
+                       pci_id: Option<&str>) -> Result<Self, Error> {
+        let api = unsafe { loader::load(dll, pins)? };
         let asr = native_path(asr)?;
         let projector = native_path(projector)?;
         let mt = native_path(mt)?;
-        if pci_id.is_empty() { return Err(Error::InvalidInput); }
-        let device = CString::new(pci_id).map_err(|_| Error::InvalidInput)?;
+        if pci_id == Some("") { return Err(Error::InvalidInput); }
+        let device = CString::new(pci_id.unwrap_or_default()).map_err(|_| Error::InvalidInput)?;
         let mut raw = std::ptr::null_mut();
+        let mut actual = [0u8; 32];
         let status = unsafe {
-            (api.open)(asr.as_ptr(), projector.as_ptr(), mt.as_ptr(), device.as_ptr(), &mut raw)
+            (api.open)(asr.as_ptr(), projector.as_ptr(), mt.as_ptr(), device.as_ptr(),
+                       actual.as_mut_ptr().cast(), actual.len(), &mut raw)
         };
         if status != 0 {
             // Native contract requires null on error; do not dereference an
             // unexpected pointer from an invalid receipt.
-            return Err(if raw.is_null() { Error::Native(status) } else { Error::InvalidReceipt });
+            return Err(if raw.is_null() && actual[0] == 0 { Error::Native(status) } else { Error::InvalidReceipt });
         }
         let handle = NonNull::new(raw).ok_or(Error::InvalidReceipt)?;
-        Ok(Self { handle, api, _thread_bound: PhantomData })
+        let actual = actual.iter().position(|&byte| byte == 0)
+            .and_then(|len| std::str::from_utf8(&actual[..len]).ok())
+            .filter(|id| valid_pci_id(id) && pci_id.is_none_or(|expected| expected == *id));
+        let Some(actual) = actual else {
+            unsafe { (api.close)(handle.as_ptr()); }
+            return Err(Error::InvalidReceipt);
+        };
+        Ok(Self { handle, api, device_id: actual.to_owned(), _thread_bound: PhantomData })
     }
+
+    pub fn device_id(&self) -> &str { &self.device_id }
 
     /// 16 kHz mono finalized PCM. The caller owns the bounded reusable output
     /// scratch; return a borrowed transcript, not a second String allocation.
@@ -186,14 +210,16 @@ mod tests {
     fn resident_pair_rejects_wrong_assets_and_duplicate_open_then_releases_lease() {
         let required = |key| std::env::var(key).expect("missing target acceptance input");
         let dll = std::path::PathBuf::from(required("TRANSLATEIT_TEST_NATIVE_DLL"));
+        let pins = required("TRANSLATEIT_TEST_NATIVE_DLL_PINS");
         let asr = std::path::PathBuf::from(required("TRANSLATEIT_TEST_ASR_GGUF"));
         let projector = std::path::PathBuf::from(required("TRANSLATEIT_TEST_PROJECTOR_GGUF"));
         let mt = std::path::PathBuf::from(required("TRANSLATEIT_TEST_MT_GGUF"));
         let pci = required("TRANSLATEIT_TEST_CUDA_PCI");
         // Swap actual pinned files: the wrong projector must fail the exact
         // identity check before either model loads, and release the lease.
-        assert!(matches!(unsafe { Runtime::open(&dll, &asr, &asr, &mt, &pci) }, Err(Error::Native(13))));
-        let mut pair = unsafe { Runtime::open(&dll, &asr, &projector, &mt, &pci) }.expect("candidate resident pair");
+        assert!(matches!(unsafe { Runtime::open(&dll, &pins, &asr, &asr, &mt, Some(&pci)) }, Err(Error::Native(13))));
+        let mut pair = unsafe { Runtime::open(&dll, &pins, &asr, &projector, &mt, Some(&pci)) }.expect("candidate resident pair");
+        assert_eq!(pair.device_id(), pci.as_str());
         let cancelled = AtomicBool::new(true);
         let mut output = vec![0; MAX_OUTPUT_BYTES];
         let pcm = vec![0.0; MIN_SAMPLES];
@@ -227,9 +253,10 @@ mod tests {
             deadline: Instant::now() + std::time::Duration::from_secs(30) };
         assert!(!pair.translate("Halo", Language::Indonesian, Language::English,
                                &active, &mut output).expect("reuse after cooperative stop").is_empty());
-        assert!(matches!(unsafe { Runtime::open(&dll, &asr, &projector, &mt, &pci) }, Err(Error::Native(15))));
+        assert!(matches!(unsafe { Runtime::open(&dll, &pins, &asr, &projector, &mt, Some(&pci)) }, Err(Error::Native(15))));
         drop(pair);
-        let mut reopened = unsafe { RuntimeOwner::open(&dll, &asr, &projector, &mt, &pci) }.expect("open on owner thread");
+        let mut reopened = unsafe { RuntimeOwner::open(&dll, &pins, &asr, &projector, &mt, None) }.expect("open on owner thread");
+        assert_eq!(reopened.device_id(), pci.as_str(), "single visible CUDA identity");
         let pending = reopened.begin(InferenceInput::Translation {
             source: "Halo".into(), from: Language::Indonesian, to: Language::English,
         }, Instant::now() + std::time::Duration::from_secs(30)).expect("admitted native request");
@@ -237,8 +264,17 @@ mod tests {
         // Drop joins the idle owner. Production Stop instead retains any
         // incomplete try_close result and does not block the UI.
         drop(reopened);
-        let reopened = unsafe { Runtime::open(&dll, &asr, &projector, &mt, &pci) }.expect("lease released after owner close");
+        let reopened = unsafe { Runtime::open(&dll, &pins, &asr, &projector, &mt, Some(&pci)) }.expect("lease released after owner close");
         drop(reopened);
+    }
+
+    #[test]
+    fn pci_identity_receipt_is_exact_and_physical() {
+        assert!(valid_pci_id("0000:01:00.0"));
+        assert!(valid_pci_id("00000000:af:00.0"));
+        for invalid in ["", "cuda:0", "0000:01:00.0-v0", "0000:AF:00.0", "0000:01:00.8"] {
+            assert!(!valid_pci_id(invalid));
+        }
     }
 
     #[test]

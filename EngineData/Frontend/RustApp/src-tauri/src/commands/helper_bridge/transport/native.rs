@@ -222,6 +222,7 @@ pub(super) fn dispatch_if_owned(
         Ok(text) => {
             let mut body = json!({
                 "ok": true, "stage": task, "blocker": "", "device": "cuda",
+                "cuda_pci_id": host.native_inference.as_ref().expect("checked owner").owner.device_id(),
                 "note": "Native CUDA inference returned a complete result.",
             });
             if let Some(to) = to {

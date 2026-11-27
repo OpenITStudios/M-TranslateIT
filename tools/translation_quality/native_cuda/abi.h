@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-// Candidate ABI v4: one serialized owner for both resident model stages.
+// Candidate ABI v5: one serialized owner for both resident model stages.
 typedef struct ti_runtime ti_runtime;
 enum ti_status {
     TI_OK = 0,
@@ -42,10 +42,13 @@ typedef int32_t (*ti_stop_check)(const void * data);
 
 TI_EXPORT uint32_t ti_cuda_abi_version(void);
 // All three exact pinned GGUF files are verified before model load. Paths
-// are UTF-8 in a controlled directory; device_id is the exact CUDA PCI ID.
+// are UTF-8 in a controlled directory. A nonempty device_id selects an exact
+// CUDA PCI ID; empty admits only one visible CUDA GPU with a physical PCI ID.
+// actual_device (cap >=32) is empty on failure, NUL-terminated on success.
 // On failure *out is null. On success the caller owns the one runtime.
 TI_EXPORT int32_t ti_runtime_open(const char * asr_path, const char * projector_path,
                                    const char * mt_path, const char * device_id,
+                                   char * actual_device, size_t device_cap,
                                    ti_runtime ** out);
 TI_EXPORT void ti_runtime_close(ti_runtime * runtime);
 // 16 kHz mono normalized F32, 300ms..60s, language 1=id / 2=en.

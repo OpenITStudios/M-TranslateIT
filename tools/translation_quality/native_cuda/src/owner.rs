@@ -69,6 +69,7 @@ impl Drop for PendingInference {
 /// The host retains this owner under its existing lifecycle authority. It is
 /// not a second scheduler: one admitted request may occupy the handoff slot.
 pub struct RuntimeOwner {
+    device_id: String,
     sender: Option<SyncSender<Request>>,
     thread: Option<JoinHandle<()>>,
     active: Option<Arc<RequestState>>,
@@ -81,22 +82,23 @@ impl RuntimeOwner {
     /// it returns. It is not a cancellable GPU-load or UI-thread operation.
     ///
     /// # Safety
-    /// The caller must authenticate the DLL and dependency closure before opening.
-    pub unsafe fn open(dll: &Path, asr: &Path, projector: &Path, mt: &Path, pci_id: &str)
-        -> Result<Self, Error> {
-        let (dll, asr, projector, mt, pci_id) =
-            (dll.to_owned(), asr.to_owned(), projector.to_owned(), mt.to_owned(), pci_id.to_owned());
+    /// Supply reviewed build pins, a trusted parent and system dependency policy.
+    pub unsafe fn open(dll: &Path, pins: &str, asr: &Path, projector: &Path, mt: &Path,
+                       pci_id: Option<&str>) -> Result<Self, Error> {
+        let (dll, pins, asr, projector, mt, pci_id) =
+            (dll.to_owned(), pins.to_owned(), asr.to_owned(), projector.to_owned(),
+             mt.to_owned(), pci_id.map(str::to_owned));
         // A one-slot handoff, guarded by the one in-flight request below.
         // No queued second job, no priority policy, no polling or extra timer.
         let (sender, requests) = mpsc::sync_channel::<Request>(1);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let thread = thread::Builder::new().name("translateit-inference".into()).spawn(move || {
-            let mut runtime = match unsafe { Runtime::open(&dll, &asr, &projector, &mt, &pci_id) } {
+            let mut runtime = match unsafe { Runtime::open(&dll, &pins, &asr, &projector, &mt, pci_id.as_deref()) } {
                 Ok(runtime) => runtime,
                 Err(error) => { let _ = ready_tx.send(Err(error)); return; }
             };
             let mut output = vec![0u8; MAX_OUTPUT_BYTES];
-            if ready_tx.send(Ok(())).is_err() { return; }
+            if ready_tx.send(Ok(runtime.device_id().to_owned())).is_err() { return; }
             drop(ready_tx);
             while let Ok(request) = requests.recv() {
                 let Request { input, state, deadline, reply } = request;
@@ -115,7 +117,8 @@ impl RuntimeOwner {
         }).map_err(|_| Error::OwnerUnavailable)?;
 
         match ready_rx.recv() {
-            Ok(Ok(())) => Ok(Self {
+            Ok(Ok(device_id)) => Ok(Self {
+                device_id,
                 sender: Some(sender), thread: Some(thread), active: None, join_failed: false,
             }),
             result => {
@@ -128,6 +131,8 @@ impl RuntimeOwner {
             }
         }
     }
+
+    pub fn device_id(&self) -> &str { &self.device_id }
 
     /// Call only after existing scheduler admission and session/route checks.
     /// The caller retains its permit through PendingInference::wait.
@@ -210,6 +215,7 @@ mod tests {
             }).unwrap();
         });
         let mut owner = RuntimeOwner {
+            device_id: "fixture-only".into(),
             sender: Some(sender), thread: Some(thread), active: None, join_failed: false,
         };
         let input = || InferenceInput::Translation {

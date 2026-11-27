@@ -95,6 +95,40 @@ pub(super) struct NativeInferenceOwner {
     pub(super) owner: translateit_native_cuda::RuntimeOwner,
 }
 
+#[cfg(windows)]
+impl NativeInferenceOwner {
+    /// The package/build owner must authenticate the pins and establish a
+    /// controlled runtime root before this lifecycle admission is used.
+    /// A runtime manifest, arbitrary PATH or user-provided PCI index is not
+    /// an authority. Build-time pins come from the reviewed DLL closure.
+    ///
+    /// # Safety
+    /// The caller must establish trusted parent directories and the reviewed
+    /// Windows system dependency closure. No untrusted private DLL loader
+    /// may race this admission.
+    pub(super) unsafe fn open(session_id: Option<String>) -> Result<Self, translateit_native_cuda::Error> {
+        use crate::engine::paths::ProjectPaths;
+        use translateit_native_cuda::{Error, RuntimeOwner};
+        let pins = option_env!("TRANSLATEIT_NATIVE_DLL_PINS")
+            .filter(|value| !value.is_empty()).ok_or(Error::LibraryIdentityMismatch)?;
+        let paths = ProjectPaths::discover();
+        if !paths.packaged_context_initialized && !paths.development_root_verified {
+            return Err(Error::InvalidInput);
+        }
+        let dll = PathBuf::from(&paths.runtime_root)
+            .join("EngineData/Backend/RuntimeAssets/NativeCuda/translateit_native_cuda.dll");
+        let asr = PathBuf::from(&paths.asr_model_dir).join("qwen3-asr-1.7b");
+        let mt = PathBuf::from(&paths.translation_model_dir).join("hy-mt2-1.8b");
+        let owner = unsafe { RuntimeOwner::open(
+            &dll, pins,
+            &asr.join("Qwen3-ASR-1.7B-Q8_0.gguf"),
+            &asr.join("mmproj-Qwen3-ASR-1.7B-Q8_0.gguf"),
+            &mt.join("Hy-MT2-1.8B-Q6_K.gguf"), None,
+        )? };
+        Ok(Self { session_id, owner })
+    }
+}
+
 pub struct HelperBridgeRuntime {
     #[cfg(windows)]
     pub(super) native_inference: Option<NativeInferenceOwner>,

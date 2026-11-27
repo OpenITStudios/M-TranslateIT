@@ -160,6 +160,20 @@ bool memory_admitted(ggml_backend_dev_t device, uint64_t required) {
     return total > 0 && available <= total && available >= required;
 }
 
+bool physical_pci_id(std::string_view id) {
+    // CUDA may use a four- or eight-hex-digit PCI domain. Reject virtual
+    // device suffixes, unknown identities and ambiguous visible devices.
+    const size_t domain = id.size() == 12 ? 4 : id.size() == 16 ? 8 : 0;
+    if (!domain || id[domain] != ':' || id[domain+3] != ':' || id[domain+6] != '.' ||
+        id.back() < '0' || id.back() > '7') return false;
+    for (size_t i = 0; i + 1 < id.size(); ++i) {
+        if (i == domain || i == domain+3 || i == domain+6) continue;
+        const char c = id[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    }
+    return true;
+}
+
 ggml_backend_dev_t exact_cuda_device(const char * wanted) {
     ggml_backend_dev_t selected = nullptr;
     for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
@@ -171,8 +185,8 @@ ggml_backend_dev_t exact_cuda_device(const char * wanted) {
             ggml_backend_dev_type(device) != GGML_BACKEND_DEVICE_TYPE_GPU) continue;
         ggml_backend_dev_props props{};
         ggml_backend_dev_get_props(device, &props);
-        if (!props.device_id || std::strcmp(props.device_id, wanted) != 0) continue;
-        if (selected) return nullptr; // ambiguous physical identity
+        if (*wanted && (!props.device_id || std::strcmp(props.device_id, wanted) != 0)) continue;
+        if (!props.device_id || !physical_pci_id(props.device_id) || selected) return nullptr;
         selected = device;
     }
     return selected;
@@ -243,7 +257,7 @@ struct ti_mt : decoder {
     llama_token eos = LLAMA_TOKEN_NULL;
 };
 
-extern "C" uint32_t ti_cuda_abi_version(void) { return 4; }
+extern "C" uint32_t ti_cuda_abi_version(void) { return 5; }
 
 static int32_t open_asr(const char * model_path, const char * projector_path,
                         ggml_backend_dev_t device, ti_asr ** out) {
@@ -563,16 +577,21 @@ struct ti_runtime {
 
 extern "C" int32_t ti_runtime_open(const char * asr_path, const char * projector_path,
                                    const char * mt_path, const char * device_id,
-                                   ti_runtime ** out) {
-    if (!out) return TI_INVALID_INPUT;
-    *out = nullptr;
-    if (!asr_path || !*asr_path || !projector_path || !*projector_path ||
-        !mt_path || !*mt_path || !device_id || !*device_id) return TI_INVALID_INPUT;
+                                   char * actual_device, size_t device_cap, ti_runtime ** out) {
+    if (out) *out = nullptr;
+    if (actual_device && device_cap) *actual_device = '\0';
+    if (!out || !actual_device || device_cap < 32 ||
+        !asr_path || !*asr_path || !projector_path || !*projector_path ||
+        !mt_path || !*mt_path || !device_id) return TI_INVALID_INPUT;
     try {
         auto runtime = std::make_unique<ti_runtime>();
         if (!runtime->lease.acquire()) return TI_BUSY;
         const auto device = initialize_cuda(device_id);
         if (!device) return TI_CUDA_DEVICE;
+        ggml_backend_dev_props device_props{};
+        ggml_backend_dev_get_props(device, &device_props);
+        if (!device_props.device_id || !physical_pci_id(device_props.device_id)) return TI_CUDA_DEVICE;
+        const std::string selected_id(device_props.device_id);
         // Hash all three before any model allocation, one shared 1 MiB buffer.
         {
             hash_algorithm algorithm;
@@ -605,6 +624,7 @@ extern "C" int32_t ti_runtime_open(const char * asr_path, const char * projector
         if (mt_status != TI_OK) return mt_status;
         runtime->mt.reset(mt);
         if (!memory_admitted(device, k_reserve_bytes)) return TI_VRAM;
+        std::memcpy(actual_device, selected_id.c_str(), selected_id.size() + 1);
         *out = runtime.release();
         return TI_OK;
     } catch (...) { return TI_INTERNAL; }

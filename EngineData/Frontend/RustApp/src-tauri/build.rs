@@ -21,6 +21,8 @@ fn clean_pinned_source_sha() -> Option<String> {
 
 fn main() {
     println!("cargo:rerun-if-env-changed=TRANSLATEIT_EXPECTED_SHA");
+    // Immutable build input, not an installed manifest or runtime override.
+    println!("cargo:rerun-if-env-changed=TRANSLATEIT_NATIVE_DLL_PINS");
     if let Some(sha) = clean_pinned_source_sha() {
         println!("cargo:rustc-env=TRANSLATEIT_BUILD_SOURCE_SHA={sha}");
     }
