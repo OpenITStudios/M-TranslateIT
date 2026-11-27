@@ -19,7 +19,9 @@
       "source_type": "huggingface",
       "repo_id": "dropbox-dash/faster-whisper-large-v3-turbo",
       "expected_path": "EngineData/Backend/RuntimeAssets/ASR/ModelData/faster-whisper-large-v3-turbo",
-      "legacy_paths": ["EngineData/Backend/RuntimeAssets/ASR/ModelData/faster-whisper-large-v3-turbo"],
+      "legacy_paths": [
+        "EngineData/Backend/RuntimeAssets/ASR/ModelData/faster-whisper-large-v3-turbo"
+      ],
       "gpu_capable": true,
       "cpu_fallback": true,
       "download_url": "https://huggingface.co/dropbox-dash/faster-whisper-large-v3-turbo",
@@ -47,7 +49,9 @@
       "source_type": "huggingface",
       "repo_id": "Systran/faster-whisper-medium",
       "expected_path": "EngineData/Backend/RuntimeAssets/ASR/ModelData/faster-whisper-medium",
-      "legacy_paths": ["EngineData/Backend/RuntimeAssets/ASR/ModelData/faster-whisper-medium"],
+      "legacy_paths": [
+        "EngineData/Backend/RuntimeAssets/ASR/ModelData/faster-whisper-medium"
+      ],
       "gpu_capable": true,
       "cpu_fallback": true,
       "download_url": "https://huggingface.co/Systran/faster-whisper-medium",
@@ -64,7 +68,9 @@
       "source_type": "huggingface",
       "repo_id": "xiaomi-research/MiLMMT-46-1B-v1.0",
       "expected_path": "EngineData/Backend/RuntimeAssets/Translation/ModelData/xiaomi-research--MiLMMT-46-1B-v1.0",
-      "legacy_paths": ["EngineData/Backend/RuntimeAssets/Translation/ModelData/m2m100-418m"],
+      "legacy_paths": [
+        "EngineData/Backend/RuntimeAssets/Translation/ModelData/m2m100-418m"
+      ],
       "gpu_capable": true,
       "cpu_fallback": true,
       "download_url": "https://huggingface.co/xiaomi-research/MiLMMT-46-1B-v1.0",
@@ -96,6 +102,54 @@
         "tokenizer_config.json": "76397efdd4e6c5dd3bb7994a8aa05c12484acae42dac33b7cadc1a38a8781643"
       },
       "revision": "4fc480b6c58dec29c159dcdf9fde0f6d5c354995"
+    },
+    {
+      "model_id": "qwen3-asr-1.7b-q8_0",
+      "required": true,
+      "stage": "asr_native_candidate",
+      "backend": "llama.cpp/mtmd",
+      "source_type": "huggingface",
+      "repo_id": "ggml-org/Qwen3-ASR-1.7B-GGUF",
+      "expected_path": "EngineData/Backend/RuntimeAssets/ASR/ModelData/qwen3-asr-1.7b",
+      "legacy_paths": [],
+      "gpu_capable": true,
+      "cpu_fallback": false,
+      "download_url": "https://huggingface.co/ggml-org/Qwen3-ASR-1.7B-GGUF",
+      "install_method": "huggingface_snapshot_download",
+      "download_allow_patterns": [
+        "Qwen3-ASR-1.7B-Q8_0.gguf",
+        "mmproj-Qwen3-ASR-1.7B-Q8_0.gguf"
+      ],
+      "license": "apache-2.0",
+      "notes": "Pinned native ASR and audio projector; required migration staging inputs, not yet production readiness. License and conversion provenance are included in reviewed NativeCuda notices.",
+      "artifact_hashes": {
+        "Qwen3-ASR-1.7B-Q8_0.gguf": "cd5f5ce9d7c9c03ff47d54d7f2726e63a39e61e3001640c5d08b6e4d3aed1e6d",
+        "mmproj-Qwen3-ASR-1.7B-Q8_0.gguf": "24eaf9a96fa94fe36ed0c1de68d44cccdb3f2229ee614e5b1b5bab951bc37883"
+      },
+      "revision": "3b2c29585c2180452ccb14d3b6b58127f352400d"
+    },
+    {
+      "model_id": "hy-mt2-1.8b-q6_k",
+      "required": true,
+      "stage": "translation_native_candidate",
+      "backend": "llama.cpp",
+      "source_type": "huggingface",
+      "repo_id": "tencent/Hy-MT2-1.8B-GGUF",
+      "expected_path": "EngineData/Backend/RuntimeAssets/Translation/ModelData/hy-mt2-1.8b",
+      "legacy_paths": [],
+      "gpu_capable": true,
+      "cpu_fallback": false,
+      "download_url": "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF",
+      "install_method": "huggingface_snapshot_download",
+      "download_allow_patterns": [
+        "Hy-MT2-1.8B-Q6_K.gguf"
+      ],
+      "license": "apache-2.0",
+      "notes": "Pinned native bidirectional model; required migration staging input, not yet production readiness. License included in reviewed NativeCuda notices.",
+      "artifact_hashes": {
+        "Hy-MT2-1.8B-Q6_K.gguf": "d98fe604dec1f28f58f80d7d560f7177e584d3b8e5835862687660e5ff97cb40"
+      },
+      "revision": "a0c709d9fac510f2c807aa3af52872340dc37a4a"
     },
     {
       "model_id": "gpt-sovits-v2proplus-voicelab",

@@ -19,6 +19,8 @@ def test_required_huggingface_plan_is_revision_pinned_and_runtime_asset_scoped()
     assert {item["model_id"] for item in selected} == {
         "faster-whisper-large-v3-turbo",
         "milmmt-46-1b-v1.0",
+        "qwen3-asr-1.7b-q8_0",
+        "hy-mt2-1.8b-q6_k",
     }
     assert all(module.FULL_REVISION.fullmatch(item["revision"]) for item in selected)
     assert all(item["target"].is_relative_to(module.RUNTIME_ASSETS_ROOT) for item in selected)
@@ -34,6 +36,18 @@ def test_milmmt_plan_pins_exact_revision_and_required_snapshot_files() -> None:
     assert "tokenizer.json" in candidate["download_allow_patterns"]
     assert "tokenizer.model" in candidate["download_allow_patterns"]
     assert "pytorch_model.bin" not in candidate["download_allow_patterns"]
+
+
+def test_native_assets_have_only_exact_pinned_gguf_downloads() -> None:
+    module = load_module()
+    manifest = module.load_manifest()
+    native = {m["model_id"]: m for m in manifest["models"] if m["stage"].endswith("_native_candidate")}
+    assert set(native) == {"qwen3-asr-1.7b-q8_0", "hy-mt2-1.8b-q6_k"}
+    for model in native.values():
+        assert model["required"] is True and model["cpu_fallback"] is False
+        assert set(model["download_allow_patterns"]) == set(model["artifact_hashes"])
+        assert all(name.endswith(".gguf") for name in model["download_allow_patterns"])
+        assert all(len(h) == 64 for h in model["artifact_hashes"].values())
 
 
 def test_download_allow_pattern_cannot_escape_snapshot() -> None:
@@ -53,6 +67,8 @@ def test_optional_plan_adds_only_manifest_optional_huggingface_assets() -> None:
         "faster-whisper-large-v3-turbo",
         "faster-whisper-medium",
         "milmmt-46-1b-v1.0",
+        "qwen3-asr-1.7b-q8_0",
+        "hy-mt2-1.8b-q6_k",
     }
 
 

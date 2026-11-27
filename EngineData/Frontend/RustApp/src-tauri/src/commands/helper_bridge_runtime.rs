@@ -116,7 +116,7 @@ impl NativeInferenceOwner {
             return Err(Error::InvalidInput);
         }
         let dll = PathBuf::from(&paths.runtime_root)
-            .join("EngineData/Backend/RuntimeAssets/NativeCuda/translateit_native_cuda.dll");
+            .join("EngineData/Backend/RuntimeAssets/NativeCuda/bin/translateit_native_cuda.dll");
         let asr = PathBuf::from(&paths.asr_model_dir).join("qwen3-asr-1.7b");
         let mt = PathBuf::from(&paths.translation_model_dir).join("hy-mt2-1.8b");
         let owner = unsafe { RuntimeOwner::open(

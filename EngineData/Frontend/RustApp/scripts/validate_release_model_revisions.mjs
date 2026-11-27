@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -34,6 +34,22 @@ const requireFile = (path, label) => {
     fail(`missing_file:${label}`);
   }
 };
+
+// GGUF can exceed Node's single-buffer limit. Hash with bounded scratch.
+const hashScratch = Buffer.allocUnsafe(1024 * 1024);
+function sha256File(path) {
+  const hash = createHash("sha256");
+  const fd = openSync(path, "r");
+  try {
+    let count;
+    while ((count = readSync(fd, hashScratch, 0, hashScratch.length, null)) > 0) {
+      hash.update(hashScratch.subarray(0, count));
+    }
+    return hash.digest("hex");
+  } finally {
+    closeSync(fd);
+  }
+}
 
 if (!existsSync(manifestPath)) fail("manifest_missing");
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
@@ -84,7 +100,7 @@ for (const model of manifest.models ?? []) {
   for (const [relativePath, expectedHash] of Object.entries(artifactHashes)) {
     const path = join(target, ...relativePath.split("/"));
     requireFile(path, `${model.model_id}/${relativePath}`);
-    const actual = createHash("sha256").update(readFileSync(path)).digest("hex");
+    const actual = sha256File(path);
     if (actual !== String(expectedHash).toLowerCase()) {
       fail(`artifact_hash_mismatch:${model.model_id}:${relativePath}:${actual}`);
     }

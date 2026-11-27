@@ -61,6 +61,7 @@ const canonicalPayloadRoots = [
   "EngineData/Backend/LocalWorker/PythonRuntime",
   "EngineData/Backend/RuntimeAssets/ASR/ModelData",
   "EngineData/Backend/RuntimeAssets/Translation/ModelData",
+  "EngineData/Backend/RuntimeAssets/NativeCuda",
   "EngineData/Backend/RuntimeAssets/Voice/BuiltInVoices",
   "EngineData/Backend/RuntimeAssets/Voice/GPTSoVITS",
   "EngineData/Backend/RuntimeAssets/AudioProvider/VBCABLE/Package",
@@ -172,6 +173,7 @@ requireMarkers(builder, "payload builder", [
   'TRANSFORMERS_VERSION = "4.57.6"',
   'TOKENIZERS_VERSION = "0.22.2"',
   "validate_no_filesystem_indirection",
+  "validate_native_inputs", "TRANSLATEIT_NATIVE_DLL_PINS", "@@NATIVE_DLL_PINS_SHA256@@",
   "is_filesystem_indirection",
   "is_junction",
   '"-t7z"', '"-m0=LZMA2"', '"-mx=9"', "find_7zip", "find_tar", "expanded_bytes", "@@APP_VERSION@@", "@@PAYLOAD_EXPANDED_BYTES@@",
@@ -180,6 +182,7 @@ forbidMarkers(builder.toLowerCase(), "payload builder network/bootstrap", ["urll
 
 requireMarkers(hook, "NSIS lifecycle hook", [
   "@@PAYLOAD_SCHEMA@@", "@@INSTALLED_RUNTIME_SCHEMA@@", "@@APP_VERSION@@", "@@PAYLOAD_SHA256@@", "@@PAYLOAD_EXPANDED_BYTES@@",
+  "@@NATIVE_DLL_PINS_SHA256@@", "-ExpectedNativeDllPinsSha256",
   "NSIS_HOOK_PREINSTALL", "NSIS_HOOK_POSTINSTALL", "NSIS_HOOK_PREUNINSTALL", "-Mode Verify", "-Mode Install", "-Mode VerifyInstalled", "/UPDATE", "app-update mode", "$0 == 3010", "SetRebootFlag true",
   "RMDir /r \"$INSTDIR\\EngineData\\Backend\\LocalWorker\\PythonRuntime\"",
   "RMDir /r \"$INSTDIR\\EngineData\\Backend\\RuntimeAssets\\Voice\\BuiltInVoices\"",
@@ -190,6 +193,7 @@ forbidMarkers(hook.toLowerCase(), "NSIS network/bootstrap", ["inetc::", "nsisdl:
 requireMarkers(helper, "installer helper", [
   "[ValidateSet('Verify','Install','VerifyInstalled')]", "Verify-InstalledRuntime", "Assert-InstalledRuntimeManifest", "Get-FileHash -Algorithm SHA256", "Read-PayloadContract", "Ensure-FreeSpace", ".translateit-r3-stage", ".translateit-r3-backup",
   "Rollback-Payload", "Read-PythonMetadata", "pnputil.exe", "VBCABLE_Setup_x64.exe", "@('-i','-h')", "exit 3010",
+  "ExpectedNativeDllPinsSha256", "Assert-NativeRuntime", "Get-NativePins",
   "ExpectedInstalledRuntimeSchema", "preserve_system_driver", "preserve_app_local_user_data",
   "BuiltInVoices\\MaleVoice\\reference.wav",
   "BuiltInVoices\\FemaleVoice\\reference.wav",
@@ -204,7 +208,7 @@ requireMarkers(build, "release build", [
 
 if (manifest.schema !== "translateit.local_model_inventory.v2" || manifest.inventory_scope !== "full_product_release_assets") fail("model_manifest.json release inventory contract drifted.");
 const requiredIds = new Set((manifest.models ?? []).filter((item) => item.required === true).map((item) => item.model_id));
-for (const id of ["faster-whisper-large-v3-turbo", "milmmt-46-1b-v1.0", "gpt-sovits-v2proplus-voicelab"]) if (!requiredIds.has(id)) fail(`Required model missing: ${id}`);
+for (const id of ["faster-whisper-large-v3-turbo", "milmmt-46-1b-v1.0", "qwen3-asr-1.7b-q8_0", "hy-mt2-1.8b-q6_k", "gpt-sovits-v2proplus-voicelab"]) if (!requiredIds.has(id)) fail(`Required model missing: ${id}`);
 for (const legacy of ["marianmt-id-en", "marianmt-en-id", "m2m100-418m"]) if (requiredIds.has(legacy)) fail(`Legacy translator remains required: ${legacy}`);
 const milmmt = (manifest.models ?? []).find((item) => item.model_id === "milmmt-46-1b-v1.0");
 if (milmmt?.repo_id !== "xiaomi-research/MiLMMT-46-1B-v1.0" || milmmt?.revision !== "4fc480b6c58dec29c159dcdf9fde0f6d5c354995") fail("MiLMMT release identity drifted.");

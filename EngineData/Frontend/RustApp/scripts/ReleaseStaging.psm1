@@ -1,5 +1,5 @@
 # Controlled release input promotion; staged payload and rollback stay on one volume.
-# Only these five canonical runtime subtrees can be replaced. UserData is forbidden.
+# Only the canonical runtime subtrees below can be replaced. UserData is forbidden.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -7,6 +7,7 @@ $script:ReleasePayloadRoots = @(
     "EngineData/Backend/LocalWorker/PythonRuntime",
     "EngineData/Backend/RuntimeAssets/ASR/ModelData",
     "EngineData/Backend/RuntimeAssets/Translation/ModelData",
+    "EngineData/Backend/RuntimeAssets/NativeCuda",
     "EngineData/Backend/RuntimeAssets/Voice/GPTSoVITS/Source",
     "EngineData/Backend/RuntimeAssets/AudioProvider/VBCABLE/Package"
 )

@@ -8,9 +8,14 @@
 RuntimeAssets/
 ├─ ASR/ModelData/
 │  ├─ faster-whisper-large-v3-turbo/       # required release ASR
-│  └─ faster-whisper-medium/                # optional validated fallback
+│  ├─ faster-whisper-medium/                # optional validated fallback
+│  └─ qwen3-asr-1.7b/                       # pinned GGUF pair, migration input
 ├─ Translation/ModelData/
-│  └─ xiaomi-research--MiLMMT-46-1B-v1.0/ # canonical ID ↔ EN translator
+│  ├─ xiaomi-research--MiLMMT-46-1B-v1.0/ # current ID ↔ EN translator
+│  └─ hy-mt2-1.8b/                          # pinned GGUF, migration input
+├─ NativeCuda/
+│  ├─ bin/                                 # exact reviewed private DLL closure
+│  └─ THIRD_PARTY_NOTICES.txt               # reviewed license/build provenance
 ├─ Voice/
 │  ├─ BuiltInVoices/
 │  │  ├─ MaleVoice/reference.wav
@@ -25,13 +30,25 @@ RuntimeAssets/
 
 The machine-readable model inventory is `EngineData/Backend/LocalWorker/WorkerRuntime/model_manifest.json`. Required Hugging Face snapshots use immutable revisions and `.translateit_model_revision` markers.
 
-Canonical translation identity:
+Current production translation identity (native-only cutover pending):
 
 ```text
 xiaomi-research/MiLMMT-46-1B-v1.0
 revision 4fc480b6c58dec29c159dcdf9fde0f6d5c354995
 license metadata: Gemma
 ```
+
+## Native migration inputs
+
+The existing release staging entrypoint accepts reviewed native artifacts under
+`TRANSLATEIT_NATIVE_ARTIFACT_ROOT` (bin and notice bundle) and exact build-supplied
+`TRANSLATEIT_NATIVE_DLL_PINS`. The same pin string is bound to Rust and the
+offline Setup payload contract; app-only update verifies the existing DLL
+closure against Setup. Qwen3-ASR and Hy-MT2 exact publisher revisions and GGUF
+hashes are in the model manifest. Staging them does not activate the models.
+MiLMMT and Faster Whisper remain staged until coordinated source cutover;
+Faster Whisper evaluation and Silero assets have independent voice/audio
+consumers and must not be removed as a side effect.
 
 ## Built-in Meeting voices
 

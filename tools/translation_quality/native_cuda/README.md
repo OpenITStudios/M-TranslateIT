@@ -71,7 +71,7 @@ remains unchanged until coordinated cutover. My Voice is excluded.
   delay-load/transitive imports and concurrent module loading still require
   integrated package review. The unsafe boundary is not eliminated.
   Canonical future asset paths under the verified runtime root:
-  `EngineData/Backend/RuntimeAssets/NativeCuda/translateit_native_cuda.dll`
+  `EngineData/Backend/RuntimeAssets/NativeCuda/bin/translateit_native_cuda.dll`
   (private DLLs only); `ASR/ModelData/qwen3-asr-1.7b/` and
   `Translation/ModelData/hy-mt2-1.8b/` under RuntimeAssets, with the exact
   pinned GGUF filenames. No installed manifest is trusted as a hash anchor.
@@ -85,8 +85,18 @@ remains unchanged until coordinated cutover. My Voice is excluded.
   reserved uniquely using the host preload request ID; collision fails
   closed. Cleanup removes only that request's cache file, never an
   arbitrary worker report.
-  This does not activate the owner: package trust admission and coordinated
-  removal of the unbound legacy branch remain prerequisites.
+  The same offline release staging transaction now acquires pinned GGUFs
+  through the existing model manifest and copies only reviewed native DLLs
+  from `TRANSLATEIT_NATIVE_ARTIFACT_ROOT/bin`, with the accompanying reviewed
+  `THIRD_PARTY_NOTICES.txt` (license text, source/build provenance, CUDA
+  redistribution review). The supplied `TRANSLATEIT_NATIVE_DLL_PINS` must
+  match actual DLL bytes before staging and packaging. Setup receives the
+  digest of those pins; install and app-only update reject mismatch, and
+  Rust compilation consumes the same pin string. No third installer or
+  first-use download. Neither real artifact input nor package has been
+  produced here; the native owner still has no production startup caller.
+  Legacy model staging remains temporarily required until native-only
+  activation and legacy retirement are coordinated.
 
 ## Held local integration
 

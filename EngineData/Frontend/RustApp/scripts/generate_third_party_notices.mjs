@@ -285,6 +285,7 @@ export function buildThirdPartyNoticeBundle({ backendRoot = defaultBackendRoot }
   const gptLicense = requireFile(join(voiceRoot, "LICENSE"), "Voice/GPTSoVITS/Source/LICENSE");
   const ffmpegLicense = requireFile(join(voiceRoot, "FFMPEG_LICENSE.txt"), "Voice/GPTSoVITS/Source/FFMPEG_LICENSE.txt");
   const ffmpegSource = requireFile(join(voiceRoot, "FFMPEG_SOURCE.txt"), "Voice/GPTSoVITS/Source/FFMPEG_SOURCE.txt");
+  const nativeNotice = requireFile(join(backendRoot, "RuntimeAssets", "NativeCuda", "THIRD_PARTY_NOTICES.txt"), "NativeCuda/THIRD_PARTY_NOTICES.txt");
   const providerNotice = requireFile(join(backendRoot, "RuntimeAssets", "AudioProvider", "VBCABLE", "NOTICE.txt"), "AudioProvider/VBCABLE/NOTICE.txt");
 
   const packageIndex = distributions.map((item) => [
@@ -317,6 +318,7 @@ export function buildThirdPartyNoticeBundle({ backendRoot = defaultBackendRoot }
     "===== CONTROLLED MODEL / VOICE INVENTORY =====\n\n" + renderModelInventory(backendRoot, manifest) + "\n\n" + fixedVoiceAttribution() + "\n",
     "===== BUILT-IN VOICE ATTRIBUTION =====\n\n" + builtInVoiceAttribution(backendRoot) + "\n",
     "===== CMUDICT ATTRIBUTION =====\n\nComponent: Carnegie Mellon Pronouncing Dictionary (CMUdict)\nSource: Carnegie Mellon University / nltk_data cmudict package\nUse status recorded by upstream: research and commercial use are unrestricted; acknowledgement of Carnegie Mellon origin is requested when the dictionary is used or redistributed.\n",
+    renderMaterial("NATIVE CUDA LICENSE / BUILD PROVENANCE", nativeNotice),
     renderMaterial("GPT-SOVITS SOURCE LICENSE", gptLicense),
     renderMaterial("FFMPEG LICENSE", ffmpegLicense),
     renderMaterial("FFMPEG SOURCE / BUILD PROVENANCE", ffmpegSource),

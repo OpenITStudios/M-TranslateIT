@@ -16,6 +16,7 @@ $PythonRoot = Join-Path $Backend 'LocalWorker\PythonRuntime'
 $Assets = Join-Path $Backend 'RuntimeAssets'
 $AsrRoot = Join-Path $Assets 'ASR\ModelData'
 $TranslationRoot = Join-Path $Assets 'Translation\ModelData'
+$NativeRoot = Join-Path $Assets 'NativeCuda'
 $VoiceSource = Join-Path $Assets 'Voice\GPTSoVITS\Source'
 $VbPackage = Join-Path $Assets 'AudioProvider\VBCABLE\Package'
 # Runtime asset and release staging files belong to the same chosen repository root.
@@ -61,10 +62,49 @@ function Copy-Tree([string]$Source, [string]$Destination) {
     if ($code -gt 7) { throw "robocopy failed ($code): $Source -> $Destination" }
 }
 
+# Reviewed local artifact input, never hashes generated from arbitrary staged DLLs.
+$nativeInput = $env:TRANSLATEIT_NATIVE_ARTIFACT_ROOT
+$nativePins = $env:TRANSLATEIT_NATIVE_DLL_PINS
+if (-not $nativeInput -or -not [IO.Path]::IsPathRooted($nativeInput) -or -not $nativePins -or $nativePins.Length -gt 8192) {
+    throw 'Reviewed native artifact root and build-supplied DLL SHA-256 pins are required.'
+}
+$nativeInput = (Resolve-Path -LiteralPath $nativeInput).Path
+$nativeBin = Join-Path $nativeInput 'bin'
+$nativeNotice = Join-Path $nativeInput 'THIRD_PARTY_NOTICES.txt'
+foreach ($path in @($nativeInput, $nativeBin, $nativeNotice)) {
+    $item = Get-Item -LiteralPath $path -Force
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Native input reparse point: $path" }
+}
+$nativeFiles = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
+foreach ($pin in $nativePins.Split(';')) {
+    if ($pin -cmatch '^([a-z0-9][a-z0-9_.-]{0,95}\.dll)=([a-f0-9]{64})$') {
+        if ($Matches[1].Contains('..')) { throw 'Invalid native DLL filename.' }
+        $nativeFiles.Add($Matches[1], $Matches[2])
+    } else { throw 'Invalid native DLL pin.' }
+}
+if (-not $nativeFiles.ContainsKey('translateit_native_cuda.dll') -or $nativeFiles.Count -gt 32) { throw 'Native DLL closure is incomplete.' }
+$actualNativeFiles = @(Get-ChildItem -LiteralPath $nativeBin -Force)
+if ($actualNativeFiles.Count -ne $nativeFiles.Count) { throw 'Unexpected native DLL file set.' }
+foreach ($file in $actualNativeFiles) {
+    if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or -not $nativeFiles.ContainsKey($file.Name) -or $file.Length -le 0 -or $file.Length -gt 1GB) {
+        throw "Unapproved native DLL input: $($file.Name)"
+    }
+    Assert-Hash $file.FullName $nativeFiles[$file.Name] $file.Name
+}
+$noticeItem = Get-Item -LiteralPath $nativeNotice
+if ($noticeItem.PSIsContainer -or $noticeItem.Length -le 0) { throw 'Reviewed native license/provenance material missing.' }
+
 New-Item -ItemType Directory -Path $Temp -ErrorAction Stop | Out-Null
-foreach ($path in @($PythonRoot, $AsrRoot, $TranslationRoot, $VoiceSource, $VbPackage)) {
+foreach ($path in @($PythonRoot, $AsrRoot, $TranslationRoot, (Join-Path $NativeRoot 'bin'), $VoiceSource, $VbPackage)) {
     New-Item -ItemType Directory -Force -Path $path | Out-Null
 }
+
+foreach ($name in $nativeFiles.Keys) {
+    $destination = Join-Path (Join-Path $NativeRoot 'bin') $name
+    Copy-Item -LiteralPath (Join-Path $nativeBin $name) -Destination $destination
+    Assert-Hash $destination $nativeFiles[$name] $name
+}
+Copy-Item -LiteralPath $nativeNotice -Destination (Join-Path $NativeRoot 'THIRD_PARTY_NOTICES.txt')
 
 Write-Host '[release-stage] Stage CPython 3.12.10 embeddable runtime'
 $pythonZip = Join-Path $Temp 'python-3.12.10-embed-amd64.zip'
@@ -132,7 +172,7 @@ $env:HF_HUB_CACHE = Join-Path $env:HF_HOME 'hub'
 $env:HF_XET_CACHE = Join-Path $env:HF_HOME 'xet'
 New-Item -ItemType Directory -Force -Path $env:HF_HOME | Out-Null
 $modelAcquirer = Join-Path $Worker 'prepare_model_assets.py'
-& $stagePython $modelAcquirer --model-id 'faster-whisper-large-v3-turbo' --model-id 'milmmt-46-1b-v1.0' --destination-root $PayloadRoot
+& $stagePython $modelAcquirer --destination-root $PayloadRoot
 if ($LASTEXITCODE -ne 0) { throw 'Canonical required model acquisition failed.' }
 
 $asrRevisionMarker = Join-Path $AsrRoot 'faster-whisper-large-v3-turbo\.translateit_model_revision'
@@ -172,7 +212,7 @@ foreach ($model in $manifest.models) {
         }
     }
 }
-Write-Host '[release-stage][sha256] ASR + MiLMMT artifact hashes PASS'
+Write-Host '[release-stage][sha256] Required pinned model artifact hashes PASS'
 Write-Host '[release-stage] Verify repository-owned built-in voice references'
 $builtInRoot = Join-Path $RepoRoot 'EngineData\Backend\RuntimeAssets\Voice\BuiltInVoices'
 $builtInSources = Join-Path $builtInRoot 'SOURCES.json'
@@ -359,6 +399,7 @@ foreach ($pair in @(
     @('PythonRuntime', $PythonRoot),
     @('ASR', $AsrRoot),
     @('Translation', $TranslationRoot),
+    @('NativeCuda', $NativeRoot),
     @('Voice', $VoiceSource),
     @('VB-CABLE', $VbPackage)
 )) {

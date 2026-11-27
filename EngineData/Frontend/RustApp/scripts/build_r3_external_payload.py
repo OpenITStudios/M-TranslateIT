@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -36,11 +37,19 @@ PAYLOAD_ROOTS = (
     "EngineData/Backend/LocalWorker/PythonRuntime",
     "EngineData/Backend/RuntimeAssets/ASR/ModelData",
     "EngineData/Backend/RuntimeAssets/Translation/ModelData",
+    "EngineData/Backend/RuntimeAssets/NativeCuda",
     "EngineData/Backend/RuntimeAssets/Voice/BuiltInVoices",
     "EngineData/Backend/RuntimeAssets/Voice/GPTSoVITS",
     "EngineData/Backend/RuntimeAssets/AudioProvider/VBCABLE/Package",
 )
 REQUIRED_FILES = {
+    "EngineData/Backend/RuntimeAssets/NativeCuda/bin/translateit_native_cuda.dll": None,
+    "EngineData/Backend/RuntimeAssets/NativeCuda/THIRD_PARTY_NOTICES.txt": None,
+    "EngineData/Backend/RuntimeAssets/ASR/ModelData/qwen3-asr-1.7b/.translateit_model_revision": "3b2c29585c2180452ccb14d3b6b58127f352400d",
+    "EngineData/Backend/RuntimeAssets/ASR/ModelData/qwen3-asr-1.7b/Qwen3-ASR-1.7B-Q8_0.gguf": None,
+    "EngineData/Backend/RuntimeAssets/ASR/ModelData/qwen3-asr-1.7b/mmproj-Qwen3-ASR-1.7B-Q8_0.gguf": None,
+    "EngineData/Backend/RuntimeAssets/Translation/ModelData/hy-mt2-1.8b/.translateit_model_revision": "a0c709d9fac510f2c807aa3af52872340dc37a4a",
+    "EngineData/Backend/RuntimeAssets/Translation/ModelData/hy-mt2-1.8b/Hy-MT2-1.8B-Q6_K.gguf": None,
     "EngineData/Backend/LocalWorker/PythonRuntime/python.exe": None,
     "EngineData/Backend/RuntimeAssets/ASR/ModelData/faster-whisper-large-v3-turbo/.translateit_model_revision": ASR_REVISION,
     "EngineData/Backend/RuntimeAssets/Translation/ModelData/xiaomi-research--MiLMMT-46-1B-v1.0/.translateit_model_revision": MILMMT_REVISION,
@@ -123,7 +132,34 @@ def validate_no_filesystem_indirection(repo_root: Path) -> None:
                 raise RuntimeError(f"payload filesystem indirection is forbidden: {display}")
 
 
-def write_payload_contract(repo_root: Path, version: str) -> Path:
+def validate_native_inputs(repo_root: Path, pins: str) -> dict[str, str]:
+    # Trusted pins are supplied by the reviewed build, not derived from staged files.
+    if not pins or len(pins) > 8192:
+        raise RuntimeError("reviewed native DLL pins are required")
+    expected: dict[str, str] = {}
+    for entry in pins.split(";"):
+        match = re.fullmatch(r"([a-z0-9][a-z0-9_.-]{0,95}\.dll)=([a-f0-9]{64})", entry)
+        if not match or ".." in match[1] or match[1] in expected:
+            raise RuntimeError("invalid or duplicate native DLL pin")
+        expected[match[1]] = match[2]
+    if "translateit_native_cuda.dll" not in expected or len(expected) > 32:
+        raise RuntimeError("native DLL closure is incomplete")
+    root = repo_root / "EngineData/Backend/RuntimeAssets/NativeCuda"
+    if {p.name for p in root.iterdir()} != {"bin", "THIRD_PARTY_NOTICES.txt"}:
+        raise RuntimeError("unexpected NativeCuda package entries")
+    directory = root / "bin"
+    actual = {p.name: p for p in directory.iterdir()}
+    if set(actual) != set(expected):
+        raise RuntimeError("native DLL set differs from reviewed pins")
+    for name, digest in expected.items():
+        path = actual[name]
+        require_file(path, name)
+        if path.stat().st_size > 1024 * 1024 * 1024 or sha256_file(path) != digest:
+            raise RuntimeError(f"native DLL identity mismatch: {name}")
+    return expected
+
+
+def write_payload_contract(repo_root: Path, version: str, native_pins: str) -> Path:
     path = repo_root / PAYLOAD_CONTRACT
     path.parent.mkdir(parents=True, exist_ok=True)
     body = {
@@ -134,7 +170,10 @@ def write_payload_contract(repo_root: Path, version: str) -> Path:
         "torch_version": TORCH_VERSION,
         "transformers_version": TRANSFORMERS_VERSION,
         "tokenizers_version": TOKENIZERS_VERSION,
+        "native_dll_pins": native_pins,
         "revisions": {
+            "qwen3_asr": "3b2c29585c2180452ccb14d3b6b58127f352400d",
+            "hy_mt2": "a0c709d9fac510f2c807aa3af52872340dc37a4a",
             "milmmt": MILMMT_REVISION,
             "faster_whisper": ASR_REVISION,
             "gpt_sovits": GPT_SOVITS_REVISION,
@@ -243,6 +282,7 @@ def render_hook(
     version: str,
     digest: str,
     expanded_bytes: int,
+    native_pins: str,
 ) -> None:
     rendered = template.read_text(encoding="utf-8")
     replacements = {
@@ -251,6 +291,7 @@ def render_hook(
         "@@APP_VERSION@@": version,
         "@@PAYLOAD_FILENAME@@": PAYLOAD_FILENAME,
         "@@PAYLOAD_SHA256@@": digest,
+        "@@NATIVE_DLL_PINS_SHA256@@": hashlib.sha256(native_pins.encode("ascii")).hexdigest(),
         "@@PAYLOAD_EXPANDED_BYTES@@": str(expanded_bytes),
         "@@INSTALLER_HELPER_SOURCE@@": str(helper.resolve()).replace("/", "\\"),
     }
@@ -277,6 +318,7 @@ def write_evidence(
     entries: list[str],
     seven_zip: str,
     tar_program: str,
+    native_pins: str,
 ) -> None:
     body = {
         "schema": PAYLOAD_SCHEMA,
@@ -284,6 +326,7 @@ def write_evidence(
         "app_version": version,
         "payload_file": PAYLOAD_FILENAME,
         "payload_sha256": digest,
+        "native_dll_pins": native_pins,
         "payload_bytes": payload.stat().st_size,
         "expanded_bytes": expanded_bytes,
         "compression_ratio": round(payload.stat().st_size / expanded_bytes, 6)
@@ -334,7 +377,9 @@ def main() -> int:
     version = app_version(repo_root)
     validate_staged_inputs(repo_root)
     validate_no_filesystem_indirection(repo_root)
-    write_payload_contract(repo_root, version)
+    native_pins = os.environ.get("TRANSLATEIT_NATIVE_DLL_PINS", "")
+    native_files = validate_native_inputs(repo_root, native_pins)
+    write_payload_contract(repo_root, version, native_pins)
     root_bytes = {root: tree_bytes(repo_root / root) for root in PAYLOAD_ROOTS}
     python_runtime_root = repo_root / "EngineData/Backend/LocalWorker/PythonRuntime"
     python_runtime_top_level_bytes = direct_child_bytes(python_runtime_root)
@@ -349,6 +394,9 @@ def main() -> int:
     tar_program = find_tar()
     payload = args.output.resolve()
     entries = create_payload(repo_root, payload, seven_zip, tar_program)
+    for name in native_files:
+        if f"EngineData/Backend/RuntimeAssets/NativeCuda/bin/{name}" not in entries:
+            raise RuntimeError(f"native DLL absent from archive: {name}")
     digest = sha256_file(payload)
     render_hook(
         args.hook_template.resolve(),
@@ -357,6 +405,7 @@ def main() -> int:
         version,
         digest,
         expanded_bytes,
+        native_pins,
     )
     write_evidence(
         args.evidence.resolve(),
@@ -371,6 +420,7 @@ def main() -> int:
         entries,
         seven_zip,
         tar_program,
+        native_pins,
     )
     print(f"[r3-payload] app_version={version}")
     print(f"[r3-payload] payload={payload}")

@@ -7,6 +7,7 @@ param(
     [Parameter(Mandatory=$true)][string]$ExpectedPayloadSchema,
     [Parameter(Mandatory=$true)][string]$ExpectedInstalledRuntimeSchema,
     [Parameter(Mandatory=$true)][string]$ExpectedAppVersion,
+    [Parameter(Mandatory=$true)][string]$ExpectedNativeDllPinsSha256,
     [Int64]$ExpectedExpandedBytes=0,
     [string]$InstallRoot
 )
@@ -15,7 +16,7 @@ $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 
 $PythonVersion='3.12.10'
-$TorchVersion='2.11.0'
+$TorchVersion='2.14.1'
 $TransformersVersion='4.57.6'
 $TokenizersVersion='0.22.2'
 $MiLMMTRevision='4fc480b6c58dec29c159dcdf9fde0f6d5c354995'
@@ -27,6 +28,7 @@ $PayloadRoots=@(
     'EngineData\Backend\LocalWorker\PythonRuntime',
     'EngineData\Backend\RuntimeAssets\ASR\ModelData',
     'EngineData\Backend\RuntimeAssets\Translation\ModelData',
+    'EngineData\Backend\RuntimeAssets\NativeCuda',
     'EngineData\Backend\RuntimeAssets\Voice\BuiltInVoices',
     'EngineData\Backend\RuntimeAssets\Voice\GPTSoVITS',
     'EngineData\Backend\RuntimeAssets\AudioProvider\VBCABLE\Package'
@@ -49,14 +51,61 @@ function Read-PayloadContract([string]$Tar,[string]$Archive){
     try{return([string]::Join("`n",$raw)|ConvertFrom-Json)}catch{Fail 43 'Payload contract JSON invalid.'}
 }
 
+# The signed Setup binds a short digest of the reviewed pin string; the
+# installed manifest itself is never the trust anchor.
+function Get-NativePins([string]$Pins){
+    if(-not $Pins-or$Pins.Length-gt 8192){throw 'Native DLL pins missing or oversized.'}
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try{$actual=([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::ASCII.GetBytes($Pins)))).Replace('-','').ToLowerInvariant()}
+    finally{$sha.Dispose()}
+    if($actual-cne$ExpectedNativeDllPinsSha256){throw 'Native DLL pin identity differs from Setup.'}
+    $files=[Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
+    foreach($pin in $Pins.Split(';')){
+        if($pin-cmatch'^([a-z0-9][a-z0-9_.-]{0,95}\.dll)=([a-f0-9]{64})$'){
+            if($Matches[1].Contains('..')){throw 'Invalid native DLL filename.'}
+            $files.Add($Matches[1],$Matches[2])
+        }else{throw 'Invalid native DLL pin.'}
+    }
+    if(-not $files.ContainsKey('translateit_native_cuda.dll')-or$files.Count-gt 32){throw 'Native DLL closure incomplete.'}
+    return ,$files
+}
+
+function Assert-NativeRuntime([string]$Assets,[string]$Pins){
+    $expected=Get-NativePins $Pins
+    $native=Join-Path $Assets 'NativeCuda'
+    $bin=Join-Path $native 'bin'
+    $notice=Join-Path $native 'THIRD_PARTY_NOTICES.txt'
+    foreach($path in @($native,$bin,$notice)){
+        $item=Get-Item -LiteralPath $path -Force
+        if($item.Attributes-band[IO.FileAttributes]::ReparsePoint){throw 'Native asset is redirected.'}
+    }
+    if(@(Get-ChildItem -LiteralPath $native -Force).Count-ne 2-or(Get-Item -LiteralPath $notice).Length-le 0){throw 'Native package root invalid.'}
+    $actual=@(Get-ChildItem -LiteralPath $bin -Force)
+    if($actual.Count-ne$expected.Count){throw 'Native DLL set differs from Setup.'}
+    foreach($file in $actual){
+        if($file.PSIsContainer-or($file.Attributes-band[IO.FileAttributes]::ReparsePoint)-or-not$expected.ContainsKey($file.Name)-or$file.Length-le 0-or$file.Length-gt 1GB){throw 'Unapproved native DLL entry.'}
+        if((Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()-cne$expected[$file.Name]){throw 'Native DLL hash mismatch.'}
+    }
+    # Throw (not exit) so a post-promotion validation failure reaches rollback.
+    if((Get-Content -LiteralPath (Join-Path $Assets 'ASR\ModelData\qwen3-asr-1.7b\.translateit_model_revision') -Raw).Trim()-cne'3b2c29585c2180452ccb14d3b6b58127f352400d'){throw 'Native ASR revision mismatch.'}
+    if((Get-Content -LiteralPath (Join-Path $Assets 'Translation\ModelData\hy-mt2-1.8b\.translateit_model_revision') -Raw).Trim()-cne'a0c709d9fac510f2c807aa3af52872340dc37a4a'){throw 'Native MT revision mismatch.'}
+    foreach($relative in @('ASR\ModelData\qwen3-asr-1.7b\Qwen3-ASR-1.7B-Q8_0.gguf','ASR\ModelData\qwen3-asr-1.7b\mmproj-Qwen3-ASR-1.7B-Q8_0.gguf','Translation\ModelData\hy-mt2-1.8b\Hy-MT2-1.8B-Q6_K.gguf')){
+        $file=Get-Item -LiteralPath (Join-Path $Assets $relative) -Force
+        if($file.PSIsContainer-or($file.Attributes-band[IO.FileAttributes]::ReparsePoint)-or$file.Length-le 0){throw 'Native model asset missing or redirected.'}
+    }
+}
+
 function Assert-Contract($Contract){
+    [void](Get-NativePins ([string]$Contract.native_dll_pins))
+    if([string]$Contract.revisions.qwen3_asr-ne'3b2c29585c2180452ccb14d3b6b58127f352400d'-or[string]$Contract.revisions.hy_mt2-ne'a0c709d9fac510f2c807aa3af52872340dc37a4a'){Fail 44 'Native model revision mismatch.'}
     if([string]$Contract.schema-ne$ExpectedPayloadSchema-or[string]$Contract.app_version-ne$ExpectedAppVersion){Fail 44 'Payload identity does not match Setup.'}
     if([string]$Contract.python_version-ne$PythonVersion-or[string]$Contract.torch_version-ne$TorchVersion-or[string]$Contract.transformers_version-ne$TransformersVersion-or[string]$Contract.tokenizers_version-ne$TokenizersVersion){Fail 44 'Payload dependency identity mismatch.'}
     if([string]$Contract.revisions.milmmt-ne$MiLMMTRevision-or[string]$Contract.revisions.faster_whisper-ne$AsrRevision-or[string]$Contract.revisions.gpt_sovits-ne$GptRevision){Fail 44 'Payload model revision identity mismatch.'}
 }
 
-function Assert-Runtime([string]$Root){
+function Assert-Runtime([string]$Root,[string]$NativePins){
     $backend=Join-Path $Root 'EngineData\Backend'
+    Assert-NativeRuntime (Join-Path $backend 'RuntimeAssets') $NativePins
     NeedFile (Join-Path $backend 'LocalWorker\PythonRuntime\python.exe') 50 'Python runtime'
     NeedMarker (Join-Path $backend 'RuntimeAssets\ASR\ModelData\faster-whisper-large-v3-turbo\.translateit_model_revision') $AsrRevision 51 'ASR revision'
     NeedMarker (Join-Path $backend 'RuntimeAssets\Translation\ModelData\xiaomi-research--MiLMMT-46-1B-v1.0\.translateit_model_revision') $MiLMMTRevision 52 'MiLMMT revision'
@@ -86,14 +135,16 @@ function Assert-InstalledRuntimeManifest([string]$Root){
     if([string]$manifest.payload_schema-ne$ExpectedPayloadSchema){Fail 57 'Installed runtime payload schema is incompatible with this app update.'}
     if([string]$manifest.python-ne$PythonVersion-or[string]$manifest.torch-ne$TorchVersion-or[string]$manifest.transformers-ne$TransformersVersion-or[string]$manifest.tokenizers-ne$TokenizersVersion){Fail 57 'Installed runtime dependency identity is incompatible with this app update.'}
     if([string]$manifest.translation_revision-ne$MiLMMTRevision-or[string]$manifest.asr_revision-ne$AsrRevision-or[string]$manifest.voice_revision-ne$GptRevision){Fail 57 'Installed model/runtime revisions are incompatible with this app update.'}
+    [void](Get-NativePins ([string]$manifest.native_dll_pins))
+    return [string]$manifest.native_dll_pins
 }
 
 function Verify-InstalledRuntime([string]$Root){
     if([string]::IsNullOrWhiteSpace($Root)){Fail 58 'InstallRoot required for installed-runtime verification.'}
     $full=[IO.Path]::GetFullPath($Root)
-    Assert-Runtime $full
+    $pins=Assert-InstalledRuntimeManifest $full
+    Assert-Runtime $full $pins
     [void](Read-PythonMetadata $full)
-    Assert-InstalledRuntimeManifest $full
     if(-not(Test-VBCablePresent)){Fail 58 'Required VB-CABLE provider is not present.'}
     exit 0
 }
@@ -155,8 +206,10 @@ function Install-Payload([string]$Tar){
 
     &$Tar -xf $script:PayloadPath -C $stage
     if($LASTEXITCODE-ne 0){Fail 71 'Payload extraction failed.'}
-    Assert-Runtime $stage
-    Assert-Contract (Get-Content -LiteralPath (Join-Path $stage $PayloadContract) -Raw | ConvertFrom-Json)
+    $contract=Get-Content -LiteralPath (Join-Path $stage $PayloadContract) -Raw | ConvertFrom-Json
+    Assert-Contract $contract
+    $nativePins=[string]$contract.native_dll_pins
+    Assert-Runtime $stage $nativePins
 
     # The driver is installed from the verified staging tree before application
     # runtime replacement. If the vendor/system flow fails, the existing app runtime
@@ -175,7 +228,7 @@ function Install-Payload([string]$Tar){
             Move-Item -LiteralPath $source -Destination $target -Force
             $state.new_moved=$true
         }
-        Assert-Runtime $root
+        Assert-Runtime $root $nativePins
         $meta=Read-PythonMetadata $root
         $manifest=[ordered]@{
             schema=$ExpectedInstalledRuntimeSchema
@@ -183,6 +236,7 @@ function Install-Payload([string]$Tar){
             app_version=$ExpectedAppVersion
             payload_schema=$ExpectedPayloadSchema
             payload_sha256=$ExpectedSha256.ToLowerInvariant()
+            native_dll_pins=$nativePins
             python=$meta.python
             torch=$meta.torch
             transformers=$meta.transformers

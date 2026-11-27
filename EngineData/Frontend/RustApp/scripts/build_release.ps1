@@ -59,6 +59,7 @@ function Resolve-SourceCommit {
 }
 
 $SourceCommit = Resolve-SourceCommit
+if ([string]::IsNullOrWhiteSpace($env:TRANSLATEIT_NATIVE_DLL_PINS)) { throw 'Reviewed native DLL pins are required for this source revision.' }
 $QualityReadinessEvidence = (Resolve-Path -LiteralPath $QualityReadinessEvidence).Path
 Require-File $ReleasePython 'Staged private PythonRuntime'
 Require-File $QualityReadinessEvidence 'Quality Readiness evidence'
@@ -105,6 +106,8 @@ try {
     Require-File $GeneratedHook 'Generated R3 NSIS hook'
     Require-File $PayloadEvidence 'R3 payload build evidence'
 
+    $nativePayloadPins = [string](Get-Content -LiteralPath $PayloadEvidence -Raw | ConvertFrom-Json).native_dll_pins
+    if ($nativePayloadPins -cne $env:TRANSLATEIT_NATIVE_DLL_PINS) { throw 'Native DLL pins differ between payload and Rust build input.' }
     $TauriCli = Join-Path $AppRoot 'node_modules\.bin\tauri.cmd'
     Require-File $TauriCli 'Local @tauri-apps/cli from package-lock.json'
     $BuildStartUtc = [DateTime]::UtcNow
@@ -165,6 +168,7 @@ try {
         source_commit = $SourceCommit
         app_version = [string]$payloadBuild.app_version
         payload_schema = [string]$payloadBuild.schema
+        native_dll_pins = $nativePayloadPins
         setup_file = 'TranslateIT-Setup.exe'
         setup_sha256 = Get-Sha256 $SetupPath
         payload_file = 'TranslateIT-Payload.7z'
