@@ -329,8 +329,15 @@ test("Live transcript surfaces the first actual storage failure with existing Me
   assert.match(live, /turns\.archive_write_errors/);
   assert.match(live, /role="alert"/);
   assert.match(live, /saved archive/);
-  assert.match(eventMonitors, /void pollMeeting\(true\)/);
-  assert.match(reader, /if \(statusKey === previousStatusKey && !forceTurns && retainedTurns\)/);
+  assert.match(eventMonitors, /if \(!disposed\) void pollMeeting\(\)/);
+  // Archive errors participate in the authoritative token even when speech
+  // and delivery state have not changed. A storage event is not a forced read.
+  assert.match(memory, /format!\("\{\}:\{\}:\{\}", self\.session_id, self\.revision, errors\)/);
+  assert.match(memory, /archive_errors\.as_ref\(\)\.ok\(\)\.map/);
+  assert.match(memory, /known_revision == Some\(value\)/);
+  assert.match(memory, /assert!\(!store\.read_live\(Some\(token\), Ok\(1\)\)\.unchanged\)/);
+  assert.match(reader, /nextTurns\.live_revision === retainedTurns\.live_revision/);
+  assert.match(reader, /if \(!unchanged\) return \{ status, turns: nextTurns/);
 });
 
 test("saved transcript previews share the existing Delete-Export archive lock", () => {

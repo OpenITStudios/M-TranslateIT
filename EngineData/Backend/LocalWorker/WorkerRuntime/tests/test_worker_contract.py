@@ -182,13 +182,20 @@ def test_worker_status_reports_milmmt_revision_for_both_directions(monkeypatch) 
         assert status["models"][key]["path"] == str(worker.TRANSLATION_MODEL)
 
 
-@pytest.mark.parametrize("primary_ready,backup_ready,expected_id,expected_checks", [
-    (True, True, "faster-whisper-large-v3-turbo", 1),
-    (False, True, "faster-whisper-medium", 2),
-    (False, False, None, 2),
-])
+@pytest.mark.parametrize(
+    "primary_ready,backup_ready,expected_id,expected_checks",
+    [
+        (True, True, "faster-whisper-large-v3-turbo", 1),
+        (False, True, "faster-whisper-medium", 2),
+        (False, False, None, 2),
+    ],
+)
 def test_asr_preload_reuses_single_asset_observation(
-    monkeypatch, primary_ready, backup_ready, expected_id, expected_checks,
+    monkeypatch,
+    primary_ready,
+    backup_ready,
+    expected_id,
+    expected_checks,
 ) -> None:
     io = load_worker_module().io_runtime
     checks = []

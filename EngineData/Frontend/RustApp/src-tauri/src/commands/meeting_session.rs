@@ -450,7 +450,8 @@ fn process_authoritative_finalized_outbound_wav(
     )
 }
 
-#[tauri::command]
+// Internal observation shared by the existing runtime and diagnostic owners.
+// Frontend Meeting reconciliation uses the conditional committed-turn read.
 pub fn get_meeting_session_status() -> MeetingSessionStatus {
     current_status()
 }

@@ -100,6 +100,48 @@ This is an **execution plan**, not a request to use the user's PC now. All hoste
 
 Pass is **revision-scoped**: source and model identity must match the observed developer-mode run; for release claims, quality receipt, Setup/payload hashes, installed runtime and native measurements must additionally match the admitted release. A passing source check or Tauri dev run is not a passing installed application. This plan adds no normal user-PC testing steps to the ChatGPT/GitHub development loop.
 
+### Zero Waste & Minimal State — held integrated acceptance
+
+**Scope:** efficiency increments from baseline `Local@c4177c2d35243767b6ba6fc3a7bd49a01dd285d0`
+through reviewed source `96bf1ea74c396574253bad590481e6543b496ee7` and the
+closure commit containing this section. The later local agent must pin the
+actual closure commit (or explicitly reconciled successor) from GitHub before
+execution; the earlier reviewed SHA alone omits closure corrections.
+This is a source-only handoff, not full-product or release admission.
+
+Use the existing integrated sequence above, including its exact-SHA frontend
+contract/type checks, locked Python environment (existing Ruff and pytest
+checks), and compile gate. From `EngineData/Frontend/RustApp/src-tauri`,
+include `cargo test --locked` in the same authorized local source phase;
+record the actual command and result, including any unavailable fixture.
+Do not treat authored tests as PASS. No hosted CI, extra profiler, automatic
+local test request, model download, or release is authorized by this note.
+
+| Existing boundary | Acceptance observation | Failure / limitation |
+| --- | --- | --- |
+| Runtime reliability | One combined Meeting observation; one explicit device enumeration for guard/route; unchanged 8-second/10-second/30-second monitoring cadence. Exercise existing device-loss, Start/Stop, Mute and source-switch checks in flows 1/3/4. | Stale owner, silent route replacement, hidden device loss or broken recovery fails. Source-level call counts are not CPU measurements. |
+| State / IPC | One conditional read for Meeting status plus live turns. Same session/token returns no turn records; translation, playback timing and archive errors change the token even at the same timestamp. Verify full bounded recovery on session change, missed event or failed read, and separate saved/export DTO. Reuse flow 5 and the existing Rust/TS fixtures. | Cross-session text, lost storage warning, stale delivery or missing caption fails. Do not assume byte savings or UI latency without observation. |
+| Worker lifecycle | Existing ASR primary/backup selection uses observed asset readiness; resident identity stays bound, missing assets fail explicitly. Keep functional proof, canonical MiLMMT, voice actor and CUDA policies. Compare cold/warm stages and allocator/whole-device headroom using section 5A/5B. | No claims of lower VRAM, faster inference or model-quality parity without matched data. |
+| Audio | Existing rolling buffer capacity fixture verifies fixed-format preallocation, retained order and received count; fused noise gain fixture compares complete PCM16 WAV bytes against the previous algorithm. Exercise optional noise suppression, physical capture and actual receiver in existing flows 2/3. | Any byte-parity failure, clipping/quality regression, loss or replay fails. The WAV handoff remains unchanged. |
+| Diagnostic export | One direct Meeting/helper/incident-history observation per export reused by existing diagnostic owners. Inspect the existing redacted JSON, bounded history, unknown state, and explicit export; preserve archive privacy and no incidental history mutation. | Private audio/text, false healthy/clean claim, missing timing or incident coverage fails. No atomic cross-subsystem snapshot is claimed. |
+
+For a meaningful before/after comparison, use the same hardware, selected
+model/actor, audio endpoints, public utterance set, app/meeting workload and
+measurement definitions. Retain the existing metrics: idle CPU/RAM/VRAM,
+cold/warm readiness, per-stage timing and scheduler waits, end-of-speech
+to first playback P50/P95, pressure/drop counts and actual receiver delivery.
+Compare against a genuinely measured matched baseline; if none exists,
+report only the candidate observations and keep improvement UNKNOWN.
+IPC counts and the removed PCM allocation are source-derived only; no
+additional normal-runtime telemetry is required. If actual IPC payload or
+disk I/O measurement is unavailable, mark it NOT EXECUTED rather than add
+a production monitor.
+
+STOP on first material source/build/native regression. Preserve the hold,
+existing privacy and product semantics. This source work does not close
+unrelated outstanding product work, package signing, installation or release
+acceptance.
+
 ### Five Meeting flows — baseline order
 
 These rows group existing acceptance scenarios; they are not new scenario IDs or

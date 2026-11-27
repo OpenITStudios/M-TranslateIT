@@ -67,3 +67,14 @@ test("saved transcript DTO stays flat and live-only metadata belongs to its read
   assert.match(backend, /struct MeetingLiveReadRequest \{\s*known_revision: Option<String>,/);
   assert.match(bridge, /live_revision: null,\s*unchanged: false,/);
 });
+
+test("the superseded standalone Meeting status IPC is retired but the internal owner remains", () => {
+  const bridge = readFileSync(new URL("../../src/app/bridge/runtimeApi.ts", import.meta.url), "utf8");
+  const registry = readFileSync(new URL("../../src-tauri/src/commands/registry.rs", import.meta.url), "utf8");
+  const backend = readFileSync(new URL("../../src-tauri/src/commands/meeting_session.rs", import.meta.url), "utf8");
+  assert.doesNotMatch(bridge, /getMeetingSessionStatus|get_meeting_session_status/);
+  assert.doesNotMatch(registry, /::get_meeting_session_status,/);
+  assert.doesNotMatch(backend, /#\[tauri::command\]\s*pub fn get_meeting_session_status/);
+  assert.match(backend, /pub fn get_meeting_session_status\(\) -> MeetingSessionStatus \{\s*current_status\(\)/);
+  assert.match(registry, /::get_meeting_committed_turns,/);
+});

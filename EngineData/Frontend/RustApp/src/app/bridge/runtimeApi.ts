@@ -459,14 +459,6 @@ export const runtimeApi = {
     return invokeNullable<MeetingAudioSourceActionResult>("set_meeting_audio_source", { source });
   },
 
-  async getMeetingSessionStatus(): Promise<MeetingSessionStatus> {
-    return invokeOr<MeetingSessionStatus>(
-      "get_meeting_session_status",
-      undefined,
-      meetingSessionStatusFallback("Meeting session status is unavailable because the frontend bridge could not call Tauri."),
-    );
-  },
-
   async listMeetingLibrary(): Promise<MeetingLibrary> {
     return invokeOr<MeetingLibrary>(
       "list_meeting_library", undefined,

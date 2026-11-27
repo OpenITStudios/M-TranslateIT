@@ -27,7 +27,6 @@ pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wr
         crate::commands::codex_gateway::get_codex_gateway_status,
         crate::commands::codex_gateway::connect_codex_gateway,
         crate::commands::codex_gateway::disconnect_codex_gateway,
-        crate::commands::meeting_session::get_meeting_session_status,
         crate::commands::meeting_session::set_meeting_audio_source,
         crate::commands::meeting_session::set_meeting_preferred_audio_source,
         crate::commands::meeting_session::set_meeting_output_muted,
