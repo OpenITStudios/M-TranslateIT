@@ -25,10 +25,10 @@ test("Voice build terminal state emits a global backend runtime event", () => {
 });
 
 test("application runtime subscription folds Voice build completion into canonical reconciliation", () => {
-  assert.match(api, /listen<VoiceBuildRuntimeEvent>/);
-  assert.match(api, /translateit:\/\/voice-build-runtime/);
+  assert.match(api, /myVoiceBuildApi\.subscribeRuntime\(/);
+  assert.doesNotMatch(api, /listen<VoiceBuildRuntimeEvent>/);
   assert.match(api, /getApplicationSnapshot\(\)/);
-  assert.match(api, /listener\(\{ reason: event\.payload\.reason, snapshot \}\)/);
+  assert.match(api, /listener\(\{ reason: event\.reason, snapshot \}\)/);
 });
 
 test("partial combined subscription installation cleans up the first listener", () => {

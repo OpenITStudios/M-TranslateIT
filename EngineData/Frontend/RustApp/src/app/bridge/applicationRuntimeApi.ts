@@ -1,5 +1,6 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { runCommand } from "../shared/tauriBridge";
+import { myVoiceBuildApi } from "./myVoiceBuildApi";
 import { meetingSessionStatusFallback } from "../runtime/meetingBridgeFallback";
 import { defaultSettings } from "../shared/state";
 import type {
@@ -116,12 +117,6 @@ export type ApplicationIntentResult = {
 export type ApplicationRuntimeEvent = {
   reason: string;
   snapshot: ApplicationSnapshot;
-};
-
-type VoiceBuildRuntimeEvent = {
-  revision: number;
-  reason: string;
-  generation: number;
 };
 
 function unavailableSnapshot(): ApplicationSnapshot {
@@ -244,16 +239,15 @@ export async function subscribeApplicationRuntime(
   );
   let voiceBuildStop: UnlistenFn;
   try {
-    voiceBuildStop = await listen<VoiceBuildRuntimeEvent>(
-      "translateit://voice-build-runtime",
-      (event) => {
-        void getApplicationSnapshot().then((snapshot) => {
-          if (disposed) return;
-          if (snapshot.revision <= 0 || snapshot.lifecycle === "unavailable") return;
-          listener({ reason: event.payload.reason, snapshot });
-        });
-      },
-    );
+    voiceBuildStop = await myVoiceBuildApi.subscribeRuntime((event) => {
+      if (disposed || event.revision <= 0) return;
+      void getApplicationSnapshot().then((snapshot) => {
+        if (disposed) return;
+        // Forward uncertainty too; the shell must not mistake a failed
+        // terminal-event read for a verified completed build.
+        listener({ reason: event.reason, snapshot });
+      });
+    });
   } catch (error) {
     disposed = true;
     applicationStop();

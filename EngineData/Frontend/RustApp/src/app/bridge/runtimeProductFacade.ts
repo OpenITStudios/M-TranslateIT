@@ -66,6 +66,8 @@ export type ProductMeetingActionResult = {
   message: string;
   meeting: ProductMeetingState;
   status: MeetingSessionActionResult["status"];
+  snapshot: ApplicationSnapshot;
+  reason: string;
 };
 
 async function loadApprovedVoiceReady(): Promise<boolean | null> {
@@ -234,6 +236,8 @@ export async function runProductMeetingAction(
     message: compact(result.message, fallbackMessage),
     meeting: mapProductMeetingState(status),
     status,
+    snapshot: result.snapshot,
+    reason: result.intent,
   };
 }
 

@@ -27,8 +27,9 @@ test("newer action/application snapshot invalidates stale Meeting-only reads", (
     "utf8",
   );
   assert.match(app, /if \(!result\.applied\) return;[\s\S]*meetingViewState = meetingLiveController\.invalidate\(\)/);
-  assert.match(app, /const actionControllerRevision = applicationController\.read\(\)\.revision/);
-  assert.match(app, /if \(applicationController\.read\(\)\.revision !== actionControllerRevision\)/);
+  assert.match(app, /applicationController\.invalidate\(\);\s*meetingViewState = meetingLiveController\.invalidate\(\)/);
+  assert.match(app, /current\.applicationRevision !== result\.snapshot\.revision/);
+  assert.match(app, /current\.snapshot\.meetingSession\?\.session_id !== result\.status\.session_id/);
   assert.match(app, /const pollControllerRevision = applicationController\.read\(\)\.revision/);
   assert.match(app, /if \(applicationController\.read\(\)\.revision !== pollControllerRevision\)/);
   assert.match(controller, /callbacks\.onStatus\(result\.status\);\s*\/\/[^\n]*[\s\S]*?if \(revision !== state\.revision\) return publish\(\);\s*const overlayRevision/);

@@ -15,10 +15,11 @@ const voiceApi = readFileSync(
   new URL("../../src/app/bridge/myVoiceBuildApi.ts", import.meta.url),
   "utf8",
 );
-const voiceSync = readFileSync(
-  new URL("../../src/app/runtime/voiceBuildRuntimeSync.ts", import.meta.url),
+const applicationApi = readFileSync(
+  new URL("../../src/app/bridge/applicationRuntimeApi.ts", import.meta.url),
   "utf8",
 );
+const notices = readFileSync(new URL("../../src/app/runtime/applicationNotice.ts", import.meta.url), "utf8");
 
 test("Voice selection and approval refresh the canonical runtime snapshot", () => {
   assert.match(mutations, /emit_after\(&app, "approve_voice_candidate"/);
@@ -84,10 +85,14 @@ test("background Voice build completion uses a global backend event", () => {
   assert.match(runtimeEvents, /translateit:\/\/voice-build-runtime/);
   assert.match(voiceApi, /subscribeRuntime/);
   assert.match(voiceApi, /translateit:\/\/voice-build-runtime/);
-  assert.match(app, /startVoiceBuildRuntimeSync/);
-  assert.match(voiceSync, /myVoiceBuildApi\.subscribeRuntime/);
-  assert.match(voiceSync, /if \(disposed\)/);
-  assert.match(voiceSync, /unlisten\?\.\(\)/);
+  assert.doesNotMatch(app, /startVoiceBuildRuntimeSync|stopVoiceBuildRuntimeSync/);
+  assert.equal((applicationApi.match(/myVoiceBuildApi\.subscribeRuntime\(/g) ?? []).length, 1);
+  assert.match(applicationApi, /if \(disposed \|\| event\.revision <= 0\) return/);
+  assert.match(applicationApi, /voiceBuildStop\(\)/);
+  assert.match(app, /noticeForVoiceBuildReason\(reason\)/);
+  assert.match(notices, /voice_build_completed/);
+  assert.match(notices, /voice_build_cancelled/);
+  assert.match(notices, /voice_build_failed/);
   assert.doesNotMatch(app, /onRuntimeStateChanged/);
 });
 

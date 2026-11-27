@@ -35,7 +35,7 @@ function emittedReasons(): Set<string> {
   for (const match of mutations.matchAll(/emit_after\(&app,\s*"([a-z_0-9]+)"/g)) values.add(match[1]);
   // Asynchronous build events carry authored reasons through the canonical app event bridge.
   assert.match(voiceBuild, /emit_voice_build_runtime_event\(event_reason, generation\)/);
-  assert.match(applicationBridge, /listener\(\{ reason: event\.payload\.reason, snapshot \}\)/);
+  assert.match(applicationBridge, /listener\(\{ reason: event\.reason, snapshot \}\)/);
   const authoredEvent = voiceBuild.match(/let event_reason = if recovery_failed \{([\s\S]*?)\};/);
   assert.ok(authoredEvent, "voice build terminal reasons must be source-authored");
   for (const match of authoredEvent[1].matchAll(/"(voice_build_[a-z_]+)"/g)) values.add(match[1]);

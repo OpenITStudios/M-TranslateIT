@@ -12,10 +12,9 @@
     type ProductSetupAction,
   } from "./app/bridge/runtimeProductFacade";
   import { startMeetingRuntimeMonitors, type ReliabilityChannel, type ReliabilityNotice } from "./app/runtime/reliabilityMonitor";
-import { appNotice, visibleAppNotice, type AppNotice, type AppNoticeKind } from "./app/runtime/applicationNotice";
+import { appNotice, visibleAppNotice, noticeForVoiceBuildReason, type AppNotice, type AppNoticeKind } from "./app/runtime/applicationNotice";
   import { subscribeOverlayReady, subscribeQuickAccessCaptionRequests } from "./app/runtime/translationOverlayRuntime";
 import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlayState";
-  import { startVoiceBuildRuntimeSync } from "./app/runtime/voiceBuildRuntimeSync";
   import { installNativeCloseGuard } from "./app/runtime/nativeCloseRuntime";
   import {
     createCloseController,
@@ -318,6 +317,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     try {
       applyRefreshResult(
         await applicationController.refreshFromApplication(application, reason),
+        noticeForVoiceBuildReason(reason),
       );
     } catch {
       setKnownNotice("TranslateIT couldn't confirm its latest runtime status. Check Meeting or Help.", "unverified");
@@ -379,9 +379,9 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     if (!action) return;
     const previousSessionId = meetingStatus?.session_id ?? null;
 
-    // Fence an in-flight Meeting-only poll before this action changes native
-    // ownership. Application events may still reconcile a newer state first.
-    const actionControllerRevision = applicationController.read().revision;
+    // Fence in-flight Meeting-only reads before native ownership changes.
+    // The receipt and runtime event share the same canonical sequence.
+    applicationController.invalidate();
     meetingViewState = meetingLiveController.invalidate();
     meetingActionBusy = true;
     setKnownNotice(action === "start"
@@ -398,12 +398,20 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
             : result.ok && action === "stop" && !result.meeting.hasSession && result.meeting.lifecycle === "idle"
               ? "Meeting audio stopped."
               : result.meeting.message;
-      if (applicationController.read().revision !== actionControllerRevision) {
-        // A native application event or newer refresh won the race. The
-        // action receipt has no application revision and cannot overwrite it.
+      if (result.snapshot.revision <= 0 || result.snapshot.lifecycle === "unavailable") {
+        setKnownNotice("Meeting status is unknown. Check its status before trying another action.", "unverified");
         await refreshSnapshot();
         return;
       }
+      // Both IPC receipt and event enter the existing ordered controller. The
+      // same sequence is applied once; an older receipt never forces a reread.
+      applyRefreshResult(await applicationController.refreshFromApplication(
+        result.snapshot, result.reason,
+      ));
+      const current = applicationController.read();
+      if (current.applicationRevision !== result.snapshot.revision || !current.snapshot) return;
+      if (current.snapshot.meetingSession?.session_id !== result.status.session_id
+        || current.snapshot.meeting.lifecycle !== result.meeting.lifecycle) return;
       const kind: AppNoticeKind = result.meeting.lifecycle === "cleanup_incomplete" || result.state === "cleanup_incomplete"
         ? "attention"
         : result.meeting.lifecycle === "unavailable" || result.state === "frontend_bridge_error"
@@ -411,7 +419,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
           : result.ok && ((action === "start" && result.meeting.live)
             || (action === "stop" && !result.meeting.hasSession && result.meeting.lifecycle === "idle"))
             ? "success" : result.ok ? "info" : "attention";
-      applyMeetingStatus(result.status, resultNotice, kind);
+      setKnownNotice(resultNotice, kind);
       if (result.ok && action === "start" && result.meeting.live && result.status.session_id) {
         selectedSessionId = result.status.session_id;
         selectedSurface = "recent";
@@ -424,10 +432,8 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
         meetingSection = "session";
         route = "meeting";
       }
-      void refreshMeetingLibrary();
-      if (!result.status.has_session || action === "start") {
-        meetingViewState = meetingLiveController.reset();
-      }
+      // Canonical applyRefreshResult already reconciles the library and
+      // clears old captions on a session transition.
     } catch {
       setKnownNotice("The Meeting action couldn't be confirmed. Check its status before trying again.", "unverified");
       await refreshSnapshot();
@@ -489,9 +495,19 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
       const result = await applicationRuntimeApi.dispatchIntent(
         micTestOwnsRuntime ? "stop_mic_test" : "start_mic_test",
       );
-      await refreshSnapshot(result.ok
+      const message = result.ok
         ? (micTestOwnsRuntime ? "Mic Test stopped." : "Mic Test started.")
-        : result.message || "Mic Test couldn't be completed. Try again.");
+        : result.message || "Mic Test couldn't be completed. Try again.";
+      if (result.snapshot.revision <= 0 || result.snapshot.lifecycle === "unavailable") {
+        await refreshSnapshot(message);
+      } else {
+        applyRefreshResult(await applicationController.refreshFromApplication(
+          result.snapshot, result.intent,
+        ), message);
+        if (applicationController.read().applicationRevision === result.snapshot.revision) {
+          setNotice(message);
+        }
+      }
     } catch {
       setNotice("Mic Test couldn't be completed. Check your microphone and try again.");
     } finally {
@@ -558,7 +574,6 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     let unlistenOverlayReady: (() => void) | null = null;
     let unlistenQuickAccessCaptions: (() => void) | null = null;
     discardLegacyOverlayCaption();
-    const stopVoiceBuildRuntimeSync = startVoiceBuildRuntimeSync((message) => refreshSnapshot(message));
     // Cold worker/model imports may take tens of seconds. Render the
     // authoritative saved-setup + application snapshot before starting them;
     // a native event/result reconciles readiness after the worker completes.
@@ -566,23 +581,22 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     const boot = async () => {
       let initialSnapshot: ApplicationSnapshot | null = null;
       try {
-        const loadedSettings = await runtimeApi.loadSettings();
-        if (!loadedSettings) {
-          setKnownNotice("TranslateIT can't reach the desktop runtime yet. Try again when it is available.", "unverified");
-          return;
+        initialSnapshot = await applicationRuntimeApi.getSnapshot();
+        if (initialSnapshot.revision <= 0 || initialSnapshot.lifecycle === "unavailable") {
+          throw new Error("Initial application state was unavailable.");
         }
         if (disposed) return;
-        applicationController.applySettings(loadedSettings);
-        applicationState = applicationController.read();
-        if (loadedSettings.meeting_setup_state !== "new") {
-          initialSnapshot = await applicationRuntimeApi.getSnapshot();
-          if (initialSnapshot.revision <= 0 || initialSnapshot.lifecycle === "unavailable") {
-            throw new Error("Initial application state was unavailable.");
+        // Settings already belong to this authoritative snapshot. The first
+        // setup page keeps its own explicit readiness/reconfirmation checks.
+        if (initialSnapshot.settings.meeting_setup_state === "new") {
+          if (applicationController.read().applicationRevision < initialSnapshot.revision) {
+            applicationController.applySettings(initialSnapshot.settings);
+            applicationState = applicationController.read();
           }
-          if (disposed) return;
+        } else {
           applyRefreshResult(
             await applicationController.refreshFromApplication(
-              initialSnapshot, "initial_shell", loadedSettings,
+              initialSnapshot, "initial_shell",
             ),
           );
         }
@@ -605,7 +619,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
             const outcome = await applicationRuntimeApi.dispatchIntent("ensure_runtime_ready");
             if (disposed) return;
             if (outcome.snapshot.revision > 0 && outcome.snapshot.lifecycle !== "unavailable") {
-              await refreshFromApplicationEvent(outcome.snapshot, "startup_worker_result");
+              await refreshFromApplicationEvent(outcome.snapshot, outcome.intent);
             }
             if (disposed) return;
             if (!outcome.ok) {
@@ -637,7 +651,11 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     const installApplicationRuntimeSync = async () => {
       try {
         const stop = await applicationRuntimeApi.subscribe((event) => {
-          if (disposed || event.snapshot.revision <= 0) return;
+          if (disposed) return;
+          if (event.snapshot.revision <= 0 || event.snapshot.lifecycle === "unavailable") {
+            setKnownNotice("TranslateIT couldn't confirm its latest runtime status. Check Meeting or Help.", "unverified");
+            return;
+          }
           void refreshFromApplicationEvent(event.snapshot, event.reason);
         });
         if (disposed) {
@@ -669,7 +687,6 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
       unlistenApplicationRuntime?.();
       unlistenOverlayReady?.();
       unlistenQuickAccessCaptions?.();
-      stopVoiceBuildRuntimeSync();
     };
   });
 

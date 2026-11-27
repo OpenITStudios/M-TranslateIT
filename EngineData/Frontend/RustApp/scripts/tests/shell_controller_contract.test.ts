@@ -48,14 +48,17 @@ test("returning startup renders the native shell before cold worker initializati
   assert.ok(onMountStart >= 0 && bootStart > onMountStart && bootEnd > bootStart);
   const boot = app.slice(bootStart, bootEnd);
   assert.match(boot, /await applicationRuntimeApi\.getSnapshot\(\)/);
-  assert.match(boot, /applicationController\.refreshFromApplication\(\s*initialSnapshot,\s*"initial_shell",\s*loadedSettings/);
+  assert.match(boot, /applicationController\.refreshFromApplication\(\s*initialSnapshot,\s*"initial_shell",/);
+  assert.equal((boot.match(/applicationRuntimeApi\.getSnapshot\(\)/g) ?? []).length, 1);
+  assert.doesNotMatch(boot, /runtimeApi\.loadSettings\(/);
+  assert.match(boot, /applicationController\.applySettings\(initialSnapshot\.settings\)/);
   assert.doesNotMatch(boot, /await refreshSnapshot\(/);
   const shellReady = boot.indexOf("booting = false;");
   assert.ok(shellReady >= 0 && shellReady < boot.indexOf('dispatchIntent("ensure_runtime_ready")'));
   assert.match(boot, /initialSnapshot\?\.helper\.state === "not_started"/);
   assert.match(boot, /applicationController\.read\(\)\.snapshot\?\.helper\?\.state === "not_started"/);
   assert.match(boot, /if \(outcome\.snapshot\.revision > 0 && outcome\.snapshot\.lifecycle !== "unavailable"\)/);
-  assert.match(boot, /refreshFromApplicationEvent\(outcome\.snapshot, "startup_worker_result"\)/);
+  assert.match(boot, /refreshFromApplicationEvent\(outcome\.snapshot, outcome\.intent\)/);
   assert.match(boot, /if \(!outcome\.ok\) \{\s*setKnownNotice\(outcome\.message, "attention"\)/);
   assert.doesNotMatch(boot, /setInterval|setTimeout|retry_blocked_worker/);
 });
@@ -74,4 +77,16 @@ test("runtime product facade remains a thin compatibility surface", () => {
   assert.match(facade, /from "\.\/productSetupFacade"/);
   assert.doesNotMatch(facade, /async function probeProductAudioDevice/);
   assert.doesNotMatch(facade, /async function runProductTranslationAlternative/);
+});
+
+test("native Meeting and Mic Test receipts reuse the exact application sequence", () => {
+  const meeting = app.slice(app.indexOf("async function handleMeetingAction("), app.indexOf("async function runSetupAction("));
+  const mic = app.slice(app.indexOf("async function toggleMicTest("), app.indexOf("async function pollMeeting("));
+  assert.match(facade, /snapshot: result\.snapshot,\s*reason: result\.intent/);
+  assert.match(meeting, /result\.snapshot\.revision <= 0 \|\| result\.snapshot\.lifecycle === "unavailable"/);
+  assert.match(meeting, /refreshFromApplication\(\s*result\.snapshot, result\.reason/);
+  assert.match(meeting, /current\.applicationRevision !== result\.snapshot\.revision/);
+  assert.doesNotMatch(meeting, /applyMeetingStatus\(result\.status|void refreshMeetingLibrary\(/);
+  assert.match(mic, /refreshFromApplication\(\s*result\.snapshot, result\.intent/);
+  assert.match(mic, /result\.snapshot\.revision <= 0 \|\| result\.snapshot\.lifecycle === "unavailable"/);
 });
