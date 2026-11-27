@@ -87,3 +87,18 @@ test("each support export creates a fresh non-overwriting file and checks full w
   assert.match(support, /fn two_support_exports_never_clobber_the_first_file/);
   assert.doesNotMatch(support, /fs::write\(&path, body\)/);
 });
+
+test("support export shares Meeting, helper and incident observations through current owners", () => {
+  const read = support.slice(support.indexOf("without_runtime_incident_recording(|| {"));
+  for (const fn of ["get_meeting_session_status", "get_helper_bridge_status", "get_recent_runtime_incidents"]) {
+    assert.equal(read.split(fn + "()").length - 1, 1, fn);
+  }
+  assert.match(read, /runtime_watchdog_for_observation\(&meeting, &helper\)/);
+  assert.match(read, /device_loss_guard_for_meeting\(&meeting\)/);
+  assert.match(read, /long_session_health_for_observation\(&meeting, &incidents\)/);
+  assert.doesNotMatch(read, /get_runtime_watchdog_status\(|get_device_loss_guard_status\(|get_long_session_health_status\(/);
+  const watchdog = readFileSync(new URL("../../src-tauri/src/commands/runtime_watchdog.rs", import.meta.url), "utf8");
+  const health = readFileSync(new URL("../../src-tauri/src/commands/long_session_health.rs", import.meta.url), "utf8");
+  assert.match(watchdog, /runtime_watchdog_for_observation\(meeting, &helper\)/);
+  assert.match(health, /long_session_health_for_observation\(&meeting, &incident_history\)/);
+});

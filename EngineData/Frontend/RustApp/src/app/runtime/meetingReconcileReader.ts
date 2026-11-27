@@ -1,15 +1,15 @@
-import { runtimeApi, type MeetingCommittedTurnsSnapshot, type MeetingSessionStatus } from "../bridge/runtimeApi";
+import { runtimeApi, type MeetingLiveTurnsSnapshot, type MeetingSessionStatus } from "../bridge/runtimeApi";
 import { meetingBridgeUnavailable } from "../bridge/runtimeProductFacade";
 import { APPLICATION_MEETING_OWNER_ID } from "../shared/types";
 
 export type MeetingReconcileResult = {
   status: MeetingSessionStatus;
-  turns: MeetingCommittedTurnsSnapshot | null;
+  turns: MeetingLiveTurnsSnapshot | null;
   unavailable: boolean;
 };
 
 export async function readMeetingReconciliation(
-  currentTurns: MeetingCommittedTurnsSnapshot | null,
+  currentTurns: MeetingLiveTurnsSnapshot | null,
 ): Promise<MeetingReconcileResult | null> {
   try {
     // The existing live read carries status and either a fresh snapshot or

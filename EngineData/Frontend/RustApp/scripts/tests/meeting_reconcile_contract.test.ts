@@ -50,5 +50,20 @@ test("event and fallback share the authoritative revision read without timestamp
   assert.doesNotMatch(reader + controller, /forceTurns|transcriptStatusKey/);
   assert.doesNotMatch(reader, /updated_unix_ms|utterance_sequence/);
   const bridge = readFileSync(new URL("../../src/app/bridge/runtimeApi.ts", import.meta.url), "utf8");
-  assert.match(bridge, /knownRevision === undefined \? undefined : \{ reconcile: \{ known_revision: knownRevision \} \}/);
+  assert.match(bridge, /\{ reconcile: knownRevision === undefined \? null : \{ known_revision: knownRevision \} \}/);
+});
+
+test("saved transcript DTO stays flat and live-only metadata belongs to its read", () => {
+  const bridge = readFileSync(new URL("../../src/app/bridge/runtimeApi.ts", import.meta.url), "utf8");
+  const backend = readFileSync(new URL("../../src-tauri/src/commands/meeting_session.rs", import.meta.url), "utf8");
+  const saved = bridge.match(/export type MeetingCommittedTurnsSnapshot\s*=\s*\{([^{}]*)\};/)?.[1];
+  assert.ok(saved);
+  assert.doesNotMatch(saved, /live_revision|unchanged|status:/);
+  assert.match(bridge, /MeetingLiveTurnsSnapshot = MeetingCommittedTurnsSnapshot & \{\s*live_revision: string \| null;/);
+  assert.match(bridge, /MeetingLiveTurnsRead = MeetingLiveTurnsSnapshot & \{\s*unchanged: boolean;\s*status\?: MeetingSessionStatus;/);
+  assert.match(backend, /#\[serde\(flatten\)\]\s*pub snapshot: MeetingCommittedTurnsSnapshot,/);
+  assert.match(backend, /pub live_revision: Option<String>,\s*pub unchanged: bool,\s*#\[serde\(skip_serializing_if = "Option::is_none"\)\]\s*pub status: Option<MeetingSessionStatus>,/);
+  assert.match(backend, /get_meeting_committed_turns\(reconcile: Option<MeetingLiveReadRequest>\)/);
+  assert.match(backend, /struct MeetingLiveReadRequest \{\s*known_revision: Option<String>,/);
+  assert.match(bridge, /live_revision: null,\s*unchanged: false,/);
 });

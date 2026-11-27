@@ -1,12 +1,12 @@
 import type {
-  MeetingCommittedTurnsSnapshot,
+  MeetingLiveTurnsSnapshot,
   MeetingSessionStatus,
 } from "../bridge/runtimeApi";
 import { readMeetingReconciliation } from "./meetingReconcileReader";
 import { clearLatestMeetingOverlay, publishLatestMeetingOverlay } from "./translationOverlayRuntime";
 
 export type MeetingLiveViewState = {
-  turns: MeetingCommittedTurnsSnapshot | null;
+  turns: MeetingLiveTurnsSnapshot | null;
   overlayRevision: string;
   inFlight: boolean;
   revision: number;

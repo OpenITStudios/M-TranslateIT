@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::helper_bridge::get_helper_bridge_status;
 use super::helper_bridge_runtime::{
-    WORKER_INFERENCE_RESPONSE_DEADLINE_MS, WORKER_SYNTHESIS_RESPONSE_DEADLINE_MS,
+    HelperBridgeStatus, WORKER_INFERENCE_RESPONSE_DEADLINE_MS, WORKER_SYNTHESIS_RESPONSE_DEADLINE_MS,
 };
 use super::incident_log::record_runtime_incident;
 use super::meeting_session::{get_meeting_session_status, MeetingSessionStatus};
@@ -201,6 +201,13 @@ pub fn get_runtime_watchdog_status() -> RuntimeWatchdogStatus {
 
 pub(super) fn runtime_watchdog_for_meeting(meeting: &MeetingSessionStatus) -> RuntimeWatchdogStatus {
     let helper = get_helper_bridge_status();
+    runtime_watchdog_for_observation(meeting, &helper)
+}
+
+pub(super) fn runtime_watchdog_for_observation(
+    meeting: &MeetingSessionStatus,
+    helper: &HelperBridgeStatus,
+) -> RuntimeWatchdogStatus {
     let status = evaluate_meeting_watchdog(
         meeting,
         helper.active_task.as_deref(),

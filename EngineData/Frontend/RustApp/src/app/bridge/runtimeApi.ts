@@ -275,8 +275,6 @@ export type SavedMeetingHtmlPreview = {
   message: string;
 };
 export type MeetingCommittedTurnsSnapshot = {
-  // Live reads only; saved and legacy snapshots need no revision.
-  live_revision?: string | null;
   ok: boolean;
   has_session: boolean;
   session_id: string | null;
@@ -289,7 +287,13 @@ export type MeetingCommittedTurnsSnapshot = {
   runtime_claim: string;
 };
 
-export type MeetingLiveTurnsRead = MeetingCommittedTurnsSnapshot & {
+// Keep saved/export DTOs identical to their Rust counterpart. The live-only
+// revision belongs to the conditional read and its retained frontend view.
+export type MeetingLiveTurnsSnapshot = MeetingCommittedTurnsSnapshot & {
+  live_revision: string | null;
+};
+
+export type MeetingLiveTurnsRead = MeetingLiveTurnsSnapshot & {
   unchanged: boolean;
   status?: MeetingSessionStatus;
 };
@@ -546,9 +550,10 @@ export const runtimeApi = {
     const message = "Meeting transcript is temporarily unavailable because the frontend bridge could not call Tauri.";
     return invokeOr<MeetingLiveTurnsRead>(
       "get_meeting_committed_turns",
-      knownRevision === undefined ? undefined : { reconcile: { known_revision: knownRevision } },
+      { reconcile: knownRevision === undefined ? null : { known_revision: knownRevision } },
       {
         ...meetingCommittedTurnsFallback(message),
+        live_revision: null,
         unchanged: false,
         status: meetingSessionStatusFallback(message),
       },

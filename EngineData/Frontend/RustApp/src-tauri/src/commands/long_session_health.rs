@@ -6,9 +6,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::engine::paths::ProjectPaths;
 use crate::engine::runtime_state::APPLICATION_MEETING_OWNER_ID;
 
-use super::incident_log::{get_recent_runtime_incidents, record_runtime_incident};
+use super::incident_log::{get_recent_runtime_incidents, record_runtime_incident, RuntimeIncidentSnapshot};
 use super::meeting_session::{
     committed_turn_health_counts, deferred_incoming_health_counts, get_meeting_session_status,
+    MeetingSessionStatus,
 };
 
 const TEMP_FILE_WARNING_THRESHOLD: usize = 12;
@@ -69,12 +70,19 @@ fn meeting_temp_file_count(paths: &ProjectPaths) -> usize {
 #[tauri::command]
 pub fn get_long_session_health_status() -> LongSessionHealthStatus {
     let meeting = get_meeting_session_status();
+    let incident_history = get_recent_runtime_incidents();
+    long_session_health_for_observation(&meeting, &incident_history)
+}
+
+pub(super) fn long_session_health_for_observation(
+    meeting: &MeetingSessionStatus,
+    incident_history: &RuntimeIncidentSnapshot,
+) -> LongSessionHealthStatus {
     let (_turn_count, transcript_dropped, transcript_truncated) =
         committed_turn_health_counts();
     let (deferred_depth, deferred_overflow, deferred_stale) =
         deferred_incoming_health_counts();
     let temp_count = meeting_temp_file_count(&ProjectPaths::discover());
-    let incident_history = get_recent_runtime_incidents();
     let incident_count = observed_incident_count(incident_history.coverage, incident_history.count);
 
     let meeting_owned =
