@@ -1,12 +1,13 @@
 # Native CUDA candidate — source only
 
 This is the staged Rust ↔ llama.cpp/mtmd ABI, not a second production engine.
-It is deliberately outside the Tauri Cargo graph. The only current production
-worker remains unchanged until the coordinated cutover. My Voice is excluded.
+The Windows Tauri Cargo graph now includes this Rust crate. The native
+DLL is opened explicitly, not at app startup. Production ASR/MT dispatch
+remains unchanged until coordinated cutover. My Voice is excluded.
 
 - Exact upstream: [llama.cpp 6d8a888](https://github.com/ggml-org/llama.cpp/tree/6d8a8886fa44a4a404c58ace93052ea680193981), MIT; use the upstream LICENSE in any eventual distribution.
 - Apply only the reviewed adjacent `llama-strict-cuda.patch` in a dedicated checkout at that SHA. The candidate CMake file checks SHA and reverse-patch applicability; it does not prove there are no unrelated changes. No fetch, install, patch application or build is performed by this source increment.
-- The candidate is one Windows x64 MSVC DLL linked to the exact static llama/mtmd/GGML closure, CUDA SM 86, no alternate acceleration backend selection or runtime download. Only the narrow C ABI is consumed by Rust. The dependency-free candidate Cargo graph does not modify the Tauri lock.
+- The candidate is one Windows x64 MSVC DLL linked to the exact static llama/mtmd/GGML closure, CUDA SM 86, no alternate acceleration backend selection or runtime download. Only the narrow C ABI is consumed by Rust. The Rust crate has no third-party dependencies; the Tauri lock includes this local path crate.
 - Both the decoder and audio projector receive the exact same explicitly selected CUDA PCI device. `n_gpu_layers=-1`, no host buffer preference, KQV offload and strict graph guard are requested; actual model/KV residency, direct non-scheduler ops, WDDM spill and graph rejection require real evidence. CPU preprocessing and token selection remain ordinary host work.
 - ASR uses the official [forced-language prefill](https://github.com/QwenLM/Qwen3-ASR/blob/7c6daf77a2421100f5fb066495372c00129d39ff/qwen_asr/inference/qwen3_asr.py), only current finalized PCM, no history, no external VAD, no additional audio-file conversion. Bound 300 ms..60 s, 2048 positions, batch 256, 512 generated tokens. Cap/error/empty output returns no transcript; only the reported length after EOG authorizes consumption of the caller's scratch bytes. Context and batch are reused; utterance memory resets each time. A native inference error poisons the candidate handle; the caller must dispose it, not retry in another engine.
 - Hy-MT2 1.8B translation uses the same decoder owner and DLL for both directions. Its fixed user-only prompt and stop marker follow Tencent's [published prompt](https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/blob/a0c709d9fac510f2c807aa3af52872340dc37a4a/README.md) and [single-turn template](https://huggingface.co/tencent/Hy-MT2-1.8B/blob/ef3ba04e0b2a9c49221ca008eea876ad19f84aec/chat_template.jinja). Validate exact BOS/User/Assistant/EOS token IDs and actual EOG at load against Tencent's [generation config](https://huggingface.co/tencent/Hy-MT2-1.8B/blob/ef3ba04e0b2a9c49221ca008eea876ad19f84aec/generation_config.json); reject unsupported directions, role markers, over-limit input, incomplete/capped/empty or malformed output and exact instruction-envelope echo. Greedy decoding and adaptive 64–256-token budget deliberately preserve the prior Meeting policy rather than Tencent's sampling/4096-token recommendation; quality/latency parity is a held acceptance gate, not established. One resident model for ID↔EN, separate context from ASR, reset memory per request; caller scratch reused without output serialization. Rust ABI v4 requires matching DLL.
@@ -36,17 +37,29 @@ worker remains unchanged until the coordinated cutover. My Voice is excluded.
   authority, signals `cancel_active` only for its matching request, and
   retains the owner if nonblocking `try_close` reports incomplete cleanup
   or a failed join. Owner Drop joins as a safety backstop, not a UI Stop
-  operation. Model open is synchronous and not interruptible. No production
-  caller, model download, dependency or Tauri Cargo graph change yet.
+  operation. Model open is synchronous and not interruptible. The existing
+  HelperBridgeRuntime now has the resident native owner slot; Stop/restart/
+  shutdown share bounded cleanup and preserve Meeting ownership between
+  requests. No production native dispatch or model download yet.
+
+- The import-library build script is retired. Explicit open uses the
+  absolute controlled `translateit_native_cuda.dll` path, restricts the
+  dependency search to its directory and System32, checks the actual
+  module path and complete ABI symbol table, and pins one library identity
+  for the process. Models still close per owner lifecycle.
+  [Windows loader flags](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-loadlibraryexw).
+  The unsafe open boundary requires authentication of the exact DLL and
+  dependency closure and a controlled parent directory before loading.
+  Path/ABI checks are not authentication; package admission is pending.
 
 ## Held local integration
 
 Only the separately authorized integrated PC phase may configure/build or execute.
 Use an already prepared, reviewed patched checkout and existing local CUDA
 toolchain. Configure CMake with an absolute `LLAMA_SOURCE_DIR`; build
-`translateit_native_cuda` in Release; set `TRANSLATEIT_NATIVE_LIB_DIR` to its
-absolute DLL/import library directory for the candidate Rust crate. The DLL
-must be in the controlled local loader directory, not an arbitrary PATH entry.
+`translateit_native_cuda` in Release. The held fixture uses
+`TRANSLATEIT_TEST_NATIVE_DLL` for the absolute trusted DLL path; no import
+library or PATH entry is required.
 The held ignored Rust lifecycle fixture requires explicit ASR/projector/MT GGUF
 paths and CUDA PCI ID from the target; missing input is not PASS. It covers wrong
 asset admission, exclusive ownership, pre-cancellation, expired deadline,

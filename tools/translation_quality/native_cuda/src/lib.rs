@@ -1,8 +1,10 @@
-//! Source-only candidate, not linked into the production application.
+//! Native CUDA binding; execution is admitted by the host.
+#![cfg(windows)]
 //! No third-party Rust dependencies or by-value llama.cpp ABI structs.
 use std::{ffi::{c_char, c_void, CString}, marker::PhantomData, path::Path,
           ptr::NonNull, rc::Rc, sync::atomic::{AtomicBool, Ordering}, time::Instant};
 
+mod loader;
 mod owner;
 pub use owner::{InferenceInput, PendingInference, RuntimeOwner};
 
@@ -16,21 +18,6 @@ const MAX_OUTPUT_BYTES: usize = 16_000;
 const MIN_SAMPLES: usize = 4_800;
 const MAX_SAMPLES: usize = 960_000;
 
-extern "C" {
-    fn ti_cuda_abi_version() -> u32;
-    fn ti_runtime_open(asr_path: *const c_char, projector_path: *const c_char,
-                       mt_path: *const c_char, device_id: *const c_char,
-                       out: *mut *mut c_void) -> i32;
-    fn ti_runtime_close(runtime: *mut c_void);
-    fn ti_runtime_transcribe(runtime: *mut c_void, pcm: *const f32, count: usize,
-                             language: u32, stop: StopCheck, stop_data: *const c_void,
-                             output: *mut c_char, output_cap: usize,
-                             out_len: *mut usize) -> i32;
-    fn ti_runtime_translate(runtime: *mut c_void, source: *const c_char, source_len: usize,
-                            source_language: u32, target_language: u32,
-                            stop: StopCheck, stop_data: *const c_void,
-                            output: *mut c_char, output_cap: usize, out_len: *mut usize) -> i32;
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Language { Indonesian = 1, English = 2 }
@@ -38,6 +25,9 @@ pub enum Language { Indonesian = 1, English = 2 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     AbiMismatch,
+    LibraryUnavailable,
+    LibraryIdentityMismatch,
+    LibrarySymbolMissing,
     InvalidInput,
     Native(i32),
     InvalidReceipt,
@@ -73,6 +63,7 @@ unsafe extern "C" fn stop_check(data: *const c_void) -> i32 {
 
 pub struct Runtime {
     handle: NonNull<c_void>,
+    api: loader::Api,
     // A single caller thread owns the mutable native context; do not
     // implicitly make this handle Send/Sync or add a second scheduler.
     _thread_bound: PhantomData<Rc<()>>,
@@ -87,8 +78,13 @@ fn native_path(path: &Path) -> Result<CString, Error> {
 impl Runtime {
     /// One resident pair. The native owner validates all pinned artifacts
     /// and checks free VRAM before publication. No partial model opens.
-    pub fn open(asr: &Path, projector: &Path, mt: &Path, pci_id: &str) -> Result<Self, Error> {
-        if unsafe { ti_cuda_abi_version() } != ABI { return Err(Error::AbiMismatch); }
+    ///
+    /// # Safety
+    /// The caller must authenticate the exact DLL and its dependency closure
+    /// in a controlled directory. Path and ABI checks are not authentication.
+    pub unsafe fn open(dll: &Path, asr: &Path, projector: &Path, mt: &Path, pci_id: &str)
+        -> Result<Self, Error> {
+        let api = unsafe { loader::load(dll)? };
         let asr = native_path(asr)?;
         let projector = native_path(projector)?;
         let mt = native_path(mt)?;
@@ -96,7 +92,7 @@ impl Runtime {
         let device = CString::new(pci_id).map_err(|_| Error::InvalidInput)?;
         let mut raw = std::ptr::null_mut();
         let status = unsafe {
-            ti_runtime_open(asr.as_ptr(), projector.as_ptr(), mt.as_ptr(), device.as_ptr(), &mut raw)
+            (api.open)(asr.as_ptr(), projector.as_ptr(), mt.as_ptr(), device.as_ptr(), &mut raw)
         };
         if status != 0 {
             // Native contract requires null on error; do not dereference an
@@ -104,7 +100,7 @@ impl Runtime {
             return Err(if raw.is_null() { Error::Native(status) } else { Error::InvalidReceipt });
         }
         let handle = NonNull::new(raw).ok_or(Error::InvalidReceipt)?;
-        Ok(Self { handle, _thread_bound: PhantomData })
+        Ok(Self { handle, api, _thread_bound: PhantomData })
     }
 
     /// 16 kHz mono finalized PCM. The caller owns the bounded reusable output
@@ -117,7 +113,7 @@ impl Runtime {
         }
         let mut len = 0;
         let status = unsafe {
-            ti_runtime_transcribe(self.handle.as_ptr(), pcm.as_ptr(), pcm.len(),
+            (self.api.transcribe)(self.handle.as_ptr(), pcm.as_ptr(), pcm.len(),
                 language as u32, stop_check, control.data(), output.as_mut_ptr().cast(), output.len(), &mut len)
         };
         let text = checked_output(status, len, output, usize::MAX)?;
@@ -136,7 +132,7 @@ impl Runtime {
         }
         let mut len = 0;
         let status = unsafe {
-            ti_runtime_translate(self.handle.as_ptr(), source.as_ptr().cast(), source.len(),
+            (self.api.translate)(self.handle.as_ptr(), source.as_ptr().cast(), source.len(),
                 from as u32, to as u32, stop_check, control.data(),
                 output.as_mut_ptr().cast(), output.len(), &mut len)
         };
@@ -147,7 +143,7 @@ impl Runtime {
 }
 
 impl Drop for Runtime {
-    fn drop(&mut self) { unsafe { ti_runtime_close(self.handle.as_ptr()); } }
+    fn drop(&mut self) { unsafe { (self.api.close)(self.handle.as_ptr()); } }
 }
 
 fn check_control(control: &RequestControl<'_>) -> Result<(), Error> {
@@ -189,14 +185,15 @@ mod tests {
     #[ignore = "requires authorized target Windows GPU and exact pinned assets"]
     fn resident_pair_rejects_wrong_assets_and_duplicate_open_then_releases_lease() {
         let required = |key| std::env::var(key).expect("missing target acceptance input");
+        let dll = std::path::PathBuf::from(required("TRANSLATEIT_TEST_NATIVE_DLL"));
         let asr = std::path::PathBuf::from(required("TRANSLATEIT_TEST_ASR_GGUF"));
         let projector = std::path::PathBuf::from(required("TRANSLATEIT_TEST_PROJECTOR_GGUF"));
         let mt = std::path::PathBuf::from(required("TRANSLATEIT_TEST_MT_GGUF"));
         let pci = required("TRANSLATEIT_TEST_CUDA_PCI");
         // Swap actual pinned files: the wrong projector must fail the exact
         // identity check before either model loads, and release the lease.
-        assert!(matches!(Runtime::open(&asr, &asr, &mt, &pci), Err(Error::Native(13))));
-        let mut pair = Runtime::open(&asr, &projector, &mt, &pci).expect("candidate resident pair");
+        assert!(matches!(unsafe { Runtime::open(&dll, &asr, &asr, &mt, &pci) }, Err(Error::Native(13))));
+        let mut pair = unsafe { Runtime::open(&dll, &asr, &projector, &mt, &pci) }.expect("candidate resident pair");
         let cancelled = AtomicBool::new(true);
         let mut output = vec![0; MAX_OUTPUT_BYTES];
         let pcm = vec![0.0; MIN_SAMPLES];
@@ -219,7 +216,7 @@ mod tests {
         let calls = std::sync::atomic::AtomicUsize::new(0);
         let mut len = 99;
         let status = unsafe {
-            ti_runtime_translate(pair.handle.as_ptr(), b"Halo".as_ptr().cast(), 4,
+            (pair.api.translate)(pair.handle.as_ptr(), b"Halo".as_ptr().cast(), 4,
                 Language::Indonesian as u32, Language::English as u32,
                 stop_during, (&calls as *const std::sync::atomic::AtomicUsize).cast(),
                 output.as_mut_ptr().cast(), output.len(), &mut len)
@@ -230,9 +227,9 @@ mod tests {
             deadline: Instant::now() + std::time::Duration::from_secs(30) };
         assert!(!pair.translate("Halo", Language::Indonesian, Language::English,
                                &active, &mut output).expect("reuse after cooperative stop").is_empty());
-        assert!(matches!(Runtime::open(&asr, &projector, &mt, &pci), Err(Error::Native(15))));
+        assert!(matches!(unsafe { Runtime::open(&dll, &asr, &projector, &mt, &pci) }, Err(Error::Native(15))));
         drop(pair);
-        let mut reopened = RuntimeOwner::open(&asr, &projector, &mt, &pci).expect("open on owner thread");
+        let mut reopened = unsafe { RuntimeOwner::open(&dll, &asr, &projector, &mt, &pci) }.expect("open on owner thread");
         let pending = reopened.begin(InferenceInput::Translation {
             source: "Halo".into(), from: Language::Indonesian, to: Language::English,
         }, Instant::now() + std::time::Duration::from_secs(30)).expect("admitted native request");
@@ -240,7 +237,7 @@ mod tests {
         // Drop joins the idle owner. Production Stop instead retains any
         // incomplete try_close result and does not block the UI.
         drop(reopened);
-        let reopened = Runtime::open(&asr, &projector, &mt, &pci).expect("lease released after owner close");
+        let reopened = unsafe { Runtime::open(&dll, &asr, &projector, &mt, &pci) }.expect("lease released after owner close");
         drop(reopened);
     }
 

@@ -79,15 +79,19 @@ impl RuntimeOwner {
     /// Model load and its rollback occur entirely on the owner thread.
     /// Open is synchronous; the host must retain its startup ownership until
     /// it returns. It is not a cancellable GPU-load or UI-thread operation.
-    pub fn open(asr: &Path, projector: &Path, mt: &Path, pci_id: &str) -> Result<Self, Error> {
-        let (asr, projector, mt, pci_id) =
-            (asr.to_owned(), projector.to_owned(), mt.to_owned(), pci_id.to_owned());
+    ///
+    /// # Safety
+    /// The caller must authenticate the DLL and dependency closure before opening.
+    pub unsafe fn open(dll: &Path, asr: &Path, projector: &Path, mt: &Path, pci_id: &str)
+        -> Result<Self, Error> {
+        let (dll, asr, projector, mt, pci_id) =
+            (dll.to_owned(), asr.to_owned(), projector.to_owned(), mt.to_owned(), pci_id.to_owned());
         // A one-slot handoff, guarded by the one in-flight request below.
         // No queued second job, no priority policy, no polling or extra timer.
         let (sender, requests) = mpsc::sync_channel::<Request>(1);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let thread = thread::Builder::new().name("translateit-inference".into()).spawn(move || {
-            let mut runtime = match Runtime::open(&asr, &projector, &mt, &pci_id) {
+            let mut runtime = match unsafe { Runtime::open(&dll, &asr, &projector, &mt, &pci_id) } {
                 Ok(runtime) => runtime,
                 Err(error) => { let _ = ready_tx.send(Err(error)); return; }
             };

@@ -85,7 +85,17 @@ pub struct HelperBridgeActionResult {
     pub runtime_claim: String,
 }
 
+// The resident native pair belongs to the existing helper lifecycle.
+// Its session identity persists between inference requests.
+#[cfg(windows)]
+pub(super) struct NativeInferenceOwner {
+    pub(super) session_id: Option<String>,
+    pub(super) owner: translateit_native_cuda::RuntimeOwner,
+}
+
 pub struct HelperBridgeRuntime {
+    #[cfg(windows)]
+    pub(super) native_inference: Option<NativeInferenceOwner>,
     pub state: String,
     pub message: String,
     pub cuda_ready: bool,
@@ -123,6 +133,8 @@ pub struct HelperBridgeRuntime {
 impl Default for HelperBridgeRuntime {
     fn default() -> Self {
         Self {
+            #[cfg(windows)]
+            native_inference: None,
             state: "not_started".to_string(),
             message: "Helper bridge contract exists; runtime process bridge is not started yet."
                 .to_string(),
@@ -147,6 +159,38 @@ impl Default for HelperBridgeRuntime {
             stdin: None,
             stdout: None,
         }
+    }
+}
+
+impl HelperBridgeRuntime {
+    pub(super) fn native_meeting_session_id(&self) -> Option<&str> {
+        #[cfg(windows)]
+        {
+            self.native_inference.as_ref().and_then(|native| native.session_id.as_deref())
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    }
+
+    pub(super) fn has_meeting_resources(&self) -> bool {
+        self.pending_meeting_cleanup_session_id.is_some()
+            || self.active_meeting_session_id.is_some()
+            || self.native_meeting_session_id().is_some()
+    }
+
+    fn try_close_native_inference(&mut self) -> bool {
+        #[cfg(windows)]
+        {
+            if let Some(native) = self.native_inference.as_mut() {
+                if native.owner.try_close() != Ok(true) {
+                    return false;
+                }
+                self.native_inference = None;
+            }
+        }
+        true
     }
 }
 
@@ -667,7 +711,8 @@ fn stop_child_with_budget(runtime: &mut HelperBridgeRuntime, budget: Duration) -
     // clears active-request metadata. It is NOT authorization to touch a
     // different Meeting session; a later retry must match this exact ID.
     if runtime.pending_meeting_cleanup_session_id.is_none() {
-        runtime.pending_meeting_cleanup_session_id = runtime.active_meeting_session_id.clone();
+        runtime.pending_meeting_cleanup_session_id = runtime.active_meeting_session_id.clone()
+            .or_else(|| runtime.native_meeting_session_id().map(str::to_owned));
     }
     // Drop our available request pipes before terminating the worker. The
     // writer/reader may still own moved pipes while their JoinHandles remain
@@ -678,6 +723,7 @@ fn stop_child_with_budget(runtime: &mut HelperBridgeRuntime, budget: Duration) -
     let mut kill_attempted = false;
 
     loop {
+        let native_released = runtime.try_close_native_inference();
         let mut reaped = false;
         if let Some(child) = runtime.child.as_mut() {
             match child.try_wait() {
@@ -724,6 +770,7 @@ fn stop_child_with_budget(runtime: &mut HelperBridgeRuntime, budget: Duration) -
             if runtime.stdin_writer.is_none()
                 && runtime.stdout_reader.is_none()
                 && runtime.stderr_logger.is_none()
+                && native_released
             {
                 // Process and I/O thread release is only one part of Meeting
                 // Stop. Do NOT clear pending_meeting_cleanup_session_id here:
@@ -742,7 +789,7 @@ fn stop_child_with_budget(runtime: &mut HelperBridgeRuntime, budget: Duration) -
     }
 }
 
-/// True only when child is reaped, stdin/stdout/stderr joins verified, and
+/// True only when native models are closed, child is reaped, stdin/stdout/stderr joins verified, and
 /// no earlier I/O thread panicked.
 /// On timeout, retain every remaining OS/thread handle for an explicit retry.
 pub fn stop_child(runtime: &mut HelperBridgeRuntime) -> bool {

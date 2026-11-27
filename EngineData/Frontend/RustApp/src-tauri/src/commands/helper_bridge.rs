@@ -415,8 +415,7 @@ fn start_helper_bridge_internal(
             // Worker Start/Retry Worker cannot consume that attribution by
             // restarting the process behind Meeting Retry Stop's back.
             if clear_outbound_pipeline
-                && (runtime.pending_meeting_cleanup_session_id.is_some()
-                    || runtime.active_meeting_session_id.is_some())
+                && runtime.has_meeting_resources()
             {
                 return helper_start_denied(
                     "cleanup_incomplete",
@@ -751,8 +750,7 @@ pub fn start_helper_bridge() -> HelperBridgeActionResult {
 // lock contention. A poisoned owner is never considered clean.
 pub(crate) fn meeting_helper_orphan_cleanup_pending() -> bool {
     match runtime().try_lock() {
-        Ok(owner) => owner.pending_meeting_cleanup_session_id.is_some()
-            || owner.active_meeting_session_id.is_some(),
+        Ok(owner) => owner.has_meeting_resources(),
         Err(TryLockError::WouldBlock) => false,
         Err(TryLockError::Poisoned(_)) => true,
     }
@@ -777,8 +775,7 @@ pub(crate) fn finish_orphaned_meeting_helper_without_session() -> Result<(), &'s
         return Err("helper_orphan:runtime_owner_changed");
     }
 
-    let meeting_owned = owner.pending_meeting_cleanup_session_id.is_some()
-        || owner.active_meeting_session_id.is_some();
+    let meeting_owned = owner.has_meeting_resources();
     if !meeting_owned {
         // Ordinary helper activity or an un-attributed cleanup must not be
         // claimed or killed by Meeting's no-snapshot Stop.
@@ -829,9 +826,7 @@ pub(crate) fn shutdown_helper_bridge_for_app_exit() -> bool {
     // Even if orphan cleanup could finish here, the app-close path cannot
     // certify Meeting audio/transcript cleanup on the basis of helper process
     // exit alone. The no-snapshot Retry Stop must release its native owner.
-    if runtime.pending_meeting_cleanup_session_id.is_some()
-        || runtime.active_meeting_session_id.is_some()
-    {
+    if runtime.has_meeting_resources() {
         return false;
     }
 
@@ -881,6 +876,21 @@ pub fn cancel_helper_bridge_meeting_session(session_id: &str) -> HelperBridgeAct
     // Meeting session for an explicit Retry Stop instead.
     match runtime().try_lock() {
         Ok(mut runtime) => {
+            // Resident native work and active helper work may not authorize
+            // cleanup of a different Meeting session.
+            if (runtime.native_meeting_session_id().is_some_and(|id| id != session_id)
+                && (runtime.active_meeting_session_id.as_deref() == Some(session_id)
+                    || runtime.pending_meeting_cleanup_session_id.as_deref() == Some(session_id)))
+                || (runtime.native_meeting_session_id() == Some(session_id)
+                    && runtime.active_meeting_session_id.as_deref().is_some_and(|id| id != session_id))
+            {
+                return helper_start_denied(
+                    "cleanup_owner_unverified",
+                    "Native and active helper resources do not belong to the same Meeting session.",
+                    "helper_cancel_rejected_native_owner_mismatch",
+                    runtime.generation_token,
+                );
+            }
             let cleanup_unverified = runtime.last_error.as_deref()
                 == Some("helper_bridge:cleanup_incomplete")
                 || runtime.pending_meeting_cleanup_session_id.is_some();
@@ -921,7 +931,9 @@ pub fn cancel_helper_bridge_meeting_session(session_id: &str) -> HelperBridgeAct
                 return action_result(true, &runtime);
             }
 
-            if runtime.active_meeting_session_id.as_deref() == Some(session_id) {
+            if runtime.active_meeting_session_id.as_deref() == Some(session_id)
+                || runtime.native_meeting_session_id() == Some(session_id)
+            {
                 runtime.generation_token = runtime.generation_token.saturating_add(1);
                 invalidate_required_outbound_ai_readiness();
                 // stop_child records the exact session before any active
@@ -938,7 +950,7 @@ pub fn cancel_helper_bridge_meeting_session(session_id: &str) -> HelperBridgeAct
                 runtime.pending_meeting_cleanup_session_id = None;
                 runtime.state = "stopped".to_string();
                 runtime.message = format!(
-                    "In-flight helper inference for Meeting session {session_id} was hard-cancelled during full Meeting Stop."
+                    "Helper resources for Meeting session {session_id} were released during full Meeting Stop."
                 );
                 runtime.cuda_ready = false;
                 runtime.provider_ready = false;

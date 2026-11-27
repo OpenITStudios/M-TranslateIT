@@ -4361,7 +4361,12 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-updater",
+ "translateit-native-cuda",
 ]
+
+[[package]]
+name = "translateit-native-cuda"
+version = "0.0.0"
 
 [[package]]
 name = "transpose"

@@ -2,5 +2,5 @@
 version = 4
 
 [[package]]
-name = "translateit-native-cuda-candidate"
+name = "translateit-native-cuda"
 version = "0.0.0"

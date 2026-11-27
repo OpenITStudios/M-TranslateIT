@@ -20,6 +20,9 @@ sysinfo = "0.39.6"
 tauri = { version = "2.12.5", features = ["tray-icon"] }
 tauri-plugin-updater = "=2.14.0"
 
+[target.'cfg(windows)'.dependencies]
+translateit-native-cuda = { path = "../../../../tools/translation_quality/native_cuda" }
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
