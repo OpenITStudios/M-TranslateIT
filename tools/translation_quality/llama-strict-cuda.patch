@@ -1,0 +1,185 @@
+diff --git a/ggml/CMakeLists.txt b/ggml/CMakeLists.txt
+--- a/ggml/CMakeLists.txt
++++ b/ggml/CMakeLists.txt
+@@ -197,5 +197,7 @@
+ option(GGML_LLAMAFILE                       "ggml: use LLAMAFILE"                             ${GGML_LLAMAFILE_DEFAULT})
+ 
++# TranslateIT candidate build only. Keep the ordinary upstream build unchanged.
++option(GGML_TRANSLATEIT_STRICT_CUDA "ggml: reject non-CUDA-primary model graph execution" OFF)
+ option(GGML_CUDA                            "ggml: use CUDA"                                  OFF)
+ set   (GGML_CUDA_CCCL_VERSION "" CACHE STRING "ggml: CCCL git tag to fetch, empty to use the version bundled with the installed CUDA Toolkit")
+ option(GGML_MUSA                            "ggml: use MUSA"                                  OFF)
+diff --git a/ggml/src/CMakeLists.txt b/ggml/src/CMakeLists.txt
+--- a/ggml/src/CMakeLists.txt
++++ b/ggml/src/CMakeLists.txt
+@@ -221,5 +221,11 @@
+ endif()
+ 
++if (GGML_TRANSLATEIT_STRICT_CUDA)
++    if (NOT GGML_CUDA)
++        message(FATAL_ERROR "GGML_TRANSLATEIT_STRICT_CUDA requires GGML_CUDA")
++    endif()
++    target_compile_definitions(ggml-base PRIVATE GGML_TRANSLATEIT_STRICT_CUDA)
++endif()
+ if (GGML_SCHED_NO_REALLOC)
+     target_compile_definitions(ggml-base PUBLIC GGML_SCHED_NO_REALLOC)
+ endif()
+diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
+--- a/ggml/src/ggml-backend.cpp
++++ b/ggml/src/ggml-backend.cpp
+@@ -2281,9 +2281,49 @@
+ }
+ 
++#if defined(GGML_TRANSLATEIT_STRICT_CUDA)
++// The CPU backend is structurally required by the scheduler. Keep it for
++// host inputs and metadata, but never dispatch model arithmetic to it.
++// Validate all splits before the first input copy or graph submission so a
++// later unsupported operation cannot yield a partially executed graph.
++static bool ggml_translateit_cuda_graph_admitted(ggml_backend_sched_t sched) {
++    if (sched->n_backends <= 0 || sched->backends[0] == nullptr) {
++        return false;
++    }
++    ggml_backend_dev_t primary = ggml_backend_get_device(sched->backends[0]);
++    ggml_backend_reg_t reg = primary ? ggml_backend_dev_backend_reg(primary) : nullptr;
++    const char * name = reg ? ggml_backend_reg_name(reg) : nullptr;
++    if (!primary || ggml_backend_dev_type(primary) != GGML_BACKEND_DEVICE_TYPE_GPU ||
++        !name || strcmp(name, "CUDA") != 0) {
++        GGML_LOG_ERROR("translateit:cuda_primary_required\n");
++        return false;
++    }
++    for (int i = 0; i < sched->n_splits; ++i) {
++        const ggml_backend_sched_split & split = sched->splits[i];
++        if (split.backend_id == 0) {
++            continue;
++        }
++        for (int j = 0; j < split.graph.n_nodes; ++j) {
++            const ggml_tensor * node = split.graph.nodes[j];
++            if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) &&
++                node->op != GGML_OP_NONE && !ggml_is_view_op(node->op)) {
++                GGML_LOG_ERROR("translateit:cuda_graph_placement_rejected (%s)\n",
++                               ggml_op_name(node->op));
++                return false;
++            }
++        }
++    }
++    return true;
++}
++#endif
+ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
+     GGML_ASSERT(sched);
+     struct ggml_backend_sched_split * splits = sched->splits;
+ 
++#if defined(GGML_TRANSLATEIT_STRICT_CUDA)
++    if (!ggml_translateit_cuda_graph_admitted(sched)) {
++        return GGML_STATUS_FAILED;
++    }
++#endif
+     int prev_backend_id = -1;
+ 
+     for (int split_id = 0; split_id < sched->n_splits; split_id++) {
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -376,5 +376,8 @@
+ llama_build_and_test(test-backend-tensor.cpp LINK ggml)
+ llama_build_and_test(test-sleep.cpp LINK ggml)
++if (GGML_TRANSLATEIT_STRICT_CUDA)
++    llama_build_and_test(test-translateit-strict-cuda.cpp LABEL "behavior backend" LINK ggml)
++endif()
+ llama_build_and_test(test-backend-sched.cpp LINK ggml)
+ 
+ if (BUILD_SHARED_LIBS)
+diff --git a/tests/test-translateit-strict-cuda.cpp b/tests/test-translateit-strict-cuda.cpp
+new file mode 100644
+--- /dev/null
++++ b/tests/test-translateit-strict-cuda.cpp
+@@ -0,0 +1,89 @@
++// Dedicated strict-CUDA candidate probe; requires an actual CUDA GPU for PASS.
++#include "ggml.h"
++#include "ggml-backend.h"
++#include "ggml-cpp.h"
++
++#include <cstdio>
++#include <cstring>
++
++static ggml_backend_dev_t cuda_device() {
++    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
++        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
++        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
++        const char * name = reg ? ggml_backend_reg_name(reg) : nullptr;
++        if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU &&
++            name && std::strcmp(name, "CUDA") == 0) {
++            return dev;
++        }
++    }
++    return nullptr;
++}
++
++static bool run_graph(ggml_backend_t gpu, ggml_backend_t cpu,
++                      bool force_cpu, bool expect_success) {
++    constexpr size_t graph_size = 32;
++    ggml_context_ptr ctx(ggml_init({
++        ggml_tensor_overhead() * 8 + ggml_graph_overhead_custom(graph_size, false),
++        nullptr, true
++    }));
++    if (!ctx) {
++        return false;
++    }
++    ggml_tensor * a = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
++    ggml_tensor * b = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
++    ggml_set_input(a);
++    ggml_set_input(b);
++    ggml_tensor * out = ggml_add(ctx.get(), a, b);
++    ggml_set_output(out);
++    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), graph_size, false);
++    ggml_build_forward_expand(graph, out);
++
++    ggml_backend_t backends[] = {gpu ? gpu : cpu, cpu};
++    ggml_backend_sched_ptr sched(ggml_backend_sched_new(
++        backends, nullptr, gpu ? 2 : 1, graph_size, false, false));
++    if (!sched) {
++        return false;
++    }
++    ggml_backend_sched_set_tensor_backend(sched.get(), out, force_cpu ? cpu : gpu);
++    if (!ggml_backend_sched_alloc_graph(sched.get(), graph)) {
++        return false; // allocation failure is not a strict-placement rejection
++    }
++    const float a_data[] = {1, 2, 3, 4};
++    const float b_data[] = {2, 3, 4, 5};
++    ggml_backend_tensor_set(a, a_data, 0, sizeof(a_data));
++    ggml_backend_tensor_set(b, b_data, 0, sizeof(b_data));
++    const ggml_status status = ggml_backend_sched_graph_compute(sched.get(), graph);
++    if (!expect_success) {
++        return status == GGML_STATUS_FAILED;
++    }
++    if (status != GGML_STATUS_SUCCESS) {
++        return false;
++    }
++    float actual[4] = {};
++    ggml_backend_tensor_get(out, actual, 0, sizeof(actual));
++    return actual[0] == 3 && actual[1] == 5 && actual[2] == 7 && actual[3] == 9;
++}
++
++int main() {
++    ggml_backend_load_all();
++    ggml_backend_ptr cpu(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
++    if (!cpu || !run_graph(nullptr, cpu.get(), true, false)) {
++        std::fprintf(stderr, "CPU-primary graph was not explicitly rejected\n");
++        return 1;
++    }
++    ggml_backend_dev_t dev = cuda_device();
++    ggml_backend_ptr gpu(dev ? ggml_backend_dev_init(dev, nullptr) : nullptr);
++    if (!gpu) {
++        std::fprintf(stderr, "CUDA unavailable; positive and mixed-placement checks NOT_EXECUTED\n");
++        return 1;
++    }
++    if (!run_graph(gpu.get(), cpu.get(), true, false)) {
++        std::fprintf(stderr, "CUDA-primary graph with CPU arithmetic was not explicitly rejected\n");
++        return 1;
++    }
++    if (!run_graph(gpu.get(), cpu.get(), false, true)) {
++        std::fprintf(stderr, "CUDA-only arithmetic did not produce expected output\n");
++        return 1;
++    }
++    return 0;
++}
