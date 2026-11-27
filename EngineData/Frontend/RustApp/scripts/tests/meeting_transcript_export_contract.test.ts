@@ -205,7 +205,7 @@ test("large transcript disk operations use Tauri blocking workers, not synchrono
 
 test("zero-entry saved sessions remain visible for deliberate deletion without empty HTML export", () => {
   assert.match(archive, /Retain empty archives in History as well/);
-  assert.match(archive, /match scan_stored_turns\(&entry\.path\(\)\) \{\s*\/\//);
+  assert.match(archive, /match scan_stored_turns\(&dir, false\) \{\s*\/\//);
   assert.match(archive, /Ok\(scan\) => \{/);
   assert.doesNotMatch(archive, /Ok\(turns\) if !turns\.is_empty\(\)/);
   assert.match(ui, /No recognized entries/);
@@ -257,8 +257,10 @@ test("finished receipt counts surviving archived turns and rejects crash staging
   assert.match(archive, /fn write_finished_receipt\(dir: &Path\)/);
   assert.match(archive, /fn finished_receipt_count\(dir: &Path\)/);
   assert.match(archive, /write_finished_receipt\(&dir\)\.is_ok\(\)/);
-  assert.match(archive, /expected == turns\.len\(\)/);
-  assert.match(archive, /expected == scan\.paths\.len\(\)/);
+  assert.match(archive, /expected == scan\.count/);
+  assert.match(archive, /let scan = scan_stored_turns\(dir, false\)\?/);
+  assert.match(archive, /if collect_paths \{\s*scan\.paths\.push\(entry\.path\(\)\)/);
+  assert.match(archive, /fn count_only_scan_matches_ordered_inventory_without_collecting_paths\(/);
   assert.match(archive, /scan\.has_unpublished_files/);
   assert.match(archive, /name\.ends_with\("\.tmp"\)/);
   assert.match(archive, /fn finished_receipt_rejects_missing_and_legacy_metadata\(/);
@@ -416,7 +418,7 @@ test("HTML transcript escaping streams large UTF-8 text without cloned escaped s
 test("full HTML export snapshots one saved-session file inventory and decodes once", () => {
   assert.match(archive, /pub\(super\) struct SavedExportInventory/);
   assert.match(archive, /pub\(super\) fn saved_export_inventory\(id: &str\)/);
-  assert.match(archive, /let scan = scan_stored_turns\(&dir\)/);
+  assert.match(archive, /let scan = scan_stored_turns\(&dir, true\)/);
   assert.match(archive, /SavedExportInventory \{ paths: scan\.paths, incomplete \}/);
   assert.match(archive, /pub\(super\) fn stream_saved_turns\(\s*id: &str,\s*paths: &\[PathBuf\]/);
   assert.match(html, /saved_export_inventory\(&session_id\)/);

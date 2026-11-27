@@ -109,12 +109,15 @@ fn turn_name(sequence: u64) -> String {
 }
 
 struct StoredTurnScan {
+    count: usize,
     paths: Vec<PathBuf>,
     has_unpublished_files: bool,
 }
 
-fn scan_stored_turns(dir: &Path) -> io::Result<StoredTurnScan> {
-    let mut scan = StoredTurnScan { paths: Vec::new(), has_unpublished_files: false };
+// Finalization and History need only counts, not allocated/sorted paths.
+// Preview and Export opt into ordered paths from the same validation pass.
+fn scan_stored_turns(dir: &Path, collect_paths: bool) -> io::Result<StoredTurnScan> {
+    let mut scan = StoredTurnScan { count: 0, paths: Vec::new(), has_unpublished_files: false };
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let name = entry.file_name();
@@ -127,7 +130,10 @@ fn scan_stored_turns(dir: &Path) -> io::Result<StoredTurnScan> {
             && name[5..name.len()-5].bytes().all(|b| b.is_ascii_digit())
         {
             if entry.file_type()?.is_file() {
-                scan.paths.push(entry.path());
+                scan.count += 1;
+                if collect_paths {
+                    scan.paths.push(entry.path());
+                }
             } else {
                 // Refuse symlinks or directories as archive entries, while
                 // keeping the session visible so the user can delete it.
@@ -139,12 +145,14 @@ fn scan_stored_turns(dir: &Path) -> io::Result<StoredTurnScan> {
             scan.has_unpublished_files = true;
         }
     }
-    scan.paths.sort();
+    if collect_paths {
+        scan.paths.sort();
+    }
     Ok(scan)
 }
 
 fn stored_turn_paths(dir: &Path) -> io::Result<Vec<PathBuf>> {
-    Ok(scan_stored_turns(dir)?.paths)
+    Ok(scan_stored_turns(dir, true)?.paths)
 }
 
 fn atomic_turn_write(dir: &Path, turn: &MeetingCommittedTurn) -> io::Result<()> {
@@ -188,11 +196,11 @@ fn write_marker(dir: &Path, marker: &str) -> io::Result<()> {
 fn write_finished_receipt(dir: &Path) -> io::Result<()> {
     // This is a finalization/count receipt, NOT evidence that every spoken
     // utterance was recognized or that all data is forensically durable.
-    let scan = scan_stored_turns(dir)?;
+    let scan = scan_stored_turns(dir, false)?;
     if scan.has_unpublished_files {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "Unpublished archive entries remain"));
     }
-    let body = format!("{FINISHED_RECEIPT_HEADER}\nentries={}\n", scan.paths.len());
+    let body = format!("{FINISHED_RECEIPT_HEADER}\nentries={}\n", scan.count);
     write_atomic_marker(dir, "finished", body.as_bytes())
 }
 
@@ -486,27 +494,27 @@ pub fn list_saved_sessions() -> SavedMeetingSessions {
         let Some(id) = entry.file_name().to_str().map(str::to_owned) else { continue };
         if !valid_id(&id) { continue }
         if !entry.file_type().is_ok_and(|f| f.is_dir()) { result.ok = false; continue }
-        match scan_stored_turns(&entry.path()) {
+        let dir = entry.path();
+        match scan_stored_turns(&dir, false) {
             // Retain empty archives in History as well. They can result from
             // sessions with no recognized speech or from interrupted storage.
             // Hiding them would prevent the user's explicit Delete action.
             Ok(scan) => {
-                let turns = &scan.paths;
                 // A finished marker alone is insufficient: after a crash or
                 // accidental deletion, compare its expected count with the
                 // actual surviving entry filenames. Old unversioned markers
                 // fail closed as unverified, never silently upgraded.
                 let count_matches = matches!(
-                    finished_receipt_count(&entry.path()),
-                    Ok(Some(expected)) if expected == turns.len()
+                    finished_receipt_count(&dir),
+                    Ok(Some(expected)) if expected == scan.count
                 );
-                let storage_warning = entry.path().join("storage_warning").exists()
+                let storage_warning = dir.join("storage_warning").exists()
                     || scan.has_unpublished_files
                     || !count_matches
                     || active.as_ref().is_some_and(|(current, issues)| current == &id && *issues > 0);
                 let complete = count_matches && !storage_warning;
                 result.sessions.push(SavedMeetingSession {
-                    session_id: id, entry_count: turns.len(), complete, storage_warning,
+                    session_id: id, entry_count: scan.count, complete, storage_warning,
                 });
             }
             Err(_) => result.ok = false,
@@ -532,11 +540,11 @@ pub(super) fn saved_export_inventory(id: &str) -> Result<SavedExportInventory, S
     // One authoritative directory enumeration supplies count, status and
     // paths for this export. Export and Delete share the saved-session lock;
     // the full writer must already be stopped.
-    let scan = scan_stored_turns(&dir)
+    let scan = scan_stored_turns(&dir, true)
         .map_err(|_| "Cannot inspect saved transcript entries.".to_string())?;
     let finalized = matches!(
         finished_receipt_count(&dir),
-        Ok(Some(expected)) if expected == scan.paths.len()
+        Ok(Some(expected)) if expected == scan.count
     );
     let incomplete = dir.join("storage_warning").exists()
         || scan.has_unpublished_files || !finalized || active_write_errors(id)? > 0;
@@ -596,9 +604,9 @@ pub(super) fn stream_saved_turns(
 pub(super) fn session_warning(id: &str) -> Result<bool, String> {
     let dir = session_dir(id)?;
     if !dir.is_dir() { return Err("Saved Meeting transcript was not found.".to_string()) }
-    let scan = scan_stored_turns(&dir)
+    let scan = scan_stored_turns(&dir, false)
         .map_err(|_| "Could not verify saved Meeting entry count.".to_string())?;
-    let finalized = matches!(finished_receipt_count(&dir), Ok(Some(expected)) if expected == scan.paths.len());
+    let finalized = matches!(finished_receipt_count(&dir), Ok(Some(expected)) if expected == scan.count);
     Ok(dir.join("storage_warning").exists()
         || scan.has_unpublished_files
         || !finalized
@@ -736,10 +744,48 @@ mod tests {
         std::fs::write(dir.join(turn_name(1)), b"{}").unwrap();
         assert_ne!(finished_receipt_count(&dir).unwrap().unwrap(), stored_turn_paths(&dir).unwrap().len());
         std::fs::write(dir.join("turn_00000000000000000002.tmp"), b"partial").unwrap();
-        assert!(scan_stored_turns(&dir).unwrap().has_unpublished_files);
+        assert!(scan_stored_turns(&dir, false).unwrap().has_unpublished_files);
         assert!(write_finished_receipt(&dir).is_err(), "staged entry must block successful finalization");
         std::fs::write(dir.join("finished"), b"legacy opaque marker").unwrap();
         assert!(finished_receipt_count(&dir).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn count_only_scan_matches_ordered_inventory_without_collecting_paths() {
+        let dir = std::env::temp_dir().join(format!(
+            "ti-archive-count-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                .unwrap().as_nanos(),
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let empty = scan_stored_turns(&dir, false).unwrap();
+        assert_eq!(empty.count, 0);
+        assert!(empty.paths.is_empty());
+        assert!(!empty.has_unpublished_files);
+
+        std::fs::write(dir.join(turn_name(9)), b"{}").unwrap();
+        std::fs::write(dir.join(turn_name(2)), b"{}").unwrap();
+        std::fs::write(dir.join("unrelated.txt"), b"ignored").unwrap();
+        std::fs::create_dir(dir.join(turn_name(3))).unwrap();
+        std::fs::write(dir.join("turn_00000000000000000004.tmp"), b"partial").unwrap();
+
+        let counts = scan_stored_turns(&dir, false).unwrap();
+        let inventory = scan_stored_turns(&dir, true).unwrap();
+        assert_eq!(counts.count, 2);
+        assert_eq!(counts.count, inventory.paths.len());
+        assert_eq!(counts.count, inventory.count);
+        assert_eq!(counts.has_unpublished_files, inventory.has_unpublished_files);
+        assert!(counts.has_unpublished_files);
+        assert!(counts.paths.is_empty(), "count-only callers never collect paths");
+        assert_eq!(inventory.paths, vec![dir.join(turn_name(2)), dir.join(turn_name(9))]);
+        assert!(write_finished_receipt(&dir).is_err());
+
+        std::fs::remove_dir(dir.join(turn_name(3))).unwrap();
+        std::fs::remove_file(dir.join("turn_00000000000000000004.tmp")).unwrap();
+        write_finished_receipt(&dir).unwrap();
+        assert_eq!(finished_receipt_count(&dir).unwrap(), Some(2));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
