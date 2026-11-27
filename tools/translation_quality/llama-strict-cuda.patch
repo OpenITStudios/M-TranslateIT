@@ -183,3 +183,42 @@ new file mode 100644
 +    }
 +    return 0;
 +}
+diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
+--- a/tools/mtmd/mtmd-helper-gen.cpp
++++ b/tools/mtmd/mtmd-helper-gen.cpp
+@@ -3602,11 +3602,16 @@
+             eos_row   = std::max(0, r - max_eoa);
+             countdown = n_cb + 1;
+         }
+-        if ((countdown > 0 && --countdown == 0) || step >= max_frames || (uint32_t) pos >= llama_n_ctx_seq(lctx)) {
+-            done = true;
+-            *out_stop = true;
+-            return 0;
+-        }
++        if (countdown > 0 && --countdown == 0) {
++            done = true;
++            *out_stop = true;
++            return 0;
++        }
++        // A capacity limit is not a completed utterance. Never publish it as EOS.
++        if (step >= max_frames || (uint32_t) pos >= llama_n_ctx_seq(lctx)) {
++            LOG_ERR("translateit:zonos3_generation_incomplete\n");
++            return 1;
++        }
+ 
+         const float * next = embed_row(frame);
+         if (!next) {
+@@ -3633,7 +3638,12 @@
+     int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples) override {
+         *out_sample_rate = info.sample_rate;
+ 
+-        if (!stream) {
++        if (!stream) {
++            // A caller-side limit or failed generation must not produce a success PCM receipt.
++            if (!done) {
++                LOG_ERR("translateit:zonos3_generation_not_complete\n");
++                return 1;
++            }
+             if (flush() != 0) {
+                 return 1;
+             }

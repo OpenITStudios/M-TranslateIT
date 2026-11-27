@@ -131,3 +131,11 @@ ASR and translation candidate paths are authored, but native compile, linkage,
 GPU execution, tokenizer/prompt parity, EOG handling, Indonesian/English quality,
 cancellation/timeout, process isolation, and combined VRAM remain unverified.
 Do not release or claim runtime acceptance until integrated source review and held Windows build/runtime proof are complete.
+
+## Native TTS candidate — ZONOS3-Mini (not active)
+
+The approved Python retirement direction is one Rust-owned native Meeting pipeline, with ZONOS3-Mini as the first TTS candidate. The existing exact llama.cpp revision already provides ZONOS3 generation, built-in voice and reference embedding, and raw F32 PCM through `mtmd_helper_gen_audio_*`. Do not introduce llama-server, a second GGML runtime, Candle, or Python IPC for this candidate. The adjacent controlled source patch additionally rejects ZONOS3 context/frame exhaustion rather than reporting it as end-of-speech, and rejects non-streaming output before the end-of-audio delay completes. This is a source-side prerequisite, not an active TTS implementation or successful patch application.
+
+The pinned helper omits speaker CFG, encodes a reference in `set_input`, and performs the iSTFT synthesis head on the host after codec graph execution. The existing strict CUDA scheduler guard covers scheduled model graphs, not all host DSP or direct operations. Verify decoder, codebook heads, speaker encoder and codec graph placement and error propagation on the exact device. Host DSP is not a model fallback. Keep one resident model and selected voice binding; do not assume cached speaker embeddings or official reference quality are already available through this helper.
+
+Before admitting TTS, obtain the exact ggml-org GGUF backbone and matching codec/speaker-encoder projector revision, sizes, SHA-256 and license closure; publisher listing alone is not sufficient. Integrate the existing Rust owner with a bounded cancellable PCM request, retain the current actor files and voice route until source replacement is complete, and compare BF16 and Q8_0 with GPT-SoVITS on the existing quality corpus. No model bytes were downloaded and no build/inference/quality tests were executed. The old My Voice checkpoint cannot be interpreted as a ZONOS3 speaker embedding.
