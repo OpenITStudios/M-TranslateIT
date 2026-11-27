@@ -1,6 +1,6 @@
 //! One execution thread for the existing scheduler's already-admitted request.
 //! This module does not select priority, retry, load a fallback or queue waiters.
-use super::{Error, Language, RequestControl, Runtime, MAX_OUTPUT_BYTES};
+use super::{Error, Language, RequestControl, Runtime, VoiceBinding, MAX_OUTPUT_BYTES};
 use std::{
     path::Path,
     sync::{
@@ -17,13 +17,15 @@ pub enum InferenceInput {
     Speech { pcm: Vec<f32>, language: Language },
     Translation { source: String, from: Language, to: Language },
     // Candidate: authorized, 16 kHz mono F32 reference. Never a model path.
-    Voice { normalized: String, reference: Vec<f32> },
+    BindVoice { reference: Vec<f32> },
+    Voice { normalized: String, binding: VoiceBinding },
 }
 
 #[derive(Debug, PartialEq)]
 pub enum InferenceOutput {
     Text(String),
     Voice(Vec<f32>),
+    VoiceBound(VoiceBinding),
 }
 
 struct RequestState {
@@ -51,7 +53,7 @@ impl PendingInference {
     pub fn wait(self) -> Result<String, Error> {
         match self.wait_output()? {
             InferenceOutput::Text(text) => Ok(text),
-            InferenceOutput::Voice(_) => Err(Error::InvalidReceipt),
+            _ => Err(Error::InvalidReceipt),
         }
     }
 
@@ -136,8 +138,10 @@ impl RuntimeOwner {
                     InferenceInput::Translation { source, from, to } =>
                         runtime.translate(&source, from, to, &control, &mut output)
                             .map(|text| InferenceOutput::Text(text.to_owned())),
-                    InferenceInput::Voice { normalized, reference } =>
-                        runtime.synthesize(&normalized, &reference, &control).map(InferenceOutput::Voice),
+                    InferenceInput::BindVoice { reference } =>
+                        runtime.bind_voice(&reference, &control).map(InferenceOutput::VoiceBound),
+                    InferenceInput::Voice { normalized, binding } =>
+                        runtime.synthesize(&normalized, binding, &control).map(InferenceOutput::Voice),
                 };
                 // Input is released before the result; the only text copy is
                 // the owned Rust result leaving reusable native scratch.

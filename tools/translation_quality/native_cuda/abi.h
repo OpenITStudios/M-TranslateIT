@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-// Candidate ABI v6: one serialized owner for ASR, MT and optional candidate voice.
+// Candidate ABI v7: one serialized owner for ASR, MT and optional candidate voice.
 typedef struct ti_runtime ti_runtime;
 enum ti_status {
     TI_OK = 0,
@@ -66,11 +66,15 @@ TI_EXPORT int32_t ti_runtime_translate(ti_runtime * runtime, const char * source
                                        ti_stop_check stop, const void * stop_data,
                                        char * output, size_t output_cap, size_t * out_len);
 
-// Candidate TTS: normalized English UTF-8 <=4000 bytes, authorized reference
-// 16 kHz mono F32 (3..30s). Complete mono F32 44.1 kHz output <=60s.
+// Replace the sole selected reference: 16 kHz mono F32 (3..30s).
+// Failure/cancellation revokes the old binding. No reference is retained by caller.
+TI_EXPORT int32_t ti_runtime_bind_voice(ti_runtime * runtime, const float * reference,
+                                         size_t reference_len, ti_stop_check stop, const void * stop_data);
+// Candidate TTS: normalized English UTF-8 <=4000 bytes, prior successful binding.
+// Complete mono F32 44.1 kHz output <=60s.
 // Caller provides >=2646000 samples; only success authorizes *out_len samples.
 TI_EXPORT int32_t ti_runtime_synthesize(ti_runtime * runtime, const char * normalized,
-                                         size_t text_len, const float * reference, size_t reference_len,
+                                         size_t text_len,
                                          ti_stop_check stop, const void * stop_data,
                                          float * output, size_t output_cap, size_t * out_len);
 

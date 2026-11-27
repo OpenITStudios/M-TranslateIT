@@ -20,7 +20,8 @@ type Transcribe = unsafe extern "C" fn(*mut c_void, *const f32, usize, u32,
 type Translate = unsafe extern "C" fn(*mut c_void, *const c_char, usize, u32, u32,
     StopCheck, *const c_void, *mut c_char, usize, *mut usize) -> i32;
 
-type Synthesize = unsafe extern "C" fn(*mut c_void, *const c_char, usize, *const f32, usize,
+type BindVoice = unsafe extern "C" fn(*mut c_void, *const f32, usize, StopCheck, *const c_void) -> i32;
+type Synthesize = unsafe extern "C" fn(*mut c_void, *const c_char, usize,
     StopCheck, *const c_void, *mut f32, usize, *mut usize) -> i32;
 
 #[derive(Clone, Copy)]
@@ -29,6 +30,7 @@ pub(super) struct Api {
     pub close: Close,
     pub transcribe: Transcribe,
     pub translate: Translate,
+    pub bind_voice: BindVoice,
     pub synthesize: Synthesize,
 }
 
@@ -248,6 +250,7 @@ pub(super) unsafe fn load(path: &Path, pins: &str) -> Result<Api, Error> {
         close: symbol!("ti_runtime_close", Close),
         transcribe: symbol!("ti_runtime_transcribe", Transcribe),
         translate: symbol!("ti_runtime_translate", Translate),
+        bind_voice: symbol!("ti_runtime_bind_voice", BindVoice),
         synthesize: symbol!("ti_runtime_synthesize", Synthesize),
     };
     // llama.cpp backend initialization is process-global. Pin the admitted

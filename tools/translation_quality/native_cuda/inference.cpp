@@ -268,9 +268,10 @@ struct ti_mt : decoder {
 struct ti_voice : decoder {
     owned<mtmd_context, mtmd_free> projector{nullptr, mtmd_free};
     owned<mtmd_helper_gen_audio, mtmd_helper_gen_audio_free> gen{nullptr, mtmd_helper_gen_audio_free};
+    bool bound = false;
 };
 
-extern "C" uint32_t ti_cuda_abi_version(void) { return 6; }
+extern "C" uint32_t ti_cuda_abi_version(void) { return 7; }
 
 static int32_t open_voice(const char * model_path, const char * projector_path,
                           ggml_backend_dev_t device, std::unique_ptr<ti_voice> & out) {
@@ -612,18 +613,14 @@ struct clear_voice_utterance {
     }
 };
 
-int32_t synthesize_voice(ti_voice & voice, const char * normalized, size_t text_len,
-                         const float * reference, size_t reference_len,
-                         const request_control & control, float * output,
-                         size_t output_cap, size_t * out_len) {
-    // The caller must provide already normalized English and the selected,
-    // authorized reference, converted by Rust to 16 kHz mono F32.
-    if (!normalized || !text_len || text_len > 4000 || !reference ||
-        reference_len < k_voice_min_ref_samples || reference_len > k_voice_max_ref_samples ||
-        !output || output_cap < k_voice_max_samples) return TI_INVALID_INPUT;
-    const std::string_view text(normalized, text_len);
-    if (text.find('\0') != std::string_view::npos ||
-        text.find("<|") != std::string_view::npos) return TI_INVALID_INPUT;
+int32_t bind_voice(ti_voice & voice, const float * reference, size_t reference_len,
+                   const request_control & control) {
+    // A failed or cancelled replacement cannot leave the old voice selectable.
+    voice.bound = false;
+    if (mtmd_helper_gen_audio_bind_speaker(voice.gen.get(), nullptr) != 0) return TI_INFERENCE;
+    if (!reference || reference_len < k_voice_min_ref_samples ||
+        reference_len > k_voice_max_ref_samples) return TI_INVALID_INPUT;
+    if (const auto status = control.check(); status != TI_OK) return status;
     bool signal = false;
     for (size_t i = 0; i < reference_len; ++i) {
         const float sample = reference[i];
@@ -631,16 +628,32 @@ int32_t synthesize_voice(ti_voice & voice, const char * normalized, size_t text_
         signal |= std::abs(sample) >= 0.0001f;
     }
     if (!signal) return TI_INVALID_INPUT;
-    if (const auto status = control.check(); status != TI_OK) return status;
-    clear_voice_utterance clear{voice};
     owned<mtmd_bitmap, mtmd_bitmap_free> bitmap(
         mtmd_bitmap_init_from_audio(reference_len, reference), mtmd_bitmap_free);
     if (!bitmap) return TI_INTERNAL;
+    if (mtmd_helper_gen_audio_bind_speaker(voice.gen.get(), bitmap.get()) != 0) return TI_INFERENCE;
+    if (const auto status = control.check(); status != TI_OK) {
+        mtmd_helper_gen_audio_bind_speaker(voice.gen.get(), nullptr);
+        return status;
+    }
+    voice.bound = true;
+    return TI_OK;
+}
+
+int32_t synthesize_voice(ti_voice & voice, const char * normalized, size_t text_len,
+                         const request_control & control, float * output,
+                         size_t output_cap, size_t * out_len) {
+    if (!voice.bound || !normalized || !text_len || text_len > 4000 ||
+        !output || output_cap < k_voice_max_samples) return TI_INVALID_INPUT;
+    const std::string_view text(normalized, text_len);
+    if (text.find('\0') != std::string_view::npos ||
+        text.find("<|") != std::string_view::npos) return TI_INVALID_INPUT;
+    if (const auto status = control.check(); status != TI_OK) return status;
+    clear_voice_utterance clear{voice};
     auto inp = mtmd_helper_gen_audio_inp_default();
     inp.prompt = normalized;
     inp.prompt_len = text_len;
     inp.lang = "en";
-    inp.speaker_ref = bitmap.get();
     inp.out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM;
     inp.stream = false;
     const auto prepared = mtmd_helper_gen_audio_set_input(voice.gen.get(), &inp);
@@ -814,8 +827,27 @@ extern "C" int32_t ti_runtime_translate(ti_runtime * runtime, const char * sourc
                                               control, output, output_cap, out_len), control, out_len);
 }
 
+extern "C" int32_t ti_runtime_bind_voice(ti_runtime * runtime, const float * reference,
+                                         size_t reference_len, ti_stop_check stop, const void * stop_data) {
+    if (!runtime || !stop || !stop_data) return TI_INVALID_INPUT;
+    if (runtime->poisoned) return TI_POISONED;
+    if (!runtime->voice) return TI_INVALID_INPUT;
+    const request_control control{stop, stop_data};
+    int32_t status;
+    try {
+        status = bind_voice(*runtime->voice, reference, reference_len, control);
+    } catch (...) { status = TI_INTERNAL; }
+    size_t unused = 0;
+    status = finish_stage(*runtime, status, control, &unused);
+    if (status != TI_OK && runtime->voice && runtime->voice->bound) {
+        runtime->voice->bound = false;
+        mtmd_helper_gen_audio_bind_speaker(runtime->voice->gen.get(), nullptr);
+    }
+    return status;
+}
+
 extern "C" int32_t ti_runtime_synthesize(ti_runtime * runtime, const char * normalized,
-                                         size_t text_len, const float * reference, size_t reference_len,
+                                         size_t text_len,
                                          ti_stop_check stop, const void * stop_data,
                                          float * output, size_t output_cap, size_t * out_len) {
     if (!out_len) return TI_INVALID_INPUT;
@@ -828,7 +860,7 @@ extern "C" int32_t ti_runtime_synthesize(ti_runtime * runtime, const char * norm
     int32_t status;
     try {
         status = synthesize_voice(*runtime->voice, normalized, text_len,
-                                  reference, reference_len, control, output, output_cap, out_len);
+                                  control, output, output_cap, out_len);
     } catch (...) {
         status = TI_INTERNAL;
     }

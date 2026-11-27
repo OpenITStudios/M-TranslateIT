@@ -183,10 +183,78 @@ new file mode 100644
 +    }
 +    return 0;
 +}
+diff --git a/tools/mtmd/mtmd-helper.h b/tools/mtmd/mtmd-helper.h
+--- a/tools/mtmd/mtmd-helper.h
++++ b/tools/mtmd/mtmd-helper.h
+@@ -343,7 +343,11 @@
+ 
+ MTMD_API void mtmd_helper_gen_audio_free(mtmd_helper_gen_audio * ctx);
+ 
+-MTMD_API void mtmd_helper_gen_audio_reset(mtmd_helper_gen_audio * ctx);
++MTMD_API void mtmd_helper_gen_audio_reset(mtmd_helper_gen_audio * ctx);
++
++// TranslateIT: bind exactly one ZONOS3 speaker per resident owner. Null clears.
++// Reset only clears utterance state; binding survives until cleared or destroyed.
++MTMD_API int32_t mtmd_helper_gen_audio_bind_speaker(mtmd_helper_gen_audio * ctx, mtmd_bitmap * speaker);
+ 
+ // frame limit for a caller that has none of its own (e.g. no -n); 0 = step_gen() stops by itself
+ MTMD_API int32_t mtmd_helper_gen_audio_max_frames(const mtmd_helper_gen_audio * ctx);
 diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
 --- a/tools/mtmd/mtmd-helper-gen.cpp
 +++ b/tools/mtmd/mtmd-helper-gen.cpp
-@@ -3602,11 +3602,16 @@
+@@ -113,7 +113,8 @@
+     virtual bool check_context() const { return true; }
+     // see mtmd_helper_gen_audio_max_frames()
+     virtual int32_t max_frames() const { return 512; }
+-    virtual void reset() = 0;
++    virtual void reset() = 0;
++    virtual int32_t bind_speaker(mtmd_bitmap *) { return 1; }
+     virtual int32_t set_input(const mtmd_helper_gen_audio_inp * inp) = 0;
+     // decodes at most n_batch prompt tokens; returns remaining count (0 = done), <0 on error
+     virtual int32_t step_prompt(int32_t n_batch) = 0;
+@@ -3403,7 +3404,21 @@
+ public:
+     using mtmd_gen_audio_pipeline::mtmd_gen_audio_pipeline;
+ 
+-    bool supports_delivery() const override { return true; }
++    bool supports_delivery() const override { return true; }
++
++    int32_t bind_speaker(mtmd_bitmap * speaker) override {
++        reset();
++        bound_speaker.clear();
++        if (!speaker) return 0;
++        std::vector<float> encoded;
++        if (!encode_speaker(speaker, encoded) || encoded.empty() ||
++            encoded.size() % (size_t) n_embd != 0 ||
++            !std::all_of(encoded.begin(), encoded.end(), [](float v) { return std::isfinite(v); })) {
++            return 1;
++        }
++        bound_speaker = std::move(encoded);
++        return 0;
++    }
+ 
+     void reset() override {
+         seq_id = 0;
+@@ -3453,10 +3468,14 @@
+             if (!encode_speaker(inp->speaker_ref, seg.embd)) {
+                 return 1;
+             }
+-            segments.push_back(std::move(seg));
+-        }
+-
+-        // condition rows: the bucket of each value over the checkpoint edges, or unknown
++            segments.push_back(std::move(seg));
++        } else if (!bound_speaker.empty()) {
++            segment seg;
++            seg.embd = bound_speaker;
++            segments.push_back(std::move(seg));
++        }
++
++        // condition rows: the bucket of each value over the checkpoint edges, or unknown
+         auto bucket = [](const std::vector<float> & edges, float v) {
+             return std::to_string(std::upper_bound(edges.begin(), edges.end(), v) - edges.begin());
+         };
+@@ -3602,11 +3621,16 @@
              eos_row   = std::max(0, r - max_eoa);
              countdown = n_cb + 1;
          }
@@ -208,17 +276,42 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
  
          const float * next = embed_row(frame);
          if (!next) {
-@@ -3633,7 +3638,12 @@
+@@ -3633,8 +3657,13 @@
      int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples) override {
          *out_sample_rate = info.sample_rate;
  
 -        if (!stream) {
+-            if (flush() != 0) {
 +        if (!stream) {
 +            // A caller-side limit or failed generation must not produce a success PCM receipt.
 +            if (!done) {
 +                LOG_ERR("translateit:zonos3_generation_not_complete\n");
 +                return 1;
 +            }
-             if (flush() != 0) {
++            if (flush() != 0) {
                  return 1;
              }
+             if (out_n_samples) {
+@@ -3892,7 +3921,8 @@
+         return true;
+     }
+ 
+-    std::vector<segment> segments;
++    std::vector<float> bound_speaker; // one owner-local selected speaker embedding
++    std::vector<segment> segments;
+     size_t seg_idx = 0;
+     int    seg_pos = 0;
+ 
+@@ -5659,7 +5689,11 @@
+     }
+ }
+ 
+-struct mtmd_helper_gen_audio_inp mtmd_helper_gen_audio_inp_default(void) {
++int32_t mtmd_helper_gen_audio_bind_speaker(mtmd_helper_gen_audio * ctx, mtmd_bitmap * speaker) {
++    return ctx && ctx->pipeline ? ctx->pipeline->bind_speaker(speaker) : 1;
++}
++
++struct mtmd_helper_gen_audio_inp mtmd_helper_gen_audio_inp_default(void) {
+     mtmd_helper_gen_audio_inp inp{};
+     inp.top_k    = 50;
+     inp.top_p    = 1.0f;

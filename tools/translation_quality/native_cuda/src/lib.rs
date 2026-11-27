@@ -2,13 +2,13 @@
 #![cfg(windows)]
 //! Reuse the application's SHA-256 dependency; no by-value llama.cpp ABI structs.
 use std::{ffi::{c_char, c_void, CString}, marker::PhantomData, path::Path,
-          ptr::NonNull, rc::Rc, sync::atomic::{AtomicBool, Ordering}, time::Instant};
+          ptr::NonNull, rc::Rc, sync::atomic::{AtomicBool, AtomicU64, Ordering}, time::Instant};
 
 mod loader;
 mod owner;
 pub use owner::{InferenceInput, InferenceOutput, PendingInference, RuntimeOwner};
 
-const ABI: u32 = 6;
+const ABI: u32 = 7;
 const CANCELLED: i32 = 16;
 const DEADLINE: i32 = 17;
 type StopCheck = unsafe extern "C" fn(*const c_void) -> i32;
@@ -21,6 +21,12 @@ pub const VOICE_SAMPLE_RATE: u32 = 44_100;
 const MAX_VOICE_SAMPLES: usize = 44_100 * 60;
 const MIN_VOICE_REFERENCE: usize = 16_000 * 3;
 const MAX_VOICE_REFERENCE: usize = 16_000 * 30;
+
+// Process-unique, ephemeral identity of a successfully encoded reference.
+// Never a persisted profile ID or permission to select a different session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VoiceBinding(u64);
+static NEXT_VOICE_BINDING: AtomicU64 = AtomicU64::new(1);
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +75,7 @@ pub struct Runtime {
     handle: NonNull<c_void>,
     api: loader::Api,
     device_id: String,
+    voice_binding: Option<VoiceBinding>,
     // Keep the verified model parent names stable for the native lifetime.
     // The C++ owner independently pins and hashes each exact file handle.
     _asset_parents: Vec<std::fs::File>,
@@ -159,7 +166,7 @@ impl Runtime {
             unsafe { (api.close)(handle.as_ptr()); }
             return Err(Error::InvalidReceipt);
         };
-        Ok(Self { handle, api, device_id: actual.to_owned(),
+        Ok(Self { handle, api, device_id: actual.to_owned(), voice_binding: None,
             _asset_parents: asset_parents, _thread_bound: PhantomData })
     }
 
@@ -203,13 +210,32 @@ impl Runtime {
         Ok(text)
     }
 
-    /// Candidate only: normalized English and 16 kHz mono authorized voice reference.
+    /// Bind only an authorized reference, once on the existing execution thread.
+    /// Rebinding revokes the previous handle even if native encoding fails.
+    pub fn bind_voice(&mut self, reference: &[f32], control: &RequestControl<'_>) -> Result<VoiceBinding, Error> {
+        self.voice_binding = None;
+        // Native clears its prior embedding before validating or observing cancellation.
+        let status = unsafe { (self.api.bind_voice)(self.handle.as_ptr(), reference.as_ptr(),
+            reference.len(), stop_check, control.data()) };
+        if status != 0 { return Err(match status {
+            CANCELLED => Error::Cancelled,
+            DEADLINE => Error::DeadlineExceeded,
+            _ => Error::Native(status),
+        }); }
+        check_control(control)?;
+        let id = NEXT_VOICE_BINDING.fetch_update(Ordering::Relaxed, Ordering::Relaxed,
+            |n| n.checked_add(1)).map_err(|_| Error::InvalidReceipt)?;
+        let binding = VoiceBinding(id);
+        self.voice_binding = Some(binding);
+        Ok(binding)
+    }
+
+    /// Candidate only: normalized English and exact currently bound reference.
     /// Output is owned PCM, not a WAV, JSON payload or borrowed native pointer.
-    pub fn synthesize(&mut self, normalized: &str, reference: &[f32],
+    pub fn synthesize(&mut self, normalized: &str, binding: VoiceBinding,
                       control: &RequestControl<'_>) -> Result<Vec<f32>, Error> {
-        if normalized.trim().is_empty() || normalized.len() > 4000 ||
-            normalized.contains('\0') || normalized.contains("<|") ||
-            !(MIN_VOICE_REFERENCE..=MAX_VOICE_REFERENCE).contains(&reference.len()) {
+        if self.voice_binding != Some(binding) || normalized.trim().is_empty() || normalized.len() > 4000 ||
+            normalized.contains('\0') || normalized.contains("<|") {
             return Err(Error::InvalidInput);
         }
         check_control(control)?;
@@ -218,8 +244,7 @@ impl Runtime {
         let mut len = 0;
         let status = unsafe {
             (self.api.synthesize)(self.handle.as_ptr(), normalized.as_ptr().cast(), normalized.len(),
-                reference.as_ptr(), reference.len(), stop_check, control.data(),
-                output.as_mut_ptr(), MAX_VOICE_SAMPLES, &mut len)
+                stop_check, control.data(), output.as_mut_ptr(), MAX_VOICE_SAMPLES, &mut len)
         };
         if status != 0 {
             return Err(if len != 0 { Error::InvalidReceipt } else { match status {
@@ -410,14 +435,28 @@ mod tests {
                 Some((&voice, &voice_projector)))
         }.expect("resident ASR, translation and voice on one device");
         assert_eq!(owner.device_id(), pci.as_str());
+        let bound = owner.begin(InferenceInput::BindVoice { reference },
+            Instant::now() + Duration::from_secs(90)).expect("admitted reference")
+            .wait_output().expect("reference encoded");
+        let InferenceOutput::VoiceBound(binding) = bound else { panic!("missing binding receipt"); };
         let pending = owner.begin(InferenceInput::Voice {
-            normalized: "Hello, this is a voice quality check.".into(),
-            reference,
+            normalized: "Hello, this is a voice quality check.".into(), binding,
         }, Instant::now() + Duration::from_secs(90)).expect("admitted voice request");
         let InferenceOutput::Voice(samples) = pending.wait_output().expect("complete native PCM") else {
             panic!("voice request returned a non-PCM receipt");
         };
         validate_voice_pcm(&samples).expect("bounded finite non-silent PCM");
+        // A second utterance carries the same handle, no PCM reference.
+        assert!(matches!(owner.begin(InferenceInput::Voice {
+            normalized: "This is the second sentence.".into(), binding,
+        }, Instant::now() + Duration::from_secs(90)).unwrap().wait_output(),
+            Ok(InferenceOutput::Voice(_))));
+        // Invalid replacement revokes prior authority rather than falling back.
+        assert!(owner.begin(InferenceInput::BindVoice { reference: Vec::new() },
+            Instant::now() + Duration::from_secs(30)).unwrap().wait_output().is_err());
+        assert_eq!(owner.begin(InferenceInput::Voice {
+            normalized: "Must not use the old voice.".into(), binding,
+        }, Instant::now() + Duration::from_secs(30)).unwrap().wait_output(), Err(Error::InvalidInput));
         // The same owner must still execute another stage after voice completes.
         let result = owner.begin(InferenceInput::Translation {
             source: "Halo".into(), from: Language::Indonesian, to: Language::English,
