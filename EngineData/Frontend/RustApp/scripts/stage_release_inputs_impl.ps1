@@ -175,25 +175,6 @@ $modelAcquirer = Join-Path $Worker 'prepare_model_assets.py'
 & $stagePython $modelAcquirer --destination-root $PayloadRoot
 if ($LASTEXITCODE -ne 0) { throw 'Canonical required model acquisition failed.' }
 
-$asrRevisionMarker = Join-Path $AsrRoot 'faster-whisper-large-v3-turbo\.translateit_model_revision'
-$milmmtRoot = Join-Path $TranslationRoot 'xiaomi-research--MiLMMT-46-1B-v1.0'
-$milmmtRevisionMarker = Join-Path $milmmtRoot '.translateit_model_revision'
-Assert-TextEquals $asrRevisionMarker '0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf' 'ASR revision'
-Assert-TextEquals $milmmtRevisionMarker '4fc480b6c58dec29c159dcdf9fde0f6d5c354995' 'MiLMMT revision'
-foreach ($requiredModelFile in @(
-    'config.json',
-    'generation_config.json',
-    'model.safetensors',
-    'tokenizer.json',
-    'tokenizer.model',
-    'tokenizer_config.json'
-)) {
-    $requiredPath = Join-Path $milmmtRoot $requiredModelFile
-    if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
-        throw "MiLMMT required file missing: $requiredModelFile"
-    }
-}
-
 Write-Host '[release-stage] Verify pinned model artifact SHA-256 from model_manifest.json'
 $manifest = Get-Content -LiteralPath (Join-Path $Worker 'model_manifest.json') -Raw | ConvertFrom-Json
 foreach ($model in $manifest.models) {
@@ -201,6 +182,7 @@ foreach ($model in $manifest.models) {
     if ($model.source_type -ne 'huggingface') { continue }
     if (-not $model.artifact_hashes) { throw "artifact_hashes_missing:$($model.model_id)" }
     $modelRoot = Join-Path $PayloadRoot ($model.expected_path -replace '/', '\')
+    Assert-TextEquals (Join-Path $modelRoot '.translateit_model_revision') $model.revision $model.model_id
     foreach ($property in $model.artifact_hashes.PSObject.Properties) {
         $artifactPath = Join-Path $modelRoot ($property.Name -replace '/', '\')
         if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) {

@@ -9,8 +9,6 @@ from pathlib import Path
 
 import pytest
 
-import milmmt_translation_provider
-
 WORKER_PATH = Path(__file__).resolve().parents[1] / "realtime_local_worker.py"
 
 
@@ -20,53 +18,6 @@ def load_worker_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-class _FakeInferenceMode:
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return False
-
-
-def _install_fake_generate_runtime(worker, sequences) -> dict:
-    captured: dict = {}
-
-    class FakeTokenizer:
-        eos_token_id = 2
-        pad_token_id = 1
-
-        def __call__(self, prompt, **kwargs):
-            del prompt
-            assert kwargs.get("add_special_tokens") is False
-            assert kwargs.get("truncation") is False
-            return {"input_ids": [[5, 6, 7]]}
-
-        def decode(self, ids, *, skip_special_tokens=True):
-            assert skip_special_tokens is True
-            return "halo dunia"
-
-    class FakeModel:
-        eos_token_id = 2
-        pad_token_id = 1
-
-        def generate(self, **kwargs):
-            captured.update(kwargs)
-            return [list(sequence) for sequence in sequences]
-
-    worker.TRANSLATION_RUNTIME["id->en"] = {
-        "tokenizer": FakeTokenizer(),
-        "model": FakeModel(),
-        "device": "cpu",
-        "device_note": "cpu_runtime",
-        "precision": "fp32",
-        "translation_gpu_requested": True,
-        "translation_torch_cuda_available": False,
-        "translation_degraded": True,
-        "translation_fallback_reason": "torch_cuda_unavailable",
-    }
-    return captured
 
 
 def test_voice_provider_keeps_heavy_upstream_stage_off_worker_import_path() -> None:
@@ -81,278 +32,14 @@ def test_voice_provider_keeps_heavy_upstream_stage_off_worker_import_path() -> N
     assert "from voice_lab_upstream_stage import install_headless_my_utils" in create_runtime
 
 
-def test_translation_prompt_does_not_inject_retired_terminology_preferences() -> None:
-    prompt = milmmt_translation_provider.build_prompt("id", "en", "Program API ini diperbarui.")
-    assert prompt == (
-        "Translate this from Indonesian to English:\n"
-        "Indonesian: Program API ini diperbarui.\n"
-        "English:"
-    )
-    assert "preferred terms" not in prompt.lower()
-
-
-def test_translate_routes_to_milmmt_without_legacy_mode_output(monkeypatch) -> None:
-    worker = load_worker_module()
-    worker.TRANSLATION_RUNTIME.clear()
-    monkeypatch.setattr(worker, "translation_model_ready", lambda _path: False)
-    result = worker.handle_translate(
-        {"text": "halo", "source_language": "id", "target_language": "en"}
-    )
-    assert result["ok"] is False
-    assert "mode" not in result
-    assert result["direction_pair"] == "id->en"
-    assert result["blocker"] == "model:milmmt_46_1b_missing"
-    assert result["model_revision"] == worker.MILMMT_MODEL_REVISION
-
-
-def test_reverse_direction_uses_same_canonical_milmmt_model(monkeypatch) -> None:
-    worker = load_worker_module()
-    worker.TRANSLATION_RUNTIME.clear()
-    monkeypatch.setattr(worker, "translation_model_ready", lambda _path: False)
-    result = worker.handle_translate(
-        {"text": "hello", "source_language": "en", "target_language": "id"}
-    )
-    assert result["ok"] is False
-    assert result["direction_pair"] == "en->id"
-    assert result["blocker"] == "model:milmmt_46_1b_missing"
-    assert worker.translation_model_for_direction("id", "en") == (
-        "milmmt-46-1b-v1.0",
-        worker.TRANSLATION_MODEL,
-    )
-    assert worker.translation_model_for_direction("en", "id") == (
-        "milmmt-46-1b-v1.0",
-        worker.TRANSLATION_MODEL,
-    )
-
-
-def test_worker_status_reports_milmmt_revision_for_both_directions(monkeypatch) -> None:
-    worker = load_worker_module()
-    monkeypatch.setattr(worker, "import_ready", lambda _name: True)
-    asr_checks = []
-
-    def observed_asr(path):
-        asr_checks.append(path)
-        return True
-
-    monkeypatch.setattr(worker, "asr_model_ready", observed_asr)
-    monkeypatch.setattr(worker, "translation_model_ready", lambda _path: True)
-    monkeypatch.setattr(
-        worker,
-        "probe_gpu_runtime",
-        lambda _payload=None: {
-            "torch_import_ready": True,
-            "torch_cuda_probe_ok": True,
-            "torch_cuda_available": True,
-            "torch_cuda_probe_blocker": "",
-            "ctranslate2_import_ready": True,
-            "ctranslate2_cuda_probe_ok": True,
-            "ctranslate2_cuda_available": True,
-            "ctranslate2_cuda_probe_blocker": "",
-            "cuda_capability_known": True,
-            "cpu_fallback_active": False,
-            "cuda_probe_blocker": "",
-            "cuda_primary_requested": True,
-            "selected_device": "cuda",
-            "selected_translation_device": "cuda",
-            "selected_compute_type": "int8_float16",
-            "fallback_reason": "",
-        },
-    )
-    monkeypatch.setattr(
-        worker,
-        "voice_actor_static_status",
-        lambda: {"ready": True, "actor_token": "actor-v1", "blocker": ""},
-    )
-    monkeypatch.setattr(
-        worker.io_runtime.common,
-        "torch_allocator_snapshot",
-        lambda: {"state": "unavailable", "reason": "torch_cuda_api_missing"},
-    )
-    status = worker.build_status_payload({})
-    assert status["ok"] is True
-    assert asr_checks == [worker.ASR_MODEL, worker.ASR_BACKUP_MODEL]
-    assert status["asr_active_model_id"] == "faster-whisper-large-v3-turbo"
-    assert status["gpu"]["torch_allocator"] == {
-        "state": "unavailable",
-        "reason": "torch_cuda_api_missing",
-    }
-    for key in ("translation_id_en", "translation_en_id"):
-        assert status["models"][key]["id"] == "milmmt-46-1b-v1.0"
-        assert status["models"][key]["revision"] == worker.MILMMT_MODEL_REVISION
-        assert status["models"][key]["path"] == str(worker.TRANSLATION_MODEL)
-
-
-@pytest.mark.parametrize(
-    "primary_ready,backup_ready,expected_id,expected_checks",
-    [
-        (True, True, "faster-whisper-large-v3-turbo", 1),
-        (False, True, "faster-whisper-medium", 2),
-        (False, False, None, 2),
-    ],
-)
-def test_asr_preload_reuses_single_asset_observation(
-    monkeypatch,
-    primary_ready,
-    backup_ready,
-    expected_id,
-    expected_checks,
-) -> None:
-    io = load_worker_module().io_runtime
-    checks = []
-    loads = []
-
-    def asset_ready(path):
-        checks.append(path)
-        return primary_ready if path == io.ASR_MODEL else backup_ready
-
-    def load_model(path, **kwargs):
-        loads.append((path, kwargs))
-        return object()
-
-    monkeypatch.setattr(io, "ASR_RUNTIME", None)
-    monkeypatch.setattr(io, "ASR_RUNTIME_MODEL_ID", "not_loaded")
-    monkeypatch.setattr(io, "ASR_RUNTIME_DEVICE", "not_loaded")
-    monkeypatch.setattr(io, "ASR_RUNTIME_COMPUTE", "not_loaded")
-    monkeypatch.setattr(io, "asr_model_ready", asset_ready)
-    monkeypatch.setattr(io.common, "import_ready", lambda _name: True)
-    monkeypatch.setattr(io, "asr_runtime_config", lambda _payload: ("cpu", "int8", ""))
-    monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=load_model))
-
-    result = io.handle_asr_preload({})
-    assert len(checks) == expected_checks
-    assert len(set(checks)) == expected_checks
-    if expected_id is None:
-        assert not result["ok"]
-        assert not loads
-        return
-    assert result["ok"]
-    assert result["model_id"] == expected_id
-    assert len(loads) == 1
-    assert loads[0][0] == result["model_path"]
-    assert loads[0][1] == {"device": "cpu", "compute_type": "int8"}
-
-
-def test_warm_asr_preload_checks_resident_model_without_loading_another(monkeypatch) -> None:
-    io = load_worker_module().io_runtime
-    resident = object()
-    checks = []
-    monkeypatch.setattr(io, "ASR_RUNTIME", resident)
-    monkeypatch.setattr(io, "ASR_RUNTIME_MODEL_ID", io.ASR_BACKUP_ID)
-    monkeypatch.setattr(io, "ASR_RUNTIME_DEVICE", "cpu")
-    monkeypatch.setattr(io, "ASR_RUNTIME_COMPUTE", "int8")
-    monkeypatch.setattr(io.common, "import_ready", lambda _name: True)
-
-    def asset_ready(path):
-        checks.append(path)
-        return True
-
-    monkeypatch.setattr(io, "asr_model_ready", asset_ready)
-    result = io.handle_asr_preload({})
-    assert result["ok"]
-    assert checks == [io.ASR_BACKUP_MODEL]
-    assert result["model_id"] == io.ASR_BACKUP_ID
-    assert result["model_path"] == str(io.ASR_BACKUP_MODEL)
-    assert io.ASR_RUNTIME is resident
-
-    monkeypatch.setattr(io, "asr_model_ready", lambda _path: False)
-    assert not io.handle_asr_preload({})["ok"]
-
-
-def test_milmmt_generate_options_are_greedy_deterministic_and_have_no_forced_bos(
-    monkeypatch,
-) -> None:
-    worker = load_worker_module()
-    fake_torch = types.SimpleNamespace(inference_mode=_FakeInferenceMode)
-    monkeypatch.setitem(sys.modules, "torch", fake_torch)
-    monkeypatch.setattr(worker, "translation_model_ready", lambda _path: True)
-    captured = _install_fake_generate_runtime(worker, [[1, 2, 3, 9, 9, 2]])
-
-    result = worker.handle_translate(
-        {"text": "halo", "source_language": "id", "target_language": "en"}
-    )
-
-    assert result["ok"] is True
-    assert result["translated_text"] == "halo dunia"
-    assert captured["max_new_tokens"] == milmmt_translation_provider.MAX_NEW_TOKENS
-    assert captured["do_sample"] is False
-    assert captured["use_cache"] is True
-    assert "return_dict_in_generate" not in captured
-    assert "forced_bos_token_id" not in captured
-
-
-@pytest.mark.parametrize(
-    ("pad_equals_eos", "generated_sequence", "expected_complete"),
-    [
-        (True, [5, 6, 7, 9, 2], True),
-        (False, [5, 6, 7, 9, 2, 1, 1], True),
-        (True, [5, 6, 7, 9, 9], False),
-        (False, [5, 6, 7, 9, 9, 1], False),
-    ],
-)
-def test_milmmt_eos_completion_survives_pad_alias_without_accepting_incomplete_output(
-    monkeypatch, pad_equals_eos, generated_sequence, expected_complete
-) -> None:
-    worker = load_worker_module()
-    monkeypatch.setitem(
-        sys.modules, "torch", types.SimpleNamespace(inference_mode=_FakeInferenceMode)
-    )
-    monkeypatch.setattr(worker, "translation_model_ready", lambda _path: True)
-    _install_fake_generate_runtime(worker, [generated_sequence])
-    if pad_equals_eos:
-        runtime = worker.TRANSLATION_RUNTIME["id->en"]
-        runtime["tokenizer"].pad_token_id = 2
-        runtime["model"].pad_token_id = 2
-
-    result = worker.handle_translate(
-        {"text": "halo", "source_language": "id", "target_language": "en"}
-    )
-
-    assert result["ok"] is expected_complete
-    assert result["complete"] is expected_complete
-    assert result["finished_with_eos"] is expected_complete
-    assert result["generated_tokens"] == 2
-    if expected_complete:
-        assert result["translated_text"] == "halo dunia"
-        assert result["blocker"] == ""
-    else:
-        assert result.get("translated_text", "") == ""
-        assert result["blocker"] == "translation:output_ended_without_eos"
-
-
-def test_milmmt_standalone_source_limit_bounds_target_expansion() -> None:
-    worker = load_worker_module()
-    assert worker.translation_input_token_limit(object(), object()) == 96
-
-
-def test_milmmt_continuation_rejects_token_ceiling_without_eos(monkeypatch) -> None:
-    worker = load_worker_module()
-    fake_torch = types.SimpleNamespace(inference_mode=_FakeInferenceMode)
-    monkeypatch.setitem(sys.modules, "torch", fake_torch)
-    monkeypatch.setattr(worker, "translation_model_ready", lambda _path: True)
-    _install_fake_generate_runtime(worker, [[1, 2, 3] + [9] * 70])
-
-    result = worker.handle_translate(
-        {
-            "text": "halo",
-            "source_language": "id",
-            "target_language": "en",
-            "max_new_tokens": 16,
-        }
-    )
-
-    assert result["ok"] is False
-    assert result["complete"] is False
-    assert result["hit_token_ceiling"] is True
-    assert result["blocker"] == "translation:output_hit_token_ceiling_without_eos"
-
-
 def test_legacy_userdata_label_cannot_escape_allowed_root(tmp_path: Path, monkeypatch) -> None:
     worker = load_worker_module()
     user_root = tmp_path / "app-local-data"
     cache_root = user_root / "CacheData"
-    monkeypatch.setattr(worker, "USER_DATA_ROOT", user_root)
+    common = worker.io_runtime.common
+    monkeypatch.setattr(common, "USER_DATA_ROOT", user_root)
     with pytest.raises(ValueError, match="worker:path_outside_allowed_roots"):
-        worker.resolve_worker_path(
+        common.resolve_worker_path(
             "UserData/CacheData/../LogData/not-allowed.wav",
             cache_root / "default.wav",
             [cache_root],
@@ -363,41 +50,7 @@ def test_configured_runtime_root_must_be_absolute(tmp_path: Path, monkeypatch) -
     worker = load_worker_module()
     monkeypatch.setenv("TRANSLATEIT_TEST_ROOT", "relative/path")
     with pytest.raises(RuntimeError, match="translateit_test_root_must_be_absolute"):
-        worker.configured_absolute_root("TRANSLATEIT_TEST_ROOT", tmp_path)
-
-
-def test_asr_failure_contract_preserves_owned_security_blocker(monkeypatch) -> None:
-    worker = load_worker_module()
-
-    def reject_path(*_args, **_kwargs):
-        raise ValueError("worker:path_outside_allowed_roots")
-
-    monkeypatch.setattr(worker.io_runtime.common, "resolve_worker_path", reject_path)
-    result = worker.handle_transcribe({"audio_path": "outside.wav"})
-
-    assert result["ok"] is False
-    assert result["blocker"] == "worker:path_outside_allowed_roots"
-
-
-def test_asr_runtime_failure_is_namespaced(tmp_path: Path, monkeypatch) -> None:
-    worker = load_worker_module()
-    audio = tmp_path / "segment.wav"
-    audio.write_bytes(b"RIFF" + b"0" * 64)
-
-    monkeypatch.setattr(
-        worker.io_runtime.common,
-        "resolve_worker_path",
-        lambda *_args, **_kwargs: audio,
-    )
-
-    def fail_runtime(_payload=None):
-        raise RuntimeError("unexpected inference failure")
-
-    monkeypatch.setattr(worker.io_runtime, "get_asr_runtime", fail_runtime)
-    result = worker.handle_transcribe({"audio_path": str(audio)})
-
-    assert result["ok"] is False
-    assert result["blocker"] == "asr:runtime_failed:RuntimeError"
+        worker.io_runtime.common.configured_absolute_root("TRANSLATEIT_TEST_ROOT", tmp_path)
 
 
 def test_newline_json_protocol_rejects_unknown_command() -> None:
@@ -428,100 +81,6 @@ def test_newline_protocol_rejects_already_expired_request() -> None:
     payload = json.loads(completed.stdout.strip())
     assert payload["ok"] is False
     assert payload["blocker"] == "worker:request_deadline_expired"
-
-
-def test_gpu_probe_uses_cpu_only_for_known_unavailable_capability(monkeypatch) -> None:
-    worker = load_worker_module()
-    common = worker.io_runtime.common
-    monkeypatch.setattr(
-        common,
-        "torch_status",
-        lambda: {
-            "import_ready": True,
-            "cuda_probe_ok": True,
-            "cuda_available": False,
-            "blocker": "",
-        },
-    )
-    monkeypatch.setattr(
-        common,
-        "ctranslate2_status",
-        lambda: {
-            "import_ready": True,
-            "cuda_probe_ok": True,
-            "cuda_available": False,
-            "blocker": "",
-        },
-    )
-    gpu = worker.probe_gpu_runtime({})
-    assert gpu["cuda_capability_known"] is True
-    assert gpu["cpu_fallback_active"] is True
-    assert gpu["selected_device"] == "cpu"
-    assert gpu["selected_translation_device"] == "cpu"
-    assert gpu["fallback_reason"] == "cuda_unavailable"
-
-
-def test_translation_prompt_uses_only_current_text_without_prior_pairs() -> None:
-    from milmmt_translation_provider import build_prompt
-
-    prompt = build_prompt("id", "en", "Besok dia memimpin rapat.")
-    assert prompt == (
-        "Translate this from Indonesian to English:\n"
-        "Indonesian: Besok dia memimpin rapat.\n"
-        "English:"
-    )
-    assert "Itu kakak saya." not in prompt
-    assert prompt.count("Translate this from") == 1
-
-
-def test_warm_translation_runtime_skips_redundant_model_asset_scan(monkeypatch) -> None:
-    worker = load_worker_module()
-    fake_torch = types.SimpleNamespace(inference_mode=_FakeInferenceMode)
-    monkeypatch.setitem(sys.modules, "torch", fake_torch)
-    _install_fake_generate_runtime(worker, [[5, 6, 7, 9, 2]])
-
-    def unexpected_asset_scan(_path):
-        raise AssertionError("warm translation runtime must not rescan model assets")
-
-    monkeypatch.setattr(worker, "translation_model_ready", unexpected_asset_scan)
-    result = worker.handle_translate(
-        {"text": "halo", "source_language": "id", "target_language": "en"}
-    )
-
-    assert result["ok"] is True
-    assert result["runtime_reused"] is True
-    assert result["model_asset_check_performed"] is False
-
-
-def test_translation_preload_does_not_run_full_worker_status(monkeypatch) -> None:
-    worker = load_worker_module()
-    fake_runtime = {
-        "device": "cpu",
-        "device_note": "cpu_runtime",
-        "precision": "fp32",
-        "translation_gpu_requested": True,
-        "translation_torch_cuda_available": False,
-        "translation_degraded": True,
-        "translation_fallback_reason": "torch_cuda_unavailable",
-    }
-    monkeypatch.setattr(
-        worker.runtime,
-        "import_ready",
-        lambda name: name in {"torch", "transformers"},
-    )
-    monkeypatch.setattr(worker, "translation_model_ready", lambda _path: True)
-    worker.TRANSLATION_RUNTIME.clear()
-    worker.TRANSLATION_RUNTIME["id->en"] = fake_runtime
-
-    def unexpected_full_status(_payload=None):
-        raise AssertionError("translation preload must not run full worker readiness")
-
-    monkeypatch.setattr(worker, "build_status_payload", unexpected_full_status)
-    result = worker.handle_translation_preload({"source_language": "id", "target_language": "en"})
-
-    assert result["ok"] is True
-    assert result["translation_degraded"] is True
-    assert result["warnings"] == ["cuda_unavailable_cpu_fallback_active"]
 
 
 def test_torch_allocator_snapshot_never_initializes_cuda(monkeypatch) -> None:
@@ -656,158 +215,34 @@ def test_cuda_device_memory_rejects_inconsistent_free_total(monkeypatch) -> None
     }
 
 
-def test_gpu_capability_snapshot_is_reused_until_probe_implementation_changes(monkeypatch) -> None:
+@pytest.mark.parametrize("command", ["asr_preload", "transcribe", "translation_preload", "translate"])
+def test_python_worker_rejects_retired_inference_commands(command: str) -> None:
+    completed = subprocess.run(
+        [sys.executable, str(WORKER_PATH)],
+        input=json.dumps({"command": command, "request_id": "retired-task"}) + "\n",
+        text=True, capture_output=True, timeout=5, check=False,
+    )
+    assert completed.returncode == 0
+    receipt = json.loads(completed.stdout)
+    assert receipt["request_id"] == "retired-task"
+    assert receipt["ok"] is False
+    assert receipt["blocker"] == "worker:unknown_command"
+
+
+def test_voice_status_never_probes_retired_meeting_models(monkeypatch) -> None:
     worker = load_worker_module()
     common = worker.io_runtime.common
-    common.clear_gpu_capability_snapshot()
-    calls = {"torch": 0, "ct2": 0}
-
-    def torch_probe():
-        calls["torch"] += 1
-        return {
-            "import_ready": True,
-            "cuda_probe_ok": True,
-            "cuda_available": True,
-            "blocker": "",
-        }
-
-    def ct2_probe():
-        calls["ct2"] += 1
-        return {
-            "import_ready": True,
-            "cuda_probe_ok": True,
-            "cuda_available": True,
-            "blocker": "",
-        }
-
-    monkeypatch.setattr(common, "torch_status", torch_probe)
-    monkeypatch.setattr(common, "ctranslate2_status", ct2_probe)
-
-    first = worker.probe_gpu_runtime({})
-    second = worker.probe_gpu_runtime({})
-
-    assert calls == {"torch": 1, "ct2": 1}
-    assert first == second
-    assert first["capability_probe_count"] >= 1
-
-
-def test_translation_prompt_has_no_user_selectable_register() -> None:
-    from milmmt_translation_provider import build_prompt
-
-    prompt = build_prompt("id", "en", "Terima kasih atas waktunya.")
-    assert "formal, professional register" not in prompt
-    assert "Terima kasih atas waktunya." in prompt
-
-
-def test_legacy_translation_style_input_cannot_reactivate_style_mode(monkeypatch) -> None:
-    worker = load_worker_module()
-    fake_torch = types.SimpleNamespace(inference_mode=_FakeInferenceMode)
-    monkeypatch.setitem(sys.modules, "torch", fake_torch)
-    monkeypatch.setattr(worker, "translation_model_ready", lambda _path: True)
-    _install_fake_generate_runtime(worker, [[5, 6, 7, 9, 2]])
-
-    result = worker.handle_translate(
-        {
-            "text": "halo",
-            "source_language": "id",
-            "target_language": "en",
-            "translation_style": "creative",
-        }
-    )
-
+    imported = []
+    def observe(name):
+        imported.append(name)
+        return True
+    monkeypatch.setattr(common, "import_ready", observe)
+    monkeypatch.setattr(worker.runtime, "voice_actor_static_status",
+                        lambda: {"ready": True, "actor_token": "fixture", "blocker": ""})
+    monkeypatch.setattr(common, "torch_allocator_snapshot", lambda: {"state": "not_initialized"})
+    result = worker.runtime.build_status_payload()
+    assert imported == ["torch", "transformers"]
     assert result["ok"] is True
-    assert "translation_style" not in result
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {"meeting_start_prepare": False},
-        {"meeting_start_prepare": True},
-        {"meeting_lane": "you", "meeting_generation": 7},
-        {"meeting_lane": "incoming", "meeting_session_id": "meeting-test"},
-    ],
-)
-def test_meeting_asr_rejects_cold_cpu_and_backup_without_loading(monkeypatch, payload) -> None:
-    io = load_worker_module().io_runtime
-    monkeypatch.setattr(io, "ASR_RUNTIME", None)
-    loads = []
-    monkeypatch.setitem(
-        sys.modules,
-        "faster_whisper",
-        types.SimpleNamespace(WhisperModel=lambda *args, **kwargs: loads.append(args)),
-    )
-    monkeypatch.setattr(io.common, "import_ready", lambda _name: True)
-    monkeypatch.setattr(io, "asr_model_ready", lambda path: path == io.ASR_BACKUP_MODEL)
-    monkeypatch.setattr(io, "asr_runtime_config", lambda _payload: ("cuda", "int8_float16", ""))
-    assert not io.handle_asr_preload(payload)["ok"]
-    with pytest.raises(RuntimeError, match="faster_whisper_large_v3_turbo_missing"):
-        io.get_asr_runtime(payload)
-    monkeypatch.setattr(io, "asr_model_ready", lambda _path: True)
-    monkeypatch.setattr(io, "asr_runtime_config", lambda _payload: ("cpu", "int8", ""))
-    with pytest.raises(RuntimeError, match="meeting_asr_required"):
-        io.get_asr_runtime(payload)
-    assert not loads
-
-
-def test_meeting_asr_checks_actual_native_compute_before_publishing(monkeypatch) -> None:
-    io = load_worker_module().io_runtime
-    payload = {"meeting_start_prepare": False}
-    for name, value in (
-        ("ASR_RUNTIME", None),
-        ("ASR_RUNTIME_MODEL_ID", "not_loaded"),
-        ("ASR_RUNTIME_DEVICE", "not_loaded"),
-        ("ASR_RUNTIME_COMPUTE", "not_loaded"),
-    ):
-        monkeypatch.setattr(io, name, value)
-    monkeypatch.setattr(io, "asr_model_ready", lambda _path: True)
-    monkeypatch.setattr(io, "asr_runtime_config", lambda _payload: ("cuda", "int8_float16", ""))
-    native = types.SimpleNamespace(device="cpu", compute_type="int8")
-    model = types.SimpleNamespace(model=native)
-    monkeypatch.setitem(
-        sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=lambda *a, **k: model)
-    )
-    with pytest.raises(RuntimeError, match="meeting_asr_compute_unverified"):
-        io.get_asr_runtime(payload)
-    assert io.ASR_RUNTIME is None
-    native.device, native.compute_type = "cuda", "int8_float16"
-    assert io.get_asr_runtime(payload) is model
-    native.device = "cpu"
-    with pytest.raises(RuntimeError, match="meeting_asr_compute_unverified"):
-        io.get_asr_runtime(payload)
-
-
-def test_meeting_translation_refuses_cold_cpu_and_warm_degraded_runtime(monkeypatch) -> None:
-    load_worker_module()
-    provider = milmmt_translation_provider
-    host = provider._host()
-    monkeypatch.setitem(host, "TRANSLATION_RUNTIME", {})
-    monkeypatch.setitem(host, "translation_runtime_config", lambda: ("cpu", "cuda_unavailable"))
-    monkeypatch.setitem(host, "translation_model_ready", lambda _path: True)
-    with pytest.raises(RuntimeError, match="meeting_translation_required"):
-        provider.get_translation_runtime("id", "en", require_cuda=True)
-    assert not host["TRANSLATION_RUNTIME"]
-
-    resident = {
-        "model": types.SimpleNamespace(
-            device="cuda:0", dtype="torch.bfloat16", hf_device_map={"": 0}
-        ),
-        "model_id": provider.MODEL_ID,
-        "model_revision": provider.MODEL_REVISION,
-        "device": "cuda",
-        "precision": "bf16",
-        "translation_degraded": False,
-        "translation_fallback_reason": "",
-    }
-    host["TRANSLATION_RUNTIME"]["id->en"] = resident
-    assert provider.get_translation_runtime("id", "en", require_cuda=True) is resident
-    resident["model"].hf_device_map = {"": 0, "layer": "cpu"}
-    with pytest.raises(RuntimeError, match="meeting_translation_compute_unverified"):
-        provider.get_translation_runtime("id", "en", require_cuda=True)
-    resident["model"].hf_device_map = {"": 0}
-    resident["device"] = "cpu"
-    with pytest.raises(RuntimeError, match="meeting_translation_compute_unverified"):
-        provider.get_translation_runtime("id", "en", require_cuda=True)
-    with pytest.raises(RuntimeError, match="meeting_translation_compute_unverified"):
-        provider.get_translation_runtime("en", "id", require_cuda=True)
-    assert "en->id" not in host["TRANSLATION_RUNTIME"]
+    assert result["readiness"] == {"voice_actor_tts": True}
+    assert "selected_device" not in result and "asr_primary_model_ready" not in result
+    assert result["gpu"]["torch_allocator"] == {"state": "not_initialized"}

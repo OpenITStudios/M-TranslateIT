@@ -22,25 +22,12 @@ def test_worker_entrypoint_uses_explicit_runtime_module_without_exec() -> None:
 
     entry = load_entry_module()
     assert entry.runtime.__name__ == "realtime_local_worker_base"
-    assert entry.TRANSLATION_MODEL == entry.runtime.TRANSLATION_MODEL
     assert entry.HANDLERS is entry.runtime.HANDLERS
 
 
-def test_worker_entrypoint_installs_provider_once_per_runtime_module() -> None:
+def test_worker_entrypoint_reuses_one_voice_runtime_module() -> None:
     first = load_entry_module()
-    first_build_status = first.runtime.build_status_payload
     second = load_entry_module()
-
     assert second.runtime is first.runtime
-    assert second.runtime.build_status_payload is first_build_status
-    assert getattr(second.runtime, second._PROVIDER_SENTINEL) is True
-
-
-def test_facade_override_is_scoped_to_one_call() -> None:
-    entry = load_entry_module()
-    original = entry.runtime.translation_model_ready
-    entry.translation_model_ready = lambda _path: False
-
-    entry.handle_translate({"text": "halo", "source_language": "id", "target_language": "en"})
-
-    assert entry.runtime.translation_model_ready is original
+    assert second.HANDLERS is first.HANDLERS
+    assert set(second.HANDLERS) == {"ping", "status", "voice_actor_preflight", "voice_actor_synthesize"}

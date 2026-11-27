@@ -99,8 +99,10 @@ My Voice synthesis, training and evaluation algorithms are unchanged.
   produced here. The production source now selects native-only ASR/MT.
   Idle diagnostic model weights close after verification; VoiceLab
   admission releases idle native weights before GPU use. Legacy Python
-  implementations and model staging are now unreachable from Meeting
-  ASR/MT transport and remain for the next retirement pass, not fallback.
+  ASR/MT implementation and MiLMMT model staging are retired. The voice
+  worker retains only voice/control handlers. Faster Whisper Large V3
+  Turbo and CTranslate2 remain for My Voice evaluation and Silero assets.
+  Offline payload and installed-runtime schema v2 reject the old layout.
   Parent names are locked during DLL admission and redirected directories
   rejected. Complete reviewed PE closure and actual installed ACLs
   remain release evidence requirements.
@@ -128,5 +130,4 @@ recipe or authorization to run a test now.
 ASR and translation candidate paths are authored, but native compile, linkage,
 GPU execution, tokenizer/prompt parity, EOG handling, Indonesian/English quality,
 cancellation/timeout, process isolation, and combined VRAM remain unverified.
-Do not release or claim runtime acceptance until the remaining legacy retirement,
-integrated source review and held Windows build/runtime proof are complete.
+Do not release or claim runtime acceptance until integrated source review and held Windows build/runtime proof are complete.

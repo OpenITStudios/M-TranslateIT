@@ -152,10 +152,8 @@ const hasAnyFile = (root) => {
 for (const file of [
   "realtime_local_worker.py",
   "realtime_local_worker_base.py",
-  "milmmt_translation_provider.py",
   "worker_runtime_common.py",
   "worker_io_runtime.py",
-  "translation_envelope.py",
   "voice_lab_build.py",
   "my_voice_compute_probe.py",
   "my_voice_gpu_policy.py",

@@ -32,7 +32,6 @@ const paths = {
   manifest: join(workerRoot, "model_manifest.json"),
   entrypoint: join(workerRoot, "realtime_local_worker.py"),
   base: join(workerRoot, "realtime_local_worker_base.py"),
-  provider: join(workerRoot, "milmmt_translation_provider.py"),
   build: join(scriptDir, "build_release.ps1"),
   stage: join(scriptDir, "stage_release_inputs_impl.ps1"),
   builder: join(scriptDir, "build_r3_external_payload.py"),
@@ -50,7 +49,6 @@ const config = readJson(paths.config);
 const manifest = readJson(paths.manifest);
 const entrypoint = readText(paths.entrypoint);
 const base = readText(paths.base);
-const provider = readText(paths.provider);
 const build = readText(paths.build);
 const stage = readText(paths.stage);
 const builder = readText(paths.builder);
@@ -82,10 +80,8 @@ else {
 const expectedResources = {
   "../../../Backend/LocalWorker/WorkerRuntime/realtime_local_worker.py": "EngineData/Backend/LocalWorker/WorkerRuntime/realtime_local_worker.py",
   "../../../Backend/LocalWorker/WorkerRuntime/realtime_local_worker_base.py": "EngineData/Backend/LocalWorker/WorkerRuntime/realtime_local_worker_base.py",
-  "../../../Backend/LocalWorker/WorkerRuntime/milmmt_translation_provider.py": "EngineData/Backend/LocalWorker/WorkerRuntime/milmmt_translation_provider.py",
   "../../../Backend/LocalWorker/WorkerRuntime/worker_runtime_common.py": "EngineData/Backend/LocalWorker/WorkerRuntime/worker_runtime_common.py",
   "../../../Backend/LocalWorker/WorkerRuntime/worker_io_runtime.py": "EngineData/Backend/LocalWorker/WorkerRuntime/worker_io_runtime.py",
-  "../../../Backend/LocalWorker/WorkerRuntime/translation_envelope.py": "EngineData/Backend/LocalWorker/WorkerRuntime/translation_envelope.py",
   "../../../Backend/LocalWorker/WorkerRuntime/voice_lab_build.py": "EngineData/Backend/LocalWorker/WorkerRuntime/voice_lab_build.py",
   "../../../Backend/LocalWorker/WorkerRuntime/my_voice_compute_probe.py": "EngineData/Backend/LocalWorker/WorkerRuntime/my_voice_compute_probe.py",
   "../../../Backend/LocalWorker/WorkerRuntime/my_voice_gpu_policy.py": "EngineData/Backend/LocalWorker/WorkerRuntime/my_voice_gpu_policy.py",
@@ -167,8 +163,8 @@ forbidMarkers(stage, "release staging moving FFmpeg source", [
 ]);
 
 requireMarkers(builder, "payload builder", [
-  'PAYLOAD_SCHEMA = "translateit.r3.external_payload.v1"',
-  'INSTALLED_RUNTIME_SCHEMA = "translateit.installed_runtime.v1"',
+  'PAYLOAD_SCHEMA = "translateit.r3.external_payload.v2"',
+  'INSTALLED_RUNTIME_SCHEMA = "translateit.installed_runtime.v2"',
   "TRANSLATEIT_PAYLOAD_CONTRACT.json",
   'TRANSFORMERS_VERSION = "4.57.6"',
   'TOKENIZERS_VERSION = "0.22.2"',
@@ -208,14 +204,19 @@ requireMarkers(build, "release build", [
 
 if (manifest.schema !== "translateit.local_model_inventory.v2" || manifest.inventory_scope !== "full_product_release_assets") fail("model_manifest.json release inventory contract drifted.");
 const requiredIds = new Set((manifest.models ?? []).filter((item) => item.required === true).map((item) => item.model_id));
-for (const id of ["faster-whisper-large-v3-turbo", "milmmt-46-1b-v1.0", "qwen3-asr-1.7b-q8_0", "hy-mt2-1.8b-q6_k", "gpt-sovits-v2proplus-voicelab"]) if (!requiredIds.has(id)) fail(`Required model missing: ${id}`);
-for (const legacy of ["marianmt-id-en", "marianmt-en-id", "m2m100-418m"]) if (requiredIds.has(legacy)) fail(`Legacy translator remains required: ${legacy}`);
-const milmmt = (manifest.models ?? []).find((item) => item.model_id === "milmmt-46-1b-v1.0");
-if (milmmt?.repo_id !== "xiaomi-research/MiLMMT-46-1B-v1.0" || milmmt?.revision !== "4fc480b6c58dec29c159dcdf9fde0f6d5c354995") fail("MiLMMT release identity drifted.");
-if (!entrypoint.includes("import realtime_local_worker_base as runtime") || !entrypoint.includes("milmmt_translation_provider.install(vars(runtime))") || !entrypoint.includes("_PROVIDER_SENTINEL")) fail("Canonical worker entrypoint drifted.");
+for (const id of ["faster-whisper-large-v3-turbo", "qwen3-asr-1.7b-q8_0", "hy-mt2-1.8b-q6_k", "gpt-sovits-v2proplus-voicelab"]) if (!requiredIds.has(id)) fail(`Required model missing: ${id}`);
+for (const legacy of ["marianmt-id-en", "marianmt-en-id", "m2m100-418m", "milmmt-46-1b-v1.0", "faster-whisper-medium"]) if (requiredIds.has(legacy)) fail(`Legacy translator remains required: ${legacy}`);
+const mt = (manifest.models ?? []).filter((item) => item.stage === "translation_bidirectional_id_en");
+if (mt.length !== 1 || mt[0].model_id !== "hy-mt2-1.8b-q6_k" || mt[0].revision !== "a0c709d9fac510f2c807aa3af52872340dc37a4a" || mt[0].cpu_fallback !== false) fail("Native MT identity drifted.");
+const asr = (manifest.models ?? []).filter((item) => item.stage === "asr_primary");
+if (asr.length !== 1 || asr[0].model_id !== "qwen3-asr-1.7b-q8_0" || asr[0].revision !== "3b2c29585c2180452ccb14d3b6b58127f352400d" || asr[0].cpu_fallback !== false) fail("Native ASR identity drifted.");
+if (!entrypoint.includes("import realtime_local_worker_base as runtime") || !entrypoint.includes("runtime.HANDLERS.get(command)")) fail("Canonical worker entrypoint drifted.");
 if (entrypoint.includes("exec(") || entrypoint.includes("compile(") || entrypoint.includes('globals()["__name__"]')) fail("Canonical worker entrypoint returned to dynamic exec bootstrap.");
-if (base.includes("AutoModelForSeq2SeqLM") || base.toLowerCase().includes("m2m100")) fail("Legacy translator implementation returned to worker base.");
-for (const marker of ["AutoModelForCausalLM", "milmmt-46-1b-v1.0", "4fc480b6c58dec29c159dcdf9fde0f6d5c354995", "do_sample=False"]) if (!provider.includes(marker)) fail(`MiLMMT provider marker missing: ${marker}`);
+const handlers = base.match(/HANDLERS\s*=\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
+compareExact([...handlers.matchAll(/"([a-z_]+)"\s*:/g)].map(match => match[1]).sort(), ["ping", "status", "voice_actor_preflight", "voice_actor_synthesize"], "voice worker command closure");
+for (const legacy of ["milmmt_translation_provider", "translation_envelope", "AutoModelForCausalLM", "handle_transcribe", "handle_translate"]) {
+  if (entrypoint.includes(legacy) || base.includes(legacy)) fail(`Legacy inference in voice worker: ${legacy}`);
+}
 
 const scripts = packageJson.scripts ?? {};
 if (!String(scripts["preflight:tauri-package"] ?? "").includes("validate_release_package_contract.mjs")) fail("Tauri package preflight must include the R3 release contract.");

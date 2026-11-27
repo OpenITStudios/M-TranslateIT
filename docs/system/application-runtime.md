@@ -101,7 +101,7 @@ Cross-generation functional-proof reuse remains conditional under
 [Phase C](../foundation/04-realtime-latency-architecture.md#phase-c--strong-functional-proof-rebinding).
 The existing receipt has worker generation, Meeting generation, actor token,
 and verification timestamp, but does not establish the required full
-ASR/MiLMMT/voice execution identity and invalidation epoch. There is no
+Qwen3-ASR/Hy-MT2/voice execution identity and invalidation epoch. There is no
 matched target timing proving repeated inference dominates warm Start.
 Do not replace the full functional probe with cached readiness or file
 presence on this source evidence alone.

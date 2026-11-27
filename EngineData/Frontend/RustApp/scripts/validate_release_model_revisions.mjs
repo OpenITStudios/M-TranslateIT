@@ -11,14 +11,15 @@ const manifestPath = join(workerRoot, "model_manifest.json");
 const revisionMarker = ".translateit_model_revision";
 
 const EXPECTED_TRANSLATION = {
-  model_id: "milmmt-46-1b-v1.0",
-  repo_id: "xiaomi-research/MiLMMT-46-1B-v1.0",
-  revision: "4fc480b6c58dec29c159dcdf9fde0f6d5c354995",
+  model_id: "hy-mt2-1.8b-q6_k",
+  repo_id: "tencent/Hy-MT2-1.8B-GGUF",
+  revision: "a0c709d9fac510f2c807aa3af52872340dc37a4a",
   expected_path:
-    "EngineData/Backend/RuntimeAssets/Translation/ModelData/xiaomi-research--MiLMMT-46-1B-v1.0",
+    "EngineData/Backend/RuntimeAssets/Translation/ModelData/hy-mt2-1.8b",
 };
 
 const LEGACY_TRANSLATION_DIRS = [
+  "xiaomi-research--MiLMMT-46-1B-v1.0",
   "m2m100-418m",
   "facebook--m2m100_418M",
   "marianmt-id-en",
@@ -68,8 +69,15 @@ const translation = translations[0];
 for (const [key, expected] of Object.entries(EXPECTED_TRANSLATION)) {
   if (translation[key] !== expected) fail(`translation_${key}`);
 }
-if (translation.backend !== "milmmt") fail("translation_backend");
+if (translation.backend !== "llama.cpp") fail("translation_backend");
 if (translation.source_type !== "huggingface") fail("translation_source_type");
+const asr = manifest.models.filter(model => model.stage === "asr_primary");
+if (asr.length !== 1 || asr[0].model_id !== "qwen3-asr-1.7b-q8_0"
+    || asr[0].revision !== "3b2c29585c2180452ccb14d3b6b58127f352400d"
+    || asr[0].backend !== "llama.cpp/mtmd" || asr[0].cpu_fallback !== false
+    || translation.cpu_fallback !== false) fail("native_model_identity");
+const expectedEvaluation = manifest.models.find(model => model.model_id === "faster-whisper-large-v3-turbo");
+if (expectedEvaluation?.stage !== "voice_actor_evaluation_asr" || expectedEvaluation.required !== true) fail("voice_evaluation_model_missing");
 
 const prefix = "EngineData/Backend/";
 for (const model of manifest.models ?? []) {
@@ -112,6 +120,10 @@ for (const legacy of LEGACY_TRANSLATION_DIRS) {
   if (existsSync(join(translationRoot, legacy))) fail(`legacy_translation_present:${legacy}`);
 }
 
+if (existsSync(join(backendRoot, "RuntimeAssets", "ASR", "ModelData", "faster-whisper-medium"))) {
+  fail("retired_meeting_asr_backup_present");
+}
+
 console.log(
-  `[release-model-revision] canonical MiLMMT + required Hugging Face revision markers PASS (${EXPECTED_TRANSLATION.revision})`,
+  `[release-model-revision] canonical Hy-MT2 + required Hugging Face revision markers PASS (${EXPECTED_TRANSLATION.revision})`,
 );

@@ -18,7 +18,6 @@ def test_required_huggingface_plan_is_revision_pinned_and_runtime_asset_scoped()
     selected, manual = module.build_plan(module.load_manifest())
     assert {item["model_id"] for item in selected} == {
         "faster-whisper-large-v3-turbo",
-        "milmmt-46-1b-v1.0",
         "qwen3-asr-1.7b-q8_0",
         "hy-mt2-1.8b-q6_k",
     }
@@ -27,21 +26,10 @@ def test_required_huggingface_plan_is_revision_pinned_and_runtime_asset_scoped()
     assert {item["model_id"] for item in manual} == {"gpt-sovits-v2proplus-voicelab"}
 
 
-def test_milmmt_plan_pins_exact_revision_and_required_snapshot_files() -> None:
-    module = load_module()
-    selected, _manual = module.build_plan(module.load_manifest())
-    candidate = next(item for item in selected if item["model_id"] == "milmmt-46-1b-v1.0")
-    assert candidate["revision"] == "4fc480b6c58dec29c159dcdf9fde0f6d5c354995"
-    assert "model.safetensors" in candidate["download_allow_patterns"]
-    assert "tokenizer.json" in candidate["download_allow_patterns"]
-    assert "tokenizer.model" in candidate["download_allow_patterns"]
-    assert "pytorch_model.bin" not in candidate["download_allow_patterns"]
-
-
 def test_native_assets_have_only_exact_pinned_gguf_downloads() -> None:
     module = load_module()
     manifest = module.load_manifest()
-    native = {m["model_id"]: m for m in manifest["models"] if m["stage"].endswith("_native_candidate")}
+    native = {m["model_id"]: m for m in manifest["models"] if m["backend"].startswith("llama.cpp")}
     assert set(native) == {"qwen3-asr-1.7b-q8_0", "hy-mt2-1.8b-q6_k"}
     for model in native.values():
         assert model["required"] is True and model["cpu_fallback"] is False
@@ -60,13 +48,11 @@ def test_download_allow_pattern_cannot_escape_snapshot() -> None:
         raise AssertionError("snapshot allow pattern must not escape its model root")
 
 
-def test_optional_plan_adds_only_manifest_optional_huggingface_assets() -> None:
+def test_optional_plan_never_restores_retired_meeting_fallback_assets() -> None:
     module = load_module()
     selected, _manual = module.build_plan(module.load_manifest(), include_optional=True)
     assert {item["model_id"] for item in selected} == {
         "faster-whisper-large-v3-turbo",
-        "faster-whisper-medium",
-        "milmmt-46-1b-v1.0",
         "qwen3-asr-1.7b-q8_0",
         "hy-mt2-1.8b-q6_k",
     }

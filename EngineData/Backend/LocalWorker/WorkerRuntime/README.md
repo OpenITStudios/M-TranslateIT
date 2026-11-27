@@ -1,95 +1,25 @@
 # Backend Local Worker Runtime
 
-This folder owns TranslateIT's single Python inference worker used by the Tauri/Rust application.
+Python is retained for selected Meeting voice synthesis and My Voice build/evaluation. ASR and MT are exclusively Rust-owned native CUDA requests, not Python commands.
 
 ## Process
 
 ```text
-realtime_local_worker.py
-├─ realtime_local_worker_base.py
-│  ├─ worker_runtime_common.py
-│  └─ worker_io_runtime.py
-└─ milmmt_translation_provider.py
+realtime_local_worker.py       # bounded JSON framing, request ID and deadline
+├─ realtime_local_worker_base.py # voice status and exact handler table
+│  ├─ worker_runtime_common.py   # paths, text/deadline bounds, allocator observation
+│  └─ worker_io_runtime.py       # selected actor lifecycle and synthesis
 ```
 
-`realtime_local_worker.py` is the only application-facing worker entrypoint. Supporting modules split responsibility without creating another process/runtime:
+The only worker commands are `ping`, `status`, `voice_actor_preflight`, and
+`voice_actor_synthesize`. Native ASR/MT remains in the same Rust scheduler and
+lifecycle; the Python worker does not import or inspect ASR/MT model assets.
+See [native inference source](../../../../tools/translation_quality/native_cuda/README.md).
 
-- `realtime_local_worker_base.py`: newline-JSON protocol, status composition, command dispatch and standalone Text orchestration;
-- `worker_runtime_common.py`: paths, limits, language normalization, GPU/device probes and generic completion helpers;
-- `worker_io_runtime.py`: Faster Whisper ASR and GPT-SoVITS selected-voice inference state/commands;
-- `milmmt_translation_provider.py`: Indonesian ↔ English MiLMMT translation behavior.
-
-The worker exposes:
-
-```text
-status
-asr_preload
-transcribe
-translation_preload
-translate
-voice_actor_preflight
-voice_actor_synthesize
-```
-
-Rust remains Meeting/session/audio and selected-voice profile authority. The Python worker does not own Windows virtual-audio routing or a second product architecture.
-
-## Translation
-
-```text
-xiaomi-research/MiLMMT-46-1B-v1.0
-revision 4fc480b6c58dec29c159dcdf9fde0f6d5c354995
-one resident causal model
-ID → EN and EN → ID
-CUDA BF16 primary
-CPU fallback = legacy non-Meeting requests only; Meeting ASR/MT requires CUDA
-```
-
-Production rules:
-
-- official Xiaomi translation prompt;
-- deterministic `do_sample=false`;
-- continuation-only causal decoding;
-- source is never silently truncated;
-- known incomplete/non-EOS generation fails closed;
-- malformed success envelopes and non-string translated outputs fail closed instead
-  of coercing lists, null values or other objects into text;
-- a completed response that begins by repeating the exact canonical MiLMMT
-  prompt for the current source is rejected before Meeting TTS or caption use.
-  This narrowly detects complete prompt-envelope echoes; it does not claim to
-  detect arbitrary language mismatch, semantic hallucinations, or source-only
-  phrases such as `English:` used legitimately;
-- RuntimeAssets readiness requires `.translateit_model_revision` to match the pinned revision;
-- no M2M100/Marian/second-translator fallback/router.
-
-Direct worker translation requests use the existing output contract exactly once.
-Standalone Text still validates each chunk and the newly assembled aggregate.
-No prompt, token budget, EOS, failure-invalidation, or inference policy changes.
-
-Meeting translation is context-free across turns: outbound ID→EN uses only the current finalized Indonesian utterance; incoming EN→ID uses only the current finalized English utterance. Standalone Text uses only its current input. Prior translated pairs, transcript history, and historical `context_pairs` are not supplied to MiLMMT. Transcript retention is for review/export only.
-
-## ASR and Meeting voice
-
-- ASR primary: Faster Whisper Large V3 Turbo.
-- Optional ASR fallback: Faster Whisper Medium for legacy non-Meeting calls only.
-  Meeting and the setup functional probe admit only Large V3 Turbo on CUDA.
-  Before inference, the worker refuses a missing primary, an existing backup
-  or CPU model, or an actual CTranslate2 device/compute mismatch. MiLMMT
-  Meeting requests likewise refuse CPU loading and degraded resident reuse;
-  no fallback result is promoted by Rust. This is a transitional source gate,
-  not the native CUDA migration or a change to My Voice.
-- Status observes each ASR asset candidate once and derives the preferred candidate
-  from those results. Cold preload reuses its verified selection through construction;
-  warm preload validates and reports the actual resident model, without switching or
-  reloading it. Explicit asset checks remain fresh, not a persistent readiness cache.
-  The status candidate and loaded model identity remain separate.
-- Meeting voice inference: one GPT-SoVITS `voice_actor_*` contract. Cold actor
-  construction consumes the same validated package from the worker load
-  transaction; a fresh post-load fingerprint check remains required before
-  publishing the resident runtime. Standalone loader calls still validate
-  their own package. Warm bound synthesis remains unchanged.
-- Built-in Male/Female: Rust prepares a selected actor profile from pinned LibriSpeech reference assets plus reviewed shared V2ProPlus pretrained weights; user training is not required.
-- My Voice: optional trained GPT-SoVITS V2ProPlus actor promoted only after held-out evaluation and explicit user approval.
-- Existing `voice_lab_*` Python filenames/error namespaces are legacy compatibility identifiers, not product vocabulary.
+- Native Meeting ASR: pinned Qwen3-ASR 1.7B Q8_0 and audio projector.
+- Native Meeting translation: pinned Hy-MT2 1.8B Q6_K, ID ↔ EN, only current source, no fallback.
+- Built-in Male/Female and trained My Voice retain one selected GPT-SoVITS V2ProPlus actor, exact actor-token and post-load identity checks.
+- Faster Whisper Large V3 Turbo, CTranslate2 and bundled Silero ONNX remain for My Voice evaluation and VAD; no Meeting ASR fallback. Training/evaluation code is unchanged.
 
 ## Dependencies
 
@@ -111,13 +41,13 @@ Tokenizers   0.22.2 resolved by uv.lock
 Accelerate   1.15.0 resolved by uv.lock
 ```
 
-Transformers 4.57.6 remains the reviewed MiLMMT runtime boundary. Updating the lock or passing source tests does not revalidate model quality, GPU coexistence or Meeting delivery.
+Transformers 4.57.6 remains the existing pinned voice dependency boundary. Updating the lock or passing source tests does not revalidate model quality, GPU coexistence or Meeting delivery.
 
 Compatibility ceilings retained during the 2026-10-26 dependency refresh:
 
 - PyAV is constrained to `<19` while stable faster-whisper 1.2.1 calls `av.open(..., metadata_errors="ignore")`. PyAV 19 removed that keyword ([upstream changelog](https://pyav.basswood.io/docs/stable/development/changelog.html)), which broke actual WAV transcription despite successful imports/preload. Keep the newest compatible release resolved by the lock; remove this ceiling only after a released faster-whisper decoder supports the newer API and real decode/inference acceptance passes. `tests/test_asr_audio_decode.py` exercises actual mono/stereo WAV decoding without models or network.
 - The pinned GPT-SoVITS source requirements retain NumPy `<2`, librosa `0.10.2`, PEFT `<0.18` and TorchMetrics `<=1.5`. They remain explicit constraints, not claims that those packages are globally latest. SciPy and pandas are resolved to the newest versions allowed by that NumPy boundary.
-- Transformers stays at the reviewed 4.57.6 MiLMMT boundary; its dependency metadata keeps Hugging Face Hub below 1 and Tokenizers below 0.23. A Transformers 5 migration needs its own model/voice acceptance and is not implied by a lockfile refresh.
+- Transformers stays at the reviewed 4.57.6 voice dependency boundary; its dependency metadata keeps Hugging Face Hub below 1 and Tokenizers below 0.23. A Transformers 5 migration needs its own model/voice acceptance and is not implied by a lockfile refresh.
 - TorchAudio 2.11 is current and uses PyTorch's stable ABI, supporting PyTorch 2.11 and later ([upstream compatibility](https://docs.pytorch.org/audio/stable/installation.html)). Torch 2.14.1 keeps the existing CUDA 12.6 index; source/import tests are separate from GPU/model proof.
 - Python stays at 3.12.10 because the NumPy 1.26 Windows wheels support Python through 3.12, and 3.12.10 is the final official 3.12 Windows embeddable binary. Later 3.12 security releases are source-only ([Python release policy](https://www.python.org/downloads/release/python-31215/)). This leaves a security-maintenance limitation; it does not claim that 3.12.10 includes newer source-only fixes. A newer Python requires migration of the pinned voice dependency boundary.
 

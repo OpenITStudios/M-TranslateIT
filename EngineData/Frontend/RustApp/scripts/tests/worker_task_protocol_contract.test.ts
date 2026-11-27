@@ -34,21 +34,13 @@ function rustDeadlineTasks(): string[] {
   return [...values].sort();
 }
 
-test("Rust helper deadlines cover exactly the Python worker command handlers", () => {
-  assert.deepEqual(rustDeadlineTasks(), pythonHandlers());
-});
-
-test("canonical worker protocol contains the required realtime task set", () => {
-  assert.deepEqual(pythonHandlers(), [
-    "asr_preload",
-    "ping",
-    "status",
-    "transcribe",
-    "translate",
-    "translation_preload",
-    "voice_actor_preflight",
-    "voice_actor_synthesize",
-  ]);
+test("Rust deadlines cover the disjoint native and voice task sets", () => {
+  const native = ["asr_preload", "transcribe", "translate", "translation_preload"];
+  const transport = readFileSync(new URL("../../src-tauri/src/commands/helper_bridge/transport.rs", import.meta.url), "utf8");
+  assert.deepEqual(pythonHandlers(), ["ping", "status", "voice_actor_preflight", "voice_actor_synthesize"]);
+  assert.deepEqual(rustDeadlineTasks(), [...native, ...pythonHandlers()].sort());
+  assert.match(transport, /return native::dispatch\(/);
+  assert.match(transport, /!matches!\(task, "ping" \| "status" \| "voice_actor_preflight" \| "voice_actor_synthesize"\)/);
 });
 
 test("unknown Rust worker tasks remain bounded by a fallback deadline", () => {

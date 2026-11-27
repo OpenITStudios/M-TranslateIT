@@ -124,7 +124,7 @@ Domain algorithms remain in their domain modules; ApplicationRuntime coordinates
 | Helper process/transport/readiness | Rust `commands/helper_bridge*` |
 | Experimental Codex App Server account/usage probe and process lifecycle (not Meeting-capable) | Rust `commands/codex_gateway.rs`, `commands/codex_gateway/protocol.rs`, `transport.rs` (sealed source-only P25 offer/ACK/started/SDP exchange); `compatibility.rs` owns the source-derived Windows CLI version, initialize and account gateway-provider read-only gate; `realtime.rs` owns offline typed voice observations and PCM frame admission; `correlation.rs` owns one-flight unverified source/assistant evidence; `realtime_rpc.rs` owns offline typed V3 WebRTC RPC envelopes, in-flight ACK accounting and Stop handshake; `text.rs` owns source-only text request/final-result evidence, not production inference |
 | WebView2 Codex WebRTC SDP/ICE signalling peer (source-only; not a second Meeting/Voice owner) | `EngineData/Frontend/RustApp/src/app/bridge/codexRealtimePeer.ts`; bound by native Meeting generation/epoch only when later admitted. No browser microphone, media playback or production command caller today |
-| Canonical MiLMMT translation | `milmmt_translation_provider.py` |
+| Canonical native ASR and MT | `tools/translation_quality/native_cuda/` + `commands/helper_bridge/transport/native.rs` |
 | Model inventory/staging | `model_manifest.json` + `prepare_model_assets*.py` |
 | My Voice recording/review | Rust `commands/voice_lab_recording.rs` |
 | My Voice build/evaluation | Rust `commands/voice_lab_build.rs` + `voice_lab_build.py` + `voice_lab_gpt_sovits_build.py` |
@@ -164,7 +164,7 @@ Command-name/response-shape parity is owned by `validate_bridge_contract.mjs`. R
 
 ### Local worker protocol ownership
 
-Rust↔Python worker task-name/deadline parity is guarded by `worker_task_protocol_contract.test.ts`. Python status payload ↔ Rust readiness application ↔ TypeScript capability parsing is guarded by `worker_status_protocol_contract.test.ts`. Transport implementation remains Rust-owned in `commands/helper_bridge/` and `helper_bridge_runtime.rs`; command execution remains Python-owned in `realtime_local_worker_base.py` / `worker_io_runtime.py`. No side may add or rename protocol fields/tasks without updating the cross-language contract.
+Disjoint native and Python voice task sets and their deadlines are guarded by `worker_task_protocol_contract.test.ts`. Rust-projected native status plus Python voice capability ↔ TypeScript capability parsing is guarded by `worker_status_protocol_contract.test.ts`. Transport remains Rust-owned in `commands/helper_bridge/` and `helper_bridge_runtime.rs`; only voice and control commands execute in `realtime_local_worker_base.py` / `worker_io_runtime.py`. No side may add or rename protocol fields/tasks without updating the cross-language contract.
 
 
 ### RuntimeSettings contract ownership

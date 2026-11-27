@@ -1,11 +1,13 @@
 # Translation Quality
 
+Native cutover: the existing corpus and grading logic remain unchanged. Older MiLMMT results are historical baselines, not native inference evidence. Direct Python worker translation commands are retired; fresh results must be collected through the native inference route during the separately authorized Windows acceptance phase.
+
 This directory owns source-level translation quality evaluation infrastructure for the canonical Indonesian ↔ English pipeline.
 
 It deliberately separates **quality measurement** from **quality claims**:
 
 - source-level corpus/evaluator checks validate integrity and behavior when actually executed; hosted CI is inactive under the current repository policy;
-- real MiLMMT output must be produced by a runtime with the canonical model installed;
+- real Hy-MT2 output must be produced by the pinned native runtime with the canonical model installed;
 - no repository/static result is reported as proof of model quality.
 
 ## Corpus
@@ -263,7 +265,7 @@ When an otherwise fully passing contrast has no pair of matching declared
 worker receipts, the new status is `RESULTS_ONLY_NO_WORKER_RECEIPT` and the CLI
 exits nonzero. This gate changes only the focused contrast workflow; it does
 not silently change the older `evaluate`/`compare` result formats or quality
-scoring. Never infer that a source-only self-test exercised MiLMMT.
+scoring. Never infer that a source-only self-test exercised native Hy-MT2.
 
 ### Execute the selected translation stage
 

@@ -40,9 +40,9 @@ const common = readFileSync(
 test("Rust injects the worker command and bounded request deadline consumed by Python", () => {
   assert.match(policy, /object\.insert\("command"\.to_string\(\), json!\(task\)\)/);
   assert.match(runtime, /"deadline_unix_ms"\.to_string\(\)/);
-  assert.match(worker, /request\.get\("command", "status"\)/);
+  assert.match(workerEntry, /request\.get\("command", "status"\)/);
   assert.match(common, /payload\.get\("deadline_unix_ms", 0\)/);
-  assert.match(worker, /request_deadline_expired\(request\)/);
+  assert.match(workerEntry, /request_deadline_expired\(request\)/);
 });
 
 test("request correlation metadata remains Rust transport-owned", () => {

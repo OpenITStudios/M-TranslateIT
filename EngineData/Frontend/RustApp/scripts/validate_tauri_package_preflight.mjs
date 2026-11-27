@@ -228,8 +228,7 @@ forbidMarkers(workerPyproject, "retired WorkerRuntime dependency boundary", [
 const workerEntrypoint = readText(workerEntrypointPath);
 requireMarkers(workerEntrypoint, "thin worker entrypoint", [
   "import realtime_local_worker_base as runtime",
-  "milmmt_translation_provider.install(vars(runtime))",
-  "_PROVIDER_SENTINEL",
+  "runtime.HANDLERS.get(command)",
 ]);
 forbidMarkers(workerEntrypoint, "dynamic worker bootstrap", ["exec(", "compile(", 'globals()["__name__"]']);
 
@@ -240,7 +239,7 @@ requireMarkers(workerCommon, "worker runtime/user path owner", [
   "RUNTIME_ASSETS_ROOT = RUNTIME_ROOT",
   'CACHE_ROOT = USER_DATA_ROOT / "CacheData"',
   'LOG_ROOT = USER_DATA_ROOT / "LogData"',
-  'TRANSLATION_MODEL_ROOT = RUNTIME_ASSETS_ROOT / "Translation" / "ModelData"',
+  'GPT_SOVITS_SOURCE_ROOT = RUNTIME_ASSETS_ROOT / "Voice" / "GPTSoVITS" / "Source"',
 ]);
 forbidMarkers(workerCommon, "worker repository-coupled packaged paths", [
   'CACHE_ROOT = SCRIPT_ROOT / "UserData"',

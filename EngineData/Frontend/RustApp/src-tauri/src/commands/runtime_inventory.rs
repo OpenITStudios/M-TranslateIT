@@ -68,7 +68,7 @@ fn manifest_contract_valid(manifest: &ModelManifest) -> bool {
     manifest.schema == "translateit.local_model_inventory.v2"
         && manifest.inventory_scope == "full_product_release_assets"
         && manifest.required_field_semantics == "required_for_full_product_release"
-        && manifest.meeting_readiness_owner == "realtime_local_worker.status"
+        && manifest.meeting_readiness_owner == "rust.helper_bridge"
 }
 
 fn read_model_manifest(path: &Path) -> Option<ModelManifest> {
@@ -229,7 +229,7 @@ mod a7_release_inventory_tests {
                 "schema":"translateit.local_model_inventory.v2",
                 "inventory_scope":"full_product_release_assets",
                 "required_field_semantics":"required_for_full_product_release",
-                "meeting_readiness_owner":"realtime_local_worker.status",
+                "meeting_readiness_owner":"rust.helper_bridge",
                 "models":[]
             }"#,
         )

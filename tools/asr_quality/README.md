@@ -1,5 +1,7 @@
 # ASR Quality
 
+Native cutover: Meeting ASR now selects Qwen3-ASR through Rust/native CUDA. Existing Faster Whisper observations are historical baselines; the optional legacy word-alignment probe is not a native capability. Preserve corpus/evaluator coverage and collect fresh native results only in the held Windows acceptance phase.
+
 This directory owns regression-evaluation infrastructure for TranslateIT's canonical Indonesian Meeting ASR path.
 
 It does **not** contain fabricated audio or claim that faster-whisper is accurate because CI is green. Hosted CI validates the specification and evaluator. Real ASR quality requires exact audio fixtures to be processed by the canonical worker/model/runtime.

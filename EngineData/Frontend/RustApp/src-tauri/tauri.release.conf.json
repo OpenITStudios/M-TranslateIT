@@ -11,10 +11,8 @@
     "resources": {
       "../../../Backend/LocalWorker/WorkerRuntime/realtime_local_worker.py": "EngineData/Backend/LocalWorker/WorkerRuntime/realtime_local_worker.py",
       "../../../Backend/LocalWorker/WorkerRuntime/realtime_local_worker_base.py": "EngineData/Backend/LocalWorker/WorkerRuntime/realtime_local_worker_base.py",
-      "../../../Backend/LocalWorker/WorkerRuntime/milmmt_translation_provider.py": "EngineData/Backend/LocalWorker/WorkerRuntime/milmmt_translation_provider.py",
       "../../../Backend/LocalWorker/WorkerRuntime/worker_runtime_common.py": "EngineData/Backend/LocalWorker/WorkerRuntime/worker_runtime_common.py",
       "../../../Backend/LocalWorker/WorkerRuntime/worker_io_runtime.py": "EngineData/Backend/LocalWorker/WorkerRuntime/worker_io_runtime.py",
-      "../../../Backend/LocalWorker/WorkerRuntime/translation_envelope.py": "EngineData/Backend/LocalWorker/WorkerRuntime/translation_envelope.py",
       "../../../Backend/LocalWorker/WorkerRuntime/voice_lab_build.py": "EngineData/Backend/LocalWorker/WorkerRuntime/voice_lab_build.py",
       "../../../Backend/LocalWorker/WorkerRuntime/my_voice_compute_probe.py": "EngineData/Backend/LocalWorker/WorkerRuntime/my_voice_compute_probe.py",
       "../../../Backend/LocalWorker/WorkerRuntime/my_voice_gpu_policy.py": "EngineData/Backend/LocalWorker/WorkerRuntime/my_voice_gpu_policy.py",

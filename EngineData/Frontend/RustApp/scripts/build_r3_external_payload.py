@@ -19,8 +19,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-PAYLOAD_SCHEMA = "translateit.r3.external_payload.v1"
-INSTALLED_RUNTIME_SCHEMA = "translateit.installed_runtime.v1"
+PAYLOAD_SCHEMA = "translateit.r3.external_payload.v2"
+INSTALLED_RUNTIME_SCHEMA = "translateit.installed_runtime.v2"
 PAYLOAD_FILENAME = "TranslateIT-Payload.7z"
 PAYLOAD_CONTRACT = (
     "EngineData/Backend/LocalWorker/PythonRuntime/TRANSLATEIT_PAYLOAD_CONTRACT.json"
@@ -29,7 +29,6 @@ PYTHON_VERSION = "3.12.10"
 TORCH_VERSION = "2.14.1"
 TRANSFORMERS_VERSION = "4.57.6"
 TOKENIZERS_VERSION = "0.22.2"
-MILMMT_REVISION = "4fc480b6c58dec29c159dcdf9fde0f6d5c354995"
 ASR_REVISION = "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf"
 GPT_SOVITS_REVISION = "d523079fc05d9a8028d6085bffe4a2757c32abb6"
 
@@ -52,7 +51,6 @@ REQUIRED_FILES = {
     "EngineData/Backend/RuntimeAssets/Translation/ModelData/hy-mt2-1.8b/Hy-MT2-1.8B-Q6_K.gguf": None,
     "EngineData/Backend/LocalWorker/PythonRuntime/python.exe": None,
     "EngineData/Backend/RuntimeAssets/ASR/ModelData/faster-whisper-large-v3-turbo/.translateit_model_revision": ASR_REVISION,
-    "EngineData/Backend/RuntimeAssets/Translation/ModelData/xiaomi-research--MiLMMT-46-1B-v1.0/.translateit_model_revision": MILMMT_REVISION,
     "EngineData/Backend/RuntimeAssets/Voice/BuiltInVoices/MaleVoice/reference.wav": None,
     "EngineData/Backend/RuntimeAssets/Voice/BuiltInVoices/MaleVoice/REFERENCE_SOURCE.txt": None,
     "EngineData/Backend/RuntimeAssets/Voice/BuiltInVoices/FemaleVoice/reference.wav": None,
@@ -174,7 +172,6 @@ def write_payload_contract(repo_root: Path, version: str, native_pins: str) -> P
         "revisions": {
             "qwen3_asr": "3b2c29585c2180452ccb14d3b6b58127f352400d",
             "hy_mt2": "a0c709d9fac510f2c807aa3af52872340dc37a4a",
-            "milmmt": MILMMT_REVISION,
             "faster_whisper": ASR_REVISION,
             "gpt_sovits": GPT_SOVITS_REVISION,
         },
@@ -377,6 +374,13 @@ def main() -> int:
     version = app_version(repo_root)
     validate_staged_inputs(repo_root)
     validate_no_filesystem_indirection(repo_root)
+    # Require an exact staged model subtree closure even when the builder
+    # is called directly rather than through the normal preflight.
+    assets = repo_root / "EngineData/Backend/RuntimeAssets"
+    if {p.name for p in (assets / "ASR/ModelData").iterdir()} != {"qwen3-asr-1.7b", "faster-whisper-large-v3-turbo"}:
+        raise RuntimeError("unexpected ASR model subtree")
+    if {p.name for p in (assets / "Translation/ModelData").iterdir()} != {"hy-mt2-1.8b"}:
+        raise RuntimeError("unexpected translation model subtree")
     native_pins = os.environ.get("TRANSLATEIT_NATIVE_DLL_PINS", "")
     native_files = validate_native_inputs(repo_root, native_pins)
     write_payload_contract(repo_root, version, native_pins)

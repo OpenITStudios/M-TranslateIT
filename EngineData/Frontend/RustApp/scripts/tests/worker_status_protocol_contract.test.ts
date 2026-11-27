@@ -25,9 +25,10 @@ const readinessKeys = [
   "voice_actor_tts",
 ] as const;
 
-test("worker readiness keys stay aligned across Python Rust and TypeScript", () => {
+test("Rust owns ASR/MT status while Python reports voice capability", () => {
+  assert.match(python, /"voice_actor_tts"\s*:/);
+  assert.doesNotMatch(python, /"asr"\s*:|"translation_id_en"\s*:|"translation_en_id"\s*:/);
   for (const key of readinessKeys) {
-    assert.match(python, new RegExp(`"${key}"\\s*:`), `Python missing ${key}`);
     assert.match(frontend, new RegExp(`readiness\\["${key}"\\]`), `TypeScript missing ${key}`);
   }
 
@@ -45,7 +46,7 @@ test("worker preflight stage remains the capability response discriminator", () 
   assert.match(rust, /stage == "local_realtime_worker_preflight"/);
 });
 
-test("frontend diagnostic loaded-state fields exist in Python status payload", () => {
+test("frontend diagnostic loaded-state fields exist in Rust projected status", () => {
   for (const key of [
     "asr",
     "asr_device",
@@ -55,7 +56,7 @@ test("frontend diagnostic loaded-state fields exist in Python status payload", (
     "voice_actor",
     "voice_actor_device",
   ]) {
-    assert.match(python, new RegExp(`"${key}"\\s*:`), `Python loaded status missing ${key}`);
+    assert.match(rust, new RegExp(`"${key}"\\s*:`), `Rust loaded status missing ${key}`);
   }
 });
 

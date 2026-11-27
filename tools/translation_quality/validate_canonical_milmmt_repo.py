@@ -1,3 +1,5 @@
+# Historical command filename retained for existing held source-validation entrypoints.
+# This validates native-only ASR/MT, not the retired MiLMMT implementation.
 from __future__ import annotations
 
 import json
@@ -5,14 +7,14 @@ import re
 import sys
 from pathlib import Path
 
-MODEL_ID = "milmmt-46-1b-v1.0"
-HF_MODEL_ID = "xiaomi-research/MiLMMT-46-1B-v1.0"
-REVISION = "4fc480b6c58dec29c159dcdf9fde0f6d5c354995"
+MODEL_ID = "hy-mt2-1.8b-q6_k"
+HF_MODEL_ID = "tencent/Hy-MT2-1.8B-GGUF"
+REVISION = "a0c709d9fac510f2c807aa3af52872340dc37a4a"
 EXPECTED_MODEL_PATH = (
     "EngineData/Backend/RuntimeAssets/Translation/ModelData/"
-    "xiaomi-research--MiLMMT-46-1B-v1.0"
+    "hy-mt2-1.8b"
 )
-ACCELERATE_VERSION = "1.14.0"
+ACCELERATE_VERSION = "1.15.0"
 TRANSFORMERS_VERSION = "4.57.6"
 TOKENIZERS_VERSION = "0.22.2"
 TOKENIZERS_SDIST_SHA256 = "473b83b915e547aa366d1eee11806deaf419e17be16310ac0a14077f1e28f917"
@@ -51,18 +53,14 @@ def validate_manifest(root: Path) -> None:
     require(item.get("repo_id") == HF_MODEL_ID, "manifest:repo_id")
     require(item.get("revision") == REVISION, "manifest:revision")
     require(item.get("expected_path") == EXPECTED_MODEL_PATH, "manifest:expected_path")
-    require(item.get("backend") == "milmmt", "manifest:backend")
-    require(item.get("license") == "gemma", "manifest:license")
-    patterns = set(item.get("download_allow_patterns") or [])
-    for filename in (
-        "config.json",
-        "generation_config.json",
-        "model.safetensors",
-        "tokenizer.json",
-        "tokenizer.model",
-        "tokenizer_config.json",
-    ):
-        require(filename in patterns, f"manifest:missing_allow_pattern:{filename}")
+    require(item.get("backend") == "llama.cpp" and item.get("cpu_fallback") is False, "manifest:native_backend")
+    require(set(item.get("download_allow_patterns") or []) == {"Hy-MT2-1.8B-Q6_K.gguf"}, "manifest:exact_gguf")
+    asr = [model for model in data["models"] if model.get("stage") == "asr_primary"]
+    require(len(asr) == 1 and asr[0].get("model_id") == "qwen3-asr-1.7b-q8_0"
+            and asr[0].get("revision") == "3b2c29585c2180452ccb14d3b6b58127f352400d"
+            and asr[0].get("cpu_fallback") is False, "manifest:native_asr")
+    require(data.get("meeting_readiness_owner") == "rust.helper_bridge", "manifest:readiness_owner")
+    require(not any(model["model_id"] in {"milmmt-46-1b-v1.0", "faster-whisper-medium"} for model in data["models"]), "manifest:retired_models")
 
 
 def validate_worker(root: Path) -> None:
@@ -71,24 +69,27 @@ def validate_worker(root: Path) -> None:
     base = read(root, prefix + "realtime_local_worker_base.py")
     common = read(root, prefix + "worker_runtime_common.py")
     io_runtime = read(root, prefix + "worker_io_runtime.py")
-    provider = read(root, prefix + "milmmt_translation_provider.py")
     acquisition = read(root, prefix + "prepare_model_assets.py")
     require("import realtime_local_worker_base as runtime" in entrypoint, "worker:base_missing")
-    require("milmmt_translation_provider.install(vars(runtime))" in entrypoint, "worker:provider_missing")
-    require("_PROVIDER_SENTINEL" in entrypoint, "worker:provider_install_guard_missing")
     require("exec(" not in entrypoint and "compile(" not in entrypoint, "worker:dynamic_exec_bootstrap")
     require("import prepare_model_assets_core as _core" in acquisition, "acquisition:core_import_missing")
     require("exec(" not in acquisition and "compile(" not in acquisition, "acquisition:dynamic_exec_bootstrap")
-    for label, body in (("base", base), ("common", common), ("io", io_runtime)):
-        for marker in LEGACY_ACTIVE_MARKERS:
-            require(marker not in body, f"worker:{label}:legacy:{marker}")
-    require(HF_MODEL_ID in provider and REVISION in provider, "provider:identity")
-    require("AutoModelForCausalLM" in provider, "provider:causal_lm")
-    require("do_sample=False" in provider, "provider:deterministic")
-    require("prompt_tokens:" in provider, "provider:continuation_decode")
-    require(".translateit_model_revision" in provider, "provider:revision_marker")
     require(".translateit_model_revision" in acquisition, "acquisition:revision_marker")
-    require(not (root / (prefix + "realtime_local_worker_core.py")).exists(), "worker:legacy_core_exists")
+    for name in ("milmmt_translation_provider.py", "translation_envelope.py", "realtime_local_worker_core.py"):
+        require(not (root / (prefix + name)).exists(), f"worker:legacy_source:{name}")
+    commands = re.search(r'HANDLERS\s*=\s*\{([\s\S]*?)\n\}', base)
+    require(commands is not None and set(re.findall(r'"([a-z_]+)"\s*:', commands[1])) ==
+            {"ping", "status", "voice_actor_preflight", "voice_actor_synthesize"}, "worker:voice_only")
+    for label, body in (("entrypoint", entrypoint), ("base", base), ("common", common), ("io", io_runtime)):
+        for marker in (*LEGACY_ACTIVE_MARKERS, "milmmt_translation_provider", "handle_transcribe", "handle_translate", "from faster_whisper"):
+            require(marker not in body, f"worker:{label}:legacy:{marker}")
+    transport = read(root, "EngineData/Frontend/RustApp/src-tauri/src/commands/helper_bridge/transport.rs")
+    native = read(root, "EngineData/Frontend/RustApp/src-tauri/src/commands/helper_bridge/transport/native.rs")
+    implementation = read(root, "tools/translation_quality/native_cuda/inference.cpp")
+    require("return native::dispatch(" in transport and "TemporaryAsrWav" not in transport, "native:sole_dispatch")
+    require("condition_asr_pcm(&mut samples" in native and "owner.begin(input, deadline)" in native, "native:owned_dispatch")
+    require("TI_INCOMPLETE" in implementation and "TI_OUTPUT_LIMIT" in implementation
+            and "llama_memory_clear" in implementation, "native:bounded_complete_current_source")
 
 
 def lock_package_version(lock: str, name: str) -> str:
@@ -134,7 +135,7 @@ def require_manual_workflow(source: str, label: str) -> None:
 
 def validate_release(root: Path) -> None:
     app = "EngineData/Frontend/RustApp/"
-    stage = read(root, app + "scripts/stage_release_inputs.ps1")
+    stage = read(root, app + "scripts/stage_release_inputs_impl.ps1")
     optimizer = read(root, app + "scripts/optimize_release_payload.py")
     license_stager = read(root, app + "scripts/stage_release_license_material.py")
     payload_validator = read(root, app + "scripts/validate_release_payload.mjs")
@@ -146,20 +147,21 @@ def validate_release(root: Path) -> None:
     release_workflow = read(root, ".github/workflows/release-payload-verify.yml")
     lock_workflow = read(root, ".github/workflows/workerruntime-lock.yml")
 
-    require("prepare_model_assets.py" in stage and MODEL_ID in stage and REVISION in stage, "release:model_acquisition")
+    require("prepare_model_assets.py" in stage and "--destination-root $PayloadRoot" in stage and "Assert-TextEquals" in stage, "release:model_acquisition")
     require('"installMode": "perMachine"' in config, "release:per_machine")
     require("translateit-r3-payload-hooks.generated.nsh" in config, "release:hook_config")
     for forbidden in (
         "../../../Backend/LocalWorker/PythonRuntime/",
         "../../../Backend/RuntimeAssets/ASR/ModelData/",
         "../../../Backend/RuntimeAssets/Translation/ModelData/",
+        "../../../Backend/RuntimeAssets/NativeCuda/",
         "../../../Backend/RuntimeAssets/Voice/GPTSoVITS/",
         "../../../Backend/RuntimeAssets/AudioProvider/VBCABLE/Package/",
     ):
         require(forbidden not in config, f"release:large_payload_embedded:{forbidden}")
     for marker in (
-        "translateit.r3.external_payload.v1",
-        "translateit.installed_runtime.v1",
+        "translateit.r3.external_payload.v2",
+        "translateit.installed_runtime.v2",
         "TranslateIT-Payload.7z",
         "-m0=LZMA2",
         "TRANSLATEIT_PAYLOAD_CONTRACT.json",
@@ -232,9 +234,9 @@ def validate_quality_evaluation(root: Path) -> None:
 def validate_tests_and_runtime_docs(root: Path) -> None:
     tests = "\n".join(
         read(root, f"EngineData/Backend/LocalWorker/WorkerRuntime/tests/{name}")
-        for name in ("test_worker_contract.py", "test_translation_reliability.py", "test_prepare_model_assets.py")
+        for name in ("test_worker_contract.py", "test_prepare_model_assets.py")
     )
-    require(MODEL_ID in tests, "tests:milmmt_identity")
+    require(MODEL_ID in tests and "test_python_worker_rejects_retired_inference_commands" in tests, "tests:native_identity_and_voice_only")
     require("from transformers import AutoModelForSeq2SeqLM" not in tests, "tests:legacy_seq2seq")
     runtime_readme = read(root, "EngineData/Backend/LocalWorker/WorkerRuntime/README.md")
     require(TRANSFORMERS_VERSION in runtime_readme, "docs:runtime_readme:transformers")
@@ -257,7 +259,7 @@ def main() -> int:
                 "accelerate": ACCELERATE_VERSION,
                 "transformers": TRANSFORMERS_VERSION,
                 "tokenizers": TOKENIZERS_VERSION,
-                "worker_architecture": "translation_neutral_base_plus_milmmt_provider",
+                "worker_architecture": "rust_native_asr_mt_plus_voice_only_worker",
                 "release_packaging": "r3_external_offline_payload",
                 "target_pc_validation": "deferred",
             },
@@ -271,5 +273,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:
-        print(f"MiLMMT repository contract validation failed: {exc}", file=sys.stderr)
+        print(f"Native inference repository contract validation failed: {exc}", file=sys.stderr)
         raise

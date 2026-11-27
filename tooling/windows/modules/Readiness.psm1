@@ -52,7 +52,10 @@ function Get-TranslateITReadiness {
     }
     $assets = @(
         'EngineData/Backend/RuntimeAssets/ASR/ModelData/faster-whisper-large-v3-turbo/.translateit_model_revision',
-        'EngineData/Backend/RuntimeAssets/Translation/ModelData/xiaomi-research--MiLMMT-46-1B-v1.0/.translateit_model_revision',
+        'EngineData/Backend/RuntimeAssets/ASR/ModelData/qwen3-asr-1.7b/Qwen3-ASR-1.7B-Q8_0.gguf',
+        'EngineData/Backend/RuntimeAssets/ASR/ModelData/qwen3-asr-1.7b/mmproj-Qwen3-ASR-1.7B-Q8_0.gguf',
+        'EngineData/Backend/RuntimeAssets/Translation/ModelData/hy-mt2-1.8b/Hy-MT2-1.8B-Q6_K.gguf',
+        'EngineData/Backend/RuntimeAssets/NativeCuda/bin/translateit_native_cuda.dll',
         'EngineData/Backend/RuntimeAssets/Voice/BuiltInVoices/MaleVoice/reference.wav',
         'EngineData/Backend/RuntimeAssets/Voice/BuiltInVoices/FemaleVoice/reference.wav',
         'EngineData/Backend/RuntimeAssets/Voice/GPTSoVITS/Source/TRANSLATEIT_GPTSOVITS_REVISION.txt'

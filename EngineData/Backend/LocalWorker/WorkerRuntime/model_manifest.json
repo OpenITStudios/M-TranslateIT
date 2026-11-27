@@ -2,32 +2,28 @@
   "schema": "translateit.local_model_inventory.v2",
   "inventory_scope": "full_product_release_assets",
   "required_field_semantics": "required_for_full_product_release",
-  "meeting_readiness_owner": "realtime_local_worker.status",
+  "meeting_readiness_owner": "rust.helper_bridge",
   "backend_policy": {
     "gpu_primary": true,
-    "cpu_fallback_allowed": true,
-    "cpu_fallback_label": "degraded"
+    "cpu_fallback_allowed": false,
+    "cpu_fallback_label": "not_supported_for_meeting_asr_mt"
   },
   "models": [
     {
       "model_id": "faster-whisper-large-v3-turbo",
       "required": true,
-      "stage": "asr_primary",
-      "preferred": true,
-      "priority": 1,
+      "stage": "voice_actor_evaluation_asr",
       "backend": "whisper",
       "source_type": "huggingface",
       "repo_id": "dropbox-dash/faster-whisper-large-v3-turbo",
       "expected_path": "EngineData/Backend/RuntimeAssets/ASR/ModelData/faster-whisper-large-v3-turbo",
-      "legacy_paths": [
-        "EngineData/Backend/RuntimeAssets/ASR/ModelData/faster-whisper-large-v3-turbo"
-      ],
+      "legacy_paths": [],
       "gpu_capable": true,
       "cpu_fallback": true,
       "download_url": "https://huggingface.co/dropbox-dash/faster-whisper-large-v3-turbo",
       "install_method": "huggingface_snapshot_download",
       "license": "mit",
-      "notes": "Required full-product-release ASR asset. Meeting runtime readiness is owned by worker status, which may use the validated medium fallback when the primary asset is unavailable. Presence is installation evidence only.",
+      "notes": "Required for existing My Voice intelligibility evaluation only. Not a Meeting ASR engine. Preserve Faster Whisper/CTranslate2 and bundled Silero ONNX asset.",
       "artifact_hashes": {
         ".gitattributes": "11ad7efa24975ee4b0c3c3a38ed18737f0658a5f75a0a96787b576a78a023361",
         "config.json": "b0253ea6c0d3bea6b1e19e91a02acfd3b53f4467362efcb5a3e6b16c9b3a9b7e",
@@ -40,73 +36,9 @@
       "revision": "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf"
     },
     {
-      "model_id": "faster-whisper-medium",
-      "required": false,
-      "stage": "asr_fallback",
-      "preferred": false,
-      "priority": 2,
-      "backend": "whisper",
-      "source_type": "huggingface",
-      "repo_id": "Systran/faster-whisper-medium",
-      "expected_path": "EngineData/Backend/RuntimeAssets/ASR/ModelData/faster-whisper-medium",
-      "legacy_paths": [
-        "EngineData/Backend/RuntimeAssets/ASR/ModelData/faster-whisper-medium"
-      ],
-      "gpu_capable": true,
-      "cpu_fallback": true,
-      "download_url": "https://huggingface.co/Systran/faster-whisper-medium",
-      "install_method": "huggingface_snapshot_download",
-      "license": "mit",
-      "notes": "Optional packaged ASR fallback. It can satisfy Meeting ASR runtime capability when selected by the worker, but it is not independently required for full-product-release inventory while the primary ASR asset is packaged.",
-      "revision": "08e178d48790749d25932bbc082711ddcfdfbc4f"
-    },
-    {
-      "model_id": "milmmt-46-1b-v1.0",
-      "required": true,
-      "stage": "translation_bidirectional_id_en",
-      "backend": "milmmt",
-      "source_type": "huggingface",
-      "repo_id": "xiaomi-research/MiLMMT-46-1B-v1.0",
-      "expected_path": "EngineData/Backend/RuntimeAssets/Translation/ModelData/xiaomi-research--MiLMMT-46-1B-v1.0",
-      "legacy_paths": [
-        "EngineData/Backend/RuntimeAssets/Translation/ModelData/m2m100-418m"
-      ],
-      "gpu_capable": true,
-      "cpu_fallback": true,
-      "download_url": "https://huggingface.co/xiaomi-research/MiLMMT-46-1B-v1.0",
-      "install_method": "huggingface_snapshot_download",
-      "download_allow_patterns": [
-        "README.md",
-        "added_tokens.json",
-        "chat_template.jinja",
-        "config.json",
-        "generation_config.json",
-        "model.safetensors",
-        "special_tokens_map.json",
-        "tokenizer.json",
-        "tokenizer.model",
-        "tokenizer_config.json"
-      ],
-      "license": "gemma",
-      "notes": "Canonical resident Indonesian-English translation model. The exact Hugging Face revision is required and acquisition writes .translateit_model_revision after snapshot staging. Runtime acceptance remains separate from installation evidence.",
-      "artifact_hashes": {
-        "README.md": "b947eb325d6069558269bc82df9980e23883d618867c5abb98fb2333fea26810",
-        "added_tokens.json": "50b2f405ba56a26d4913fd772089992252d7f942123cc0a034d96424221ba946",
-        "chat_template.jinja": "61fbedab465ef2a7f1b123fc7e4bc06a995bd09ac381579affeda60f02ebd940",
-        "config.json": "2e9dcab9d9875f7acd33af240f4d0377ee22aa7e2849404dc5f0b36bca9bd027",
-        "generation_config.json": "72e999861fcdc6c43485d04e12c47a78f4c6037db1234452e7226575662b72bb",
-        "model.safetensors": "60d322f9b330b231a41f1d4fec4d6f3f5ed99c9631b4ea546478d1f335cc27c6",
-        "special_tokens_map.json": "2f7b0adf4fb469770bb1490e3e35df87b1dc578246c5e7e6fc76ecf33213a397",
-        "tokenizer.json": "33753cc9825494361904313ed469063a8b3e05f1648c18e4b2936f5aa3c78202",
-        "tokenizer.model": "1299c11d7cf632ef3b4e11937501358ada021bbdf7c47638d13c0ee982f2e79c",
-        "tokenizer_config.json": "76397efdd4e6c5dd3bb7994a8aa05c12484acae42dac33b7cadc1a38a8781643"
-      },
-      "revision": "4fc480b6c58dec29c159dcdf9fde0f6d5c354995"
-    },
-    {
       "model_id": "qwen3-asr-1.7b-q8_0",
       "required": true,
-      "stage": "asr_native_candidate",
+      "stage": "asr_primary",
       "backend": "llama.cpp/mtmd",
       "source_type": "huggingface",
       "repo_id": "ggml-org/Qwen3-ASR-1.7B-GGUF",
@@ -121,7 +53,7 @@
         "mmproj-Qwen3-ASR-1.7B-Q8_0.gguf"
       ],
       "license": "apache-2.0",
-      "notes": "Pinned native ASR and audio projector; required migration staging inputs, not yet production readiness. License and conversion provenance are included in reviewed NativeCuda notices.",
+      "notes": "Canonical native Meeting ASR and audio projector, exact pinned GGUF pair. No CPU or secondary-model fallback.",
       "artifact_hashes": {
         "Qwen3-ASR-1.7B-Q8_0.gguf": "cd5f5ce9d7c9c03ff47d54d7f2726e63a39e61e3001640c5d08b6e4d3aed1e6d",
         "mmproj-Qwen3-ASR-1.7B-Q8_0.gguf": "24eaf9a96fa94fe36ed0c1de68d44cccdb3f2229ee614e5b1b5bab951bc37883"
@@ -131,7 +63,7 @@
     {
       "model_id": "hy-mt2-1.8b-q6_k",
       "required": true,
-      "stage": "translation_native_candidate",
+      "stage": "translation_bidirectional_id_en",
       "backend": "llama.cpp",
       "source_type": "huggingface",
       "repo_id": "tencent/Hy-MT2-1.8B-GGUF",
@@ -145,7 +77,7 @@
         "Hy-MT2-1.8B-Q6_K.gguf"
       ],
       "license": "apache-2.0",
-      "notes": "Pinned native bidirectional model; required migration staging input, not yet production readiness. License included in reviewed NativeCuda notices.",
+      "notes": "Canonical native bidirectional translation, pinned GGUF. No CPU or secondary-model fallback.",
       "artifact_hashes": {
         "Hy-MT2-1.8B-Q6_K.gguf": "d98fe604dec1f28f58f80d7d560f7177e584d3b8e5835862687660e5ff97cb40"
       },

@@ -19,7 +19,8 @@ $PythonVersion='3.12.10'
 $TorchVersion='2.14.1'
 $TransformersVersion='4.57.6'
 $TokenizersVersion='0.22.2'
-$MiLMMTRevision='4fc480b6c58dec29c159dcdf9fde0f6d5c354995'
+$NativeAsrRevision='3b2c29585c2180452ccb14d3b6b58127f352400d'
+$NativeMtRevision='a0c709d9fac510f2c807aa3af52872340dc37a4a'
 $AsrRevision='0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf'
 $GptRevision='d523079fc05d9a8028d6085bffe4a2757c32abb6'
 $PayloadContract='EngineData\Backend\LocalWorker\PythonRuntime\TRANSLATEIT_PAYLOAD_CONTRACT.json'
@@ -100,15 +101,14 @@ function Assert-Contract($Contract){
     if([string]$Contract.revisions.qwen3_asr-ne'3b2c29585c2180452ccb14d3b6b58127f352400d'-or[string]$Contract.revisions.hy_mt2-ne'a0c709d9fac510f2c807aa3af52872340dc37a4a'){Fail 44 'Native model revision mismatch.'}
     if([string]$Contract.schema-ne$ExpectedPayloadSchema-or[string]$Contract.app_version-ne$ExpectedAppVersion){Fail 44 'Payload identity does not match Setup.'}
     if([string]$Contract.python_version-ne$PythonVersion-or[string]$Contract.torch_version-ne$TorchVersion-or[string]$Contract.transformers_version-ne$TransformersVersion-or[string]$Contract.tokenizers_version-ne$TokenizersVersion){Fail 44 'Payload dependency identity mismatch.'}
-    if([string]$Contract.revisions.milmmt-ne$MiLMMTRevision-or[string]$Contract.revisions.faster_whisper-ne$AsrRevision-or[string]$Contract.revisions.gpt_sovits-ne$GptRevision){Fail 44 'Payload model revision identity mismatch.'}
+    if([string]$Contract.revisions.faster_whisper-ne$AsrRevision-or[string]$Contract.revisions.gpt_sovits-ne$GptRevision){Fail 44 'Payload model revision identity mismatch.'}
 }
 
 function Assert-Runtime([string]$Root,[string]$NativePins){
     $backend=Join-Path $Root 'EngineData\Backend'
     Assert-NativeRuntime (Join-Path $backend 'RuntimeAssets') $NativePins
     NeedFile (Join-Path $backend 'LocalWorker\PythonRuntime\python.exe') 50 'Python runtime'
-    NeedMarker (Join-Path $backend 'RuntimeAssets\ASR\ModelData\faster-whisper-large-v3-turbo\.translateit_model_revision') $AsrRevision 51 'ASR revision'
-    NeedMarker (Join-Path $backend 'RuntimeAssets\Translation\ModelData\xiaomi-research--MiLMMT-46-1B-v1.0\.translateit_model_revision') $MiLMMTRevision 52 'MiLMMT revision'
+    NeedMarker (Join-Path $backend 'RuntimeAssets\ASR\ModelData\faster-whisper-large-v3-turbo\.translateit_model_revision') $AsrRevision 51 'Voice evaluation ASR revision'
     NeedFile (Join-Path $backend 'RuntimeAssets\Voice\BuiltInVoices\MaleVoice\reference.wav') 53 'Built-in Male reference'
     NeedFile (Join-Path $backend 'RuntimeAssets\Voice\BuiltInVoices\FemaleVoice\reference.wav') 53 'Built-in Female reference'
     NeedFile (Join-Path $backend 'RuntimeAssets\Voice\BuiltInVoices\SOURCES.json') 53 'Built-in voice source manifest'
@@ -134,7 +134,7 @@ function Assert-InstalledRuntimeManifest([string]$Root){
     if([string]$manifest.schema-ne$ExpectedInstalledRuntimeSchema-or -not [bool]$manifest.installed_complete){Fail 57 'Installed runtime manifest is incomplete or incompatible.'}
     if([string]$manifest.payload_schema-ne$ExpectedPayloadSchema){Fail 57 'Installed runtime payload schema is incompatible with this app update.'}
     if([string]$manifest.python-ne$PythonVersion-or[string]$manifest.torch-ne$TorchVersion-or[string]$manifest.transformers-ne$TransformersVersion-or[string]$manifest.tokenizers-ne$TokenizersVersion){Fail 57 'Installed runtime dependency identity is incompatible with this app update.'}
-    if([string]$manifest.translation_revision-ne$MiLMMTRevision-or[string]$manifest.asr_revision-ne$AsrRevision-or[string]$manifest.voice_revision-ne$GptRevision){Fail 57 'Installed model/runtime revisions are incompatible with this app update.'}
+    if([string]$manifest.translation_revision-ne$NativeMtRevision-or[string]$manifest.asr_revision-ne$NativeAsrRevision-or[string]$manifest.voice_evaluation_asr_revision-ne$AsrRevision-or[string]$manifest.voice_revision-ne$GptRevision){Fail 57 'Installed model/runtime revisions are incompatible with this app update.'}
     [void](Get-NativePins ([string]$manifest.native_dll_pins))
     return [string]$manifest.native_dll_pins
 }
@@ -241,9 +241,10 @@ function Install-Payload([string]$Tar){
             torch=$meta.torch
             transformers=$meta.transformers
             tokenizers=$meta.tokenizers
-            translation_model='xiaomi-research/MiLMMT-46-1B-v1.0'
-            translation_revision=$MiLMMTRevision
-            asr_revision=$AsrRevision
+            translation_model='tencent/Hy-MT2-1.8B-GGUF'
+            translation_revision=$NativeMtRevision
+            asr_revision=$NativeAsrRevision
+            voice_evaluation_asr_revision=$AsrRevision
             voice_revision=$GptRevision
             vb_cable_restart_required=$restartRequired
             vb_cable_uninstall_policy='preserve_system_driver'
