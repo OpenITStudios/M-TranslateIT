@@ -1,5 +1,5 @@
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::engine::runtime_state::{
     latest_runtime_session_state, runtime_generation_is_authoritative,
@@ -279,12 +279,8 @@ pub struct MeetingLiveReadRequest {
     known_revision: Option<String>,
 }
 
-fn worker_json(response: &HelperBridgeWorkerResponse) -> Value {
-    serde_json::from_str::<Value>(&response.worker_response_json).unwrap_or_else(|_| json!({}))
-}
-
 fn worker_text(response: &HelperBridgeWorkerResponse, key: &str) -> Option<String> {
-    let value = worker_json(response);
+    let value = &response.worker_response_json;
     value
         .get(key)
         .and_then(Value::as_str)
@@ -306,7 +302,7 @@ fn validated_meeting_translation(
     if !response.ok || response.task != "translate" {
         return None;
     }
-    let value = worker_json(response);
+    let value = &response.worker_response_json;
     let expected_pair = format!("{source_language}->{target_language}");
     if value.get("ok").and_then(Value::as_bool) != Some(true)
         || value.get("stage").and_then(Value::as_str) != Some("translate")
@@ -336,7 +332,7 @@ fn validated_meeting_asr_transcript(
     if !response.ok || response.task != "transcribe" {
         return None;
     }
-    let value = worker_json(response);
+    let value = &response.worker_response_json;
     if value.get("ok").and_then(Value::as_bool) != Some(true)
         || value.get("stage").and_then(Value::as_str) != Some("transcribe")
         || value.get("language").and_then(Value::as_str) != Some(expected_language)
@@ -358,7 +354,7 @@ fn validated_meeting_voice_output_path(
     {
         return None;
     }
-    let value = worker_json(response);
+    let value = &response.worker_response_json;
     if value.get("ok").and_then(Value::as_bool) != Some(true)
         || value.get("stage").and_then(Value::as_str) != Some("voice_actor_synthesize")
         || value.get("language_code").and_then(Value::as_str) != Some("en")
@@ -375,11 +371,11 @@ fn worker_blocker(response: &HelperBridgeWorkerResponse, fallback: &str) -> Stri
 }
 
 fn worker_number(response: &HelperBridgeWorkerResponse, key: &str) -> Option<f64> {
-    worker_json(response).get(key).and_then(Value::as_f64)
+    response.worker_response_json.get(key).and_then(Value::as_f64)
 }
 
 fn worker_scheduler_wait_ms(response: &HelperBridgeWorkerResponse) -> Option<u64> {
-    let value = worker_json(response);
+    let value = &response.worker_response_json;
     if let Some(timing) = value.get("worker_attempt_timing") {
         // An incomplete retry trace must not fall back to only the last wait.
         return timing.get("scheduler_wait_total_ms").and_then(Value::as_u64);
@@ -388,7 +384,7 @@ fn worker_scheduler_wait_ms(response: &HelperBridgeWorkerResponse) -> Option<u64
 }
 
 fn worker_attempt_timing(response: &HelperBridgeWorkerResponse) -> Option<MeetingWorkerAttemptTiming> {
-    serde_json::from_value(worker_json(response).get("worker_attempt_timing")?.clone()).ok()
+    serde::Deserialize::deserialize(response.worker_response_json.get("worker_attempt_timing")?).ok()
 }
 
 fn generation_is_live(generation: u64) -> bool {
@@ -840,7 +836,7 @@ mod translation_delivery_contract_tests {
             message: String::new(),
             generation_token: 1,
             runtime_claim: "test_fixture".into(),
-            worker_response_json: payload.to_string(),
+            worker_response_json: payload,
         }
     }
 
@@ -870,13 +866,13 @@ mod translation_delivery_contract_tests {
             let mut invalid = outgoing.clone();
             let mut payload = valid.clone();
             payload[key] = replacement;
-            invalid.worker_response_json = payload.to_string();
+            invalid.worker_response_json = payload;
             assert!(validated_meeting_asr_transcript(&invalid, "id").is_none(), "{key}");
         }
         let mut incoming = valid;
         incoming["language"] = json!("en");
         incoming["transcript_text"] = json!("  Good morning.  ");
-        outgoing.worker_response_json = incoming.to_string();
+        outgoing.worker_response_json = incoming;
         assert_eq!(
             validated_meeting_asr_transcript(&outgoing, "en"),
             Some("Good morning.".into()),
@@ -913,7 +909,7 @@ mod translation_delivery_contract_tests {
             let mut invalid = voice.clone();
             let mut payload = valid.clone();
             payload[key] = replacement;
-            invalid.worker_response_json = payload.to_string();
+            invalid.worker_response_json = payload;
             assert!(
                 validated_meeting_voice_output_path(&invalid, "start-bound-actor").is_none(),
                 "{key}"
@@ -1009,7 +1005,7 @@ mod worker_attempt_timing_tests {
             request_id: "helper-1".to_string(),
             scheduler_priority: "meeting_outbound".to_string(),
             message: String::new(), generation_token: 1,
-            runtime_claim: "fixture".to_string(), worker_response_json: body.to_string(),
+            runtime_claim: "fixture".to_string(), worker_response_json: body,
         }
     }
 

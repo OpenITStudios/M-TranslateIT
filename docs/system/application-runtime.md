@@ -106,6 +106,19 @@ matched target timing proving repeated inference dominates warm Start.
 Do not replace the full functional probe with cached readiness or file
 presence on this source evidence alone.
 
+### Worker response ownership
+
+The newline-JSON worker transport parses and validates each received response
+at its existing request/correlation boundary. The Rust receipt now retains
+that owned JSON value through scheduler timing annotation, transport recovery,
+functional proof, and Meeting ASR/translation/voice admission. Consumers
+borrow fields instead of serializing and reparsing the entire response.
+The existing Tauri diagnostic `worker_response_json` field is still a
+JSON string, serialized only at that external boundary. No new protocol,
+scheduler, cache or worker is introduced. Permit limits, priority, deadlines,
+retry admission, generation checks, failure invalidation and incoming
+degradation are unchanged.
+
 ### Event-first Meeting reconciliation
 
 Live Meeting UI freshness uses lightweight backend change events from authoritative committed-turn state. The event payload contains only revision/reason/session/sequence metadata. Both event and 10-second fallback use the existing live transcript command with an opt-in reconciliation request: one IPC returns Meeting status and either a full bounded live snapshot or an explicit unchanged receipt. The store-owned revision covers accepted source, translation, delivery, timing, and interruption mutations; the token also binds the session and observed archive errors. Unknown archive health or a new session never authorizes unchanged reuse. No timestamp heuristic, delta log, extra command, or cross-session transcript cache. The bridge passes the explicit nullable reconciliation argument; the shared saved/export DTO remains unchanged, with live-only metadata kept in the conditional read type. Standalone full transcript reads and saved/export formats remain available. The superseded standalone Meeting-status IPC and its unused frontend wrapper are retired; internal Rust Meeting status observations remain available to runtime and diagnostics.

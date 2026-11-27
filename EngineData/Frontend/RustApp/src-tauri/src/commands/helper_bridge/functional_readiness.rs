@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::fs;
 use std::sync::{Mutex, OnceLock};
 
@@ -81,32 +81,28 @@ pub(super) fn invalidate_required_outbound_ai_readiness() {
     }
 }
 
-pub(super) fn worker_response_value(response: &HelperBridgeWorkerResponse) -> Value {
-    serde_json::from_str::<Value>(&response.worker_response_json).unwrap_or_else(|_| json!({}))
-}
-
 pub(super) fn functional_translation_output(response: &HelperBridgeWorkerResponse) -> Option<String> {
     if !response.ok {
         return None;
     }
-    let value = worker_response_value(response);
+    let value = &response.worker_response_json;
     let complete = value.get("complete").and_then(Value::as_bool) == Some(true);
     let finished_with_eos = value.get("finished_with_eos").and_then(Value::as_bool) == Some(true);
     let correct_direction = value.get("direction_pair").and_then(Value::as_str) == Some("id->en");
     if !complete || !finished_with_eos || !correct_direction {
         return None;
     }
-    worker_text(&value, "translated_text")
+    worker_text(value, "translated_text")
 }
 
 pub(super) fn functional_voice_actor_output_path(
     response: &HelperBridgeWorkerResponse,
     expected_actor_token: &str,
 ) -> Option<String> {
-    let value = worker_response_value(response);
-    let output_path = worker_text(&value, "output_path")?;
+    let value = &response.worker_response_json;
+    let output_path = worker_text(value, "output_path")?;
     let actor_token_matches = !expected_actor_token.is_empty()
-        && worker_text(&value, "actor_token").as_deref() == Some(expected_actor_token);
+        && worker_text(value, "actor_token").as_deref() == Some(expected_actor_token);
     let file_ready = fs::metadata(&output_path)
         .map(|metadata| metadata.is_file() && metadata.len() > 44)
         .unwrap_or(false);
@@ -122,9 +118,9 @@ pub(super) fn functional_asr_output(response: &HelperBridgeWorkerResponse) -> bo
     if !response.ok {
         return false;
     }
-    let value = worker_response_value(response);
+    let value = &response.worker_response_json;
     value.get("stage").and_then(Value::as_str) == Some("transcribe")
-        && worker_text(&value, "transcript_text").is_some()
+        && worker_text(value, "transcript_text").is_some()
 }
 
 pub(super) fn failed_required_outbound_task_invalidates_cache(
@@ -135,8 +131,8 @@ pub(super) fn failed_required_outbound_task_invalidates_cache(
     if response.ok || priority == HelperTaskPriority::MeetingIncoming {
         return false;
     }
-    let value = worker_response_value(response);
-    let blocker = worker_text(&value, "blocker").unwrap_or_default();
+    let value = &response.worker_response_json;
+    let blocker = worker_text(value, "blocker").unwrap_or_default();
     match task {
         "status" | "asr_preload" | "voice_actor_preflight" => true,
         // An explicit optional EN->ID preload failure is not evidence that the
@@ -169,6 +165,7 @@ pub(super) fn failed_required_outbound_task_invalidates_cache(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn functional_cache_identity_keeps_diagnostic_and_meeting_scopes_distinct() {
@@ -210,8 +207,7 @@ mod tests {
                 "ok": true,
                 "output_path": path.to_string_lossy(),
                 "actor_token": "actor-v1",
-            })
-            .to_string(),
+            }),
         };
 
         assert_eq!(

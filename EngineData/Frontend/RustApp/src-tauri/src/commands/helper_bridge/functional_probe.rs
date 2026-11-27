@@ -7,7 +7,7 @@ use crate::engine::runtime_state::runtime_generation_is_authoritative;
 
 use super::functional_readiness::{
     functional_asr_output, functional_translation_output, functional_voice_actor_output_path,
-    invalidate_required_outbound_ai_readiness, worker_response_value,
+    invalidate_required_outbound_ai_readiness,
 };
 use super::{get_helper_bridge_status, send_worker_task, worker_text};
 
@@ -94,7 +94,7 @@ pub(super) fn run_required_outbound_ai_probe(
         invalidate_required_outbound_ai_readiness();
         return Err("My Voice");
     }
-    let Some(actor_token) = worker_text(&worker_response_value(&actor_preflight), "actor_token") else {
+    let Some(actor_token) = worker_text(&actor_preflight.worker_response_json, "actor_token") else {
         invalidate_required_outbound_ai_readiness();
         return Err("My Voice");
     };
@@ -128,7 +128,7 @@ pub(super) fn run_required_outbound_ai_probe(
             "meeting_generation": meeting_generation,
         }),
     );
-    let reported_voice_path = worker_response_value(&voice)
+    let reported_voice_path = voice.worker_response_json
         .get("output_path")
         .and_then(Value::as_str)
         .map(str::to_string);
@@ -184,7 +184,7 @@ pub(super) fn run_codex_voice_only_probe(
         "voice_actor_preflight",
         json!({"meeting_generation":meeting_generation, "meeting_start_prepare":true}),
     );
-    let preflight_json = worker_response_value(&preflight);
+    let preflight_json = &preflight.worker_response_json;
     let Some(token) = preflight_json.get("actor_token").and_then(Value::as_str)
         .filter(|value| !value.is_empty() && value.len() <= 512)
         .filter(|_| preflight.ok && preflight.task == "voice_actor_preflight"
@@ -244,7 +244,7 @@ fn voice_only_probe_path_matches(reported: &str, requested: &Path) -> bool {
 fn voice_only_receipt_matches(
     response: &super::HelperBridgeWorkerResponse, token: &str, expected_path: &Path
 ) -> bool {
-    let body = worker_response_value(response);
+    let body = &response.worker_response_json;
     response.ok && response.task == "voice_actor_synthesize" && !token.is_empty()
         && body.get("stage").and_then(Value::as_str) == Some("voice_actor_synthesize")
         && body.get("actor_token").and_then(Value::as_str) == Some(token)
@@ -288,7 +288,7 @@ mod tests {
             message: String::new(), generation_token: 7, runtime_claim: "synthetic".into(),
             worker_response_json: serde_json::json!({
                 "actor_token":actor, "output_path":reported, "stage":stage
-            }).to_string(),
+            }),
         };
         let requested = path.to_string_lossy().into_owned();
         let foreign = foreign_path.to_string_lossy().into_owned();

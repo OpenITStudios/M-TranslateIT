@@ -25,14 +25,10 @@ fn reset_bridge_runtime() {
 }
 
 fn response_blocker(response: &HelperBridgeWorkerResponse) -> String {
-    serde_json::from_str::<Value>(&response.worker_response_json)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("blocker")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
+    response.worker_response_json
+        .get("blocker")
+        .and_then(Value::as_str)
+        .map(str::to_string)
         .unwrap_or_default()
 }
 

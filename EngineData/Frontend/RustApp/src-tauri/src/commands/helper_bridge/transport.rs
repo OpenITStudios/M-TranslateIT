@@ -32,9 +32,7 @@ pub(super) fn helper_transport_failure(response: &HelperBridgeWorkerResponse) ->
     if response.ok {
         return false;
     }
-    let value =
-        serde_json::from_str::<Value>(&response.worker_response_json).unwrap_or_else(|_| json!({}));
-    let blocker = worker_text(&value, "blocker").unwrap_or_default();
+    let blocker = worker_text(&response.worker_response_json, "blocker").unwrap_or_default();
     blocker.starts_with("helper_bridge:")
         && (blocker.contains("_write_failed:") || blocker.contains("_read_failed:"))
 }
@@ -57,7 +55,7 @@ fn response_with_runtime(
         message,
         generation_token: runtime.generation_token,
         runtime_claim: runtime_claim(runtime),
-        worker_response_json: worker_response.to_string(),
+        worker_response_json: worker_response,
     }
 }
 
@@ -85,8 +83,7 @@ fn standalone_blocked_response(
             "scheduler_priority": priority.label(),
             "blocker": blocker,
             "note": message,
-        })
-        .to_string(),
+        }),
     }
 }
 
@@ -100,18 +97,13 @@ fn attach_admitted_wait_to_failure(
     scheduler_wait_ms: u64,
 ) -> HelperBridgeWorkerResponse {
     // Successful worker replies already receive this field before the bridge
-    // applies the result. Avoid reparsing or rewriting those normal replies.
+    // applies the result. Only failed replies need this in-place update.
     if response.ok {
         return response;
     }
-    if let Ok(mut worker_response) =
-        serde_json::from_str::<Value>(&response.worker_response_json)
-    {
-        if let Some(object) = worker_response.as_object_mut() {
-            // Overwrite any worker-reported value: only Rust owns admission timing.
-            object.insert("scheduler_wait_ms".to_string(), json!(scheduler_wait_ms));
-            response.worker_response_json = worker_response.to_string();
-        }
+    if let Some(object) = response.worker_response_json.as_object_mut() {
+        // Overwrite any worker-reported value: only Rust owns admission timing.
+        object.insert("scheduler_wait_ms".to_string(), json!(scheduler_wait_ms));
     }
     response
 }
@@ -551,8 +543,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value) -> HelperBridgeWorkerR
                     &request_id,
                     priority,
                     response.message,
-                    serde_json::from_str(&response.worker_response_json)
-                        .unwrap_or_else(|_| json!({})),
+                    response.worker_response_json,
                     &runtime,
                 );
             }
@@ -689,15 +680,13 @@ fn observed_elapsed_ms(started: Instant) -> u64 {
 }
 
 fn response_scheduler_wait_ms(response: &HelperBridgeWorkerResponse) -> Option<u64> {
-    serde_json::from_str::<Value>(&response.worker_response_json).ok()?
-        .get("scheduler_wait_ms").and_then(Value::as_u64)
+    response.worker_response_json.get("scheduler_wait_ms").and_then(Value::as_u64)
 }
 
 // Rust owns these measurements; never trust a worker-provided summary and
 // never turn missing/invalid response data into invented numeric evidence.
 fn add_worker_attempt_observation(response: &mut HelperBridgeWorkerResponse, timing: WorkerAttemptObservation) {
-    let Ok(mut value) = serde_json::from_str::<Value>(&response.worker_response_json) else { return };
-    let Some(object) = value.as_object_mut() else { return };
+    let Some(object) = response.worker_response_json.as_object_mut() else { return };
     object.insert("worker_attempt_timing".to_string(), json!({
         "initial_attempt_ms": timing.initial_attempt_ms,
         "recovery_ms": timing.recovery_ms,
@@ -706,7 +695,6 @@ fn add_worker_attempt_observation(response: &mut HelperBridgeWorkerResponse, tim
         "retry_scheduler_wait_ms": timing.retry_scheduler_wait_ms,
         "scheduler_wait_total_ms": timing.scheduler_wait_total_ms(),
     }));
-    response.worker_response_json = value.to_string();
 }
 
 pub(super) fn send_worker_task(task: &str, payload: Value) -> HelperBridgeWorkerResponse {
@@ -880,7 +868,7 @@ mod request_payload_retention_tests {
 mod scheduler_failure_receipt_tests {
     use super::{attach_admitted_wait_to_failure, standalone_blocked_response};
     use super::super::super::helper_bridge_runtime::HelperTaskPriority;
-    use serde_json::{json, Value};
+    use serde_json::json;
 
     #[test]
     fn post_permit_bridge_failure_retains_measured_wait_and_blocker() {
@@ -892,7 +880,7 @@ mod scheduler_failure_receipt_tests {
         let original_request = failed.request_id.clone();
         let original_claim = failed.runtime_claim.clone();
         let response = attach_admitted_wait_to_failure(failed, 275);
-        let body: Value = serde_json::from_str(&response.worker_response_json).unwrap();
+        let body = &response.worker_response_json;
         assert!(!response.ok);
         assert_eq!(response.request_id, original_request);
         assert_eq!(response.runtime_claim, original_claim);
@@ -908,7 +896,7 @@ mod scheduler_failure_receipt_tests {
             "error", "helper_scheduler:wait_deadline_exceeded:meeting_outbound:120000ms",
             "Scheduler could not admit the request.",
         );
-        let body: Value = serde_json::from_str(&rejected.worker_response_json).unwrap();
+        let body = &rejected.worker_response_json;
         assert!(body.get("scheduler_wait_ms").is_none());
         assert!(!rejected.ok);
     }
@@ -922,9 +910,9 @@ mod scheduler_failure_receipt_tests {
         failure.worker_response_json = json!({
             "ok": false, "blocker": "helper_bridge:worker_exited",
             "scheduler_wait_ms": 999_999, "attempt": "failed"
-        }).to_string();
+        });
         let response = attach_admitted_wait_to_failure(failure, 12);
-        let body: Value = serde_json::from_str(&response.worker_response_json).unwrap();
+        let body = &response.worker_response_json;
         assert_eq!(body["scheduler_wait_ms"], 12);
         assert_eq!(body["attempt"], "failed");
     }
@@ -935,7 +923,7 @@ mod worker_attempt_observation_tests {
     use super::{add_worker_attempt_observation, response_scheduler_wait_ms,
         standalone_blocked_response, WorkerAttemptObservation};
     use super::super::super::helper_bridge_runtime::HelperTaskPriority;
-    use serde_json::{json, Value};
+    use serde_json::json;
 
     fn fake_response(wait: Option<u64>) -> super::HelperBridgeWorkerResponse {
         let mut response = standalone_blocked_response(
@@ -943,9 +931,7 @@ mod worker_attempt_observation_tests {
             "error", "helper_bridge:translate_read_failed:timeout", "transport failed",
         );
         if let Some(wait) = wait {
-            let mut v: Value = serde_json::from_str(&response.worker_response_json).unwrap();
-            v["scheduler_wait_ms"] = json!(wait);
-            response.worker_response_json = v.to_string();
+            response.worker_response_json["scheduler_wait_ms"] = json!(wait);
         }
         response
     }
@@ -958,7 +944,7 @@ mod worker_attempt_observation_tests {
             initial_scheduler_wait_ms: response_scheduler_wait_ms(&fake_response(Some(13))),
             retry_scheduler_wait_ms: None,
         });
-        let v: Value = serde_json::from_str(&response.worker_response_json).unwrap();
+        let v = &response.worker_response_json;
         assert_eq!(v["scheduler_wait_ms"], 13);
         assert_eq!(v["worker_attempt_timing"]["initial_attempt_ms"], 80);
         assert_eq!(v["worker_attempt_timing"]["scheduler_wait_total_ms"], 13);
@@ -972,7 +958,7 @@ mod worker_attempt_observation_tests {
             initial_attempt_ms: 140, recovery_ms: Some(250), retry_attempt_ms: Some(110),
             initial_scheduler_wait_ms: Some(18), retry_scheduler_wait_ms: Some(7),
         });
-        let v: Value = serde_json::from_str(&response.worker_response_json).unwrap();
+        let v = &response.worker_response_json;
         assert_eq!(v["scheduler_wait_ms"], 7);
         let timing = &v["worker_attempt_timing"];
         assert_eq!(timing["scheduler_wait_total_ms"], 25);
@@ -988,7 +974,7 @@ mod worker_attempt_observation_tests {
             initial_attempt_ms: 140, recovery_ms: Some(250), retry_attempt_ms: Some(110),
             initial_scheduler_wait_ms: Some(18), retry_scheduler_wait_ms: None,
         });
-        let v: Value = serde_json::from_str(&response.worker_response_json).unwrap();
+        let v = &response.worker_response_json;
         assert!(v["worker_attempt_timing"]["scheduler_wait_total_ms"].is_null());
         let no_permit = WorkerAttemptObservation {
             initial_attempt_ms: 1, recovery_ms: None, retry_attempt_ms: None,
@@ -1000,11 +986,12 @@ mod worker_attempt_observation_tests {
     #[test]
     fn malformed_response_does_not_become_a_trusted_measurement() {
         let mut response = fake_response(None);
-        response.worker_response_json = "invalid-json".to_string();
+        response.worker_response_json = json!("non-object");
         add_worker_attempt_observation(&mut response, WorkerAttemptObservation {
             initial_attempt_ms: 1, recovery_ms: None, retry_attempt_ms: None,
             initial_scheduler_wait_ms: None, retry_scheduler_wait_ms: None,
         });
-        assert_eq!(response.worker_response_json, "invalid-json");
+        assert_eq!(response.worker_response_json, json!("non-object"));
+        assert_eq!(response_scheduler_wait_ms(&response), None);
     }
 }

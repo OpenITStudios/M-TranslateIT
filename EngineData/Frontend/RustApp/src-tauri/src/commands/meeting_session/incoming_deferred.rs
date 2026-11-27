@@ -403,8 +403,7 @@ mod tests {
                 "ok": false,
                 "stage": "transcribe",
                 "blocker": "helper_scheduler:incoming_deferred_for_outbound",
-            })
-            .to_string(),
+            }),
         };
 
         assert_eq!(
@@ -429,7 +428,7 @@ mod tests {
             message: String::new(),
             generation_token: 1,
             runtime_claim: "test_fixture".into(),
-            worker_response_json: valid.to_string(),
+            worker_response_json: valid.clone(),
         };
         assert_eq!(
             classify_incoming_asr_response(&response, "en"),
@@ -441,7 +440,7 @@ mod tests {
         );
         let mut misleading = valid;
         misleading["stage"] = serde_json::json!("translate");
-        response.worker_response_json = misleading.to_string();
+        response.worker_response_json = misleading;
         assert_eq!(
             classify_incoming_asr_response(&response, "en"),
             IncomingAsrDisposition::Failed("asr:invalid_response".into()),
@@ -449,7 +448,7 @@ mod tests {
         response.ok = false;
         response.worker_response_json = serde_json::json!({
             "ok": false, "stage": "transcribe", "blocker": "asr:empty_transcript",
-        }).to_string();
+        });
         assert_eq!(
             classify_incoming_asr_response(&response, "en"),
             IncomingAsrDisposition::EmptyTranscript,

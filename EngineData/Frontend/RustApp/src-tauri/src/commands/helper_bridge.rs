@@ -59,7 +59,17 @@ pub struct HelperBridgeWorkerResponse {
     pub message: String,
     pub generation_token: u64,
     pub runtime_claim: String,
-    pub worker_response_json: String,
+    // Retain the parsed worker value internally. The frontend's historical
+    // JSON-string field is materialized only at the Tauri serialization boundary.
+    #[serde(serialize_with = "serialize_worker_response_json")]
+    pub worker_response_json: Value,
+}
+
+fn serialize_worker_response_json<S>(value: &Value, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&value.to_string())
 }
 
 fn clean_helper_text(value: &str, max_chars: usize) -> String {
@@ -1089,8 +1099,21 @@ mod c4_functional_readiness_tests {
             message: "test".to_string(),
             generation_token: 7,
             runtime_claim: "test".to_string(),
-            worker_response_json: body.to_string(),
+            worker_response_json: serde_json::from_str(body).expect("valid worker fixture"),
         }
+    }
+
+    #[test]
+    fn structured_worker_response_preserves_legacy_frontend_json_string() {
+        let body = r#"{"ok":true,"stage":"status","note":"line\nquote: \"hi\"","nested":{"missing":null}}"#;
+        let mut receipt = response(true, body);
+        receipt.worker_response_json["scheduler_wait_ms"] = serde_json::json!(7);
+        let serialized = serde_json::to_value(&receipt).expect("serialize Tauri receipt");
+        let legacy_string = serialized["worker_response_json"].as_str().expect("legacy JSON string");
+        let roundtrip: serde_json::Value = serde_json::from_str(legacy_string).unwrap();
+        assert_eq!(roundtrip, receipt.worker_response_json);
+        assert_eq!(serialized["generation_token"], 7);
+        assert_eq!(serialized["ok"], true);
     }
 
     #[test]
