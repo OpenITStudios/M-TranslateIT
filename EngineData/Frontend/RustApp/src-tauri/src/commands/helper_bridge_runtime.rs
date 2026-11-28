@@ -339,6 +339,19 @@ impl HelperBridgeRuntime {
         { false }
     }
 
+    // Cold (no owner) is eligible for explicit preparation; a retained
+    // closed/failed owner is not. Both startup and status use this same
+    // state projection without reloading models or probing the GPU.
+    pub(super) fn effective_state(&self, native_available: bool) -> &str {
+        if self.state == "ready" && (!native_available
+            || (super::helper_bridge::native_voice_candidate_enabled() && !self.native_lifecycle_ready()))
+        {
+            "blocked"
+        } else {
+            self.state.as_str()
+        }
+    }
+
     pub(super) fn native_meeting_session_id(&self) -> Option<&str> {
         #[cfg(windows)]
         {
@@ -425,14 +438,9 @@ pub fn runtime_claim(runtime: &HelperBridgeRuntime) -> String {
 }
 
 pub fn status_from_runtime(runtime: &HelperBridgeRuntime) -> HelperBridgeStatus {
-    #[cfg(windows)]
-    let native_available = runtime.native_inference.as_ref().is_none_or(|native| native.owner.is_available());
-    #[cfg(not(windows))]
-    let native_available = true;
+    let native_available = !cfg!(windows) || runtime.native_owner_healthy();
     HelperBridgeStatus {
-        state: if super::helper_bridge::native_voice_candidate_enabled() && runtime.state == "ready"
-            && (!runtime.native_lifecycle_ready() || !native_available) { "blocked".into() }
-            else { runtime.state.clone() },
+        state: runtime.effective_state(native_available).to_owned(),
         message: runtime.message.clone(),
         cuda_ready: runtime.cuda_ready && native_available,
         provider_ready: runtime.provider_ready && native_available,
@@ -1317,6 +1325,22 @@ mod response_framing_tests {
 #[cfg(test)]
 mod readiness_contract_tests {
     use super::*;
+
+    #[test]
+    fn retained_unavailable_native_owner_blocks_ready_reuse() {
+        // Pure availability input, not a synthetic native owner or CUDA proof.
+        let mut runtime = HelperBridgeRuntime {
+            state: "ready".into(),
+            generation_token: 1,
+            ..HelperBridgeRuntime::default()
+        };
+        assert_eq!(runtime.effective_state(true), "ready");
+        assert_eq!(runtime.effective_state(false), "blocked");
+        runtime.state = "stopped".into();
+        assert_eq!(runtime.effective_state(false), "stopped");
+        runtime.state = "blocked".into();
+        assert_eq!(runtime.effective_state(true), "blocked");
+    }
 
     #[test]
     fn native_status_does_not_inherit_legacy_model_or_cuda_claims() {

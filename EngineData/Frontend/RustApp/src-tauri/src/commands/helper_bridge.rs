@@ -481,12 +481,10 @@ fn start_helper_bridge_internal(
             }
             // A competing Start may have completed while this caller waited.
             // Recheck the selected lifecycle under the single authoritative mutex.
-            if runtime.state == "ready" && (
-                if native_voice_candidate_enabled() {
-                    runtime.native_lifecycle_ready() && runtime.native_owner_healthy()
-                } else {
-                    runtime.child.as_mut().is_some_and(|child| matches!(child.try_wait(), Ok(None)))
-                })
+            let native_available = !cfg!(windows) || runtime.native_owner_healthy();
+            if runtime.effective_state(native_available) == "ready"
+                && (native_voice_candidate_enabled()
+                    || runtime.child.as_mut().is_some_and(|child| matches!(child.try_wait(), Ok(None))))
             {
                 return action_result(true, &runtime);
             }
