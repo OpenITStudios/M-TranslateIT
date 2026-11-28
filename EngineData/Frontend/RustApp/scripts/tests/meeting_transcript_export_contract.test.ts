@@ -475,3 +475,14 @@ test("explicit HTML export cleans only app-owned interrupted temporary output", 
   assert.match(html, /The saved transcript source was preserved/);
   assert.doesNotMatch(html.split("#[cfg(test)]")[0], /remove_dir_all\(/);
 });
+
+test("committed turn mutations pass their exact archive receipt without searching history again", () => {
+  const mutations = memory.slice(memory.indexOf("pub(super) fn begin_committed_playback("),
+    memory.indexOf("pub(super) fn interrupt_committed_turns_for_generation("));
+  assert.doesNotMatch(mutations, /store\.turns\.iter\(\)/);
+  assert.equal((mutations.match(/if let Some\(turn\) = receipt \{\s*(?:\/\/[^\n]*\n\s*)*transcript_archive::queue_turn\(turn\);/g) ?? []).length, 3);
+  const store = memory.slice(memory.indexOf("fn commit_at("), memory.indexOf("fn interrupt_generation_at("));
+  assert.equal((store.match(/binary_search_by_key\(&sequence, \|turn\| turn\.sequence\)/g) ?? []).length, 3);
+  assert.match(store, /turn\.lane == lane && turn\.generation == generation && turn\.utterance_id == utterance_id/);
+  assert.match(store, /return \(turn\.delivery_state\.as_deref\(\) == Some\(delivery_state\)\)\.then\(\|\| turn\.clone\(\)\)/);
+});

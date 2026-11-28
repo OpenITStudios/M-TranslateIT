@@ -100,14 +100,15 @@ impl MeetingCommittedTurnStore {
         // Only a newly inserted source can start MT/TTS. A duplicate sequence
         // or utterance identity must not reopen inference; evicted history is
         // protected by a compact monotonic sequence fence.
-        if sequence <= self.retired_sequence
-            || self.turns.iter().any(|turn| {
-                turn.sequence == sequence
-                    || (turn.lane == lane
-                        && turn.generation == generation
-                        && turn.utterance_id == utterance_id)
-            })
-        {
+        if sequence <= self.retired_sequence {
+            return None;
+        }
+        // Sequence order survives out-of-order lane completion. Reuse the
+        // duplicate-sequence search for the insertion point.
+        let insert_at = self.turns.binary_search_by_key(&sequence, |turn| turn.sequence).err()?;
+        if self.turns.iter().any(|turn| {
+            turn.lane == lane && turn.generation == generation && turn.utterance_id == utterance_id
+        }) {
             return None;
         }
 
@@ -131,11 +132,6 @@ impl MeetingCommittedTurnStore {
             created_unix_ms: now_unix_ms,
             updated_unix_ms: now_unix_ms,
         };
-        let insert_at = self
-            .turns
-            .iter()
-            .position(|existing| existing.sequence > sequence)
-            .unwrap_or(self.turns.len());
         self.retained_text_bytes =
             self.retained_text_bytes.saturating_add(turn_text_bytes(&turn));
         // The archive owns an accepted copy before bounded Live memory can
@@ -160,13 +156,13 @@ impl MeetingCommittedTurnStore {
         if self.session_id != session_id || sequence == 0 || !matches!(lane, "you" | "incoming") {
             return None;
         }
-        let Some(turn) = self.turns.iter_mut().find(|turn| {
-            turn.session_id == session_id && turn.sequence == sequence
-                && turn.generation == generation && turn.utterance_id == utterance_id
-                && turn.lane == lane
-        }) else {
+        let index = self.turns.binary_search_by_key(&sequence, |turn| turn.sequence).ok()?;
+        let turn = self.turns.get_mut(index)?;
+        if turn.session_id != session_id || turn.generation != generation
+            || turn.utterance_id != utterance_id || turn.lane != lane
+        {
             return None;
-        };
+        }
         // Once a turn is complete, failed, or interrupted, stale results cannot
         // rewrite its recognized text, translation or playback state.
         if turn.translation_state != "pending"
@@ -207,7 +203,7 @@ impl MeetingCommittedTurnStore {
         utterance_id: u64,
         delivery_state: &str,
         now_unix_ms: u128,
-    ) -> bool {
+    ) -> Option<MeetingCommittedTurn> {
         if self.session_id != session_id
             || !matches!(
                 delivery_state,
@@ -220,27 +216,27 @@ impl MeetingCommittedTurnStore {
                     | "interrupted"
             )
         {
-            return false;
+            return None;
         }
-        let Some(turn) = self.turns.iter_mut().find(|turn| {
+        let Some(turn) = self.turns.iter_mut().rev().find(|turn| {
             turn.session_id == session_id
                 && turn.generation == Some(generation)
                 && turn.utterance_id == utterance_id
                 && turn.lane == "you"
         }) else {
-            return false;
+            return None;
         };
 
         if terminal_delivery_state(turn.delivery_state.as_deref()) {
             // Repeated terminal acknowledgement is idempotent, but Stop,
             // failure and completion cannot rewrite one another.
-            return turn.delivery_state.as_deref() == Some(delivery_state);
+            return (turn.delivery_state.as_deref() == Some(delivery_state)).then(|| turn.clone());
         }
         // Only begin_playback_at owns queued -> speaking, after checking the
         // exact session/generation/sequence, translation and queued state.
         // A generic delivery update must never bypass that at-most-once claim.
         if delivery_state == "speaking" {
-            return false;
+            return None;
         }
         // Native output can be marked complete only after its committed turn
         // was claimed for playback. Failures and Stop may still finalize from
@@ -249,26 +245,26 @@ impl MeetingCommittedTurnStore {
             && (turn.translation_state != "translated"
                 || turn.delivery_state.as_deref() != Some("speaking"))
         {
-            return false;
+            return None;
         }
         // Once audio is queued or playing, delayed AI-stage results cannot
         // move the same turn backwards while playback/Stop owns its outcome.
         if matches!(turn.delivery_state.as_deref(), Some("queued" | "speaking"))
             && matches!(delivery_state, "translating" | "preparing_voice")
         {
-            return false;
+            return None;
         }
         // A stale enqueue cannot send a translated or playing unit backwards.
         if delivery_state == "queued"
             && (turn.translation_state != "translated"
                 || turn.delivery_state.as_deref() != Some("preparing_voice"))
         {
-            return false;
+            return None;
         }
         turn.delivery_state = Some(delivery_state.to_string());
         turn.updated_unix_ms = now_unix_ms;
         self.revision += 1;
-        true
+        Some(turn.clone())
     }
 
     fn begin_playback_at(
@@ -278,28 +274,27 @@ impl MeetingCommittedTurnStore {
         sequence: u64,
         utterance_id: u64,
         now_unix_ms: u128,
-    ) -> bool {
+    ) -> Option<MeetingCommittedTurn> {
         if self.session_id != session_id || sequence == 0 {
-            return false;
+            return None;
         }
-        let Some(turn) = self.turns.iter_mut().find(|turn| {
-            turn.sequence == sequence
-                && turn.generation == Some(generation)
-                && turn.utterance_id == utterance_id
-                && turn.lane == "you"
-        }) else {
-            return false;
-        };
+        let index = self.turns.binary_search_by_key(&sequence, |turn| turn.sequence).ok()?;
+        let turn = self.turns.get_mut(index)?;
+        if turn.generation != Some(generation) || turn.utterance_id != utterance_id
+            || turn.lane != "you"
+        {
+            return None;
+        }
         if turn.translation_state != "translated"
             || turn.delivery_state.as_deref() != Some("queued")
         {
-            return false;
+            return None;
         }
         // Claim queued -> speaking exactly once before native audio is attempted.
         turn.delivery_state = Some("speaking".to_string());
         turn.updated_unix_ms = now_unix_ms;
         self.revision += 1;
-        true
+        Some(turn.clone())
     }
 
     fn update_outbound_timing_at(
@@ -309,22 +304,22 @@ impl MeetingCommittedTurnStore {
         utterance_id: u64,
         timing: &MeetingOutboundTiming,
         now_unix_ms: u128,
-    ) -> bool {
+    ) -> Option<MeetingCommittedTurn> {
         if self.session_id != session_id {
-            return false;
+            return None;
         }
-        let Some(turn) = self.turns.iter_mut().find(|turn| {
+        let Some(turn) = self.turns.iter_mut().rev().find(|turn| {
             turn.session_id == session_id
                 && turn.generation == Some(generation)
                 && turn.utterance_id == utterance_id
                 && turn.lane == "you"
         }) else {
-            return false;
+            return None;
         };
         turn.outbound_timing = Some(timing.clone());
         turn.updated_unix_ms = now_unix_ms;
         self.revision += 1;
-        true
+        Some(turn.clone())
     }
 
     fn interrupt_generation_at(
@@ -708,11 +703,10 @@ pub(super) fn begin_committed_playback(
     let Some(store) = guard.as_mut() else {
         return false;
     };
-    let claimed = store.begin_playback_at(session_id, generation, sequence, utterance_id, unix_ms());
-    if claimed {
-        if let Some(turn) = store.turns.iter().find(|turn| turn.sequence == sequence) {
-            transcript_archive::queue_turn(turn.clone());
-        }
+    let receipt = store.begin_playback_at(session_id, generation, sequence, utterance_id, unix_ms());
+    let claimed = receipt.is_some();
+    if let Some(turn) = receipt {
+        transcript_archive::queue_turn(turn);
     }
     drop(guard);
     if claimed {
@@ -748,22 +742,18 @@ pub(super) fn update_committed_turn_delivery_state(
     let Some(store) = guard.as_mut() else {
         return false;
     };
-    let updated = store.update_delivery_state_at(
+    let receipt = store.update_delivery_state_at(
         session_id,
         generation,
         utterance_id,
         delivery_state,
         unix_ms(),
     );
-    if updated {
-        if let Some(turn) = store.turns.iter().find(|turn| {
-            turn.generation == Some(generation) && turn.utterance_id == utterance_id
-                && turn.lane == "you"
-        }) {
-            // Terminal duplicate acknowledgements can be idempotent; the
-            // single writer still replaces this exact entry, never appends.
-            transcript_archive::queue_turn(turn.clone());
-        }
+    let updated = receipt.is_some();
+    if let Some(turn) = receipt {
+        // Idempotent terminal acknowledgements still replace the exact
+        // archived entry; never append or change the accepted outcome.
+        transcript_archive::queue_turn(turn);
     }
     drop(guard);
     if updated {
@@ -788,14 +778,10 @@ pub(super) fn update_committed_turn_outbound_timing(
     let Some(store) = guard.as_mut() else {
         return false;
     };
-    let updated = store.update_outbound_timing_at(session_id, generation, utterance_id, timing, unix_ms());
-    if updated {
-        if let Some(turn) = store.turns.iter().find(|turn| {
-            turn.generation == Some(generation) && turn.utterance_id == utterance_id
-                && turn.lane == "you"
-        }) {
-            transcript_archive::queue_turn(turn.clone());
-        }
+    let receipt = store.update_outbound_timing_at(session_id, generation, utterance_id, timing, unix_ms());
+    let updated = receipt.is_some();
+    if let Some(turn) = receipt {
+        transcript_archive::queue_turn(turn);
     }
     updated
 }
@@ -1004,23 +990,23 @@ mod tests {
             "Halo", "Hello", Some("preparing_voice"), Some(timing(1)), 1).is_some());
         let token = |store: &MeetingCommittedTurnStore| store.read_live(None, Ok(0)).live_revision.unwrap();
         let before = token(&store);
-        assert!(!store.begin_playback_at("s1", 7, 1, 51, 1));
+        assert!(store.begin_playback_at("s1", 7, 1, 51, 1).is_none());
         assert_eq!(token(&store), before);
-        assert!(store.update_delivery_state_at("s1", 7, 51, "queued", 1));
+        assert!(store.update_delivery_state_at("s1", 7, 51, "queued", 1).is_some());
         let queued = token(&store);
         assert_ne!(queued, before);
-        assert!(store.begin_playback_at("s1", 7, 1, 51, 1));
+        assert!(store.begin_playback_at("s1", 7, 1, 51, 1).is_some());
         let speaking = token(&store);
         assert_ne!(speaking, queued);
         let mut measured = timing(1);
         measured.first_playback_unix_ms = Some(2);
-        assert!(store.update_outbound_timing_at("s1", 7, 51, &measured, 1));
+        assert!(store.update_outbound_timing_at("s1", 7, 51, &measured, 1).is_some());
         let measured_token = token(&store);
         assert_ne!(measured_token, speaking);
         assert_eq!(store.interrupt_generation_at(7, 1).len(), 1);
         let interrupted = token(&store);
         assert_ne!(interrupted, measured_token);
-        assert!(store.update_delivery_state_at("s1", 7, 51, "interrupted", 1));
+        assert!(store.update_delivery_state_at("s1", 7, 51, "interrupted", 1).is_some());
         assert_eq!(token(&store), interrupted);
     }
 
@@ -1396,13 +1382,13 @@ mod tests {
             "session-a", 5, Some(7), 51, "you", "id", "en",
             "Penting", "Important", Some("preparing_voice"), Some(timing(1_000)), 1_000,
         ).is_some());
-        assert!(store.update_delivery_state_at("session-a", 7, 51, "queued", 1_010));
-        assert!(store.begin_playback_at("session-a", 7, 5, 51, 1_020));
-        assert!(store.update_delivery_state_at("session-a", 7, 51, "output_complete", 1_030));
+        assert!(store.update_delivery_state_at("session-a", 7, 51, "queued", 1_010).is_some());
+        assert!(store.begin_playback_at("session-a", 7, 5, 51, 1_020).is_some());
+        assert!(store.update_delivery_state_at("session-a", 7, 51, "output_complete", 1_030).is_some());
         let mut measured = timing(1_000);
         measured.first_playback_unix_ms = Some(1_025);
         measured.outbound_latency_ms = Some(25);
-        assert!(store.update_outbound_timing_at("session-a", 7, 51, &measured, 1_040));
+        assert!(store.update_outbound_timing_at("session-a", 7, 51, &measured, 1_040).is_some());
         let turn = store.turns.front().unwrap();
         assert_eq!(turn.sequence, 5);
         assert_eq!(turn.delivery_state.as_deref(), Some("output_complete"));
@@ -1427,29 +1413,29 @@ mod tests {
             Some(timing(1)),
             1_000,
         ).is_some());
-        assert!(store.update_delivery_state_at("session-a", 7, 11, "queued", 1_005));
-        assert!(store.begin_playback_at("session-a", 7, 1, 11, 1_010));
+        assert!(store.update_delivery_state_at("session-a", 7, 11, "queued", 1_005).is_some());
+        assert!(store.begin_playback_at("session-a", 7, 1, 11, 1_010).is_some());
         assert!(store.update_delivery_state_at(
             "session-a",
             7,
             11,
             "output_complete",
             1_020,
-        ));
-        assert!(!store.update_delivery_state_at(
+        ).is_some());
+        assert!(store.update_delivery_state_at(
             "session-a",
             7,
             11,
             "output_failed",
             1_030,
-        ));
+        ).is_none());
         assert!(store.update_delivery_state_at(
             "session-a",
             7,
             11,
             "output_complete",
             1_040,
-        ));
+        ).is_some());
 
         assert_eq!(
             store.turns.front().and_then(|turn| turn.delivery_state.as_deref()),
@@ -1501,26 +1487,26 @@ mod tests {
 
         // Native delivery was not claimed. A callback result alone must not
         // convert a prepared WAV or a queued WAV into claimed output.
-        assert!(!store.update_delivery_state_at(
+        assert!(store.update_delivery_state_at(
             "session-a", 7, 51, "output_complete", 1_005,
-        ));
-        assert!(!store.update_delivery_state_at(
+        ).is_none());
+        assert!(store.update_delivery_state_at(
             "session-a", 7, 51, "speaking", 1_006,
-        ));
+        ).is_none());
         assert!(store.update_delivery_state_at(
             "session-a", 7, 51, "queued", 1_010,
-        ));
-        assert!(!store.update_delivery_state_at(
+        ).is_some());
+        assert!(store.update_delivery_state_at(
             "session-a", 7, 51, "output_complete", 1_015,
-        ));
-        assert!(!store.update_delivery_state_at(
+        ).is_none());
+        assert!(store.update_delivery_state_at(
             "session-a", 7, 51, "speaking", 1_016,
-        ));
-        assert!(store.begin_playback_at("session-a", 7, 5, 51, 1_020));
-        assert!(!store.begin_playback_at("session-a", 7, 5, 51, 1_021));
+        ).is_none());
+        assert!(store.begin_playback_at("session-a", 7, 5, 51, 1_020).is_some());
+        assert!(store.begin_playback_at("session-a", 7, 5, 51, 1_021).is_none());
         assert!(store.update_delivery_state_at(
             "session-a", 7, 51, "output_complete", 1_030,
-        ));
+        ).is_some());
         assert_eq!(
             store.turns.front().unwrap().delivery_state.as_deref(),
             Some("output_complete"),
@@ -1534,15 +1520,15 @@ mod tests {
             "session-a", 6, Some(7), 61, "you", "id", "en",
             "Halo", "Hello", Some("preparing_voice"), Some(timing(1)), 1,
         ).is_some());
-        assert!(store.update_delivery_state_at("session-a", 7, 61, "queued", 2));
-        assert!(store.begin_playback_at("session-a", 7, 6, 61, 3));
+        assert!(store.update_delivery_state_at("session-a", 7, 61, "queued", 2).is_some());
+        assert!(store.begin_playback_at("session-a", 7, 6, 61, 3).is_some());
         assert_eq!(store.interrupt_generation_at(7, 4).len(), 1);
-        assert!(!store.update_delivery_state_at(
+        assert!(store.update_delivery_state_at(
             "session-a", 7, 61, "output_complete", 5,
-        ));
-        assert!(!store.update_delivery_state_at(
+        ).is_none());
+        assert!(store.update_delivery_state_at(
             "session-a", 7, 61, "output_failed", 6,
-        ));
+        ).is_none());
         assert_eq!(
             store.turns.front().unwrap().delivery_state.as_deref(),
             Some("interrupted"),
@@ -1561,19 +1547,19 @@ mod tests {
         }
         assert!(store.update_delivery_state_at(
             "session-a", 7, 11, "output_failed", 2,
-        ));
+        ).is_some());
         assert!(store.update_delivery_state_at(
             "session-a", 7, 22, "queued", 3,
-        ));
-        assert!(store.begin_playback_at("session-a", 7, 2, 22, 4));
+        ).is_some());
+        assert!(store.begin_playback_at("session-a", 7, 2, 22, 4).is_some());
         assert!(store.update_delivery_state_at(
             "session-a", 7, 22, "output_failed", 5,
-        ));
+        ).is_some());
         assert!(store.turns.iter().all(|turn|
             turn.delivery_state.as_deref() == Some("output_failed")));
-        assert!(!store.update_delivery_state_at(
+        assert!(store.update_delivery_state_at(
             "session-a", 7, 22, "output_complete", 6,
-        ));
+        ).is_none());
     }
 
     #[test]
@@ -1585,18 +1571,48 @@ mod tests {
         ).is_some());
         assert!(store.update_delivery_state_at(
             "session-a", 7, 33, "queued", 2,
-        ));
+        ).is_some());
         for stale in ["translating", "preparing_voice"] {
-            assert!(!store.update_delivery_state_at("session-a", 7, 33, stale, 3));
+            assert!(store.update_delivery_state_at("session-a", 7, 33, stale, 3).is_none());
         }
-        assert!(store.begin_playback_at("session-a", 7, 3, 33, 4));
+        assert!(store.begin_playback_at("session-a", 7, 3, 33, 4).is_some());
         for stale in ["translating", "preparing_voice", "queued", "speaking"] {
-            assert!(!store.update_delivery_state_at("session-a", 7, 33, stale, 5));
+            assert!(store.update_delivery_state_at("session-a", 7, 33, stale, 5).is_none());
         }
         assert_eq!(
             store.turns.front().unwrap().delivery_state.as_deref(),
             Some("speaking"),
         );
+    }
+
+    #[test]
+    fn archive_receipts_use_the_mutated_turn_in_interleaved_sequence_order() {
+        let mut store = MeetingCommittedTurnStore::new("s1");
+        assert!(store.commit_at("s1", 8, None, 10, "incoming", "en", "id",
+            "Hello", "", None, None, 1).is_some());
+        assert!(store.commit_at("s1", 3, Some(7), 10, "you", "id", "en",
+            "Halo", "", Some("translating"), Some(timing(3)), 2).is_some());
+        assert!(store.commit_at("s1", 5, None, 11, "incoming", "en", "id",
+            "Good", "", None, None, 3).is_some());
+        assert_eq!(store.turns.iter().map(|turn| turn.sequence).collect::<Vec<_>>(), vec![3, 5, 8]);
+        assert!(store.commit_at("s1", 5, Some(7), 12, "you", "id", "en",
+            "Duplikat", "", Some("translating"), Some(timing(5)), 4).is_none());
+        assert!(store.finish_translation_at("s1", 3, Some(7), 11, "you", Some("Wrong"), 4).is_none());
+        assert!(store.finish_translation_at("s1", 3, Some(7), 10, "you", Some("Hello"), 5).is_some());
+        let queued = store.update_delivery_state_at("s1", 7, 10, "queued", 6).unwrap();
+        assert_eq!((queued.sequence, queued.delivery_state.as_deref()), (3, Some("queued")));
+        assert!(store.begin_playback_at("s1", 7, 8, 10, 7).is_none());
+        let speaking = store.begin_playback_at("s1", 7, 3, 10, 8).unwrap();
+        assert_eq!((speaking.sequence, speaking.delivery_state.as_deref()), (3, Some("speaking")));
+        let measured = store.update_outbound_timing_at("s1", 7, 10, &timing(3), 9).unwrap();
+        assert_eq!((measured.sequence, measured.updated_unix_ms), (3, 9));
+        let completed = store.update_delivery_state_at("s1", 7, 10, "output_complete", 10).unwrap();
+        let revision = store.revision;
+        let repeated = store.update_delivery_state_at("s1", 7, 10, "output_complete", 11).unwrap();
+        assert_eq!((repeated.sequence, repeated.updated_unix_ms), (completed.sequence, 10));
+        assert_eq!(store.revision, revision);
+        assert!(store.update_delivery_state_at("s1", 7, 10, "interrupted", 12).is_none());
+        assert_eq!(store.turns[2].translation_state, "pending");
     }
 
     #[test]
@@ -1606,15 +1622,15 @@ mod tests {
             "s1", 3, Some(7), 10, "you", "id", "en",
             "Lanjutkan", "", Some("translating"), Some(timing(3)), 1,
         ).is_some());
-        assert!(!store.update_delivery_state_at("s1", 7, 10, "queued", 2));
-        assert!(!store.begin_playback_at("s1", 7, 3, 10, 3));
+        assert!(store.update_delivery_state_at("s1", 7, 10, "queued", 2).is_none());
+        assert!(store.begin_playback_at("s1", 7, 3, 10, 3).is_none());
         assert!(store.finish_translation_at("s1", 3, Some(7), 10, "you", Some("Continue"), 4).is_some());
-        assert!(!store.begin_playback_at("s1", 7, 4, 10, 5));
-        assert!(!store.begin_playback_at("s1", 8, 3, 10, 5));
-        assert!(store.update_delivery_state_at("s1", 7, 10, "queued", 6));
-        assert!(store.begin_playback_at("s1", 7, 3, 10, 7));
-        assert!(!store.begin_playback_at("s1", 7, 3, 10, 8));
-        assert!(!store.update_delivery_state_at("s1", 7, 10, "queued", 9));
+        assert!(store.begin_playback_at("s1", 7, 4, 10, 5).is_none());
+        assert!(store.begin_playback_at("s1", 8, 3, 10, 5).is_none());
+        assert!(store.update_delivery_state_at("s1", 7, 10, "queued", 6).is_some());
+        assert!(store.begin_playback_at("s1", 7, 3, 10, 7).is_some());
+        assert!(store.begin_playback_at("s1", 7, 3, 10, 8).is_none());
+        assert!(store.update_delivery_state_at("s1", 7, 10, "queued", 9).is_none());
     }
 
 }
