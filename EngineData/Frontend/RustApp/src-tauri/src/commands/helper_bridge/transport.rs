@@ -15,8 +15,8 @@ use super::functional_readiness::{
 use super::request_policy::{
     clear_meeting_outbound_pipeline, incoming_session_is_eligible,
     inject_request_metadata,
-    mark_meeting_outbound_pipeline, meeting_generation, meeting_lane,
-    meeting_outbound_pipeline_active, meeting_session_id, task_priority,
+    mark_meeting_outbound_pipeline, meeting_generation,
+    meeting_outbound_pipeline_active, task_priority, RequestAdmission,
 };
 use super::{
     incoming_deferred_for_required_outbound,
@@ -239,11 +239,9 @@ enum NativeVoiceIo<'a> {
 }
 
 fn send_worker_task_inner(task: &str, mut payload: Value, input: Option<MeetingInput<'_>>,
-                          voice: Option<NativeVoiceIo<'_>>) -> HelperBridgeWorkerResponse {
-    let priority = task_priority(task, &payload);
-    let meeting_generation = meeting_generation(&payload);
-    let meeting_session_id = meeting_session_id(&payload);
-    let meeting_lane = meeting_lane(&payload);
+                          voice: Option<NativeVoiceIo<'_>>, admission: RequestAdmission) -> HelperBridgeWorkerResponse {
+    let RequestAdmission { priority, generation: meeting_generation,
+        session_id: meeting_session_id, lane: meeting_lane } = admission;
     let permit = match acquire_helper_task_permit(priority) {
         Ok(permit) => permit,
         Err(error) => {
@@ -285,7 +283,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value, input: Option<MeetingI
     // ASR and MT never cross Python IPC, including on preparation errors.
     if voice.is_some() || matches!(task, "asr_preload" | "translation_preload" | "transcribe" | "translate") {
         #[cfg(windows)]
-        return native::dispatch(task, &mut payload, input, voice, priority, &permit, response_deadline_ms);
+        return native::dispatch(task, &mut payload, input, voice, priority, &permit, response_deadline_ms, meeting_lane);
         #[cfg(not(windows))]
         return standalone_blocked_response(
             task, &request_id, priority, "error", "native_inference:platform_unsupported",
@@ -708,14 +706,9 @@ fn retain_deferred_pcm(
 
 fn send_worker_task_with_input(task: &str, payload: Value, input: Option<MeetingInput<'_>>,
                                voice: Option<NativeVoiceIo<'_>>) -> HelperBridgeWorkerResponse {
-    let priority = task_priority(task, &payload);
-    let outbound_generation = if priority == HelperTaskPriority::MeetingOutbound
-        && meeting_lane(&payload).as_deref() == Some("you")
-    {
-        meeting_generation(&payload)
-    } else {
-        None
-    };
+    let admission = RequestAdmission::from_payload(task, &payload);
+    let priority = admission.priority;
+    let outbound_generation = admission.outbound_generation();
     // Reject new optional incoming stages immediately while a required outbound
     // utterance owns the helper pipeline. The post-permit check in the inner path
     // also catches incoming work that was already queued before this claim existed.
@@ -728,7 +721,7 @@ fn send_worker_task_with_input(task: &str, payload: Value, input: Option<Meeting
     }
 
     let first_started = Instant::now();
-    let mut response = send_worker_task_inner(task, payload, input, voice);
+    let mut response = send_worker_task_inner(task, payload, input, voice, admission);
     let initial_attempt_ms = observed_elapsed_ms(first_started)
         .saturating_sub(input.and_then(MeetingInput::pcm).map_or(0, |pcm| pcm.prepare_ms.get()));
 

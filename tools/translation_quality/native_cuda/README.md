@@ -49,7 +49,9 @@ My Voice synthesis, training and evaluation algorithms are unchanged.
   fence the result against exact session/generation and request ownership.
   Native ASR/MT results move the owned text directly into the existing JSON
   Value receipt; the Meeting consumer borrows that text. Native results have
-  a Rust-owned outer receipt identity. A selected
+  a Rust-owned outer receipt identity. Scheduler metadata is parsed once;
+  native scope checks still read current session authority, moving the owned
+  snapshot session ID rather than copying it. A selected
   native request never retries in Python, and a closed Meeting-native
   binding remains until verified Stop, blocking Python-only recovery.
   The host now opens the pair on explicit ASR preload or internal

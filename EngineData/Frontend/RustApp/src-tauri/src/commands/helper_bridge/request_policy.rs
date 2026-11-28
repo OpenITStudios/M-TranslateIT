@@ -117,18 +117,43 @@ pub(super) fn incoming_session_generation(session_id: &str) -> Option<u64> {
         .map(|snapshot| snapshot.generation)
 }
 
-pub(super) fn task_priority(task: &str, payload: &Value) -> HelperTaskPriority {
-    if meeting_generation(payload).is_some() || meeting_start_prepare(payload) {
-        HelperTaskPriority::MeetingOutbound
-    } else if meeting_lane(payload).as_deref() == Some("incoming")
-        && meeting_session_id(payload).is_some()
-    {
-        HelperTaskPriority::MeetingIncoming
-    } else if task == "translate" {
-        HelperTaskPriority::Text
-    } else {
-        HelperTaskPriority::Diagnostic
+// Scheduling metadata is parsed once per request. It is not a live
+// authority receipt: the transport still checks current session/generation.
+pub(super) struct RequestAdmission {
+    pub(super) priority: HelperTaskPriority,
+    pub(super) generation: Option<u64>,
+    pub(super) session_id: Option<String>,
+    pub(super) lane: Option<String>,
+}
+
+impl RequestAdmission {
+    pub(super) fn from_payload(task: &str, payload: &Value) -> Self {
+        let generation = meeting_generation(payload);
+        let session_id = meeting_session_id(payload);
+        let lane = meeting_lane(payload);
+        let priority = if generation.is_some() || meeting_start_prepare(payload) {
+            HelperTaskPriority::MeetingOutbound
+        } else if lane.as_deref() == Some("incoming") && session_id.is_some() {
+            HelperTaskPriority::MeetingIncoming
+        } else if task == "translate" {
+            HelperTaskPriority::Text
+        } else {
+            HelperTaskPriority::Diagnostic
+        };
+        Self { priority, generation, session_id, lane }
     }
+
+    pub(super) fn outbound_generation(&self) -> Option<u64> {
+        if self.priority == HelperTaskPriority::MeetingOutbound && self.lane.as_deref() == Some("you") {
+            self.generation
+        } else {
+            None
+        }
+    }
+}
+
+pub(super) fn task_priority(task: &str, payload: &Value) -> HelperTaskPriority {
+    RequestAdmission::from_payload(task, payload).priority
 }
 
 pub(super) fn inject_request_metadata(
@@ -149,7 +174,8 @@ pub(super) fn inject_request_metadata(
 
 #[cfg(test)]
 mod scoped_cancellation_tests {
-    use super::matching_session_pipeline_generation;
+    use super::{matching_session_pipeline_generation, RequestAdmission, HelperTaskPriority};
+    use serde_json::json;
     use crate::engine::runtime_state::{
         RuntimeSessionSnapshot, APPLICATION_MEETING_OWNER_ID, MIC_TEST_OWNER_ID,
     };
@@ -166,6 +192,28 @@ mod scoped_cancellation_tests {
             safe_to_stop: true,
             note: String::new(),
         }
+    }
+
+    #[test]
+    fn admission_preserves_priority_and_outbound_generation_contract() {
+        let cases = [
+            ("translate", json!({}), HelperTaskPriority::Text, None),
+            ("status", json!({}), HelperTaskPriority::Diagnostic, None),
+            ("translate", json!({"meeting_lane":" INCOMING ","meeting_session_id":" s "}), HelperTaskPriority::MeetingIncoming, None),
+            ("translate", json!({"meeting_lane":"incoming","meeting_session_id":""}), HelperTaskPriority::Text, None),
+            ("transcribe", json!({"meeting_lane":"you","meeting_generation":7,"meeting_session_id":"s"}), HelperTaskPriority::MeetingOutbound, Some(7)),
+            ("status", json!({"meeting_start_prepare":true}), HelperTaskPriority::MeetingOutbound, None),
+            ("translate", json!({"meeting_lane":"incoming","meeting_generation":8,"meeting_session_id":"s"}), HelperTaskPriority::MeetingOutbound, None),
+        ];
+        for (task, payload, priority, outbound) in cases {
+            let admission = RequestAdmission::from_payload(task, &payload);
+            assert_eq!(admission.priority, priority);
+            assert_eq!(admission.outbound_generation(), outbound);
+        }
+        let incoming = RequestAdmission::from_payload("translate",
+            &json!({"meeting_lane":" INCOMING ","meeting_session_id":" s "}));
+        assert_eq!(incoming.lane.as_deref(), Some("incoming"));
+        assert_eq!(incoming.session_id.as_deref(), Some("s"));
     }
 
     #[test]

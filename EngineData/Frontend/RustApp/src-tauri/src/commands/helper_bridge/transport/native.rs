@@ -83,7 +83,7 @@ struct Scope {
     session_id: Option<String>,
 }
 
-fn scope_from_snapshot(payload: &Value, snapshot: Option<&RuntimeSessionSnapshot>) -> Option<Scope> {
+fn scope_from_snapshot(payload: &Value, snapshot: Option<RuntimeSessionSnapshot>) -> Option<Scope> {
     // Native admission must compare exact metadata, not the legacy
     // presentation sanitizer's normalized/truncated string values.
     let generation = match payload.get("meeting_generation") {
@@ -126,14 +126,14 @@ fn scope_from_snapshot(payload: &Value, snapshot: Option<&RuntimeSessionSnapshot
             })
     };
     matches.then(|| Scope {
-        generation: Some(snapshot.generation), session_id: Some(snapshot.session_id.clone()),
+        generation: Some(snapshot.generation), session_id: Some(snapshot.session_id),
     })
 }
 
 fn scope(payload: &Value) -> Option<Scope> {
     let state = latest_runtime_session_state();
     if state.snapshot.is_none() && (state.has_active_session || state.blocker != "runtime_session:no_active_session") { return None; }
-    scope_from_snapshot(payload, state.snapshot.as_ref())
+    scope_from_snapshot(payload, state.snapshot)
 }
 
 fn error_blocker(error: Error, task: &str) -> (&'static str, bool) {
@@ -230,6 +230,7 @@ pub(super) fn dispatch(
     task: &str, payload: &mut Value, input: Option<MeetingInput<'_>>,
     mut voice: Option<NativeVoiceIo<'_>>,
     priority: HelperTaskPriority, permit: &HelperTaskPermit, deadline_ms: u128,
+    admitted_lane: Option<String>,
 ) -> HelperBridgeWorkerResponse {
     let admitted_at = Instant::now();
     let request_id = permit.request_id();
@@ -506,7 +507,7 @@ pub(super) fn dispatch(
     host.active_request_id = Some(request_id.into());
     host.active_meeting_generation = request_scope.generation;
     host.active_meeting_session_id = request_scope.session_id.clone();
-    host.active_meeting_lane = meeting_lane(payload);
+    host.active_meeting_lane = admitted_lane;
     host.updated_unix_ms = unix_ms();
     drop(host);
     // The original permit outlives the native reply. Do not wait under the
@@ -658,7 +659,10 @@ mod tests {
     fn scope_rejects_foreign_session_generation_and_unowned_text() {
         let current = snapshot();
         let outbound = json!({"meeting_generation":41,"meeting_session_id":"meeting-1","meeting_lane":"you"});
-        let scope = scope_from_snapshot(&outbound, Some(&current)).unwrap();
+        let owned_snapshot = current.clone();
+        let session_ptr = owned_snapshot.session_id.as_ptr();
+        let scope = scope_from_snapshot(&outbound, Some(owned_snapshot)).unwrap();
+        assert_eq!(scope.session_id.as_ref().unwrap().as_ptr(), session_ptr);
         assert_eq!(scope.generation, Some(41));
         assert_eq!(scope.session_id.as_deref(), Some("meeting-1"));
         for (key, bad) in [
@@ -670,15 +674,15 @@ mod tests {
         ] {
             let mut invalid = outbound.clone();
             invalid[key] = bad;
-            assert!(scope_from_snapshot(&invalid, Some(&current)).is_none());
+            assert!(scope_from_snapshot(&invalid, Some(current.clone())).is_none());
         }
         let incoming = json!({"meeting_session_id":"meeting-1","meeting_lane":"incoming"});
-        assert_eq!(scope_from_snapshot(&incoming, Some(&current)), Some(scope));
-        assert!(scope_from_snapshot(&json!({}), Some(&current)).is_none());
+        assert_eq!(scope_from_snapshot(&incoming, Some(current.clone())), Some(scope));
+        assert!(scope_from_snapshot(&json!({}), Some(current.clone())).is_none());
         assert!(scope_from_snapshot(&json!({}), None).is_some());
         let mut revoked = current;
         revoked.authority_active = false;
-        assert!(scope_from_snapshot(&outbound, Some(&revoked)).is_none());
+        assert!(scope_from_snapshot(&outbound, Some(revoked)).is_none());
     }
 
     #[test]
