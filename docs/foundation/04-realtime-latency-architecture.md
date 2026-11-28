@@ -10,7 +10,7 @@ lifecycle: ACTIVE
 # TranslateIT — Realtime Latency Architecture
 
 **Status:** Approved target architecture; implementation remains evidence-gated  
-**Updated:** 2026-09-09  
+**Updated:** 2026-11-28  
 **Scope:** required outbound Meeting latency without reducing translation, ASR, voice, ordering, or safety quality
 
 ## Goal
@@ -21,9 +21,9 @@ This file defines the target architecture. It does not claim the phases below ar
 
 ## Non-negotiable invariants
 
-- One Tauri/Rust Meeting lifecycle owner and one canonical Python worker remain authoritative.
+- One Tauri/Rust Meeting lifecycle owner and one canonical native CUDA inference owner remain authoritative.
 - Finalized utterances remain the only normal outbound AI input.
-- ASR model/beam/language/VAD quality, MiLMMT model/prompt/context/generation policy, GPT-SoVITS V2ProPlus actor/seed/quality mode, and selected voice must not be weakened for latency.
+- Preserve the pinned Qwen3-ASR, Hy-MT2 and ZONOS3-Mini model identities, current input/generation policy, VAD quality, selected reference and speech quality for latency.
 - English TTS playback remains serialized, ordered, bounded, and at-most-once.
 - Capture may continue while previous output is processing or playing.
 - No unbounded queue, parallel TTS engines, second worker, speculative cloud fallback, or user-facing Realtime/Quality mode.
@@ -45,13 +45,13 @@ physical microphone
 → TranslateIT Meeting Microphone
 ```
 
-The key separation is **AI preparation vs playback ownership**. Python inference remains serialized by the canonical helper scheduler; Rust playback becomes independently serialized so the next finalized utterance can use the Python worker while the previous English audio is already playing.
+The key separation is **AI preparation vs playback ownership**. Native inference remains serialized by the canonical helper scheduler; the existing Rust playback owner can deliver the previous complete English PCM while the next finalized utterance uses the same native inference owner.
 
 ## Phase A — bounded playback decoupling
 
 This is the preferred first architecture change when continuous-speech `queue_ms` grows because the outbound consumer waits for previous playback to finish.
 
-Keep the current full-WAV TTS and current `deliver_meeting_output_wav` algorithm unchanged. Add one dedicated Meeting playback consumer and a `sync_channel(1)`-equivalent handoff.
+The current source uses complete native PCM, one dedicated Meeting playback consumer and a bounded `sync_channel(1)` handoff. Target behavior remains unproven.
 
 Bound:
 
@@ -62,17 +62,17 @@ pending playback  = max 1
 
 The AI/outbound consumer may therefore prepare at most **one utterance ahead**. It must not generate an unbounded audio backlog.
 
-A playback job carries generation, session, event sequence, utterance identity, source WAV path, actor/output identity, and timing context. Playback accepts jobs only for the authoritative generation and in event-sequence order.
+A playback job carries generation, session, event sequence, utterance identity, owned PCM and the existing selected-actor/output admission, and timing context. Playback accepts jobs only for the authoritative generation and in event-sequence order.
 
 If the one pending slot is occupied, AI preparation experiences bounded backpressure until the playback consumer advances. If the generation becomes stale or the bounded wait cannot complete safely, the turn becomes an explicit interrupted/attention state; it is never silently emitted late.
 
 Ownership changes required by this separation:
 
-- the playback consumer owns `deliver_meeting_output_wav` execution;
+- the playback consumer owns `deliver_meeting_output_native_pcm_for_source` execution;
 - self-output suppression covers **actual playback**, not time spent waiting in the queue;
 - first-playback and delivery completion timing are reported by the playback owner;
-- the playback owner deletes TTS temp WAVs after success/failure/cancellation;
-- Stop cancels current playback, closes the producer, rejects pending jobs, cleans their temp files, and joins the playback consumer.
+- the playback owner consumes or drops the owned PCM after success/failure/cancellation;
+- Stop cancels current playback, closes the producer, rejects pending jobs, drops their owned audio, and joins the playback consumer.
 
 No audio synthesis or resampling math changes in Phase A.
 
@@ -108,7 +108,7 @@ A reusable AI proof must be bound to a strong identity, not elapsed time or file
 helper worker generation token
 + readiness/invalidation epoch
 + ASR model id + executed device/compute type
-+ MiLMMT model id + pinned revision + executed device/precision
++ Hy-MT2 model id + pinned revision + executed device/precision
 + selected voice engine/revision
 + exact actor token/fingerprint
 ```
@@ -132,19 +132,9 @@ Microphone and native output readiness are still proven for **every new Meeting 
 
 This is last, not first. Enable only when TARGET_WINDOWS shows `tts_ms` remains the material first-audio bottleneck after safer overlap/output work.
 
-The pinned GPT-SoVITS runtime exposes `return_fragment=True` while keeping `streaming_mode=False`. That path may be evaluated as an internal first-audio transport optimization, but it is not assumed equivalent until target quality evidence exists.
+The pinned ZONOS3 helper has a streaming path, but early streaming can decode incomplete codebooks and cannot retract audible output if a later frame fails. Current native synthesis explicitly uses non-streaming complete PCM. Keep Phase D held: enabling any progressive output requires explicit product approval of changed partial-failure semantics and target quality/ordering/cancellation evidence, not just lower first-audio latency.
 
-Rules:
-
-- never enable `streaming_mode=True` merely for speed;
-- never enable fixed-length/lower-quality chunk options;
-- fragments from different utterances never interleave;
-- event/generation/actor identity travels with every fragment;
-- once any fragment has been played, failure must not replay that utterance from the beginning;
-- full-WAV remains the validated baseline until fragment quality and stability pass TARGET_WINDOWS comparison;
-- no user-facing quality/realtime toggle is introduced.
-
-Acceptance for fragment promotion requires the same selected voice, seed, model and reference plus target listening/speaker-fidelity evidence showing no material quality regression.
+No forced sentence splitting, model/sampling changes, interleaved utterances, duplicate playback, alternate engine or user-facing quality toggle. Preserve the complete-output baseline until the new contract is approved and demonstrated.
 
 ## Metrics
 
@@ -181,7 +171,7 @@ Each phase must preserve the previous accepted behavior and have its own rollbac
 
 ## Source acceptance
 
-REMOTE_GITHUB/source proof may establish bounded queue logic, order, generation rejection, cleanup ownership, compile/lint/unit contracts, identity matching, and failure-state behavior.
+REMOTE_GITHUB/source proof may establish bounded queue logic, order, generation rejection, cleanup ownership, authored compile/lint/unit contracts (not executed results), identity matching, and failure-state behavior.
 
 TARGET_WINDOWS remains required for actual microphone/device behavior, playback callback stability, meeting-app reception, real Start → Live, end-to-end latency, resource pressure, speaker fidelity, and repeated-session claims.
 

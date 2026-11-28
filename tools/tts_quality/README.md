@@ -4,9 +4,11 @@ This directory owns source-level regression evaluation for TranslateIT's selecte
 
 It does **not** claim audible quality from CI. Real evidence requires generated WAVs from the exact selected voice/runtime and an independent intelligibility/artifact review process.
 
-Before expensive My Voice training, the build path rejects clearly unusable guided recordings: non-canonical WAV format, extreme silence/clipping, very low active signal, large DC offset, and extreme level mismatch across accepted takes. Build readiness also requires at least one accepted 3–10 second take suitable for the canonical GPT-SoVITS reference contract. Reference selection prefers the cleanest eligible 3–10 second take and uses distance from the 5-second target only as a later tie-breaker. Candidate selection rejects gross synthesis artifacts first (including clipping, near-total silence, and multi-second internal dropout), then compares held-out ASR intelligibility and speaker similarity; user approval requires every held-out preview to be listened through, a completed reviewable build state, and an exact evaluation-to-candidate identity match. Successful approval also clears disposable build/evaluation artifacts while retaining accepted source takes for an optional rebuild. These remain conservative quality gates, not substitutes for native listening quality.
+Before native My Voice reference evaluation, the build path rejects clearly unusable guided recordings: non-canonical WAV format, extreme silence/clipping, very low active signal, large DC offset, and extreme level mismatch across accepted takes. Build readiness also requires at least one accepted 3–10 second take suitable for the bounded reference contract. Reference selection prefers the cleanest eligible 3–10 second take and uses distance from the 5-second target only as a later tie-breaker. Candidate selection rejects gross synthesis artifacts first (including clipping, near-total silence, and multi-second internal dropout), then compares held-out ASR intelligibility and speaker similarity; user approval requires every held-out preview to be listened through, a completed reviewable build state, and an exact evaluation-to-candidate identity match. Successful approval also clears disposable build/evaluation artifacts while retaining accepted source takes for an optional rebuild. These remain conservative quality gates, not substitutes for native listening quality.
 
 ## Native zero-shot migration acceptance
+
+The migration milestones below are historical source checkpoints. Current Local source is native-only; there is no default legacy inference/training fallback. Create/Improve requires the reviewed native assets and independent verifier pins, and native acceptance remains held.
 
 The maintainer requires My Voice to preserve or improve the resemblance to the authorized user's real voice, not merely reduce build time or remove Python. Native Quick Preview is only an early listening aid: it uses the same 3–10 s reference eligibility, gross signal thresholds and clean-reference ranking as the former Quick Preview, with quiet-edge energy compared only when all eligible takes have it. It does not train or approve a profile.
 
@@ -47,7 +49,7 @@ The evaluator combines four independent signals:
 - declared critical word/meaning preservation;
 - explicit artifact flags: clipping, dropout, repetition, truncation, unexpected silence, noise burst, or unstable pitch.
 
-A higher speaker-similarity score does not override an intelligibility or artifact regression. If every bounded training checkpoint produces a gross clipping/silence artifact, the build fails closed instead of offering a "least bad" candidate.
+A higher speaker-similarity score does not override an intelligibility or artifact regression. If every bounded reference candidate produces a gross clipping/silence artifact, the build fails closed instead of offering a "least bad" candidate.
 
 ## Corpus
 

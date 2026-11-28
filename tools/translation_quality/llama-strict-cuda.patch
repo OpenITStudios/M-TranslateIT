@@ -676,6 +676,33 @@ diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
  
  //
  // mtmd_audio_preprocessor_dots3note
+@@ -1976,22 +1994,24 @@
+         return;
+     }
+     const size_t n  = (size_t) (m1 - mix_next);
+-    std::vector<float> y(n, 0.0f);
++    // Accumulate directly into the zero-initialized resampler tail.
++    const size_t offset = rs_buf.size();
++    rs_buf.resize(offset + n, 0.0f);
++    float * y = rs_buf.data() + offset;
+     for (int c = 0; c < 2; c++) {
+         const float * w = mixer.data() + (size_t) c * fir_kernel;
+         const float * s = br[c].mix_in.data() + (mix_next - mix_base);
+         for (int k = 0; k < fir_kernel; k++) {
+             for (size_t i = 0; i < n; i++) {
+                 y[i] += w[k] * s[i + k];
+             }
+         }
+     }
+     mix_next = m1;
+     for (int c = 0; c < 2; c++) {
+         br[c].mix_in.erase(br[c].mix_in.begin(), br[c].mix_in.begin() + (mix_next - mix_base));
+     }
+     mix_base = mix_next;
+ 
+-    rs_buf.insert(rs_buf.end(), y.begin(), y.end());
+     rs_in += (int64_t) n;
+     resample(false, out);
 diff --git a/tests/test-mtmd-impl.cpp b/tests/test-mtmd-impl.cpp
 --- a/tests/test-mtmd-impl.cpp
 +++ b/tests/test-mtmd-impl.cpp
@@ -751,6 +778,46 @@ diff --git a/tests/test-mtmd-impl.cpp b/tests/test-mtmd-impl.cpp
  
  MAKE_TEST(test_audio_preprocessor_conformer) {
      mtmd_hparams hparams;
+@@ -1165,6 +1186,38 @@
+ }
+ 
+-// 13 tokens per 100-frame chunk; the tail is ceil^3 (one halving per stride-2 conv layer)
++// Model-free ZONOS3 waveform regression: preserve exact output across
++// chunk boundaries, including nonempty resampler history and final padding.
++MAKE_TEST(test_zonos3_synth_chunk_boundaries) {
++    const int n_fft0 = 8, n_fft1 = 16, hop = 2, n_frames = 19;
++    const size_t width = n_fft0 + 2 + n_fft1 + 2;
++    std::vector<float> spec((size_t) n_frames * width);
++    for (size_t i = 0; i < spec.size(); ++i) {
++        spec[i] = (float) ((int) (i % 17) - 8) * 0.125f;
++    }
++    const std::vector<float> mixer = { 0.125f, 0.5f, 0.125f, -0.125f, 0.25f, 0.125f };
++    // 2 -> 3 polyphase resampler with one sample of left/right context.
++    const std::vector<float> kernel = { 0.125f, 0.5f, 0.25f, 0.125f,
++                                        0.25f, 0.25f, 0.25f, 0.25f,
++                                        0.125f, 0.25f, 0.5f, 0.125f };
++    mtmd_audio_zonos3_synth whole(mixer, kernel, n_fft0, n_fft1, hop, 2, 3);
++    mtmd_audio_zonos3_synth split(mixer, kernel, n_fft0, n_fft1, hop, 2, 3);
++    std::vector<float> a, b;
++    whole.push(spec.data(), n_frames, a);
++    whole.flush(a);
++    int offset = 0;
++    for (int chunk : { 1, 2, 5, 3, 8 }) {
++        split.push(spec.data() + (size_t) offset * width, chunk, b);
++        offset += chunk;
++    }
++    split.flush(b);
++    t.assert_equal("frame coverage", n_frames, offset);
++    t.assert_equal("sample count", (size_t) (n_frames * hop * 3 / 2), a.size());
++    t.assert_true("finite nonzero waveform", std::all_of(a.begin(), a.end(), [](float v) { return std::isfinite(v); }) &&
++                  std::any_of(a.begin(), a.end(), [](float v) { return v != 0.0f; }));
++    t.assert_true("chunk parity", a == b);
++}
++
++// 13 tokens per 100-frame chunk; the tail is ceil^3 (one halving per stride-2 conv layer)
+ MAKE_TEST(test_qwen3a_tokens_for_frames) {
+     const std::vector<std::pair<int64_t, int64_t>> cases = {
+         {    0,   0 },
 diff --git a/src/llama-batch.cpp b/src/llama-batch.cpp
 --- a/src/llama-batch.cpp
 +++ b/src/llama-batch.cpp
