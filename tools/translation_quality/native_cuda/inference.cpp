@@ -368,8 +368,11 @@ int32_t decode_text_prefill(decoder & d, const llama_token * tokens, size_t coun
         for (; i < end; ++i) {
             const int idx = llama_batch_ext_add_token(d.batch.get(), 0, tokens[i]);
             const llama_pos pos = next_pos++;
+            // Pinned llama_batch_ext::token starts with output=false.
+            // Set only the requested final output, not every input token.
             if (idx < 0 || !llama_batch_ext_set_pos(d.batch.get(), idx, &pos) ||
-                !llama_batch_ext_set_output_logits(d.batch.get(), idx, logits_last && i + 1 == count))
+                (logits_last && i + 1 == count &&
+                 !llama_batch_ext_set_output_logits(d.batch.get(), idx, true)))
                 return TI_INFERENCE;
         }
         if (llama_process(d.context.get(), LLAMA_PROCESS_TYPE_DECODE, d.batch.get()) != 0)
