@@ -8,6 +8,7 @@
 #include <cstring>
 #include <cwchar>
 #include <memory>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -382,8 +383,13 @@ int32_t decode_text_prefill(decoder & d, const llama_token * tokens, size_t coun
 constexpr llama_token greedy_token(const float * logits, int32_t count) {
     if (!logits || count <= 0) return LLAMA_TOKEN_NULL;
     llama_token selected = 0;
+    float best = logits[0];
     for (llama_token i = 1; i < count; ++i) {
-        if (logits[i] > logits[selected]) selected = i;
+        const float candidate = logits[i];
+        if (candidate > best) {
+            best = candidate;
+            selected = i;
+        }
     }
     return selected;
 }
@@ -403,6 +409,14 @@ static_assert(greedy_token(k_greedy_negative_fixture, 3) == 2);
 static_assert(greedy_token(k_greedy_negative_fixture, 1) == 0);
 static_assert(greedy_token(nullptr, 3) == LLAMA_TOKEN_NULL);
 static_assert(greedy_token(k_greedy_negative_fixture, 0) == LLAMA_TOKEN_NULL);
+constexpr float k_greedy_inf = std::numeric_limits<float>::infinity();
+constexpr float k_greedy_nan = std::numeric_limits<float>::quiet_NaN();
+constexpr float k_greedy_nonfinite_fixture[] = {-k_greedy_inf, k_greedy_nan, k_greedy_inf, k_greedy_inf};
+constexpr float k_greedy_leading_nan_fixture[] = {k_greedy_nan, 1.0f, k_greedy_inf};
+constexpr float k_greedy_all_negative_inf_fixture[] = {-k_greedy_inf, -k_greedy_inf};
+static_assert(greedy_token(k_greedy_nonfinite_fixture, 4) == 2);
+static_assert(greedy_token(k_greedy_leading_nan_fixture, 3) == 0);
+static_assert(greedy_token(k_greedy_all_negative_inf_fixture, 2) == 0);
 
 // All forbidden MT markers begin with '<'. Ordinary speech needs one
 // search, not a separate full-text scan for each marker.
@@ -494,7 +508,10 @@ int32_t generate(decoder & d, llama_pos next_pos, uint32_t max_tokens,
         }
         ++next_pos;
     }
-    return TI_INCOMPLETE;
+    // Only the MT loop's natural exhaustion is a token-ceiling result.
+    // Earlier invalid-token, marker, byte-limit and cancellation exits keep
+    // their original precedence; the scratch remains unpublished.
+    return required_eos != LLAMA_TOKEN_NULL ? TI_MT_TOKEN_LIMIT : TI_INCOMPLETE;
 }
 
 int32_t infer(ti_asr & asr, const float * pcm, size_t count, const char * language,
@@ -663,6 +680,17 @@ constexpr bool mt_prompt_fixture(bool target_id, std::string_view expected) {
 static_assert(mt_prompt_fixture(false, u8"<｜hy_begin▁of▁sentence｜><｜hy_User｜>Translate the following text into English. Note that you should only output the translated result without any additional explanation:\n\nHalo, café < 5.<｜hy_Assistant｜>"));
 static_assert(mt_prompt_fixture(true, u8"<｜hy_begin▁of▁sentence｜><｜hy_User｜>Translate the following text into Indonesian. Note that you should only output the translated result without any additional explanation:\n\nHalo, café < 5.<｜hy_Assistant｜>"));
 
+// Keep the existing EOS-inclusive policy. The input is already bounded by
+// k_context before this helper is called, so the arithmetic cannot overflow.
+constexpr uint32_t mt_generation_budget(uint32_t prompt_tokens) {
+    return std::min(k_mt_max_tokens, std::max(64u, 2u * prompt_tokens + 32u));
+}
+static_assert(mt_generation_budget(16) == 64);
+static_assert(mt_generation_budget(17) == 66);
+static_assert(mt_generation_budget(111) == 254);
+static_assert(mt_generation_budget(112) == 256);
+static_assert(mt_generation_budget(k_context - k_mt_max_tokens) == 256);
+
 int32_t translate(ti_mt & mt, std::string_view source, bool target_id,
                   const request_control & control, char * output, size_t * out_len) {
     auto * context = mt.context.get();
@@ -681,7 +709,7 @@ int32_t translate(ti_mt & mt, std::string_view source, bool target_id,
     // budget, and reserve room before evaluating any token. No truncation.
     if (n <= 0 || limit <= k_mt_max_tokens ||
         static_cast<uint32_t>(n) > limit - k_mt_max_tokens) return TI_INPUT_LIMIT;
-    const uint32_t budget = std::min(k_mt_max_tokens, std::max(64u, 2u * static_cast<uint32_t>(n) + 32u));
+    const uint32_t budget = mt_generation_budget(static_cast<uint32_t>(n));
 
     // open_mt establishes the first empty context; the scope guard restores
     // it on every exit after this point, including cancellation or exceptions.

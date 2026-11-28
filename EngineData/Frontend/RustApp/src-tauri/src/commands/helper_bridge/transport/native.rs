@@ -8,7 +8,7 @@ use crate::commands::helper_bridge::{
     NATIVE_INFERENCE_CLAIM, NATIVE_ASR_MODEL, NATIVE_MT_MODEL, NATIVE_MT_REVISION,
 };
 use std::time::Duration;
-use translateit_native_cuda::{Error, InferenceInput, InferenceOutput, Language};
+use translateit_native_cuda::{Error, InferenceInput, InferenceOutput, Language, MT_TOKEN_LIMIT};
 
 fn language(value: &Value, key: &str) -> Option<Language> {
     parse_language(value.get(key).and_then(Value::as_str)?)
@@ -172,6 +172,8 @@ fn error_blocker(error: Error, task: &str) -> (&'static str, bool) {
         Error::Native(6) => ("asr:input_too_long_for_model", false),
         Error::Native(9) if task == "transcribe" => ("asr:empty_transcript", false),
         Error::Native(9) => ("translation:empty_output", false),
+        Error::Native(MT_TOKEN_LIMIT) if task == "translate" => ("translation:token_ceiling", false),
+        Error::Native(10) if task == "translate" => ("translation:output_byte_limit", false),
         Error::Native(8 | 10) => ("native_inference:incomplete_output", false),
         _ => ("native_inference:owner_or_backend_failed", true),
     }
@@ -648,8 +650,15 @@ pub(super) fn dispatch(
                 let _ = host.native_inference.as_mut().expect("checked owner").owner.try_close();
                 invalidate_required_outbound_ai_readiness();
             }
-            json!({"ok": false, "stage": task, "blocker": blocker,
-                "note": "Native inference did not return an admitted complete result."})
+            let mut body = json!({"ok": false, "stage": task, "blocker": blocker,
+                "note": "Native inference did not return an admitted complete result."});
+            if let Some(elapsed_ms) = translation_elapsed_ms {
+                body["elapsed_ms"] = json!(elapsed_ms);
+                if error == Error::Native(MT_TOKEN_LIMIT) {
+                    body["hit_token_ceiling"] = json!(true);
+                }
+            }
+            body
         }
     };
     let mut body = body;
@@ -808,6 +817,9 @@ mod tests {
         assert_eq!(error_blocker(Error::Native(9), "transcribe"), ("asr:empty_transcript", false));
         assert!(!error_blocker(Error::Cancelled, "translate").1);
         assert!(!error_blocker(Error::Native(6), "translate").1);
+        assert_eq!(error_blocker(Error::Native(MT_TOKEN_LIMIT), "translate"), ("translation:token_ceiling", false));
+        assert_eq!(error_blocker(Error::Native(10), "translate"), ("translation:output_byte_limit", false));
+        assert!(error_blocker(Error::Native(MT_TOKEN_LIMIT), "transcribe").1);
         assert!(error_blocker(Error::Native(7), "transcribe").1);
         assert!(error_blocker(Error::InvalidReceipt, "translate").1);
     }

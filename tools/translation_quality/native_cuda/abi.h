@@ -32,7 +32,8 @@ enum ti_status {
     TI_VRAM = 14,
     TI_BUSY = 15,
     TI_CANCELLED = 16,
-    TI_DEADLINE = 17
+    TI_DEADLINE = 17,
+    TI_MT_TOKEN_LIMIT = 18 // MT decode exhausted its EOS-inclusive token budget.
 };
 
 // Synchronous, non-retained callback: return TI_OK, TI_CANCELLED or
@@ -61,6 +62,7 @@ TI_EXPORT int32_t ti_runtime_transcribe(ti_runtime * runtime, const float * pcm,
                                         char * output,
                                         size_t output_cap, size_t * out_len);
 // UTF-8 <=8000 bytes. Different directions only, same output contract.
+// TI_MT_TOKEN_LIMIT is a nonfatal, zero-length result; never publish partial MT.
 TI_EXPORT int32_t ti_runtime_translate(ti_runtime * runtime, const char * source, size_t source_len,
                                        uint32_t source_language, uint32_t target_language,
                                        ti_stop_check stop, const void * stop_data,

@@ -12,6 +12,7 @@ pub use owner::{InferenceInput, InferenceOutput, PendingInference, RuntimeOwner}
 const ABI: u32 = 7;
 const CANCELLED: i32 = 16;
 const DEADLINE: i32 = 17;
+pub const MT_TOKEN_LIMIT: i32 = 18;
 type StopCheck = unsafe extern "C" fn(*const c_void) -> i32;
 const MAX_TRANSLATION_INPUT_CHARS: usize = 2_000;
 const MAX_TRANSLATION_OUTPUT_CHARS: usize = 4_000;
@@ -515,6 +516,8 @@ mod tests {
     #[test]
     fn output_receipt_never_exposes_failed_or_invalid_bytes() {
         assert_eq!(checked_output(7, 0, b"partial", 4000), Err(Error::Native(7)));
+        assert_eq!(checked_output(MT_TOKEN_LIMIT, 0, b"partial", 4000), Err(Error::Native(MT_TOKEN_LIMIT)));
+        assert_eq!(checked_output(MT_TOKEN_LIMIT, 7, b"partial", 4000), Err(Error::InvalidReceipt));
         assert_eq!(checked_output(CANCELLED, 0, b"partial", 4000), Err(Error::Cancelled));
         assert_eq!(checked_output(DEADLINE, 0, b"partial", 4000), Err(Error::DeadlineExceeded));
         assert_eq!(checked_output(CANCELLED, 7, b"partial", 4000), Err(Error::InvalidReceipt));

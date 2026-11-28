@@ -5,7 +5,7 @@ use super::*;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{collections::HashSet, fs, io::Read};
-use translateit_native_cuda::{InferenceInput, InferenceOutput, Language};
+use translateit_native_cuda::{Error, InferenceInput, InferenceOutput, Language, MT_TOKEN_LIMIT};
 use crate::commands::helper_bridge::{NATIVE_MT_MODEL, NATIVE_MT_REVISION};
 
 #[path = "native_asr_quality.rs"]
@@ -107,12 +107,17 @@ fn replay_translation(
             "elapsed_ms":started.elapsed().as_millis() as u64
         }), None),
         failure => {
+            let ceiling = matches!(&failure, Err(Error::Native(MT_TOKEN_LIMIT)));
             let blocker = match failure {
+                Err(Error::Native(MT_TOKEN_LIMIT)) => "translation:token_ceiling".into(),
+                Err(Error::Native(10)) => "translation:output_byte_limit".into(),
                 Err(error) => format!("native_quality:{error:?}"),
                 _ => "native_quality:unexpected_output".into(),
             };
-            (json!({"ok":false,"stage":"translate","request_id":permit.request_id(),
-                "direction_pair":pair,"blocker":blocker}), Some(blocker))
+            let mut response = json!({"ok":false,"stage":"translate","request_id":permit.request_id(),
+                "direction_pair":pair,"blocker":blocker,"elapsed_ms":started.elapsed().as_millis() as u64});
+            if ceiling { response["hit_token_ceiling"] = json!(true); }
+            (response, Some(blocker))
         }
     }
 }
