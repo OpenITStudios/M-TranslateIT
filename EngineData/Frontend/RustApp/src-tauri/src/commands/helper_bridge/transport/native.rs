@@ -175,7 +175,7 @@ fn error_blocker(error: Error, task: &str) -> (&'static str, bool) {
 // Meeting ASR must transfer its finalized PCM, not a path.
 // Same scheduler permit as inference. Control requests observe the Rust
 // lifecycle and asset eligibility; never load models or claim a functional pass.
-pub(super) fn control(task: &str, payload: &Value, permit: &HelperTaskPermit, priority: HelperTaskPriority)
+pub(super) fn control(task: &str, payload: &Value, permit: &HelperTaskPermit, priority: HelperTaskPriority, wait_generation: Option<u64>)
     -> HelperBridgeWorkerResponse
 {
     let request_id = permit.request_id();
@@ -190,7 +190,7 @@ pub(super) fn control(task: &str, payload: &Value, permit: &HelperTaskPermit, pr
     if (payload.get("meeting_start_prepare").and_then(Value::as_bool) == Some(true)
         || payload.get("meeting_generation").is_some_and(|value| !value.is_null())
         || payload.get("meeting_session_id").is_some_and(|value| !value.is_null()))
-        && scope(payload).is_none()
+        && !scope(payload).is_some_and(|scope| scope.generation == wait_generation)
     {
         return standalone_blocked_response(task, request_id, priority, "error",
             "native_inference:scope_revoked", "Native control request has no current Meeting authority.");
@@ -220,7 +220,7 @@ pub(super) fn dispatch(
     task: &str, payload: &mut Value, input: Option<MeetingInput<'_>>,
     mut voice: Option<NativeVoiceIo<'_>>,
     priority: HelperTaskPriority, permit: &HelperTaskPermit, deadline_ms: u128,
-    admitted_lane: Option<String>,
+    admitted_lane: Option<String>, wait_generation: Option<u64>,
 ) -> HelperBridgeWorkerResponse {
     let admitted_at = Instant::now();
     let request_id = permit.request_id();
@@ -260,6 +260,14 @@ pub(super) fn dispatch(
     let Some(request_scope) = scope(payload) else {
         return fail("native_inference:scope_invalid", "Native inference requires current exact session authority.");
     };
+    // A request that waited for an earlier generation cannot adopt a new
+    // generation even if its lane/session metadata otherwise resolves.
+    if request_scope.generation != wait_generation {
+        let stale = if priority == HelperTaskPriority::MeetingIncoming {
+            StaleMeetingScope::Session
+        } else { StaleMeetingScope::Generation };
+        return stale.response(task, request_id, priority);
+    }
     if host.pending_meeting_cleanup_session_id.is_some() || host.active_request_id.is_some()
         || !host.native_lifecycle_ready() || !host.native_owner_healthy()
         || host.last_error.as_deref() == Some("helper_bridge:cleanup_incomplete")

@@ -200,24 +200,32 @@ fn acquire_scoped_permit_with_deadline(
         ));
     }
 
-    scheduler_waiting_increment(&mut state, priority);
-    // Check the deadline before every admission, even if the resource
-    // became free while the waiter was reacquiring the mutex.
+    // Uncontended requests need no waiting counter updates. Both paths
+    // share the same deadline, epoch and priority checks before claiming.
+    let mut registered = false;
     loop {
         if generation.is_some_and(|generation| !runtime_generation_matches_epoch(generation)) {
-            scheduler_waiting_decrement(&mut state, priority);
-            wake.notify_all();
+            if registered {
+                scheduler_waiting_decrement(&mut state, priority);
+                wake.notify_all();
+            }
             return Err(SCHEDULER_SCOPE_REVOKED.to_string());
         }
         let remaining = wait_deadline.saturating_sub(wait_started.elapsed());
         if remaining.is_zero() {
-            scheduler_waiting_decrement(&mut state, priority);
-            wake.notify_all();
+            if registered {
+                scheduler_waiting_decrement(&mut state, priority);
+                wake.notify_all();
+            }
             return Err(scheduler_wait_deadline_error(priority, wait_deadline));
         }
 
         if scheduler_can_enter(&state, priority) {
             break;
+        }
+        if !registered {
+            scheduler_waiting_increment(&mut state, priority);
+            registered = true;
         }
         let (next_state, _) = match wake.wait_timeout(state, remaining) {
             Ok(value) => value,
@@ -232,7 +240,9 @@ fn acquire_scoped_permit_with_deadline(
         // A wake or timeout is only a reason to recheck the same budget.
     }
 
-    scheduler_waiting_decrement(&mut state, priority);
+    if registered {
+        scheduler_waiting_decrement(&mut state, priority);
+    }
     state.active = true;
     state.next_request_sequence = state.next_request_sequence.saturating_add(1);
     Ok(HelperTaskPermit {
@@ -344,6 +354,26 @@ mod scheduler_policy_tests {
             HelperTaskPriority::MeetingOutbound.scheduler_admission_limit(),
             HELPER_SCHEDULER_TOTAL_ADMISSION_CAP
         );
+    }
+
+    #[test]
+    fn uncontended_permit_preserves_sequence_and_never_leaves_waiters() {
+        let _serial = scheduler_test_guard();
+        reset_scheduler();
+        for (index, priority) in [
+            HelperTaskPriority::MeetingOutbound, HelperTaskPriority::MeetingIncoming,
+            HelperTaskPriority::Text, HelperTaskPriority::Diagnostic,
+        ].into_iter().enumerate() {
+            let permit = acquire_helper_task_permit_with_wait_deadline(priority, Duration::from_secs(1)).unwrap();
+            assert_eq!(permit.request_id(), format!("helper-{}", index + 1));
+            {
+                let state = scheduler().0.lock().unwrap();
+                assert!(state.active);
+                assert_eq!(scheduler_total_admitted(&state), 1);
+            }
+            drop(permit);
+        }
+        reset_scheduler();
     }
 
     #[test]

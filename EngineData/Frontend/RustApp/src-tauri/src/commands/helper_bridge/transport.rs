@@ -145,9 +145,16 @@ fn meeting_wait_generation(
 fn stale_meeting_request(
     task: &str, request_id: &str, priority: HelperTaskPriority,
     generation: Option<u64>, session_id: Option<&str>, lane: Option<&str>,
+    wait_generation: Option<u64>,
 ) -> Option<HelperBridgeWorkerResponse> {
-    meeting_wait_generation(generation, session_id, lane).err()
-        .map(|stale| stale.response(task, request_id, priority))
+    let stale = match meeting_wait_generation(generation, session_id, lane) {
+        Err(stale) => Some(stale),
+        Ok(current) if current != wait_generation => Some(if generation.is_some() {
+            StaleMeetingScope::Generation
+        } else { StaleMeetingScope::Session }),
+        Ok(_) => None,
+    };
+    stale.map(|stale| stale.response(task, request_id, priority))
 }
 
 #[derive(Clone, Copy)]
@@ -249,6 +256,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value, input: Option<MeetingI
         meeting_generation,
         meeting_session_id.as_deref(),
         meeting_lane.as_deref(),
+        wait_generation,
     ) {
         return response;
     }
@@ -256,7 +264,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value, input: Option<MeetingI
     // ASR and MT never cross Python IPC, including on preparation errors.
     if voice.is_some() || matches!(task, "asr_preload" | "translation_preload" | "transcribe" | "translate") {
         #[cfg(windows)]
-        return native::dispatch(task, &mut payload, input, voice, priority, &permit, response_deadline_ms, meeting_lane);
+        return native::dispatch(task, &mut payload, input, voice, priority, &permit, response_deadline_ms, meeting_lane, wait_generation);
         #[cfg(not(windows))]
         return standalone_blocked_response(
             task, request_id, priority, "error", "native_inference:platform_unsupported",
@@ -264,7 +272,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value, input: Option<MeetingI
         );
     }
     #[cfg(windows)]
-    return native::control(task, &payload, &permit, priority);
+    return native::control(task, &payload, &permit, priority, wait_generation);
     #[cfg(not(windows))]
     return standalone_blocked_response(task, request_id, priority, "error",
         "native_inference:platform_unsupported", "Native CUDA requires Windows.");

@@ -55,3 +55,15 @@ test("native receipts construct the final runtime claim directly", () => {
   assert.match(native, /&host, NATIVE_INFERENCE_CLAIM\.into\(\)\)/);
   assert.match(native, /if task == "status" \{ super::super::NATIVE_STATUS_CLAIM\.into\(\) \}/);
 });
+
+test("scheduler fast path avoids wait registration and native scope keeps the queued epoch", () => {
+  const scheduler = read("helper_bridge_runtime/scheduler.rs");
+  const enter = scheduler.indexOf("if scheduler_can_enter(&state, priority)");
+  const register = scheduler.indexOf("if !registered {", enter);
+  const wait = scheduler.indexOf("wake.wait_timeout(state, remaining)", register);
+  assert.ok(enter >= 0 && register > enter && wait > register);
+  assert.match(scheduler, /if registered \{\s*scheduler_waiting_decrement\(&mut state, priority\);\s*\}\s*state.active = true/);
+  assert.match(transport, /Ok\(current\) if current != wait_generation/);
+  assert.match(native, /request_scope\.generation != wait_generation/);
+  assert.match(native, /scope\.generation == wait_generation/);
+});
