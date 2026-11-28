@@ -621,29 +621,47 @@ static_assert(!mt_source_content_admitted(std::string_view("a\0b", 3)));
 static_assert(!mt_source_content_admitted("<think>"));
 static_assert(!mt_source_content_admitted(""));
 
-int32_t translate(ti_mt & mt, std::string_view source, const char * target,
+// The ABI has already bounded source to k_max_input_bytes and admitted one
+// of the two directions. Keep the exact full template, with no retained text.
+constexpr std::string_view k_mt_instruction_prefix = "Translate the following text into ";
+constexpr std::string_view k_mt_instruction_suffix = ". Note that you should only output the translated result without any additional explanation:\n\n";
+constexpr std::string_view k_mt_target_id = "Indonesian";
+constexpr std::string_view k_mt_target_en = "English";
+constexpr size_t k_mt_body_start = sizeof(k_mt_bos) - 1 + sizeof(k_mt_user) - 1;
+constexpr size_t k_mt_assistant_size = sizeof(k_mt_assistant) - 1;
+static_assert(k_mt_target_id.size() >= k_mt_target_en.size());
+constexpr size_t k_mt_prompt_capacity = k_mt_body_start + k_mt_instruction_prefix.size()
+    + k_mt_target_id.size() + k_mt_instruction_suffix.size() + k_max_input_bytes + k_mt_assistant_size;
+
+constexpr size_t build_mt_prompt(char * output, std::string_view source, bool target_id) {
+    const std::string_view parts[] = {k_mt_bos, k_mt_user, k_mt_instruction_prefix,
+        target_id ? k_mt_target_id : k_mt_target_en, k_mt_instruction_suffix, source, k_mt_assistant};
+    size_t used = 0;
+    for (const auto part : parts)
+        for (const char byte : part) output[used++] = byte;
+    return used;
+}
+
+constexpr bool mt_prompt_fixture(bool target_id, std::string_view expected) {
+    char prompt[512]{};
+    const auto size = build_mt_prompt(prompt, u8"Halo, café < 5.", target_id);
+    return std::string_view(prompt, size) == expected;
+}
+static_assert(mt_prompt_fixture(false, u8"<｜hy_begin▁of▁sentence｜><｜hy_User｜>Translate the following text into English. Note that you should only output the translated result without any additional explanation:\n\nHalo, café < 5.<｜hy_Assistant｜>"));
+static_assert(mt_prompt_fixture(true, u8"<｜hy_begin▁of▁sentence｜><｜hy_User｜>Translate the following text into Indonesian. Note that you should only output the translated result without any additional explanation:\n\nHalo, café < 5.<｜hy_Assistant｜>"));
+
+int32_t translate(ti_mt & mt, std::string_view source, bool target_id,
                   const request_control & control, char * output, size_t * out_len) {
     auto * context = mt.context.get();
     const auto * vocab = llama_model_get_vocab(mt.model.get());
     if (!vocab) return TI_INFERENCE;
     // Tencent's single-user-turn template and default translation instruction.
     // No system message, past turns, user instructions or second model.
-    constexpr std::string_view instruction_prefix = "Translate the following text into ";
-    constexpr std::string_view instruction_suffix = ". Note that you should only output the translated result without any additional explanation:\n\n";
-    std::string prompt;
-    prompt.reserve(sizeof(k_mt_bos) + sizeof(k_mt_user) + sizeof(k_mt_assistant)
-        + instruction_prefix.size() + std::strlen(target) + instruction_suffix.size() + source.size());
-    prompt += k_mt_bos;
-    prompt += k_mt_user;
-    const size_t body_start = prompt.size();
-    prompt += instruction_prefix;
-    prompt += target;
-    prompt += instruction_suffix;
-    prompt.append(source.data(), source.size());
-    const size_t body_size = prompt.size() - body_start;
-    prompt += k_mt_assistant;
+    std::array<char, k_mt_prompt_capacity> prompt;
+    const size_t prompt_size = build_mt_prompt(prompt.data(), source, target_id);
+    const size_t body_size = prompt_size - k_mt_body_start - k_mt_assistant_size;
     std::array<llama_token, k_context> tokens;
-    const int n = llama_tokenize(vocab, prompt.data(), static_cast<int32_t>(prompt.size()),
+    const int n = llama_tokenize(vocab, prompt.data(), static_cast<int32_t>(prompt_size),
                                  tokens.data(), static_cast<int32_t>(tokens.size()), false, true);
     const auto limit = std::min<uint32_t>(llama_n_ctx_seq(context), k_context);
     // Preserve the existing 256-token ceiling, choose a bounded adaptive
@@ -659,7 +677,7 @@ int32_t translate(ti_mt & mt, std::string_view source, const char * target,
     const auto status = decode_text_prefill(mt, tokens.data(), static_cast<size_t>(n), next_pos, true, control);
     if (status != TI_OK) return status;
     return generate(mt, next_pos, budget, mt.eos,
-                    std::string_view(prompt).substr(body_start, body_size), control, output, out_len);
+                    std::string_view(prompt.data() + k_mt_body_start, body_size), control, output, out_len);
 }
 }
 
@@ -676,7 +694,7 @@ static int32_t translate_mt(ti_mt * mt, const char * source, size_t source_len,
     const std::string_view input(source, source_len);
     if (!mt_source_content_admitted(input)) return TI_INVALID_INPUT;
     try {
-        const auto status = translate(*mt, input, target_language == 1 ? "Indonesian" : "English",
+        const auto status = translate(*mt, input, target_language == 1,
                                       control, output, out_len);
         if (status == TI_INFERENCE) mt->poisoned = true;
         return status;

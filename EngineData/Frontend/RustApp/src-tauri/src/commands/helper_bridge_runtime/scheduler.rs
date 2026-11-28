@@ -97,7 +97,11 @@ impl Drop for HelperTaskPermit {
         let (lock, wake) = scheduler();
         if let Ok(mut state) = lock.lock() {
             state.active = false;
-            wake.notify_all();
+            // All sleeping callers register under this same mutex. A new
+            // caller arriving after unlock sees the available permit itself.
+            if scheduler_total_admitted(&state) != 0 {
+                wake.notify_all();
+            }
         }
     }
 }
@@ -254,8 +258,10 @@ fn acquire_scoped_permit_with_deadline(
     }
     state.active = true;
     state.next_request_sequence = state.next_request_sequence.saturating_add(1);
+    let sequence = state.next_request_sequence;
+    drop(state);
     Ok(HelperTaskPermit {
-        request_id: format!("helper-{}", state.next_request_sequence),
+        request_id: format!("helper-{}", sequence),
         scheduler_wait_ms: wait_started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
     })
 }
@@ -275,8 +281,10 @@ pub(crate) fn try_acquire_idle_diagnostic_permit() -> Result<Option<HelperTaskPe
     }
     state.active = true;
     state.next_request_sequence = state.next_request_sequence.saturating_add(1);
+    let sequence = state.next_request_sequence;
+    drop(state);
     Ok(Some(HelperTaskPermit {
-        request_id: format!("helper-{}", state.next_request_sequence),
+        request_id: format!("helper-{}", sequence),
         scheduler_wait_ms: wait_started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
     }))
 }
