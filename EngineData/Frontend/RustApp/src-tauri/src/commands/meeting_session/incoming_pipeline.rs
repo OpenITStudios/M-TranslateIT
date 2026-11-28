@@ -1,5 +1,5 @@
 use crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance;
-use crate::engine::runtime_settings::load_settings;
+use crate::engine::runtime_settings::load_settings_with_admission;
 
 use super::committed_turns::{
     commit_meeting_turn, finish_meeting_turn_translation,
@@ -43,19 +43,27 @@ fn process_incoming_pcm_with_direction(
     let event_sequence = utterance.sequence;
     let utterance_id = utterance.utterance_id;
     let retrying_deferred = deferred_deadline.is_some();
-    // Codex selection must not borrow Local Faster-Whisper even for optional
-    // incoming captions. Check outside deferred queue ownership so no
-    // settings-IO lock is taken while the queue mutex is held.
-    if !incoming_session_is_eligible(session_id)
-        || !super::local_translated_meeting_route_admitted()
-    {
+    // Read settings outside deferred queue ownership. A first ASR needs
+    // both direction and strict admission from the same observation; a
+    // retried ASR keeps its original direction but rechecks admission.
+    if !incoming_session_is_eligible(session_id) {
         return IncomingAudioProcessResult::Complete;
     }
-    let (source_language, target_language) = deferred_direction
-        .unwrap_or_else(|| {
-            let settings = load_settings();
+    let (source_language, target_language) = match deferred_direction {
+        Some(direction) => {
+            if !super::local_translated_meeting_route_admitted() {
+                return IncomingAudioProcessResult::Complete;
+            }
+            direction
+        }
+        None => {
+            let (settings, admission) = load_settings_with_admission();
+            if !super::local_translated_route_for_admission(admission) {
+                return IncomingAudioProcessResult::Complete;
+            }
             (settings.meeting_listen_source_language, settings.meeting_listen_target_language)
-        });
+        }
+    };
 
     update_incoming_status(
         session_id,

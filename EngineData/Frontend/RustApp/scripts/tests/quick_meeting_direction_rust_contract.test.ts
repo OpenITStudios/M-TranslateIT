@@ -11,7 +11,10 @@ test("incoming direction is snapshotted per utterance and survives deferral", ()
   assert.match(incoming, /meeting_listen_target_language/);
   assert.match(deferred, /source_language: String/);
   assert.match(deferred, /target_language: String/);
-  assert.match(incoming, /deferred_direction\s*\.unwrap_or_else\(\|\| \{\s*let settings = load_settings\(\);/);
+  assert.match(incoming, /match deferred_direction \{\s*Some\(direction\) => \{\s*if !super::local_translated_meeting_route_admitted\(\)/);
+  assert.match(incoming, /None => \{\s*let \(settings, admission\) = load_settings_with_admission\(\);\s*if !super::local_translated_route_for_admission\(admission\)/);
+  assert.equal((incoming.match(/load_settings_with_admission\(\)/g) ?? []).length, 1);
+  assert.doesNotMatch(incoming, /\bload_settings\(\)/);
 });
 
 test("outbound voice remains explicitly Indonesian to English", () => {
