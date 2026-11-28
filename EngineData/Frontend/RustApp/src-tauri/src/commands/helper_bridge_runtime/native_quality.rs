@@ -1,4 +1,4 @@
-//! Explicit Windows-only translation quality replay; never a product command.
+//! Explicit Windows-only native quality replay; never a product command.
 //! One real native execution owner, existing scheduler permits, same model
 //! pins/ABI as the application. No Python worker, fake Meeting or device IO.
 use super::*;
@@ -7,6 +7,9 @@ use sha2::{Digest, Sha256};
 use std::{collections::HashSet, fs, io::Read};
 use translateit_native_cuda::{InferenceInput, InferenceOutput, Language};
 use crate::commands::helper_bridge::{NATIVE_MT_MODEL, NATIVE_MT_REVISION};
+
+#[path = "native_asr_quality.rs"]
+mod native_asr_quality;
 
 const MAX_REQUEST_BYTES: u64 = 8 * 1024 * 1024;
 
@@ -56,10 +59,7 @@ fn valid(replay: &Replay) -> bool {
         })
 }
 
-#[test]
-#[ignore = "explicit maintainer-authorized Local Windows native quality phase only"]
-fn explicit_native_translation_quality_replay() {
-    let _serial = crate::engine::runtime_state::runtime_test_guard();
+fn read_request_bundle() -> (Vec<u8>, String, PathBuf) {
     let input = PathBuf::from(std::env::var_os("TRANSLATEIT_NATIVE_QUALITY_REQUESTS").expect("explicit request bundle"));
     let output = PathBuf::from(std::env::var_os("TRANSLATEIT_NATIVE_QUALITY_RESULTS").expect("new receipt path"));
     let expected = std::env::var("TRANSLATEIT_NATIVE_QUALITY_REQUEST_SHA256").expect("request digest");
@@ -70,6 +70,27 @@ fn explicit_native_translation_quality_replay() {
     fs::File::open(input).unwrap().take(MAX_REQUEST_BYTES+1).read_to_end(&mut bytes).unwrap();
     assert_eq!(bytes.len() as u64, metadata.len());
     assert_eq!(hex(&bytes), expected);
+    (bytes, expected, output)
+}
+
+fn close_replay_owner(native: &mut NativeInferenceOwner) -> bool {
+    let end = Instant::now() + Duration::from_secs(30);
+    let closed = loop {
+        match native.owner.try_close() {
+            Ok(true) => break true,
+            Ok(false) if Instant::now() < end => std::thread::sleep(Duration::from_millis(10)),
+            _ => break false,
+        }
+    };
+    assert!(closed, "native owner cleanup not verified");
+    closed
+}
+
+#[test]
+#[ignore = "explicit maintainer-authorized Local Windows native quality phase only"]
+fn explicit_native_translation_quality_replay() {
+    let _serial = crate::engine::runtime_state::runtime_test_guard();
+    let (bytes, expected, output) = read_request_bundle();
     let replay: Replay = serde_json::from_slice(&bytes).expect("typed request bundle");
     assert!(valid(&replay), "request contract");
     drop(bytes);
@@ -121,15 +142,7 @@ fn explicit_native_translation_quality_replay() {
     }
     // Report cleanup only after the owning thread has been joined. The
     // outer fixture process also has a bounded whole-run timeout.
-    let end = Instant::now() + Duration::from_secs(30);
-    let closed = loop {
-        match native.owner.try_close() {
-            Ok(true) => break true,
-            Ok(false) if Instant::now() < end => std::thread::sleep(Duration::from_millis(10)),
-            _ => break false,
-        }
-    };
-    assert!(closed, "native owner cleanup not verified");
+    let closed = close_replay_owner(&mut native);
     let receipt = json!({
         "schema":"translateit.native_translation.replay.v1",
         "proof":"NATIVE_OWNER_TRANSLATION_ONLY_NOT_MEETING_ACCEPTANCE",

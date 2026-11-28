@@ -35,6 +35,18 @@ const DELIVERY_CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// Decode the already-owned TTS probe WAV with the same bounded RIFF
 /// decoder and resampler used by delivery; never use this for live PCM.
+// Offline quality fixtures must already be canonical mono PCM16 at 16 kHz.
+// Decode the exact verified bytes; never resample or copy decoded PCM.
+#[cfg(all(test, windows))]
+pub(crate) fn decode_quality_asr_pcm(bytes: &[u8]) -> Result<Vec<f32>, String> {
+    let source = audio_format::decode_pcm16_wav_bytes(bytes)?;
+    if source.channels != 1 || source.sample_rate_hz != 16_000
+        || !(4_800..=960_000).contains(&source.samples.len()) {
+        return Err("asr:quality_pcm_format_invalid".into());
+    }
+    Ok(source.samples)
+}
+
 pub(crate) fn decode_functional_probe_asr_pcm(file: File) -> Result<Vec<f32>, String> {
     let source = decode_wav_bytes(&read_bounded_open_wav(file)?)?;
     let frames = source.samples.len() / usize::from(source.channels);

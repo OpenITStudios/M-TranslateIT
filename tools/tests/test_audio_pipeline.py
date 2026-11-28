@@ -295,6 +295,46 @@ class AudioPipelineTests(unittest.TestCase):
                     grade = grade_pipeline(bad, by_id, selection, 2, contracts, evaluator)
                     self.assertIn('vad', [c['first_wrong_stage'] for c in grade['checks'] if c['status'] == 'FAIL'])
 
+    def test_native_finalized_asr_rejects_incomplete_or_swapped_receipt(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            (root / "A01_1.wav").touch()
+            segment = {"file": "A01_1.wav", "sha256": "a" * 64, "frames": 4800}
+            cases = {"A01": {"kind": "speech", "language": "id"}}
+            observed = {"A01": {"segments": [segment]}}
+            pci = "0000:01:00.0"
+            receipt = {
+                "proof": worker_runner.NATIVE_ASR_PROOF, "source_sha": "b" * 40,
+                "segment_fingerprint": "c" * 64, "noise_suppression_enabled": False,
+                "cuda_pci_id": pci, "dll_pins_sha256": "d" * 64,
+                "request_sha256": "e" * 64, "worker_pid": 123, "worker_terminated": True,
+                "execution_error": None,
+                "results": [{"case_id": segment["file"], "audio_sha256": segment["sha256"],
+                    "frames": 4800, "response": {"ok": True, "stage": "transcribe",
+                    "request_id": "helper-1", "device": "cuda", "cuda_pci_id": pci,
+                    "model_id": worker_runner.NATIVE_ASR_MODEL, "compute_type": "q8_0",
+                    "language": "id", "transcript_text": "Halo", "blocker": "", "elapsed_ms": 1}}],
+            }
+            for defect in (None, "missing", "swapped", "wrong_model", "cleanup"):
+                candidate = copy.deepcopy(receipt)
+                if defect == "missing":
+                    candidate["results"] = []
+                elif defect == "swapped":
+                    candidate["results"][0]["audio_sha256"] = "0" * 64
+                elif defect == "wrong_model":
+                    candidate["results"][0]["response"]["model_id"] = "legacy"
+                elif defect == "cleanup":
+                    candidate["worker_terminated"] = False
+                report = {"source_identity": {"local_sha": "b" * 40},
+                          "segment_fingerprint": "c" * 64, "results": []}
+                with self.subTest(defect=defect), patch.object(worker_runner, "native_quality_replay", return_value=candidate), patch.object(worker_runner, "Worker") as old:
+                    result = worker_runner.collect_native_finalized_asr(
+                        report, cases, {"A01"}, observed, root, 5)
+                    old.assert_not_called()
+                    self.assertEqual(result["execution_complete"], defect is None)
+                    self.assertEqual(len(result["results"]), int(defect is None))
+                    self.assertEqual("transport_error" in result, defect is not None)
+
     def test_pipeline_cli_returns_failure_for_unverified_acceptance(self):
         args = ['worker_runner', '--fixtures', 'fixture', '--python', 'python', '--source-sha', '2' * 40,
                 '--ids', 'A04', '--output', 'new.json', '--vad-observations', 'vad.json',

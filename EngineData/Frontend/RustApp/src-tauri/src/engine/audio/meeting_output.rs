@@ -6,6 +6,9 @@ use super::duration_ms;
 #[path = "meeting_output_runtime.rs"]
 mod runtime;
 
+#[cfg(all(test, windows))]
+pub(crate) use runtime::decode_quality_asr_pcm;
+
 pub(crate) use runtime::{
     deliver_meeting_output_open_wav_for_source, deliver_meeting_output_native_pcm_for_source,
     MAX_DELIVERY_DEADLINE_MS,

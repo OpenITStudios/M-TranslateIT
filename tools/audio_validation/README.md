@@ -6,14 +6,22 @@
 
 - **GitHub CI is paused by owner.** No GitHub Actions job, model inference, Windows microphone, device capture or cloud service runs automatically.
 - `harness.py validate/inspect/score/compare` never starts a model or microphone. Explicit `generate` uses the selected offline eSpeak executable or approved local neural fixture model; it never uses a cloud fallback.
-- `worker_runner.py` is **explicit opt-in**, requires a clean checkout at an externally pinned `Local` SHA and an existing pinned WorkerRuntime Python interpreter/model assets. It starts only the canonical persistent worker, with forced offline Hugging Face flags. It **does not** run Meeting, native VAD, virtual microphone, speaker playback, receiver delivery or training.
+- `worker_runner.py` is **explicit opt-in**, requires a clean checkout at an externally pinned `Local` SHA and existing reviewed local model assets. Native stage diagnostics start the Rust owner; legacy raw/voice profiles still require the pinned WorkerRuntime interpreter and are historical compatibility routes. It **does not** run Meeting, native VAD, virtual microphone, speaker playback, receiver delivery or training.
 - Use **public test utterances** only. Do not commit user speech, private recordings, selected personal-voice data, model binaries, or generated WAVs. Use `UserData/CacheData/audio_validation/<unique-run>` for generated fixtures and `UserData/LogData/` for local observations.
 - Production capture hands PCM to one native CPU Silero speech detector before the existing Rust finalizer. `pcm_handoff_replay.rs` remains a source-unit fixture for transport/finalizer mechanics; its classified energy inputs are not neural speech-quality evidence. Direct worker smoke cannot prove VAD or Meeting delivery.
 
 ## Workflow
 
-The same persistent transport also supports direct translation-only `fast|full`
-diagnostics via `--translation-suite` now use the Rust native owner, without `--python`; see the [quality execution contract](../translation_quality/README.md#execute-the-selected-translation-stage). The older audio/finalized Python runner still requires migration and cannot provide current native ASR/MT evidence.
+Finalized ASR-only (native, explicit offline diagnostic):
+
+```powershell
+python tools/audio_validation/worker_runner.py --source-sha <clean-Local-SHA> --fixtures <immutable-fixtures> --ids A01 --vad-observations <vad.json> --segments-dir <segments> --output <new-native-asr.json>
+```
+
+The request binds the actual exported PCM16/16 kHz WAV bytes and frame counts to the same source and segment fingerprint. Native conditioning uses the existing conditioner with noise suppression off; this is not original live F32 PCM, full Meeting, or voice acceptance. One native owner and the existing scheduler are reused across segments. `translateit.finalized_asr.native_run.v1` is a diagnostic report, not a release gate. No Python model worker is launched. Raw and full voice profiles remain legacy pending migration.
+
+Direct translation-only `fast|full`
+diagnostics via `--translation-suite` use the Rust native owner, without `--python`; see the [quality execution contract](../translation_quality/README.md#execute-the-selected-translation-stage). The finalized ASR-only route now uses the same native owner with no `--python`; the old raw/voice pipeline is retained for compatibility only and cannot provide current native ASR/MT evidence.
 This is a separate stage selection, not an audio profile or replacement for
 VAD→ASR→translation→TTS core acceptance. It has no audio fixture, recording,
 voice, rounds or device arguments and reuses the canonical translation evaluator.
@@ -102,12 +110,12 @@ Use `--segments-dir` on `vad_runner.py` to retain the actual writer outputs in a
 
 ```powershell
 python tools/audio_validation/vad_runner.py --fixtures <canonical-fixture-directory> --source-sha <clean-Local-SHA> --segments-dir .workspace/reports/finalized-segments-001 --output .workspace/reports/finalized-vad-001.json
-python tools/audio_validation/worker_runner.py --fixtures <canonical-fixture-directory> --source-sha <same-clean-Local-SHA> --python EngineData/Backend/LocalWorker/WorkerRuntime/.venv/Scripts/python.exe --vad-observations .workspace/reports/finalized-vad-001.json --segments-dir .workspace/reports/finalized-segments-001 --ids A01 A14 --output .workspace/reports/finalized-asr-001.json
+python tools/audio_validation/worker_runner.py --fixtures <canonical-fixture-directory> --source-sha <same-clean-Local-SHA> --vad-observations .workspace/reports/finalized-vad-001.json --segments-dir .workspace/reports/finalized-segments-001 --ids A01 A14 --output .workspace/reports/finalized-asr-001.json
 ```
 
-This is a bounded diagnostic of the first noise failure with a positive speech control. It deliberately preserves the failing VAD expectation; it does not bypass an application readiness gate or certify all 48 scenarios. The worker input is a hash-verified copy of the **exported finalized segment** staged temporarily under the canonical allowed CacheData input root, never the original fixture WAV. Source/audio/scenario/segment identities must match, and retained segment hashes are rechecked after worker cleanup. ASR uses the existing worker protocol with `vad_filter=False` because Rust already supplied finalized input; no second worker/model/provider is added.
+This is a bounded diagnostic of the first noise failure with a positive speech control. It deliberately preserves the failing VAD expectation; it does not bypass an application readiness gate or certify all 48 scenarios. The native owner receives decoded PCM from the exact hash-verified **exported finalized segment**, never the original fixture WAV. Source/audio/scenario/segment identities must match, and retained segment hashes are rechecked after owner cleanup. No second VAD or Python model worker is used.
 
-The separate `translateit.finalized_asr_probe.v1` receipt distinguishes actual non-speech transcription, an explicit `asr:empty_transcript` rejection and other ASR/transport failures. It is a diagnostic receipt, not a replacement product DTO or canonical 48-case score. Full outbound status can remain blocked by an unavailable voice; only successful executed ASR preload admits this ASR-only probe. No translation, TTS, native session, receiver or production suppression is claimed. Do not use `--include-voice` with this probe. Generated public segments remain local for reproduction; private user recordings are never inputs.
+The separate `translateit.finalized_asr.native_run.v1` receipt distinguishes actual non-speech transcription, an explicit `asr:empty_transcript` rejection and other ASR/transport failures. It is a diagnostic receipt, not a replacement product DTO or canonical 48-case score. The native ASR/MT pair must open successfully; no voice preflight is required. No translation, TTS, native session, receiver or production suppression is claimed. Do not use `--include-voice` with this probe. Generated public segments remain local for reproduction; private user recordings are never inputs.
 
 The finalized probe now emits `verdict`, per-case `checks` and `PASS/FAIL/UNVERIFIED` counts. Speech is graded by the existing canonical ASR WER limit **and critical-word invariants** over chronological segment transcripts. Noise passes only an explicit empty-transcript rejection; model/transport failures or missing controls remain unverified/failed. The command exits **0 only for PASS**, otherwise **2**, so automation need not treat successful JSON publication as successful recognition. Bounded ASR error notes are retained in the private receipt to identify decoder/dependency failures. This exit contract applies to the finalized probe; the older direct-worker output remains observation-only.
 
