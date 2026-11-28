@@ -290,7 +290,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value, input: Option<MeetingI
         priority,
         meeting_generation,
         meeting_session_id.as_deref(),
-        meeting_lane.as_deref(),
+        meeting_lane,
         wait_generation,
     ) {
         return response;
@@ -449,7 +449,7 @@ fn send_worker_task_with_input(task: &str, payload: Value, input: Option<Meeting
     let admission = RequestAdmission::from_payload(task, &payload);
     let priority = admission.priority;
     let outbound_generation = admission.outbound_generation();
-    let wait_generation = match meeting_wait_generation(admission.generation, admission.session_id.as_deref(), admission.lane.as_deref()) {
+    let wait_generation = match meeting_wait_generation(admission.generation, admission.session_id.as_deref(), admission.lane) {
         Ok(generation) => generation,
         Err(stale) => return stale.response(task, "scheduler-stale-before-admission", priority),
     };

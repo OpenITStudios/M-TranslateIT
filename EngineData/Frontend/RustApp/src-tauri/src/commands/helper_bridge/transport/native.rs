@@ -245,7 +245,7 @@ pub(super) fn dispatch(
     task: &str, payload: &mut Value, input: Option<MeetingInput<'_>>,
     mut voice: Option<NativeVoiceIo<'_>>,
     priority: HelperTaskPriority, permit: &HelperTaskPermit, deadline_ms: u128,
-    admitted_lane: Option<String>, wait_generation: Option<u64>,
+    admitted_lane: Option<&'static str>, wait_generation: Option<u64>,
 ) -> HelperBridgeWorkerResponse {
     let admitted_at = Instant::now();
     let request_id = permit.request_id();
@@ -579,7 +579,7 @@ pub(super) fn dispatch(
     host.active_request_id = Some(request_id.into());
     host.active_meeting_generation = request_scope.generation;
     host.active_meeting_session_id = request_scope.session_id.clone();
-    host.active_meeting_lane = admitted_lane;
+    host.active_meeting_lane = admitted_lane.map(str::to_owned);
     host.updated_unix_ms = unix_ms();
     drop(host);
     // The original permit outlives the native reply. Do not wait under the

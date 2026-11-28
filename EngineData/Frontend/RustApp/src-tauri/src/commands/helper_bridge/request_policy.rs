@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
 use crate::engine::audio::finalized_utterance::wake_incoming_consumer;
 
@@ -39,16 +39,23 @@ pub(super) fn meeting_session_id(payload: &Value) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-pub(super) fn meeting_lane(payload: &Value) -> Option<String> {
-    payload
-        .get("meeting_lane")
-        .and_then(Value::as_str)
-        .map(|value| {
+fn meeting_lane(payload: &Value) -> Option<&'static str> {
+    let value = payload.get("meeting_lane").and_then(Value::as_str)?;
+    match value {
+        "you" => Some("you"),
+        "incoming" => Some("incoming"),
+        // Retain legacy scheduler normalization for noncanonical metadata.
+        // Native scope admission still requires the exact original fields.
+        _ => {
             let mut lane = clean_helper_text(value, 32);
             lane.make_ascii_lowercase();
-            lane
-        })
-        .filter(|value| matches!(value.as_str(), "you" | "incoming"))
+            match lane.as_str() {
+                "you" => Some("you"),
+                "incoming" => Some("incoming"),
+                _ => None,
+            }
+        }
+    }
 }
 
 pub(super) fn meeting_start_prepare(payload: &Value) -> bool {
@@ -148,7 +155,7 @@ pub(super) struct RequestAdmission {
     pub(super) priority: HelperTaskPriority,
     pub(super) generation: Option<u64>,
     pub(super) session_id: Option<String>,
-    pub(super) lane: Option<String>,
+    pub(super) lane: Option<&'static str>,
 }
 
 impl RequestAdmission {
@@ -158,7 +165,7 @@ impl RequestAdmission {
         let lane = meeting_lane(payload);
         let priority = if generation.is_some() || meeting_start_prepare(payload) {
             HelperTaskPriority::MeetingOutbound
-        } else if lane.as_deref() == Some("incoming") && session_id.is_some() {
+        } else if lane == Some("incoming") && session_id.is_some() {
             HelperTaskPriority::MeetingIncoming
         } else if task == "translate" {
             HelperTaskPriority::Text
@@ -169,7 +176,7 @@ impl RequestAdmission {
     }
 
     pub(super) fn outbound_generation(&self) -> Option<u64> {
-        if self.priority == HelperTaskPriority::MeetingOutbound && self.lane.as_deref() == Some("you") {
+        if self.priority == HelperTaskPriority::MeetingOutbound && self.lane == Some("you") {
             self.generation
         } else {
             None
@@ -179,22 +186,6 @@ impl RequestAdmission {
 
 pub(super) fn task_priority(task: &str, payload: &Value) -> HelperTaskPriority {
     RequestAdmission::from_payload(task, payload).priority
-}
-
-pub(super) fn inject_request_metadata(
-    payload: &mut Value,
-    task: &str,
-    request_id: &str,
-    priority: HelperTaskPriority,
-) {
-    if !payload.is_object() {
-        *payload = json!({});
-    }
-    if let Some(object) = payload.as_object_mut() {
-        object.insert("command".to_string(), json!(task));
-        object.insert("request_id".to_string(), json!(request_id));
-        object.insert("scheduler_priority".to_string(), json!(priority.label()));
-    }
 }
 
 #[cfg(test)]
@@ -237,8 +228,25 @@ mod scoped_cancellation_tests {
         }
         let incoming = RequestAdmission::from_payload("translate",
             &json!({"meeting_lane":" INCOMING ","meeting_session_id":" s "}));
-        assert_eq!(incoming.lane.as_deref(), Some("incoming"));
+        assert_eq!(incoming.lane, Some("incoming"));
         assert_eq!(incoming.session_id.as_deref(), Some("s"));
+    }
+
+    #[test]
+    fn lane_admission_returns_canonical_static_labels() {
+        for (value, expected) in [
+            ("you", Some("you")),
+            ("incoming", Some("incoming")),
+            (" INCOMING ", Some("incoming")),
+            (" y\u{0001}ou ", Some("you")),
+            ("", None),
+            ("foreign", None),
+        ] {
+            let payload = json!({"meeting_lane": value});
+            assert_eq!(super::meeting_lane(&payload), expected);
+        }
+        assert_eq!(super::meeting_lane(&json!({"meeting_lane": 7})), None);
+        assert_eq!(super::meeting_lane(&json!({})), None);
     }
 
     #[test]

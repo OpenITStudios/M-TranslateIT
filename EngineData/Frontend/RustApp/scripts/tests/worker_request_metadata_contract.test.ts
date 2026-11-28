@@ -50,6 +50,14 @@ test("native scope fences observe borrowed session identity without building dia
   assert.match(transport, /let request_id = permit\.request_id\(\);/);
 });
 
+test("scheduler borrows canonical lane labels until the native owner publishes active state", () => {
+  assert.match(policy, /fn meeting_lane\(payload: &Value\) -> Option<&'static str>/);
+  assert.match(policy, /match value \{\s*"you" => Some\("you"\),\s*"incoming" => Some\("incoming"\)/);
+  assert.match(policy, /pub\(super\) lane: Option<&'static str>/);
+  assert.match(native, /host\.active_meeting_lane = admitted_lane\.map\(str::to_owned\)/);
+  assert.doesNotMatch(policy + transport + native + startup, /inject_request_metadata\(/);
+});
+
 test("native receipts construct the final runtime claim directly", () => {
   assert.match(transport, /runtime_claim: claim,/);
   assert.doesNotMatch(native, /response\.runtime_claim = NATIVE_INFERENCE_CLAIM|response\.runtime_claim = super::super::NATIVE_STATUS_CLAIM/);
@@ -168,7 +176,7 @@ test("Meeting stages share one typed event identity and preserve boundary metada
   assert.match(incoming, /send_helper_worker_pcm_task\(\s*turn\.worker_metadata\(None\)/);
   assert.match(incoming, /translate_and_commit_incoming_transcript\(\s*turn,/);
   assert.match(incoming, /send_helper_meeting_translation\(\s*turn\.worker_metadata\(None\)/);
-  assert.match(incoming, /MeetingTurnIdentity \{ session_id, generation: None, event_sequence, utterance_id \},\s*&transcript/);
+  assert.match(incoming, /MeetingTurnIdentity \{ session_id, generation: None, event_sequence, utterance_id \},\s*Cow::Owned\(transcript\)/);
   assert.doesNotMatch(outbound + incoming, /"meeting_session_id":|"meeting_sequence":|"utterance_id":/);
   assert.match(meeting, /fn native_stage_metadata_preserves_lane_identity_and_exact_fields/);
 });
