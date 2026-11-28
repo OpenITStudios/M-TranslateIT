@@ -74,7 +74,7 @@ const modelCommand = readFileSync(new URL("../../src-tauri/src/commands/runtime.
 
 test("AI worker status and disk inventory are off the UI event thread", () => {
   assert.match(helperCommand, /pub async fn helper_bridge_worker_status\(/);
-  assert.match(helperCommand, /spawn_blocking\(\|\| send_worker_task\("status", json!\(\{\}\)\)\)/);
+  assert.match(helperCommand, /spawn_blocking\(transport::observe_worker_status\)/);
   assert.match(modelCommand, /pub async fn verify_models\(/);
   assert.match(modelCommand, /spawn_blocking\(runtime_inventory::verify_models\)/);
 });
@@ -92,4 +92,22 @@ test("AI preparation and native snapshots use bounded asynchronous Tauri command
     assert.ok(mutationOwner.includes(`pub async fn ${selection}(`), selection);
   }
   assert.match(mutationOwner, /spawn_blocking\(move \|\| \{/);
+});
+
+test("UI capability observation is nonwaiting while internal status retains normal admission", () => {
+  const transport = readFileSync(new URL("../../src-tauri/src/commands/helper_bridge/transport.rs", import.meta.url), "utf8");
+  const native = readFileSync(new URL("../../src-tauri/src/commands/helper_bridge/transport/native.rs", import.meta.url), "utf8");
+  const scheduler = readFileSync(new URL("../../src-tauri/src/commands/helper_bridge_runtime/scheduler.rs", import.meta.url), "utf8");
+  const observation = transport.slice(transport.indexOf("pub(super) fn observe_worker_status()"), transport.indexOf("pub(super) fn send_worker_task("));
+  assert.match(observation, /try_acquire_idle_diagnostic_permit\(\)/);
+  assert.match(observation, /Ok\(None\) => return status_busy_response/);
+  assert.equal((observation.match(/if meeting_outbound_pipeline_active\(\)/g) ?? []).length, 2);
+  assert.match(observation, /native::control\("status", &json!\(\{\}\), &permit, priority, None, true\)/);
+  assert.doesNotMatch(observation, /send_worker_task_inner\(|acquire_scoped_helper_task_permit\(/);
+  assert.match(transport, /native::control\(task, &payload, &permit, priority, wait_generation, false\)/);
+  assert.match(native, /if observe_only \{\s*runtime\(\)\.try_lock\(\)/);
+  const immediate = scheduler.slice(scheduler.indexOf("pub(crate) fn try_acquire_idle_diagnostic_permit()"), scheduler.indexOf("pub fn acquire_helper_task_permit("));
+  assert.match(immediate, /lock\.try_lock\(\)/);
+  assert.match(immediate, /scheduler_total_admitted\(&state\) != 0/);
+  assert.doesNotMatch(immediate, /wait_timeout|scheduler_waiting_increment/);
 });

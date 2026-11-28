@@ -251,6 +251,27 @@ fn acquire_scoped_permit_with_deadline(
     })
 }
 
+// A UI observation may refresh capability only when no execution or waiter
+// owns the scheduler. It never registers, waits, or jumps ahead of a waiter.
+pub(crate) fn try_acquire_idle_diagnostic_permit() -> Result<Option<HelperTaskPermit>, &'static str> {
+    let wait_started = Instant::now();
+    let (lock, _) = scheduler();
+    let mut state = match lock.try_lock() {
+        Ok(state) => state,
+        Err(std::sync::TryLockError::WouldBlock) => return Ok(None),
+        Err(std::sync::TryLockError::Poisoned(_)) => return Err("helper_scheduler:lock_poisoned"),
+    };
+    if scheduler_total_admitted(&state) != 0 {
+        return Ok(None);
+    }
+    state.active = true;
+    state.next_request_sequence = state.next_request_sequence.saturating_add(1);
+    Ok(Some(HelperTaskPermit {
+        request_id: format!("helper-{}", state.next_request_sequence),
+        scheduler_wait_ms: wait_started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+    }))
+}
+
 pub fn acquire_helper_task_permit(
     priority: HelperTaskPriority,
 ) -> Result<HelperTaskPermit, String> {
@@ -373,6 +394,45 @@ mod scheduler_policy_tests {
             }
             drop(permit);
         }
+        reset_scheduler();
+    }
+
+    #[test]
+    fn diagnostic_observation_never_registers_or_steals_a_waiter() {
+        let _serial = scheduler_test_guard();
+        reset_scheduler();
+        let permit = acquire_helper_task_permit(HelperTaskPriority::MeetingOutbound).unwrap();
+        assert!(try_acquire_idle_diagnostic_permit().unwrap().is_none());
+        {
+            let state = scheduler().0.lock().unwrap();
+            assert_eq!(scheduler_total_admitted(&state), 1);
+            assert_eq!(state.next_request_sequence, 1);
+        }
+        drop(permit);
+        {
+            let mut state = scheduler().0.lock().unwrap();
+            // Contended lock must not block the observer.
+            assert!(try_acquire_idle_diagnostic_permit().unwrap().is_none());
+            state.waiting_meeting_outbound = 1;
+        }
+        assert!(try_acquire_idle_diagnostic_permit().unwrap().is_none());
+        {
+            let mut state = scheduler().0.lock().unwrap();
+            assert_eq!(state.waiting_meeting_outbound, 1);
+            assert_eq!(state.next_request_sequence, 1);
+            state.waiting_meeting_outbound = 0;
+            state.waiting_diagnostic = 1;
+        }
+        assert!(try_acquire_idle_diagnostic_permit().unwrap().is_none());
+        {
+            let mut state = scheduler().0.lock().unwrap();
+            assert_eq!(state.waiting_diagnostic, 1);
+            state.waiting_diagnostic = 0;
+        }
+        let observed = try_acquire_idle_diagnostic_permit().unwrap().expect("idle permit");
+        assert_eq!(observed.request_id(), "helper-2");
+        drop(observed);
+        assert_eq!(scheduler_total_admitted(&scheduler().0.lock().unwrap()), 0);
         reset_scheduler();
     }
 

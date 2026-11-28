@@ -100,6 +100,13 @@ fn attach_admitted_wait_to_failure(
     response
 }
 
+#[cfg(windows)]
+fn status_busy_response(request_id: &str) -> HelperBridgeWorkerResponse {
+    standalone_blocked_response("status", request_id, HelperTaskPriority::Diagnostic,
+        "checking", "helper_bridge:status_busy",
+        "Worker capability was not checked because the runtime is busy.")
+}
+
 fn incoming_deferred_response(task: &str, request_id: &str) -> HelperBridgeWorkerResponse {
     standalone_blocked_response(
         task,
@@ -272,7 +279,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value, input: Option<MeetingI
         );
     }
     #[cfg(windows)]
-    return native::control(task, &payload, &permit, priority, wait_generation);
+    return native::control(task, &payload, &permit, priority, wait_generation, false);
     #[cfg(not(windows))]
     return standalone_blocked_response(task, request_id, priority, "error",
         "native_inference:platform_unsupported", "Native CUDA requires Windows.");
@@ -304,6 +311,39 @@ fn add_worker_attempt_observation(response: &mut HelperBridgeWorkerResponse, ini
         "retry_scheduler_wait_ms": null,
         "scheduler_wait_total_ms": wait,
     }));
+}
+
+// Only the unscoped UI observation uses this path. Explicit internal status
+// and generation-bound preparation continue through normal admission.
+pub(super) fn observe_worker_status() -> HelperBridgeWorkerResponse {
+    let priority = HelperTaskPriority::Diagnostic;
+    #[cfg(windows)]
+    {
+        if meeting_outbound_pipeline_active() {
+            return status_busy_response("status-busy");
+        }
+        let permit = match crate::commands::helper_bridge_runtime::try_acquire_idle_diagnostic_permit() {
+            Ok(Some(permit)) => permit,
+            Ok(None) => return status_busy_response("status-busy"),
+            Err(blocker) => {
+                invalidate_required_outbound_ai_readiness();
+                return standalone_blocked_response("status", "scheduler-unavailable", priority,
+                    "error", blocker, "Worker capability observation could not verify the scheduler.");
+            }
+        };
+        // Avoid inserting a capability scan between required outbound stages.
+        if meeting_outbound_pipeline_active() {
+            return attach_admitted_wait_to_failure(status_busy_response(permit.request_id()), permit.scheduler_wait_ms());
+        }
+        let response = native::control("status", &json!({}), &permit, priority, None, true);
+        if failed_required_outbound_task_invalidates_cache("status", priority, &response) {
+            invalidate_required_outbound_ai_readiness();
+        }
+        return attach_admitted_wait_to_failure(response, permit.scheduler_wait_ms());
+    }
+    #[cfg(not(windows))]
+    standalone_blocked_response("status", "status-unsupported", priority, "error",
+        "native_inference:platform_unsupported", "Native CUDA requires Windows.")
 }
 
 pub(super) fn send_worker_task(task: &str, payload: Value) -> HelperBridgeWorkerResponse {

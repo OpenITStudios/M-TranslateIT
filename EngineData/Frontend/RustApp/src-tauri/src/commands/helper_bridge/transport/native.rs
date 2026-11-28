@@ -175,7 +175,7 @@ fn error_blocker(error: Error, task: &str) -> (&'static str, bool) {
 // Meeting ASR must transfer its finalized PCM, not a path.
 // Same scheduler permit as inference. Control requests observe the Rust
 // lifecycle and asset eligibility; never load models or claim a functional pass.
-pub(super) fn control(task: &str, payload: &Value, permit: &HelperTaskPermit, priority: HelperTaskPriority, wait_generation: Option<u64>)
+pub(super) fn control(task: &str, payload: &Value, permit: &HelperTaskPermit, priority: HelperTaskPriority, wait_generation: Option<u64>, observe_only: bool)
     -> HelperBridgeWorkerResponse
 {
     let request_id = permit.request_id();
@@ -183,9 +183,18 @@ pub(super) fn control(task: &str, payload: &Value, permit: &HelperTaskPermit, pr
         return standalone_blocked_response(task, request_id, priority, "error",
             "native_voice:typed_request_required", "This caller has not migrated to the native voice contract.");
     }
-    let Ok(mut host) = runtime().lock() else {
-        return standalone_blocked_response(task, request_id, priority, "error",
-            "helper_bridge:lock_poisoned", "Native lifecycle state is unavailable.");
+    let acquired = if observe_only {
+        runtime().try_lock()
+    } else {
+        runtime().lock().map_err(std::sync::TryLockError::Poisoned)
+    };
+    let mut host = match acquired {
+        Ok(host) => host,
+        Err(std::sync::TryLockError::WouldBlock) => return status_busy_response(request_id),
+        Err(std::sync::TryLockError::Poisoned(_)) => {
+            return standalone_blocked_response(task, request_id, priority, "error",
+                "helper_bridge:lock_poisoned", "Native lifecycle state is unavailable.");
+        }
     };
     if (payload.get("meeting_start_prepare").and_then(Value::as_bool) == Some(true)
         || payload.get("meeting_generation").is_some_and(|value| !value.is_null())
@@ -195,9 +204,16 @@ pub(super) fn control(task: &str, payload: &Value, permit: &HelperTaskPermit, pr
         return standalone_blocked_response(task, request_id, priority, "error",
             "native_inference:scope_revoked", "Native control request has no current Meeting authority.");
     }
-    if !host.native_lifecycle_ready() || !host.native_owner_healthy() || host.active_request_id.is_some() {
+    if !host.native_lifecycle_ready() || !host.native_owner_healthy() {
         return standalone_blocked_response(task, request_id, priority, "error",
-            "native_inference:lifecycle_not_ready", "Native lifecycle is stopped, busy or requires cleanup.");
+            "native_inference:lifecycle_not_ready", "Native lifecycle is stopped or requires cleanup.");
+    }
+    if host.active_request_id.is_some() {
+        if task == "status" && priority == HelperTaskPriority::Diagnostic {
+            return status_busy_response(request_id);
+        }
+        return standalone_blocked_response(task, request_id, priority, "error",
+            "native_inference:lifecycle_not_ready", "Native lifecycle still owns an active request.");
     }
     let mut body = if task == "status" {
         crate::commands::helper_bridge_runtime::project_candidate_status(&mut host, true)

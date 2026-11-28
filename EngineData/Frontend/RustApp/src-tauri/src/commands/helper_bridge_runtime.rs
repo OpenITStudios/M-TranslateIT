@@ -15,7 +15,7 @@ pub(crate) use scheduler::{
     HelperTaskPriority, SCHEDULER_SCOPE_REVOKED,
 };
 #[cfg(windows)]
-pub(crate) use scheduler::HelperTaskPermit;
+pub(crate) use scheduler::{HelperTaskPermit, try_acquire_idle_diagnostic_permit};
 
 pub const WORKER_CONTROL_RESPONSE_DEADLINE_MS: u128 = 5_000;
 pub const WORKER_STATUS_RESPONSE_DEADLINE_MS: u128 = 30_000;

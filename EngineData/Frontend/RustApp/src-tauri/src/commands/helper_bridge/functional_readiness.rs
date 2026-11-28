@@ -113,6 +113,16 @@ pub(super) fn failed_required_outbound_task_invalidates_cache(
     }
     let value = &response.worker_response_json;
     let blocker = worker_text(value, "blocker").unwrap_or_default();
+    // Host-owned, pre-execution admission pressure is not a model fault.
+    // Do not infer this from arbitrary response text or a backend failure.
+    if response.runtime_claim == "helper_scheduler_request_not_executed"
+        && response.generation_token == 0 && response.task == task
+        && (blocker.starts_with("helper_scheduler:admission_capacity_exceeded:")
+            || blocker.starts_with("helper_scheduler:wait_deadline_exceeded:")
+            || (task == "status" && blocker == "helper_bridge:status_busy"))
+    {
+        return false;
+    }
     match task {
         "status" | "asr_preload" | "voice_actor_preflight" => true,
         // An explicit optional EN->ID preload failure is not evidence that the
@@ -168,6 +178,34 @@ mod tests {
         assert_ne!(meeting.meeting_generation, 0);
     }
 
+
+    #[test]
+    fn admission_pressure_is_not_runtime_failure() {
+        for task in ["status", "transcribe", "translate", "voice_actor_synthesize"] {
+            let mut response = HelperBridgeWorkerResponse {
+                ok: false, state: "error".into(), task: task.into(),
+                request_id: "scheduler-unavailable".into(), scheduler_priority: "diagnostic".into(),
+                message: String::new(), generation_token: 0,
+                runtime_claim: "helper_scheduler_request_not_executed".into(),
+                worker_response_json: json!({}),
+            };
+            for blocker in ["helper_scheduler:admission_capacity_exceeded:diagnostic:total=5:limit=5",
+                "helper_scheduler:wait_deadline_exceeded:diagnostic:5000ms"] {
+                response.worker_response_json = json!({"blocker": blocker});
+                assert!(!failed_required_outbound_task_invalidates_cache(task, HelperTaskPriority::Diagnostic, &response));
+                response.runtime_claim = "native_cuda_inference_receipt".into();
+                assert!(failed_required_outbound_task_invalidates_cache(task, HelperTaskPriority::Diagnostic, &response));
+                response.runtime_claim = "helper_scheduler_request_not_executed".into();
+            }
+            response.worker_response_json = json!({"blocker":"helper_bridge:status_busy"});
+            assert_eq!(failed_required_outbound_task_invalidates_cache(task, HelperTaskPriority::Diagnostic, &response), task != "status");
+            for blocker in ["helper_scheduler:lock_poisoned", "native_inference:lifecycle_not_ready",
+                "native_inference:owner_or_backend_failed", "voice_actor:actor_changed_since_meeting_start"] {
+                response.worker_response_json = json!({"blocker": blocker});
+                assert!(failed_required_outbound_task_invalidates_cache(task, HelperTaskPriority::Diagnostic, &response));
+            }
+        }
+    }
 
     #[test]
     fn voice_change_invalidation_clears_functional_readiness() {
