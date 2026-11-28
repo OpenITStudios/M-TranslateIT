@@ -346,27 +346,6 @@ fn validated_meeting_asr_transcript<'a>(
 
 // The selected actor must match the exact Start-bound token. Path ownership
 // and playable WAV data are checked separately by the existing outbound owner.
-fn validated_meeting_voice_output_path(
-    response: &HelperBridgeWorkerResponse,
-    expected_actor_token: &str,
-) -> Option<String> {
-    if !response.ok || response.task != "voice_actor_synthesize"
-        || expected_actor_token.is_empty()
-    {
-        return None;
-    }
-    let value = &response.worker_response_json;
-    if value.get("ok").and_then(Value::as_bool) != Some(true)
-        || value.get("stage").and_then(Value::as_str) != Some("voice_actor_synthesize")
-        || value.get("language_code").and_then(Value::as_str) != Some("en")
-        || value.get("actor_token").and_then(Value::as_str) != Some(expected_actor_token)
-        || value.get("blocker").and_then(Value::as_str) != Some("")
-    {
-        return None;
-    }
-    worker_text(response, "output_path")
-}
-
 fn worker_blocker(response: &HelperBridgeWorkerResponse, fallback: &str) -> String {
     worker_text(response, "blocker").unwrap_or_else(|| fallback.to_string())
 }
@@ -810,8 +789,7 @@ mod cleanup_truth_tests {
 
 #[cfg(test)]
 mod translation_delivery_contract_tests {
-    use super::{validated_meeting_asr_transcript, validated_meeting_translation,
-        validated_meeting_voice_output_path};
+    use super::{validated_meeting_asr_transcript, validated_meeting_translation};
     use super::super::helper_bridge::HelperBridgeWorkerResponse;
     use serde_json::{json, Value};
 
@@ -876,47 +854,6 @@ mod translation_delivery_contract_tests {
         );
         outgoing.task = "translate".into();
         assert!(validated_meeting_asr_transcript(&outgoing, "en").is_none());
-    }
-
-    #[test]
-    fn meeting_voice_requires_start_bound_actor_before_wav_path_admission() {
-        let valid = json!({
-            "ok": true, "stage": "voice_actor_synthesize", "language_code": "en",
-            "actor_token": "start-bound-actor", "blocker": "",
-            "output_path": "owned-session.wav",
-        });
-        let mut voice = response(valid.clone());
-        voice.task = "voice_actor_synthesize".into();
-        assert_eq!(
-            validated_meeting_voice_output_path(&voice, "start-bound-actor"),
-            Some("owned-session.wav".into()),
-        );
-        assert!(validated_meeting_voice_output_path(&voice, "").is_none());
-        assert!(validated_meeting_voice_output_path(&voice, "other-actor").is_none());
-        for (key, replacement) in [
-            ("ok", json!(false)),
-            ("stage", json!("translate")),
-            ("language_code", json!("id")),
-            ("actor_token", json!("other-actor")),
-            ("actor_token", json!(null)),
-            ("blocker", json!("voice_actor:runtime_failed")),
-            ("output_path", json!(" ")),
-            ("output_path", json!(12)),
-        ] {
-            let mut invalid = voice.clone();
-            let mut payload = valid.clone();
-            payload[key] = replacement;
-            invalid.worker_response_json = payload;
-            assert!(
-                validated_meeting_voice_output_path(&invalid, "start-bound-actor").is_none(),
-                "{key}"
-            );
-        }
-        voice.task = "transcribe".into();
-        assert!(validated_meeting_voice_output_path(&voice, "start-bound-actor").is_none());
-        voice.task = "voice_actor_synthesize".into();
-        voice.ok = false;
-        assert!(validated_meeting_voice_output_path(&voice, "start-bound-actor").is_none());
     }
 
     #[test]

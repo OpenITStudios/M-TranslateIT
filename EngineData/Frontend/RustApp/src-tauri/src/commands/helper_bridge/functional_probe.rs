@@ -1,6 +1,4 @@
 use serde_json::{json, Value};
-use std::fs;
-use std::path::{Path, PathBuf};
 
 use crate::engine::runtime_state::runtime_generation_is_authoritative;
 
@@ -15,42 +13,6 @@ use super::{
 };
 
 const REQUIRED_OUTBOUND_FUNCTIONAL_ID_FIXTURE: &str = "selamat pagi";
-
-// Both native dispatch and the functional probe derive the same owned
-// cache path from the host scheduler's unique preload request ID.
-pub(super) fn required_probe_output_path(meeting_generation: Option<u64>, probe_id: &str) -> Option<PathBuf> {
-    let sequence = probe_id.strip_prefix("helper-")?.parse::<u64>().ok()?;
-    if sequence == 0 || probe_id != format!("helper-{sequence}") { return None; }
-    let paths = crate::engine::paths::ProjectPaths::discover();
-    if !paths.packaged_context_initialized && !paths.development_root_verified {
-        return None;
-    }
-    let root = PathBuf::from(paths.user_cache_dir);
-    if !root.is_absolute() { return None; }
-    let label = if meeting_generation.is_some() { "required_outbound_myvoice" } else { "diagnostic_myvoice" };
-    Some(root.join("helper_functional_readiness")
-        .join(format!("{label}-{}-{probe_id}.wav", std::process::id())))
-}
-
-struct OwnedProbeOutput(PathBuf);
-
-impl OwnedProbeOutput {
-    fn reserve(path: PathBuf) -> std::io::Result<Self> {
-        if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
-        // Collision or leftover file: refuse, without deleting the other
-        // probe's output. No global lock and no cross-probe WAV reuse.
-        let reservation = fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
-        drop(reservation);
-        Ok(Self(path))
-    }
-}
-
-impl Drop for OwnedProbeOutput {
-    fn drop(&mut self) {
-        // The request path is owned by this probe, not a reported pathname.
-        let _ = fs::remove_file(&self.0);
-    }
-}
 
 fn same_probe_inference(response: &HelperBridgeWorkerResponse, generation: u64,
                         native_device: &str) -> bool {
@@ -207,57 +169,10 @@ pub(super) fn run_required_outbound_ai_probe(
 }
 
 
-/// Compare file identity rather than Rust/Python path spelling. On Windows
-/// ProjectPaths emits forward slashes while Python Path.resolve() reports
-/// native separators. Reject missing, relative or symlinked files.
-pub(super) fn voice_only_probe_path_matches(reported: &str, requested: &Path) -> bool {
-    let candidate = Path::new(reported);
-    if !candidate.is_absolute() || !requested.is_absolute()
-        || !fs::symlink_metadata(requested)
-            .is_ok_and(|meta| meta.file_type().is_file())
-        || !fs::symlink_metadata(candidate)
-            .is_ok_and(|meta| meta.file_type().is_file())
-    {
-        return false;
-    }
-    match (fs::canonicalize(requested), fs::canonicalize(candidate)) {
-        (Ok(expected), Ok(actual)) => expected == actual,
-        _ => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{OwnedProbeOutput, same_probe_inference};
+    use super::same_probe_inference;
     use serde_json::json;
-
-    use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn temp_path(label: &str) -> std::path::PathBuf {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|value| value.as_nanos())
-            .unwrap_or(0);
-        std::env::temp_dir().join(format!("translateit-probe-{label}-{nonce}.wav"))
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn codex_voice_only_windows_reported_separators_match_same_wav() {
-        let path = temp_path("codex-windows-path");
-        fs::write(&path, b"owned fixture").expect("write fixture");
-        let native = path.to_string_lossy().into_owned();
-        let slash = native.replace('\\', "/");
-        let canonical = fs::canonicalize(&path).expect("canonical WAV");
-        assert!(super::voice_only_probe_path_matches(&native, &path));
-        assert!(super::voice_only_probe_path_matches(&slash, &path));
-        assert!(super::voice_only_probe_path_matches(
-            canonical.to_string_lossy().as_ref(), &path
-        ));
-        fs::remove_file(&path).expect("remove requested fixture");
-        assert!(!super::voice_only_probe_path_matches(&native, &path));
-    }
 
     #[test]
     fn native_binding_receipt_requires_exact_model_stage_and_token() {
@@ -297,39 +212,5 @@ mod tests {
         receipt.runtime_claim = "helper_process_ready_ping_verified".into();
         assert!(!same_probe_inference(&receipt, 7, "0000:01:00.0"));
 
-    }
-
-    #[test]
-    fn probe_reservation_never_overwrites_an_existing_output() {
-        let requested = temp_path("reserved");
-        let owned = OwnedProbeOutput::reserve(requested.clone()).unwrap();
-        fs::write(&requested, b"first probe").unwrap();
-        assert!(OwnedProbeOutput::reserve(requested.clone()).is_err());
-        assert_eq!(fs::read(&requested).unwrap(), b"first probe");
-        drop(owned);
-        assert!(!requested.exists());
-    }
-
-    #[test]
-    fn probe_cleanup_removes_requested_file_without_worker_report() {
-        let requested = temp_path("requested");
-        fs::write(&requested, b"probe").expect("write probe");
-
-        drop(OwnedProbeOutput(requested.clone()));
-
-        assert!(!requested.exists());
-    }
-
-    #[test]
-    fn probe_cleanup_never_removes_unowned_reported_file() {
-        let requested = temp_path("requested");
-        let reported = temp_path("reported");
-        fs::write(&requested, b"requested").expect("write requested");
-        fs::write(&reported, b"reported").expect("write reported");
-
-        drop(OwnedProbeOutput(requested.clone()));
-        assert!(!requested.exists());
-        assert_eq!(fs::read(&reported).unwrap(), b"reported");
-        fs::remove_file(&reported).unwrap();
     }
 }

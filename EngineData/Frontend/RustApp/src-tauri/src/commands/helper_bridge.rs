@@ -473,7 +473,6 @@ fn start_helper_bridge_internal(
             {
                 runtime.state = "ready".into();
                 runtime.last_error = None;
-                runtime.stderr_log_path = None;
                 super::helper_bridge_runtime::project_candidate_status(&mut runtime);
                 action_result(true, &runtime)
             }
@@ -704,7 +703,7 @@ pub fn cancel_helper_bridge_meeting_session(session_id: &str) -> HelperBridgeAct
                 if runtime.pending_meeting_cleanup_session_id.as_deref() != Some(session_id) {
                     return helper_start_denied(
                         "cleanup_owner_unverified",
-                        "Python helper cleanup is unverified or belongs to a different session. This Stop will not terminate unowned worker resources.",
+                        "Native helper cleanup is unverified or belongs to a different session. This Stop will not terminate unowned worker resources.",
                         "helper_cancel_rejected_unattributed_or_other_session_cleanup",
                         runtime.generation_token,
                     );
@@ -712,7 +711,7 @@ pub fn cancel_helper_bridge_meeting_session(session_id: &str) -> HelperBridgeAct
                 if !stop_child(&mut runtime) {
                     return set_blocked(
                         &mut runtime,
-                        "The same Meeting session still has unverified helper cleanup. Retry Stop after its owned process and I/O threads finish.",
+                        "The same Meeting session still has unverified helper cleanup. Retry Stop after its owned native runtime finishes.",
                         "helper_bridge:cleanup_incomplete",
                     );
                 }
@@ -745,7 +744,7 @@ pub fn cancel_helper_bridge_meeting_session(session_id: &str) -> HelperBridgeAct
                 if !stop_child(&mut runtime) {
                     return set_blocked(
                         &mut runtime,
-                        "Meeting helper Stop could not verify process/stdin/stdout/stderr cleanup. Retry Stop before releasing this session.",
+                        "Meeting helper Stop could not verify native owner cleanup. Retry Stop before releasing this session.",
                         "helper_bridge:cleanup_incomplete",
                     );
                 }
@@ -817,7 +816,7 @@ mod worker_restart_admission_tests {
 
     fn reset_worker() {
         let mut owner = runtime().lock().expect("canonical helper lock");
-        assert!(stop_child(&mut owner), "do not discard an unjoined helper");
+        assert!(stop_child(&mut owner), "do not discard an unclosed native helper");
         *owner = HelperBridgeRuntime::default();
     }
 
@@ -837,7 +836,6 @@ mod worker_restart_admission_tests {
         assert!(!denied.ok);
         assert_eq!(denied.state, "active_runtime_session");
         let owner = runtime().lock().expect("helper status after denied start");
-        assert!(owner.child.is_none());
         assert_eq!(owner.generation_token, 0);
         drop(owner);
 
@@ -859,7 +857,6 @@ mod worker_restart_admission_tests {
         let denied = start_helper_bridge();
         assert!(!denied.ok);
         assert_eq!(denied.state, "update_installing");
-        assert!(runtime().lock().expect("helper owner").child.is_none());
         drop(update);
         reset_worker();
     }
@@ -892,7 +889,6 @@ mod worker_restart_admission_tests {
         let denied = start_helper_bridge_internal(false, Some(generation));
         assert!(!denied.ok);
         assert_eq!(denied.state, "stale_generation");
-        assert!(runtime().lock().expect("helper status").child.is_none());
 
         assert_eq!(
             clear_runtime_session_if_generation(generation).blocker,

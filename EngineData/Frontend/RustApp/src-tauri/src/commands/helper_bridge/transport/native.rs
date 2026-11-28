@@ -1,9 +1,6 @@
 //! Native ASR/MT dispatch at the existing helper permit, not a second scheduler.
 use super::*;
 use crate::engine::audio::evidence::condition_asr_pcm;
-use crate::engine::audio::meeting_output::decode_functional_probe_asr_pcm;
-use super::super::functional_probe::{required_probe_output_path, voice_only_probe_path_matches};
-use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use crate::engine::runtime_state::{latest_runtime_session_state, RuntimeSessionSnapshot,
     APPLICATION_MEETING_OWNER_ID};
 use crate::commands::helper_bridge_runtime::HelperTaskPermit;
@@ -159,30 +156,6 @@ fn error_blocker(error: Error, task: &str) -> (&'static str, bool) {
 
 // A file is permitted only for the owned TTS functional probe. Live
 // Meeting ASR must transfer its finalized PCM, not a path.
-fn probe_pcm(payload: &Value, request_scope: &Scope) -> Result<Vec<f32>, &'static str> {
-    if payload.get("meeting_lane").is_some_and(|lane| !lane.is_null())
-        || (request_scope.generation.is_some()
-            && payload.get("meeting_start_prepare").and_then(Value::as_bool) != Some(true))
-    { return Err("asr:probe_scope_invalid"); }
-    let probe_id = payload.get("probe_request_id").and_then(Value::as_str)
-        .ok_or("asr:probe_scope_invalid")?;
-    let path = required_probe_output_path(request_scope.generation, probe_id)
-        .ok_or("asr:probe_root_invalid")?;
-    let reported = payload.get("audio_path").and_then(Value::as_str).ok_or("asr:probe_path_missing")?;
-    if !voice_only_probe_path_matches(reported, &path) {
-        return Err("asr:probe_path_not_owned");
-    }
-    // Deny ordinary writes/deletes while decoding the one owned handle;
-    // reject a leaf reparse point even if it appeared after the path check.
-    let file = std::fs::OpenOptions::new().read(true).share_mode(1)
-        .custom_flags(0x00200000).open(&path).map_err(|_| "asr:probe_open_failed")?;
-    let metadata = file.metadata().map_err(|_| "asr:probe_open_failed")?;
-    if !metadata.is_file() || metadata.file_attributes() & 0x400 != 0 {
-        return Err("asr:probe_path_not_owned");
-    }
-    decode_functional_probe_asr_pcm(file).map_err(|_| "asr:probe_wav_invalid")
-}
-
 // Same scheduler permit as inference. Control requests observe the Rust
 // lifecycle and asset eligibility; never load models or claim a functional pass.
 pub(super) fn control(task: &str, payload: &Value, permit: &HelperTaskPermit, priority: HelperTaskPriority)
@@ -434,12 +407,7 @@ pub(super) fn dispatch(
             pcm.prepare_ms.set(pcm.prepare_ms.get().saturating_add(observed_elapsed_ms(started)));
             samples
         } else {
-            // The existing functional readiness probe alone needs to decode
-            // synthesized audio. Never pass a WAV or decoder into live ASR.
-            match probe_pcm(payload, &request_scope) {
-                Ok(samples) => samples,
-                Err(blocker) => return fail(blocker, "Owned voice probe PCM could not be decoded."),
-            }
+            return fail("asr:typed_pcm_required", "Native ASR requires owned PCM.");
         };
         (Some(InferenceInput::Speech { pcm: samples, language: from }), from, None)
     } else {

@@ -1,11 +1,10 @@
-use std::fs::File;
 use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::engine::audio::meeting_output::{
-    deliver_meeting_output_open_wav_for_source, deliver_meeting_output_native_pcm_for_source,
+    deliver_meeting_output_native_pcm_for_source,
     MAX_DELIVERY_DEADLINE_MS,
 };
 use crate::engine::runtime_state::{runtime_generation_is_authoritative, runtime_generation_matches_epoch};
@@ -16,9 +15,6 @@ use super::super::virtual_mic_route::get_bound_virtual_mic_output_device;
 use super::committed_turns::{
     begin_committed_playback, update_committed_turn_delivery_state,
     update_committed_turn_outbound_timing,
-};
-use super::outbound_pipeline::{
-    prepared_tts_output_still_owned, remove_temporary_tts_paths,
 };
 use super::session_state::{
     elapsed_millis, record_first_playback_timing, set_outbound_playback_activity,
@@ -47,24 +43,13 @@ fn playback_finished_within(thread: &JoinHandle<()>, budget: Duration) -> bool {
     true
 }
 
-// One queue and one delivery owner. WAV is the transitional producer;
-// the native producer will move its validated PCM into the same job.
-pub(super) enum PreparedPlaybackAudio {
-    Wav {
-        requested_tts_path: String,
-        actual_tts_path: String,
-        opened_tts_file: Option<File>,
-    },
-    NativePcm(Vec<f32>),
-}
-
 pub(super) struct PreparedPlaybackJob {
     pub(super) generation: u64,
     pub(super) source_epoch: u64,
     pub(super) session_id: String,
     pub(super) event_sequence: u64,
     pub(super) utterance_id: u64,
-    pub(super) audio: PreparedPlaybackAudio,
+    pub(super) audio: Vec<f32>,
     pub(super) timing: OutboundTimingContext,
     pub(super) prepared_at: Instant,
 }
@@ -117,14 +102,7 @@ fn playback_runtime_store() -> &'static Mutex<Option<MeetingPlaybackRuntime>> {
 }
 
 pub(super) fn cleanup_job(job: &mut PreparedPlaybackJob) {
-    match &mut job.audio {
-        PreparedPlaybackAudio::Wav { requested_tts_path, actual_tts_path, opened_tts_file } => {
-            // Release the Windows read-share guard before deleting owned files.
-            drop(opened_tts_file.take());
-            remove_temporary_tts_paths(requested_tts_path, actual_tts_path);
-        }
-        PreparedPlaybackAudio::NativePcm(samples) => drop(std::mem::take(samples)),
-    }
+    drop(std::mem::take(&mut job.audio));
 }
 
 fn mark_interrupted(job: &PreparedPlaybackJob) {
@@ -279,57 +257,11 @@ fn process_playback_job(mut job: PreparedPlaybackJob, last_sequence: &mut u64) {
         drop(suppression_guard);
         return;
     }
-    // The legacy file remains pinned and identity-checked at dequeue.
-    // Native PCM has no path to reopen or temporary file to remove.
-    let delivery = match &mut job.audio {
-        PreparedPlaybackAudio::Wav { requested_tts_path, opened_tts_file, .. } => {
-            if opened_tts_file.as_ref().is_some_and(|file| {
-                prepared_tts_output_still_owned(requested_tts_path, file)
-            }) {
-                opened_tts_file.take().map(|file| {
-                    let started = Instant::now();
-                    let route = deliver_meeting_output_open_wav_for_source(
-                        file, Some(bound_output_device.as_str()), job.generation, job.source_epoch,
-                    );
-                    (started, route)
-                })
-            } else {
-                None
-            }
-        }
-        PreparedPlaybackAudio::NativePcm(samples) => {
-            let started = Instant::now();
-            let route = deliver_meeting_output_native_pcm_for_source(
-                std::mem::take(samples), Some(bound_output_device.as_str()),
-                job.generation, job.source_epoch,
-            );
-            Some((started, route))
-        }
-    };
-    let Some((delivery_started_at, route)) = delivery else {
-        cleanup_job(&mut job);
-        let _ = update_committed_turn_delivery_state(
-            &job.session_id,
-            job.generation,
-            job.utterance_id,
-            "output_failed",
-        );
-        set_outbound_playback_activity(
-            job.generation, &job.session_id, job.event_sequence, false,
-        );
-        drop(suppression_guard);
-        update_outbound_status(
-            job.generation,
-            &job.session_id,
-            "attention_needed",
-            job.event_sequence,
-            false,
-            false,
-            "meeting_playback:tts_identity_changed_before_delivery",
-            "Prepared voice WAV lost its session-owned file identity while queued. No playback was attempted.",
-        );
-        return;
-    };
+    let delivery_started_at = Instant::now();
+    let route = deliver_meeting_output_native_pcm_for_source(
+        std::mem::take(&mut job.audio), Some(bound_output_device.as_str()),
+        job.generation, job.source_epoch,
+    );
     record_first_playback_timing(
         &mut timing,
         delivery_started_at,

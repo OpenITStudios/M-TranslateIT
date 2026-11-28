@@ -1,14 +1,10 @@
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Read, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout};
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::engine::logging::{write_jsonl_event, RuntimeLogEvent};
 
 mod scheduler;
 #[cfg(all(test, windows))]
@@ -29,10 +25,6 @@ pub const WORKER_INFERENCE_RESPONSE_DEADLINE_MS: u128 = 90_000;
 pub const STANDALONE_TRANSLATION_DEADLINE_MS: u128 = 180_000;
 pub const WORKER_SYNTHESIS_RESPONSE_DEADLINE_MS: u128 = 45_000;
 pub const WORKER_FALLBACK_RESPONSE_DEADLINE_MS: u128 = WORKER_STATUS_RESPONSE_DEADLINE_MS;
-// The JSON wire protocol transports text/status and file paths, never inline WAV bytes.
-// A bounded response frame prevents an unexpected worker stdout line from growing memory.
-pub const MAX_WORKER_RESPONSE_BYTES: u64 = 1_000_000;
-
 pub fn worker_response_deadline_ms(task: &str) -> u128 {
     match task {
         "ping" => WORKER_CONTROL_RESPONSE_DEADLINE_MS,
@@ -269,26 +261,9 @@ pub struct HelperBridgeRuntime {
     pub active_meeting_lane: Option<String>,
     pub generation_token: u64,
     pub last_error: Option<String>,
-    pub stderr_log_path: Option<String>,
-    pub stderr_logger: Option<thread::JoinHandle<()>>,
-    // A blocked write retains the original pipe and thread; Stop/restart must
-    // observe and join this owner, never silently detach or start a new worker.
-    pub stdin_writer: Option<thread::JoinHandle<()>>,
-    // The reader thread MUST be registered under this same canonical owner
-    // before stdout I/O begins, so Stop cannot miss an in-flight read.
-    pub stdout_reader: Option<thread::JoinHandle<()>>,
-    // A panicked I/O owner must not be forgotten by a later cleanup attempt,
-    // which could otherwise mistake missing handles for verified clean exit.
-    pub io_thread_join_failed: bool,
-    // A failed or reaped helper may outlive the Meeting audio/transcript
-    // cleanup transaction. Preserve its original Meeting session ID until
-    // Meeting Stop (or an authorized same-generation Live recovery) confirms
-    // release; read-only status/transport may NOT erase this attribution.
+    // Keep exact Meeting cleanup attribution until its owner verifies release.
     pub pending_meeting_cleanup_session_id: Option<String>,
     pub updated_unix_ms: u128,
-    pub child: Option<Child>,
-    pub stdin: Option<ChildStdin>,
-    pub stdout: Option<BufReader<ChildStdout>>,
 }
 
 impl Default for HelperBridgeRuntime {
@@ -297,7 +272,7 @@ impl Default for HelperBridgeRuntime {
             #[cfg(windows)]
             native_inference: None,
             state: "not_started".to_string(),
-            message: "Helper bridge contract exists; runtime process bridge is not started yet."
+            message: "Native helper lifecycle is not initialized."
                 .to_string(),
             cuda_ready: false,
             provider_ready: false,
@@ -309,28 +284,16 @@ impl Default for HelperBridgeRuntime {
             active_meeting_lane: None,
             generation_token: 0,
             last_error: None,
-            stderr_log_path: None,
-            stderr_logger: None,
-            stdin_writer: None,
-            stdout_reader: None,
-            io_thread_join_failed: false,
             pending_meeting_cleanup_session_id: None,
             updated_unix_ms: unix_ms(),
-            child: None,
-            stdin: None,
-            stdout: None,
         }
     }
 }
 
 impl HelperBridgeRuntime {
-    // In the candidate build, Ready denotes initialized Rust lifecycle,
-    // not a running child, loaded model, or successful inference.
+    // Ready denotes initialized Rust lifecycle, not loaded models or successful inference.
     pub(super) fn native_lifecycle_ready(&self) -> bool {
         self.state == "ready" && self.generation_token != 0
-            && self.child.is_none() && self.stdin.is_none() && self.stdout.is_none()
-            && self.stdin_writer.is_none() && self.stdout_reader.is_none()
-            && self.stderr_logger.is_none() && !self.io_thread_join_failed
             && self.pending_meeting_cleanup_session_id.is_none()
             && self.last_error.as_deref() != Some("helper_bridge:cleanup_incomplete")
     }
@@ -347,7 +310,7 @@ impl HelperBridgeRuntime {
     // state projection without reloading models or probing the GPU.
     pub(super) fn effective_state(&self, native_available: bool) -> &str {
         if self.state == "ready" && (!native_available
-            || (super::helper_bridge::native_voice_candidate_enabled() && !self.native_lifecycle_ready()))
+            || !self.native_lifecycle_ready())
         {
             "blocked"
         } else {
@@ -451,7 +414,7 @@ pub fn status_from_runtime(runtime: &HelperBridgeRuntime) -> HelperBridgeStatus 
         active_meeting_lane: runtime.active_meeting_lane.clone(),
         generation_token: runtime.generation_token,
         last_error: runtime.last_error.clone(),
-        stderr_log_path: runtime.stderr_log_path.clone(),
+        stderr_log_path: None,
         updated_unix_ms: runtime.updated_unix_ms,
         runtime_claim: runtime_claim(runtime),
     }
@@ -465,62 +428,6 @@ pub fn action_result(ok: bool, runtime: &HelperBridgeRuntime) -> HelperBridgeAct
         generation_token: runtime.generation_token,
         runtime_claim: runtime_claim(runtime),
     }
-}
-
-fn write_helper_stderr_event(log_path: &Path, line: &str) -> std::io::Result<()> {
-    if line.trim().is_empty() {
-        return Ok(());
-    }
-    let log_dir = log_path.parent().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Helper stderr log path has no parent directory.",
-        )
-    })?;
-    let file_name = log_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Helper stderr log file name is not valid UTF-8.",
-            )
-        })?;
-    write_jsonl_event(
-        log_dir,
-        file_name,
-        &RuntimeLogEvent::warning("helper_worker_stderr", line),
-    )
-}
-
-pub fn spawn_stderr_logger(
-    stderr: ChildStderr,
-    log_path: PathBuf,
-) -> Result<thread::JoinHandle<()>, String> {
-    // A native thread-admission failure is a recoverable bootstrap error;
-    // thread::spawn would panic while the canonical helper mutex is held.
-    thread::Builder::new()
-        .spawn(move || {
-            let mut reader = BufReader::new(stderr);
-            let mut line = String::new();
-            loop {
-                line.clear();
-                match reader.read_line(&mut line) {
-                    Ok(0) => break,
-                    Ok(_) => {
-                        let _ = write_helper_stderr_event(&log_path, &line);
-                    }
-                    Err(error) => {
-                        let _ = write_helper_stderr_event(
-                            &log_path,
-                            &format!("Helper stderr reader failed: {error}"),
-                        );
-                        break;
-                    }
-                }
-            }
-        })
-        .map_err(|_| "worker:stderr_logger_spawn_failed".to_string())
 }
 
 pub fn clear_active_request(runtime: &mut HelperBridgeRuntime, request_id: &str) {
@@ -557,14 +464,6 @@ pub fn worker_bool(value: &Value, key: &str) -> bool {
     value.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
-fn worker_nested_bool(value: &Value, section: &str, key: &str) -> bool {
-    value
-        .get(section)
-        .and_then(|section| section.get(key))
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-}
-
 pub fn worker_text(value: &Value, key: &str) -> Option<String> {
     value
         .get(key)
@@ -573,63 +472,6 @@ pub fn worker_text(value: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-// Preserve the public status shape but replace legacy ASR/MT claims with
-// the actual native owner observation. Python remains authority only for voice
-// and its own allocator. This is a capability observation, not functional proof.
-fn native_status_payload(worker: &Value, pci: Option<&str>, assets_present: bool) -> Value {
-    use super::helper_bridge::{NATIVE_ASR_MODEL, NATIVE_MT_MODEL};
-    let available = pci.is_some();
-    let valid_voice_status = worker.get("stage").and_then(Value::as_str)
-        == Some("local_realtime_worker_preflight");
-    let voice_ready = valid_voice_status
-        && worker_nested_bool(worker, "readiness", "voice_actor_tts")
-        && worker_bool(worker, "torch_import_ready")
-        && worker_bool(worker, "transformers_import_ready")
-        && worker.get("voice_actor_token").and_then(Value::as_str)
-            .is_some_and(|token| !token.is_empty() && token.len() <= 512);
-    // Cold presence is eligibility for explicit preparation, NOT CUDA proof.
-    let ready = assets_present && voice_ready;
-    let blocker = if !assets_present { "native_inference:assets_or_owner_unavailable" }
-        else if !voice_ready { "voice_actor:capability_unverified" }
-        else { "" };
-    let selected = if available { "cuda" } else if assets_present { "not_loaded" } else { "blocked" };
-    json!({
-        "ok": ready, "stage": "local_realtime_worker_preflight",
-        "request_id": worker.get("request_id"),
-        "scheduler_priority": worker.get("scheduler_priority"),
-        "scheduler_wait_ms": worker.get("scheduler_wait_ms"),
-        "blocker": blocker, "provider_ready": ready,
-        "note": if ready && available { "Native models are resident and voice capability is available; functional proof is separate." }
-            else if ready { "Native assets are present; explicit preparation must verify hashes, CUDA and model loading." }
-            else { "Native ASR/MT or required voice capability is unavailable." },
-        "readiness": {
-            "asr": assets_present, "translation_id_en": assets_present, "translation_en_id": assets_present,
-            "translation_bidirectional": assets_present, "voice_actor_tts": voice_ready, "cuda_degraded": false,
-        },
-        "cuda_pci_id": pci, "cuda_capability_known": available, "cpu_fallback_active": false,
-        "selected_device": selected, "selected_translation_device": selected,
-        "selected_compute_type": if available { "q8_0" } else { "blocked" },
-        "asr_primary_model_ready": assets_present, "asr_model_ready": assets_present,
-        "asr_active_model_id": NATIVE_ASR_MODEL,
-        "translation_id_en_ready": assets_present, "translation_en_id_ready": assets_present,
-        "translation_bidirectional_ready": assets_present, "voice_actor_ready": voice_ready,
-        "voice_actor_token": worker.get("voice_actor_token").filter(|_| voice_ready),
-        "tts": worker.get("tts"), "dependencies": worker.get("dependencies"),
-        "gpu": {"torch_allocator": worker.get("gpu").and_then(|gpu| gpu.get("torch_allocator"))},
-        "loaded": {
-            "asr": available, "asr_model_id": NATIVE_ASR_MODEL,
-            "asr_device": selected, "asr_compute_type": if available { "q8_0" } else { "blocked" },
-            "translation_model_id": NATIVE_MT_MODEL,
-            "translation_directions": if available { vec!["id->en", "en->id"] } else { Vec::<&str>::new() },
-            "voice_actor": worker_nested_bool(worker, "loaded", "voice_actor"),
-            "voice_actor_device": worker.get("loaded").and_then(|loaded| loaded.get("voice_actor_device")),
-        },
-    })
-}
-
-
-// Pure candidate projection. Cold file presence is eligibility only;
-// a loaded pair is not evidence that a voice is bound or synthesis worked.
 fn candidate_status_payload(lifecycle_ready: bool, pair_present: bool,
                             voice_assets_present: bool, selected: Result<&str, &str>,
                             pci: Option<&str>, bound_token: Option<&str>) -> Value {
@@ -707,36 +549,6 @@ pub(super) fn project_candidate_status(runtime: &mut HelperBridgeRuntime) -> Val
     projected
 }
 
-pub(super) fn project_native_status(runtime: &mut HelperBridgeRuntime, worker: &mut Value) -> bool {
-    #[cfg(windows)]
-    let (pci, present) = match runtime.native_inference.as_ref() {
-        Some(native) if native.owner.is_available()
-            && runtime.pending_meeting_cleanup_session_id.is_none()
-            && runtime.last_error.as_deref() != Some("helper_bridge:cleanup_incomplete")
-            => (Some(native.owner.device_id()), true),
-        Some(_) => (None, false),
-        None => (None, runtime.pending_meeting_cleanup_session_id.is_none()
-            && runtime.last_error.as_deref() != Some("helper_bridge:cleanup_incomplete")
-            && NativeInferenceOwner::assets_present()),
-    };
-    #[cfg(not(windows))]
-    let (pci, present): (Option<&str>, bool) = (None, false);
-    let projected = native_status_payload(worker, pci, present);
-    let available = pci.is_some();
-    let ready = worker_bool(&projected, "ok");
-    runtime.cuda_ready = available;
-    runtime.provider_ready = ready;
-    runtime.degraded_mode = projected["loaded"]["voice_actor_device"].as_str() == Some("cpu");
-    // Preserve an unresolved cleanup blocker instead of replacing it with
-    // a less specific capability observation from a later status request.
-    if runtime.last_error.as_deref() != Some("helper_bridge:cleanup_incomplete") {
-        runtime.last_error = worker_text(&projected, "blocker");
-    }
-    runtime.message = worker_text(&projected, "note").unwrap_or_default();
-    *worker = projected;
-    ready
-}
-
 pub fn apply_worker_response(runtime: &mut HelperBridgeRuntime, value: &Value) -> bool {
     let ok = worker_bool(value, "ok");
     let stage = value
@@ -745,8 +557,8 @@ pub fn apply_worker_response(runtime: &mut HelperBridgeRuntime, value: &Value) -
         .unwrap_or_default();
 
     if stage == "local_realtime_worker_preflight" {
-        // Status belongs to the explicit host projection, never worker JSON.
-        return project_native_status(runtime, &mut value.clone());
+        // Only project_candidate_status owns capability projection.
+        return false;
     } else {
         let blocker = worker_text(value, "blocker").unwrap_or_default();
         let hard_voice_actor_failure = stage == "voice_actor_synthesize"
@@ -767,15 +579,6 @@ pub fn apply_worker_response(runtime: &mut HelperBridgeRuntime, value: &Value) -
             runtime.provider_ready = false;
         }
 
-        let request_degraded = value.get("device").and_then(Value::as_str) == Some("cpu")
-            || value
-                .get("device_note")
-                .and_then(Value::as_str)
-                .map(|note| note.contains("fallback") || note.contains("cpu"))
-                .unwrap_or(false);
-        if request_degraded {
-            runtime.degraded_mode = true;
-        }
         runtime.last_error = if ok {
             None
         } else {
@@ -787,537 +590,32 @@ pub fn apply_worker_response(runtime: &mut HelperBridgeRuntime, value: &Value) -
                 if ok {
                     "Helper request completed.".to_string()
                 } else {
-                    "Helper request failed; worker process remains available unless the bridge reports an I/O/lifecycle failure."
+                    "Native request failed; lifecycle readiness is separate."
                         .to_string()
                 }
             });
     }
 
-    // Native response application must not manufacture a lifecycle start.
-    if runtime.child.is_some() && !super::helper_bridge::native_voice_candidate_enabled() {
-        runtime.state = "ready".to_string();
-    }
     runtime.updated_unix_ms = unix_ms();
     ok
 }
 
-/// One host-owned budget for a Python request, including pipe write and reply.
-#[derive(Clone, Copy)]
-pub struct WorkerDeadline {
-    end: Instant,
-    started_unix_ms: u128,
-    budget_ms: u128,
-}
-
-impl WorkerDeadline {
-    pub fn new(budget_ms: u128) -> Self {
-        let started = Instant::now();
-        let duration = Duration::from_millis(budget_ms.min(u64::MAX as u128) as u64);
-        Self {
-            end: started.checked_add(duration).unwrap_or(started),
-            started_unix_ms: unix_ms(),
-            budget_ms,
-        }
-    }
-
-    fn remaining(self) -> Duration {
-        self.end.saturating_duration_since(Instant::now())
-    }
-
-    fn expired(self) -> bool {
-        self.remaining().is_zero()
-    }
-
-    fn timeout_error(self, phase: &str) -> String {
-        format!("worker:{phase}_deadline_exceeded:{}ms", self.budget_ms)
-    }
-}
-
-pub fn request_deadline_payload(mut payload: Value, deadline: WorkerDeadline) -> Value {
-    if let Some(object) = payload.as_object_mut() {
-        object.insert("request_unix_ms".to_string(), json!(deadline.started_unix_ms));
-        object.insert("deadline_unix_ms".to_string(), json!(deadline.started_unix_ms.saturating_add(deadline.budget_ms)));
-        object.insert("deadline_ms".to_string(), json!(deadline.budget_ms));
-    }
-    payload
-}
-
-pub fn write_worker_request_with_deadline<W: Write>(
-    stdin: &mut W,
-    payload: Value,
-    deadline: WorkerDeadline,
-) -> Result<(), String> {
-    if deadline.expired() {
-        return Err(deadline.timeout_error("request_write"));
-    }
-    let payload = request_deadline_payload(payload, deadline);
-    let body = serde_json::to_string(&payload).map_err(|error| error.to_string())?;
-    stdin
-        .write_all(body.as_bytes())
-        .map_err(|error| error.to_string())?;
-    stdin.write_all(b"\n").map_err(|error| error.to_string())?;
-    stdin.flush().map_err(|error| error.to_string())
-}
-
-// A deadline in the JSON payload is not a deadline for blocking Windows pipe
-// write_all/flush. Move that write into a *single owned thread*, and use the
-// same per-request budget on its completion channel. Publish its JoinHandle
-// under the canonical helper mutex before any competing Stop may enter.
-pub fn begin_worker_stdin_write<W: Write + Send + 'static>(
-    runtime: &mut HelperBridgeRuntime,
-    mut stdin: W,
-    payload: Value,
-    deadline: WorkerDeadline,
-) -> Result<mpsc::Receiver<(Result<(), String>, W)>, String> {
-    if runtime.stdin_writer.is_some() {
-        return Err("worker:stdin_writer_still_owned".to_string());
-    }
-
-    let (sender, receiver) = mpsc::channel();
-    // Unlike thread::spawn, Builder exposes a failure instead of panicking
-    // and poisoning the canonical helper lock under thread resource pressure.
-    let writer = thread::Builder::new()
-        .spawn(move || {
-            let result = write_worker_request_with_deadline(&mut stdin, payload, deadline);
-            let _ = sender.send((result, stdin));
-            // Once timed out, the receiver may be gone. The thread remains
-            // retained on HelperBridgeRuntime until the bounded Stop reaps it.
-        })
-        .map_err(|_| "worker:stdin_writer_spawn_failed".to_string())?;
-    runtime.stdin_writer = Some(writer);
-    Ok(receiver)
-}
-
-pub fn await_worker_stdin_write<W>(
-    receiver: mpsc::Receiver<(Result<(), String>, W)>,
-    deadline: WorkerDeadline,
-) -> Result<W, String> {
-    if deadline.expired() {
-        return Err(deadline.timeout_error("request_write"));
-    }
-    match receiver.recv_timeout(deadline.remaining()) {
-        Ok((Ok(()), stdin)) if !deadline.expired() => Ok(stdin),
-        Ok((Ok(()), _)) | Err(RecvTimeoutError::Timeout) => {
-            Err(deadline.timeout_error("request_write"))
-        }
-        Ok((Err(error), _stdin)) => Err(error),
-        Err(RecvTimeoutError::Disconnected) => {
-            Err("worker:request_writer_disconnected".to_string())
-        }
-    }
-}
-
-// Only after the writer has sent its owned stdin pipe back through the
-// channel can the helper reuse the pipe. No long-lived writer is detached.
-pub fn finish_received_stdin_write(runtime: &mut HelperBridgeRuntime) -> bool {
-    let Some(writer) = runtime.stdin_writer.take() else {
-        return false;
-    };
-    let joined = writer.join().is_ok();
-    runtime.io_thread_join_failed |= !joined;
-    joined
-}
-
-// Startup already holds the one canonical helper mutex during ping/status;
-// transport instead registers the writer under that mutex, then waits outside
-// it so Stop can claim the same writer while Python stops reading.
-pub fn write_worker_request_direct_with_deadline(
-    runtime: &mut HelperBridgeRuntime,
-    stdin: ChildStdin,
-    payload: Value,
-    deadline: WorkerDeadline,
-) -> Result<ChildStdin, String> {
-    let receiver = begin_worker_stdin_write(runtime, stdin, payload, deadline)?;
-    let result = await_worker_stdin_write(receiver, deadline);
-    if result.is_ok() && !finish_received_stdin_write(runtime) {
-        return Err("worker:request_writer_join_failed".to_string());
-    }
-    result
-}
-
-pub fn read_worker_response<R: BufRead>(stdout: &mut R) -> Result<Value, String> {
-    let mut line = Vec::new();
-    // Read at most one byte beyond the cap so oversized frames are rejected
-    // without allocating the rest of an untrusted or broken stdout stream.
-    let size = stdout
-        .take(MAX_WORKER_RESPONSE_BYTES + 1)
-        .read_until(b'\n', &mut line)
-        .map_err(|error| format!("worker:read_failed:{error}"))?;
-    if size == 0 {
-        return Err("worker:stdout_closed".to_string());
-    }
-    if size as u64 > MAX_WORKER_RESPONSE_BYTES {
-        return Err("worker:response_too_large".to_string());
-    }
-    if line.last() != Some(&b'\n') {
-        return Err("worker:response_not_newline_terminated".to_string());
-    }
-    serde_json::from_slice::<Value>(&line)
-        .map_err(|error| format!("worker:invalid_json_response:{error}"))
-}
-
-pub fn validate_worker_response_contract(
-    task: &str,
-    request_id: &str,
-    response: &Value,
-) -> Result<(), String> {
-    let object = response
-        .as_object()
-        .ok_or_else(|| "worker:response_must_be_object".to_string())?;
-    if object.get("request_id").and_then(Value::as_str) != Some(request_id) {
-        return Err("worker:response_request_id_mismatch".to_string());
-    }
-    let ok = object
-        .get("ok")
-        .and_then(Value::as_bool)
-        .ok_or_else(|| "worker:response_ok_must_be_bool".to_string())?;
-    let stage = object
-        .get("stage")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "worker:response_stage_missing".to_string())?;
-    let expected = if task == "status" {
-        "local_realtime_worker_preflight"
-    } else {
-        task
-    };
-    // Worker failures may have a generic protocol/handler stage; a status
-    // deadline may report the requested command rather than its preflight stage.
-    let generic_failure = !ok && matches!(stage, "worker_request" | "worker_error");
-    let failed_status_deadline = !ok && task == "status" && stage == "status";
-    if stage != expected && !generic_failure && !failed_status_deadline {
-        return Err("worker:response_stage_mismatch".to_string());
-    }
-    Ok(())
-}
-
-// One read thread per admitted worker request, never a separate worker,
-// scheduler, or background service. Its JoinHandle belongs to the existing
-// HelperBridgeRuntime before the worker request may enter pipe I/O.
-// Generic BufRead permits deterministic slow-reader regression fixtures.
-pub fn begin_worker_stdout_read<R: BufRead + Send + 'static>(
-    runtime: &mut HelperBridgeRuntime,
-    mut stdout: R,
-) -> Result<mpsc::Receiver<(Result<Value, String>, R)>, String> {
-    if runtime.stdout_reader.is_some() {
-        return Err("worker:stdout_reader_still_owned".to_string());
-    }
-    let (sender, receiver) = mpsc::channel();
-    // As for stdin, a failed OS thread admission must be returned as an
-    // explicit transport error, not poison the canonical helper mutex.
-    let reader = thread::Builder::new()
-        .spawn(move || {
-            let result = read_worker_response(&mut stdout);
-            let _ = sender.send((result, stdout));
-            // A timed-out receiver may have closed: this thread still owns
-            // stdout until it returns, and Stop must join that same handle.
-        })
-        .map_err(|_| "worker:stdout_reader_spawn_failed".to_string())?;
-    runtime.stdout_reader = Some(reader);
-    Ok(receiver)
-}
-
-pub fn await_worker_stdout_read<R>(
-    receiver: mpsc::Receiver<(Result<Value, String>, R)>,
-    deadline: WorkerDeadline,
-) -> Result<(Value, R), String> {
-    if deadline.expired() {
-        return Err(deadline.timeout_error("response"));
-    }
-    match receiver.recv_timeout(deadline.remaining()) {
-        Ok((Ok(value), stdout)) if !deadline.expired() => Ok((value, stdout)),
-        Ok((Ok(_), _)) | Err(RecvTimeoutError::Timeout) => {
-            Err(deadline.timeout_error("response"))
-        }
-        Ok((Err(error), _stdout)) => Err(error),
-        Err(RecvTimeoutError::Disconnected) => {
-            Err("worker:response_reader_disconnected".to_string())
-        }
-    }
-}
-
-// Only call this after a full response has been received from the channel.
-// At that point the thread has already handed off its entire pipe and result,
-// so join cannot be held up by Python stdout I/O. On a timeout, NEVER take
-// the handle here: stop_child must retain it until the reader actually exits.
-pub fn finish_received_stdout_read(runtime: &mut HelperBridgeRuntime) -> bool {
-    let Some(reader) = runtime.stdout_reader.take() else {
-        return false;
-    };
-    let joined = reader.join().is_ok();
-    runtime.io_thread_join_failed |= !joined;
-    joined
-}
-
-// Startup already owns the canonical runtime mutex while waiting for Python;
-// transport tasks instead register a reader under that mutex and await the
-// same bounded response outside it.
-pub fn read_worker_response_direct_with_deadline(
-    runtime: &mut HelperBridgeRuntime,
-    stdout: BufReader<ChildStdout>,
-    deadline: WorkerDeadline,
-) -> Result<(Value, BufReader<ChildStdout>), String> {
-    let receiver = begin_worker_stdout_read(runtime, stdout)?;
-    let result = await_worker_stdout_read(receiver, deadline);
-    if result.is_ok() && !finish_received_stdout_read(runtime) {
-        return Err("worker:response_reader_join_failed".to_string());
-    }
-    result
-}
-
-// Cleanup runs while the canonical helper mutex is held. Keep the native
-// exit/Stop path bounded instead of waiting indefinitely for a child process
-// or a stderr pipe inherited by descendants. The budget is a responsiveness
-// ceiling, NOT permission to release unverified process/thread ownership.
 const HELPER_CLEANUP_BUDGET: Duration = Duration::from_millis(250);
 
-fn stop_child_with_budget(runtime: &mut HelperBridgeRuntime, budget: Duration) -> bool {
-    // Save the exact Meeting owner before a transport failure or set_blocked
-    // clears active-request metadata. It is NOT authorization to touch a
-    // different Meeting session; a later retry must match this exact ID.
+/// Retain exact Meeting attribution and the native owner if closure is not
+/// verified within the existing bounded budget. Only the owning Stop may
+/// release the attribution, even after the native runtime has closed.
+pub fn stop_child(runtime: &mut HelperBridgeRuntime) -> bool {
     if runtime.pending_meeting_cleanup_session_id.is_none() {
         runtime.pending_meeting_cleanup_session_id = runtime.active_meeting_session_id.clone()
             .or_else(|| runtime.native_meeting_session_id().map(str::to_owned));
     }
-    // Drop our available request pipes before terminating the worker. The
-    // writer/reader may still own moved pipes while their JoinHandles remain
-    // registered in the canonical runtime for verified cleanup.
-    runtime.stdin.take();
-    runtime.stdout.take();
     let started = Instant::now();
-    let mut kill_attempted = false;
-
-    loop {
-        let native_released = runtime.try_close_native_inference();
-        let mut reaped = false;
-        if let Some(child) = runtime.child.as_mut() {
-            match child.try_wait() {
-                Ok(Some(_)) => reaped = true,
-                Ok(None) | Err(_) if !kill_attempted => {
-                    // kill() is a request, not proof of termination.
-                    let _ = child.kill();
-                    kill_attempted = true;
-                }
-                _ => {}
-            }
-        }
-        if reaped {
-            runtime.child.take();
-        }
-
-        // A child can be fully reaped while stdin/stdout remain owned by a
-        // blocked writer/reader (e.g. descendants inherited open pipe ends).
-        // Every writer/reader must finish and join before cleanup succeeds.
-        // Never remove or detach a still-running JoinHandle on timeout.
-        if runtime.child.is_none() {
-            let mut thread_joins_ok = true;
-            if runtime.stdin_writer.as_ref().is_some_and(|writer| writer.is_finished()) {
-                if let Some(writer) = runtime.stdin_writer.take() {
-                    thread_joins_ok &= writer.join().is_ok();
-                }
-            }
-            if runtime.stdout_reader.as_ref().is_some_and(|reader| reader.is_finished()) {
-                if let Some(reader) = runtime.stdout_reader.take() {
-                    thread_joins_ok &= reader.join().is_ok();
-                }
-            }
-            if runtime.stderr_logger.as_ref().is_some_and(|logger| logger.is_finished()) {
-                if let Some(logger) = runtime.stderr_logger.take() {
-                    thread_joins_ok &= logger.join().is_ok();
-                }
-            }
-            // A failed join consumes its handle. Persist the failure so a
-            // subsequent Retry Stop cannot misread "no handle" as clean.
-            runtime.io_thread_join_failed |= !thread_joins_ok;
-            if runtime.io_thread_join_failed {
-                return false;
-            }
-            if runtime.stdin_writer.is_none()
-                && runtime.stdout_reader.is_none()
-                && runtime.stderr_logger.is_none()
-                && native_released
-            {
-                // Process and I/O thread release is only one part of Meeting
-                // Stop. Do NOT clear pending_meeting_cleanup_session_id here:
-                // status probes and transport failure handling also call
-                // stop_child, but cannot certify Meeting audio/transcript
-                // cleanup. Only the owning Meeting Stop or authorized Live
-                // generation recovery may release that attribution.
-                return true;
-            }
-        }
-
-        if started.elapsed() >= budget {
-            return false;
-        }
+    while !runtime.try_close_native_inference() {
+        if started.elapsed() >= HELPER_CLEANUP_BUDGET { return false; }
         thread::sleep(Duration::from_millis(10));
     }
-}
-
-/// True only when native models are closed, child is reaped, stdin/stdout/stderr joins verified, and
-/// no earlier I/O thread panicked.
-/// On timeout, retain every remaining OS/thread handle for an explicit retry.
-pub fn stop_child(runtime: &mut HelperBridgeRuntime) -> bool {
-    stop_child_with_budget(runtime, HELPER_CLEANUP_BUDGET)
-}
-
-
-#[cfg(test)]
-mod stdin_write_deadline_tests {
-    use super::*;
-    use std::io::{self, Write};
-
-    struct GatedWriter {
-        gate: Option<mpsc::Receiver<()>>,
-        written: Vec<u8>,
-    }
-
-    impl Write for GatedWriter {
-        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            if let Some(gate) = self.gate.take() {
-                gate.recv().map_err(|_| io::Error::new(
-                    io::ErrorKind::BrokenPipe, "test write gate disconnected",
-                ))?;
-            }
-            self.written.extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn stdin_backpressure_timeout_keeps_writer_owned_until_retry_cleanup() {
-        let (sender, receiver) = mpsc::channel();
-        let mut runtime = HelperBridgeRuntime::default();
-        let writer = GatedWriter { gate: Some(receiver), written: Vec::new() };
-        let pending = begin_worker_stdin_write(
-            &mut runtime, writer, json!({"command": "ping"}), WorkerDeadline::new(5_000),
-        ).expect("admit the single stdin write");
-        assert!(matches!(
-            begin_worker_stdin_write(
-                &mut runtime, Vec::<u8>::new(), json!({}), WorkerDeadline::new(5_000),
-            ),
-            Err(ref error) if error.as_str() == "worker:stdin_writer_still_owned"
-        ), "a second write cannot replace the owned JoinHandle");
-        assert!(matches!(
-            await_worker_stdin_write(pending, WorkerDeadline::new(0)),
-            Err(ref error) if error.as_str() == "worker:request_write_deadline_exceeded:0ms"
-        ));
-        assert!(runtime.stdin_writer.is_some());
-        assert!(!stop_child_with_budget(&mut runtime, Duration::ZERO));
-        assert!(runtime.stdin_writer.is_some(), "do not detach a blocked writer");
-
-        sender.send(()).expect("release blocked write");
-        assert!(stop_child_with_budget(&mut runtime, Duration::from_secs(1)));
-        assert!(runtime.stdin_writer.is_none());
-    }
-
-    #[test]
-    fn blocked_flush_uses_the_same_deadline_and_owned_cleanup() {
-        struct GatedFlush {
-            gate: Option<mpsc::Receiver<()>>,
-            written: Vec<u8>,
-        }
-        impl Write for GatedFlush {
-            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-                self.written.extend_from_slice(bytes);
-                Ok(bytes.len())
-            }
-            fn flush(&mut self) -> io::Result<()> {
-                if let Some(gate) = self.gate.take() {
-                    gate.recv().map_err(|_| io::Error::new(
-                        io::ErrorKind::BrokenPipe, "test flush gate disconnected",
-                    ))?;
-                }
-                Ok(())
-            }
-        }
-
-        let (release, gate) = mpsc::channel::<()>();
-        let mut runtime = HelperBridgeRuntime::default();
-        let writer = GatedFlush { gate: Some(gate), written: Vec::new() };
-        let pending = begin_worker_stdin_write(
-            &mut runtime, writer, json!({"command": "status"}), WorkerDeadline::new(30_000),
-        ).expect("single writer registration");
-        assert!(matches!(
-            await_worker_stdin_write(pending, WorkerDeadline::new(0)),
-            Err(ref error) if error.as_str() == "worker:request_write_deadline_exceeded:0ms"
-        ));
-        assert!(!stop_child_with_budget(&mut runtime, Duration::ZERO));
-        assert!(runtime.stdin_writer.is_some());
-        release.send(()).expect("finish flush");
-        assert!(stop_child_with_budget(&mut runtime, Duration::from_secs(1)));
-        assert!(runtime.stdin_writer.is_none());
-    }
-
-    #[test]
-    fn completed_stdin_write_retains_original_pipe_and_deadline_payload() {
-        let mut runtime = HelperBridgeRuntime::default();
-        let payload = json!({"command": "ping", "request_id": "startup-ping"});
-        let write = begin_worker_stdin_write(
-            &mut runtime, Vec::<u8>::new(), payload, WorkerDeadline::new(5_000),
-        ).expect("admit write");
-        let bytes = await_worker_stdin_write(write, WorkerDeadline::new(5_000))
-            .expect("writer returned original pipe");
-        assert!(finish_received_stdin_write(&mut runtime));
-        assert!(runtime.stdin_writer.is_none());
-        let frames = String::from_utf8(bytes).expect("UTF-8 worker request");
-        assert!(frames.ends_with('\n'));
-        let request: Value = serde_json::from_str(frames.trim_end())
-            .expect("valid JSON line");
-        assert_eq!(request["command"], json!("ping"));
-        assert_eq!(request["request_id"], json!("startup-ping"));
-        assert_eq!(request["deadline_ms"], json!(5_000));
-        assert!(request["deadline_unix_ms"].as_u64().is_some());
-    }
-}
-
-#[cfg(test)]
-mod response_framing_tests {
-    use super::*;
-    use std::io::Cursor;
-
-    #[test]
-    fn normal_json_line_keeps_existing_response_parsing() {
-        let frame = b"{\"ok\":true,\"stage\":\"ping\"}\n".to_vec();
-        let mut reader = BufReader::new(Cursor::new(frame));
-        let value = read_worker_response(&mut reader).expect("valid JSON response");
-        assert_eq!(value["ok"], json!(true));
-        assert_eq!(value["stage"], json!("ping"));
-    }
-
-    #[test]
-    fn stdout_closed_and_missing_newline_remain_explicit_failures() {
-        let mut empty = BufReader::new(Cursor::new(Vec::<u8>::new()));
-        assert_eq!(read_worker_response(&mut empty).unwrap_err(), "worker:stdout_closed");
-
-        let mut incomplete = BufReader::new(Cursor::new(b"{\"ok\":true}".to_vec()));
-        assert_eq!(
-            read_worker_response(&mut incomplete).unwrap_err(),
-            "worker:response_not_newline_terminated"
-        );
-    }
-
-    #[test]
-    fn oversized_stdout_frame_is_rejected_before_json_parse() {
-        let mut oversized = vec![b'x'; MAX_WORKER_RESPONSE_BYTES as usize];
-        oversized.push(b'\n');
-        let mut reader = BufReader::new(Cursor::new(oversized));
-        assert_eq!(
-            read_worker_response(&mut reader).unwrap_err(),
-            "worker:response_too_large"
-        );
-    }
-
-    #[test]
-    fn malformed_bounded_json_keeps_explicit_error_contract() {
-        let mut reader = BufReader::new(Cursor::new(b"{not-json}\n".to_vec()));
-        assert!(read_worker_response(&mut reader)
-            .unwrap_err()
-            .starts_with("worker:invalid_json_response:"));
-    }
+    true
 }
 
 #[cfg(test)]
@@ -1338,38 +636,6 @@ mod readiness_contract_tests {
         assert_eq!(runtime.effective_state(false), "stopped");
         runtime.state = "blocked".into();
         assert_eq!(runtime.effective_state(true), "blocked");
-    }
-
-    #[test]
-    fn native_status_does_not_inherit_legacy_model_or_cuda_claims() {
-        // Pure projection fixture, not a GPU/owner execution receipt.
-        let worker = json!({
-            "ok": false, "stage": "local_realtime_worker_preflight",
-            "readiness": {"asr": true, "translation_id_en": true, "voice_actor_tts": true},
-            "torch_import_ready": true, "transformers_import_ready": true,
-            "voice_actor_token": "fixture-actor",
-            "selected_device": "cpu", "cpu_fallback_active": true,
-            "loaded": {"asr": true, "asr_model_id": "faster-whisper-large-v3-turbo"},
-        });
-        let missing = native_status_payload(&worker, None, false);
-        let cold = native_status_payload(&worker, None, true);
-        assert_eq!(cold["ok"], true);
-        assert_eq!(cold["loaded"]["asr"], false);
-        assert_eq!(cold["cuda_capability_known"], false);
-        assert_eq!(missing["ok"], false);
-        assert_eq!(missing["readiness"]["asr"], false);
-        assert_eq!(missing["loaded"]["translation_directions"], json!([]));
-        let resident = native_status_payload(&worker, Some("0000:01:00.0"), true);
-        assert_eq!(resident["ok"], true);
-        assert_eq!(resident["loaded"]["asr_model_id"], "qwen3-asr-1.7b-q8_0");
-        assert_eq!(resident["cpu_fallback_active"], false);
-        assert_eq!(resident["cuda_pci_id"], "0000:01:00.0");
-        let mut invalid_voice = worker;
-        invalid_voice["voice_actor_token"] = Value::Null;
-        assert_eq!(native_status_payload(&invalid_voice, Some("0000:01:00.0"), true)["ok"], false);
-        invalid_voice["voice_actor_token"] = json!("fixture-actor");
-        invalid_voice["stage"] = json!("worker_error");
-        assert_eq!(native_status_payload(&invalid_voice, Some("0000:01:00.0"), true)["ok"], false);
     }
 
     #[test]
@@ -1399,243 +665,6 @@ mod readiness_contract_tests {
         assert_eq!(personal["blocker"], "native_voice:personal_clone_approval_required");
     }
 
-    #[test]
-    fn absent_native_assets_never_promote_legacy_cuda_status() {
-        let worker = json!({
-            "ok": true, "stage": "local_realtime_worker_preflight",
-            "cuda_capability_known": true, "selected_device": "cuda",
-            "selected_translation_device": "cuda", "cpu_fallback_active": false,
-            "readiness": {"asr":true, "translation_id_en":true, "voice_actor_tts":true},
-            "torch_import_ready":true, "transformers_import_ready":true,
-            "voice_actor_token":"fixture-actor"
-        });
-        let blocked = native_status_payload(&worker, None, false);
-        assert_eq!(blocked["provider_ready"], false);
-        assert_eq!(blocked["cuda_capability_known"], false);
-        assert_eq!(blocked["readiness"]["translation_id_en"], false);
-        let cold = native_status_payload(&worker, None, true);
-        assert_eq!(cold["provider_ready"], true);
-        assert_eq!(cold["selected_device"], "not_loaded");
-        assert_eq!(cold["loaded"]["asr"], false);
-        assert_eq!(cold["cuda_pci_id"], Value::Null);
-    }
-
-}
-
-#[cfg(test)]
-mod stderr_lifecycle_tests {
-    use super::*;
-    use std::fs;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-
-    fn test_log_path(label: &str) -> PathBuf {
-        std::env::temp_dir()
-            .join(format!(
-                "translateit-a5-{}-{}-{label}",
-                std::process::id(),
-                unix_ms()
-            ))
-            .join("helper_bridge_stderr.jsonl")
-    }
-
-    #[test]
-    fn helper_stderr_uses_redacted_rotating_jsonl_policy() {
-        let log_path = test_log_path("redaction");
-        let log_dir = log_path.parent().expect("stderr test log parent");
-        fs::create_dir_all(log_dir).expect("create stderr test log dir");
-
-        write_helper_stderr_event(
-            &log_path,
-            r"worker failed at C:\Users\Alice\private-model.bin alice@example.com token=supersecret",
-        )
-        .expect("write redacted stderr event");
-        let content = fs::read_to_string(&log_path).expect("read redacted stderr log");
-        assert!(!content.contains(r"C:\Users\Alice\private-model.bin"));
-        assert!(!content.contains("alice@example.com"));
-        assert!(!content.contains("supersecret"));
-        assert!(content.contains("[redacted-path]"));
-        assert!(content.contains("[redacted-email]"));
-        assert!(content.contains("[redacted-secret]"));
-        let event: Value = serde_json::from_str(
-            content
-                .lines()
-                .next()
-                .expect("one helper stderr JSONL event"),
-        )
-        .expect("valid helper stderr JSONL");
-        assert_eq!(
-            event.get("area").and_then(Value::as_str),
-            Some("helper_worker_stderr")
-        );
-
-        fs::write(&log_path, vec![b'x'; 1_100_000]).expect("seed oversized stderr log");
-        write_helper_stderr_event(&log_path, "worker stderr after rotation")
-            .expect("rotate helper stderr log");
-        assert!(log_dir
-            .join("helper_bridge_stderr.previous.jsonl")
-            .is_file());
-        assert!(
-            fs::metadata(&log_path)
-                .expect("current stderr metadata")
-                .len()
-                < 10_000
-        );
-
-        let _ = fs::remove_dir_all(log_dir);
-    }
-
-
-
-    #[test]
-    fn timed_out_stdout_reader_remains_owned_until_explicit_retry_stop() {
-        use std::io::{Cursor, Read};
-        struct GatedInput {
-            release: Option<mpsc::Receiver<()>>,
-            content: Cursor<Vec<u8>>,
-        }
-        impl Read for GatedInput {
-            fn read(&mut self, target: &mut [u8]) -> std::io::Result<usize> {
-                if let Some(release) = self.release.take() {
-                    release.recv().map_err(|_| std::io::Error::new(
-                        std::io::ErrorKind::BrokenPipe, "test gate disconnected",
-                    ))?;
-                }
-                self.content.read(target)
-            }
-        }
-
-        let (release, gate) = mpsc::channel::<()>();
-        let mut runtime = HelperBridgeRuntime::default();
-        let input = BufReader::new(GatedInput {
-            release: Some(gate),
-            content: Cursor::new(b"{\"ok\":true,\"stage\":\"ping\"}\n".to_vec()),
-        });
-        let response = begin_worker_stdout_read(&mut runtime, input)
-            .expect("the only helper read owner");
-        // An overlapping request cannot replace the registered owner.
-        assert!(matches!(
-            begin_worker_stdout_read(
-                &mut runtime,
-                BufReader::new(Cursor::new(Vec::<u8>::new())),
-            ),
-            Err(ref reason) if reason.as_str() == "worker:stdout_reader_still_owned"
-        ));
-        assert!(matches!(
-            await_worker_stdout_read(response, WorkerDeadline::new(0)),
-            Err(ref error) if error.as_str() == "worker:response_deadline_exceeded:0ms"
-        ));
-        assert!(runtime.stdout_reader.is_some());
-        assert!(!stop_child_with_budget(&mut runtime, Duration::ZERO));
-        assert!(runtime.stdout_reader.is_some(), "a still-blocked stdout owner must not detach");
-
-        release.send(()).expect("release the blocked stdout reader");
-        assert!(stop_child_with_budget(&mut runtime, Duration::from_secs(1)));
-        assert!(runtime.stdout_reader.is_none(), "Retry Stop reaped the same reader");
-    }
-
-    #[test]
-    fn successful_worker_response_returns_original_stdout_after_join() {
-        use std::io::Cursor;
-        let mut runtime = HelperBridgeRuntime::default();
-        let line = BufReader::new(Cursor::new(
-            b"{\"ok\":true,\"stage\":\"ping\"}\n{\"ok\":true,\"stage\":\"status\"}\n".to_vec(),
-        ));
-        let response = begin_worker_stdout_read(&mut runtime, line)
-            .expect("registered stdout read");
-        let (value, mut remaining) = await_worker_stdout_read(response, WorkerDeadline::new(1_000))
-            .expect("received the response");
-        assert!(finish_received_stdout_read(&mut runtime), "must join completed read");
-        assert_eq!(value["stage"], json!("ping"));
-        assert!(runtime.stdout_reader.is_none());
-        // Buffered bytes remain owned by the caller for the next response.
-        let second = read_worker_response(&mut remaining)
-            .expect("stdout bytes buffered after ping must survive reader handoff");
-        assert_eq!(second["stage"], json!("status"));
-    }
-
-    #[test]
-    fn incomplete_stderr_reader_is_retained_for_retry_not_detached() {
-        let (sender, receiver) = mpsc::channel::<()>();
-        let mut runtime = HelperBridgeRuntime::default();
-        runtime.stderr_logger = Some(thread::spawn(move || {
-            let _ = receiver.recv(); // Simulate a reader awaiting a live pipe.
-        }));
-
-        assert!(!stop_child_with_budget(&mut runtime, Duration::ZERO));
-        assert!(runtime.stderr_logger.is_some(), "never lose an unjoined reader");
-
-        sender.send(()).expect("release test reader");
-        assert!(stop_child_with_budget(&mut runtime, Duration::from_secs(1)));
-        assert!(runtime.stderr_logger.is_none());
-    }
-
-
-    #[test]
-    fn panicked_io_thread_join_cannot_be_forgotten_by_retry_stop() {
-        let (started, receiver) = mpsc::channel();
-        let mut runtime = HelperBridgeRuntime::default();
-        runtime.stderr_logger = Some(thread::spawn(move || {
-            started.send(()).expect("signal the test worker");
-            panic!("simulated stderr reader failure");
-        }));
-        receiver.recv().expect("stderr test worker started");
-
-        assert!(!stop_child_with_budget(&mut runtime, Duration::from_secs(1)));
-        assert!(runtime.io_thread_join_failed);
-        assert!(runtime.stderr_logger.is_none(), "failed join consumed the handle");
-        assert!(!stop_child_with_budget(&mut runtime, Duration::ZERO),
-            "a second cleanup must not certify the earlier failed join");
-    }
-
-
-    #[test]
-    fn incomplete_helper_cleanup_retains_meeting_owner_after_active_request_clears() {
-        let (release, gate) = mpsc::channel::<()>();
-        let mut runtime = HelperBridgeRuntime::default();
-        runtime.active_meeting_session_id = Some("meeting-session-a".to_string());
-        runtime.stderr_logger = Some(thread::spawn(move || {
-            let _ = gate.recv();
-        }));
-
-        assert!(!stop_child_with_budget(&mut runtime, Duration::ZERO));
-        assert_eq!(runtime.pending_meeting_cleanup_session_id.as_deref(), Some("meeting-session-a"));
-        runtime.active_meeting_session_id = None; // set_blocked clears request metadata
-        assert!(!stop_child_with_budget(&mut runtime, Duration::ZERO));
-        assert_eq!(runtime.pending_meeting_cleanup_session_id.as_deref(), Some("meeting-session-a"));
-
-        release.send(()).expect("release owned stderr reader");
-        assert!(stop_child_with_budget(&mut runtime, Duration::from_secs(1)));
-        assert_eq!(
-            runtime.pending_meeting_cleanup_session_id.as_deref(),
-            Some("meeting-session-a"),
-            "reaping I/O cannot release the owning Meeting's Stop transaction",
-        );
-        assert!(runtime.stderr_logger.is_none());
-    }
-
-    #[test]
-    fn no_worker_handles_is_a_verified_clean_stop() {
-        let mut runtime = HelperBridgeRuntime::default();
-        assert!(stop_child_with_budget(&mut runtime, Duration::ZERO));
-        assert!(runtime.child.is_none());
-        assert!(runtime.stderr_logger.is_none());
-    }
-    #[test]
-    fn stop_child_joins_owned_stderr_logger() {
-        let finished = Arc::new(AtomicBool::new(false));
-        let finished_in_thread = Arc::clone(&finished);
-        let mut runtime = HelperBridgeRuntime::default();
-        runtime.stderr_logger = Some(thread::spawn(move || {
-            thread::sleep(Duration::from_millis(20));
-            finished_in_thread.store(true, Ordering::SeqCst);
-        }));
-
-        assert!(stop_child(&mut runtime));
-
-        assert!(finished.load(Ordering::SeqCst));
-        assert!(runtime.stderr_logger.is_none());
-    }
 }
 
 #[cfg(test)]
@@ -1691,70 +720,6 @@ mod deadline_policy_tests {
         assert_eq!(
             worker_response_deadline_for_priority("unknown", HelperTaskPriority::Diagnostic),
             WORKER_FALLBACK_RESPONSE_DEADLINE_MS
-        );
-    }
-
-    #[test]
-    fn expired_request_cannot_accept_even_a_ready_pipe_reply() {
-        let (tx, rx) = mpsc::channel();
-        tx.send((Ok(json!({"ok": true})), ())).unwrap();
-        let expired = WorkerDeadline::new(0);
-        assert_eq!(
-            await_worker_stdout_read(rx, expired).unwrap_err(),
-            "worker:response_deadline_exceeded:0ms"
-        );
-        let mut bytes = Vec::new();
-        assert!(write_worker_request_with_deadline(&mut bytes, json!({}), expired).is_err());
-        assert!(bytes.is_empty());
-    }
-
-    #[test]
-    fn request_metadata_uses_host_selected_deadline_as_authority() {
-        let deadline_ms = worker_response_deadline_ms("voice_actor_synthesize");
-        let budget = WorkerDeadline::new(deadline_ms);
-        let payload = request_deadline_payload(
-            json!({"command": "voice_actor_synthesize"}),
-            budget,
-        );
-        let started = payload
-            .get("request_unix_ms")
-            .and_then(Value::as_u64)
-            .unwrap() as u128;
-        let deadline = payload
-            .get("deadline_unix_ms")
-            .and_then(Value::as_u64)
-            .unwrap() as u128;
-        assert_eq!(
-            payload.get("deadline_ms").and_then(Value::as_u64),
-            Some(45_000)
-        );
-        assert_eq!(deadline.saturating_sub(started), deadline_ms);
-
-        let overridden = request_deadline_payload(
-            json!({
-                "command": "ping",
-                "request_unix_ms": 10_u64,
-                "deadline_unix_ms": 20_u64,
-                "deadline_ms": 10_u64
-            }),
-            WorkerDeadline::new(worker_response_deadline_ms("ping")),
-        );
-        let overridden_started = overridden
-            .get("request_unix_ms")
-            .and_then(Value::as_u64)
-            .unwrap() as u128;
-        let overridden_deadline = overridden
-            .get("deadline_unix_ms")
-            .and_then(Value::as_u64)
-            .unwrap() as u128;
-        assert_ne!(overridden_started, 10);
-        assert_eq!(
-            overridden_deadline.saturating_sub(overridden_started),
-            worker_response_deadline_ms("ping")
-        );
-        assert_eq!(
-            overridden.get("deadline_ms").and_then(Value::as_u64),
-            Some(5_000)
         );
     }
 }

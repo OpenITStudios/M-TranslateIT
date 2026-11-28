@@ -22,7 +22,7 @@ use super::{
     worker_message, HelperBridgeWorkerResponse,
 };
 use super::super::helper_bridge_runtime::{
-    acquire_scoped_helper_task_permit, clear_active_request, SCHEDULER_SCOPE_REVOKED,
+    acquire_scoped_helper_task_permit, apply_worker_response, clear_active_request, SCHEDULER_SCOPE_REVOKED,
     runtime, runtime_claim, unix_ms,
     worker_response_deadline_for_priority,
     HelperBridgeRuntime, HelperTaskPriority,
