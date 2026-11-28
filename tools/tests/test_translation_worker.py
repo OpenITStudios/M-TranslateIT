@@ -57,7 +57,7 @@ class TranslationWorkerTests(unittest.TestCase):
                             "translation_contract": "canonical_bidirectional_id_en", "translation_degraded": False,
                             "translation_fallback_reason": "", "blocker": "",
                             "model_id": worker_runner.NATIVE_MT_MODEL, "model_revision": worker_runner.NATIVE_MT_REVISION,
-                            "translated_text": case["references"][0], **(change or {})}
+                            "translated_text": case["references"][0], "elapsed_ms": i * 10, **(change or {})}
                 rows.append({"case_id": case["id"], "response": response})
             return {"proof": worker_runner.NATIVE_TRANSLATION_PROOF, "source_sha": SHA,
                     "corpus_fingerprint": requests["corpus_fingerprint"], "cuda_pci_id": "0000:01:00.0",
@@ -82,6 +82,35 @@ class TranslationWorkerTests(unittest.TestCase):
                 self.assertEqual(report["verdict"], "PASS")
                 self.assertEqual(len(report["results"]), len(quality.select_suite(CORPUS, suite)["cases"]))
                 self.assertEqual(quality.declared_worker_receipt_suite(report), suite)
+
+    def test_request_latency_is_complete_replay_only(self):
+        report = self.run_fixture(self.replay())
+        count = len(report["results"])
+        self.assertGreater(count, 1)
+        self.assertEqual(report["request_latency_ms"], {
+            "count": count, "first_request_ms": 10,
+            "p50_ms": ((count * 50 + 99) // 100) * 10,
+            "p95_ms": ((count * 95 + 99) // 100) * 10,
+            "max_ms": count * 10,
+        })
+        # Replay order must not be mistaken for sorted latency order.
+        self.assertEqual(worker_runner.translation_request_latency([
+            {"response": {"elapsed_ms": value}} for value in (40, 10, 30, 20)
+        ]), {"count": 4, "first_request_ms": 40, "p50_ms": 20, "p95_ms": 40, "max_ms": 40})
+
+        def missing_timing(requests):
+            receipt = self.replay()(requests)
+            receipt["results"][0]["response"].pop("elapsed_ms")
+            return receipt
+
+        for replay in (missing_timing, self.replay(change={"elapsed_ms": -1}),
+                       self.replay(change={"elapsed_ms": True}),
+                       self.replay(change={"elapsed_ms": "10"}),
+                       self.replay(outer={"execution_error": "controlled failure"})):
+            with self.subTest(replay=replay):
+                failed = self.run_fixture(replay)
+                self.assertFalse(failed["execution_complete"])
+                self.assertIsNone(failed["request_latency_ms"])
 
     def test_heldout_replay_is_distinct_from_full_regression(self):
         corpus = quality.select_suite(HELDOUT, "heldout")

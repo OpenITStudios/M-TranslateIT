@@ -799,6 +799,17 @@ def native_translation_replay(requests: dict) -> dict:
                                  receipt_schema="translateit.native_translation.replay.v1")
 
 
+def translation_request_latency(records: list[dict]) -> dict:
+    """Nearest-rank observations for an already validated complete replay."""
+    elapsed = [row["response"]["elapsed_ms"] for row in records]
+    ordered = sorted(elapsed)
+    count = len(ordered)
+    return {"count": count, "first_request_ms": elapsed[0],
+            "p50_ms": ordered[(count * 50 + 99) // 100 - 1],
+            "p95_ms": ordered[(count * 95 + 99) // 100 - 1],
+            "max_ms": ordered[-1]}
+
+
 def run_translation_quality(expected_sha: str, suite: str, timeout: float) -> dict:
     """Native translation-only replay and the unchanged semantic grader."""
     pinned_source(expected_sha)
@@ -844,7 +855,8 @@ def run_translation_quality(expected_sha: str, suite: str, timeout: float) -> di
                     or response.get("translation_contract") != "canonical_bidirectional_id_en"
                     or response.get("translation_degraded") is not False
                     or response.get("translation_fallback_reason") != ""
-                    or response.get("blocker") != "" or response.get("hit_token_ceiling") is not False):
+                    or response.get("blocker") != "" or response.get("hit_token_ceiling") is not False
+                    or type(response.get("elapsed_ms")) is not int or response["elapsed_ms"] < 0):
                 rejected[ident] = {"stage": "translation_output_contract", "response": response}
                 error = "translation:incomplete_or_unbound_output"
                 break
@@ -882,6 +894,7 @@ def run_translation_quality(expected_sha: str, suite: str, timeout: float) -> di
             "worker_terminated": receipt.get("worker_terminated") is True,
             "worker_pid": receipt.get("worker_pid"), "execution_complete": bool(complete), "execution_error": error,
             "elapsed_ms": round((time.monotonic() - started) * 1000),
+            "request_latency_ms": translation_request_latency(records) if complete else None,
             "results": records, "rejected": rejected, "evaluation": evaluation, "checks": checks,
             "counts": {state: sum(row["status"] == state for row in checks) for state in ("PASS", "REVIEW", "FAIL", "UNVERIFIED")},
             "verdict": evaluation["verdict"] if complete else "FAIL"}

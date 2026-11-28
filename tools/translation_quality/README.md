@@ -299,6 +299,17 @@ Missing/incomplete/mismatched output, cleanup or source identity blocks a pass.
 The source-phase hold remains active; no replay has been executed.
 Incomplete execution reports cannot be loaded as quality-result bundles.
 
+Fresh native receipts require a nonnegative integer per-case `elapsed_ms`.
+Complete replays also report `request_latency_ms` (count, first request,
+nearest-rank P50/P95, maximum); incomplete runs have no aggregate. These
+measure the existing owner handoff-to-reply interval, including the first
+request, not GPU-only or Meeting latency. The outer report elapsed time
+includes orchestration and model preparation and is not interchangeable
+with per-request latency. Compare identical ordered suites on the same
+reviewed device, pinned model and matched build identities with the existing
+quality verdict; a single replay is not a warm-latency guarantee or a
+performance acceptance result.
+
 An executed declared-invariant failure is labeled `translation_quality_check`
 with `requires_linguistic_review`; it is not automatically adjudicated as a
 model error. Complete but linguistically flagged runs remain usable for explicit
