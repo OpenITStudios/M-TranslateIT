@@ -64,11 +64,16 @@ pub(crate) fn meeting_outbound_pipeline_active() -> bool {
 
 pub(super) fn mark_meeting_outbound_pipeline(generation: u64) {
     // A delayed older request must never overwrite a newer Meeting's mark.
-    let _ = MEETING_OUTBOUND_PIPELINE_GENERATION.fetch_update(
+    let previous = MEETING_OUTBOUND_PIPELINE_GENERATION.fetch_update(
         Ordering::AcqRel, Ordering::Acquire,
         |current| (current <= generation && runtime_generation_matches_epoch(generation))
             .then_some(generation),
     );
+    if previous.is_ok_and(|current| current != generation) {
+        // Notify only on a new claim, not on every ASR/MT/TTS stage.
+        // The existing scheduler mutex prevents a lost wake.
+        super::super::helper_bridge_runtime::wake_revoked_scheduler_waiters();
+    }
 }
 
 // Transport releases the marker at TTS completion/failure. The serialized

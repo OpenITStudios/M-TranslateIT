@@ -5,6 +5,7 @@ use crate::engine::runtime_state::runtime_generation_matches_epoch;
 
 pub(crate) const SCHEDULER_SCOPE_REVOKED: &str = "helper_scheduler:meeting_scope_revoked";
 pub(crate) const SCHEDULER_DEFERRED_EXPIRED: &str = "helper_scheduler:deferred_incoming_expired";
+pub(crate) const SCHEDULER_INCOMING_DEFERRED: &str = "helper_scheduler:incoming_deferred_for_outbound";
 
 pub const HELPER_SCHEDULER_TOTAL_ADMISSION_CAP: u32 = 8;
 pub const HELPER_SCHEDULER_MEETING_OUTBOUND_WAIT_MS: u64 = 120_000;
@@ -65,7 +66,7 @@ fn scheduler() -> &'static (Mutex<HelperSchedulerState>, Condvar) {
     HELPER_SCHEDULER.get_or_init(|| (Mutex::new(HelperSchedulerState::default()), Condvar::new()))
 }
 
-// Revocation updates the atomic epoch before this notification. Synchronize
+// Revocation or an outbound pipeline claim updates atomic authority before this notification. Synchronize
 // with the existing scheduler mutex to prevent a lost wake between a
 // waiter's predicate check and Condvar wait. No runtime-state lock is ever
 // taken inside the scheduler; its scope check is atomic-only.
@@ -200,6 +201,12 @@ fn acquire_scoped_permit_with_deadline(
     if deferred_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
         return Err(SCHEDULER_DEFERRED_EXPIRED.to_string());
     }
+    let incoming_must_yield = || priority == HelperTaskPriority::MeetingIncoming
+        && generation.is_some()
+        && crate::commands::helper_bridge::meeting_outbound_pipeline_active();
+    if incoming_must_yield() {
+        return Err(SCHEDULER_INCOMING_DEFERRED.to_string());
+    }
     if !scheduler_can_admit(&state, priority) {
         return Err(format!(
             "helper_scheduler:admission_capacity_exceeded:{}:total={}:limit={}",
@@ -233,6 +240,15 @@ fn acquire_scoped_permit_with_deadline(
         }
         let remaining = deferred_remaining.map_or(remaining, |budget| remaining.min(budget));
 
+        // A waiting optional request yields before claiming a permit. The
+        // transport's post-permit fence still covers a concurrent claim.
+        if incoming_must_yield() {
+            if registered {
+                scheduler_waiting_decrement(&mut state, priority);
+                wake.notify_all();
+            }
+            return Err(SCHEDULER_INCOMING_DEFERRED.to_string());
+        }
         if scheduler_can_enter(&state, priority) {
             break;
         }
@@ -620,6 +636,48 @@ mod scheduler_policy_tests {
         drop(next);
         let _ = clear_runtime_session_if_generation(generation);
         reset_scheduler();
+    }
+
+    #[test]
+    fn incoming_waiter_yields_on_outbound_claim_before_active_permit_releases() {
+        use crate::commands::helper_bridge::{mark_outbound_pipeline_for_test, OutboundPipelineRelease};
+        use crate::engine::runtime_state::{
+            begin_application_meeting_session, clear_runtime_session_state,
+            clear_runtime_session_if_generation,
+        };
+        let _serial = scheduler_test_guard();
+        reset_scheduler();
+        let _ = clear_runtime_session_state();
+        let generation = begin_application_meeting_session().snapshot.expect("Meeting scope").generation;
+        let active = acquire_helper_task_permit(HelperTaskPriority::Diagnostic).unwrap();
+        let release = OutboundPipelineRelease::new(generation);
+        let (tx, rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let result = acquire_scoped_permit_with_deadline(
+                HelperTaskPriority::MeetingIncoming, Duration::from_secs(5), Some(generation), None,
+            );
+            let _ = tx.send(result.err());
+        });
+        let registered = Instant::now() + Duration::from_secs(1);
+        loop {
+            if scheduler().0.lock().unwrap().waiting_meeting_incoming == 1 { break; }
+            assert!(Instant::now() < registered, "incoming waiter registered");
+            thread::yield_now();
+        }
+        mark_outbound_pipeline_for_test(generation);
+        let deferred = rx.recv_timeout(Duration::from_secs(1));
+        let (still_active, waiting, sequence) = {
+            let state = scheduler().0.lock().unwrap();
+            (state.active, state.waiting_meeting_incoming, state.next_request_sequence)
+        };
+        drop(active);
+        handle.join().unwrap();
+        drop(release);
+        let _ = clear_runtime_session_if_generation(generation);
+        reset_scheduler();
+        assert_eq!(deferred.unwrap().as_deref(), Some(SCHEDULER_INCOMING_DEFERRED));
+        assert!(still_active);
+        assert_eq!((waiting, sequence), (0, 1));
     }
 
     #[test]

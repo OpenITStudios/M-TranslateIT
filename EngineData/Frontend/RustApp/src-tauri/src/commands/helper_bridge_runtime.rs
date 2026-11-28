@@ -12,7 +12,7 @@ mod native_quality;
 
 pub(crate) use scheduler::{
     acquire_helper_task_permit, acquire_scoped_helper_task_permit, wake_revoked_scheduler_waiters,
-    HelperTaskPriority, SCHEDULER_SCOPE_REVOKED, SCHEDULER_DEFERRED_EXPIRED,
+    HelperTaskPriority, SCHEDULER_SCOPE_REVOKED, SCHEDULER_DEFERRED_EXPIRED, SCHEDULER_INCOMING_DEFERRED,
 };
 #[cfg(windows)]
 pub(crate) use scheduler::{HelperTaskPermit, try_acquire_idle_diagnostic_permit};

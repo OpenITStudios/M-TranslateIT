@@ -22,7 +22,7 @@ use super::{
     worker_message, HelperBridgeWorkerResponse,
 };
 use super::super::helper_bridge_runtime::{
-    acquire_scoped_helper_task_permit, apply_worker_response, clear_active_request, SCHEDULER_SCOPE_REVOKED, SCHEDULER_DEFERRED_EXPIRED,
+    acquire_scoped_helper_task_permit, apply_worker_response, clear_active_request, SCHEDULER_SCOPE_REVOKED, SCHEDULER_DEFERRED_EXPIRED, SCHEDULER_INCOMING_DEFERRED,
     runtime, runtime_claim, unix_ms,
     worker_response_deadline_for_priority,
     HelperBridgeRuntime, HelperTaskPriority,
@@ -123,7 +123,7 @@ fn incoming_deferred_response(task: &str, request_id: &str) -> HelperBridgeWorke
         request_id,
         HelperTaskPriority::MeetingIncoming,
         "deferred",
-        "helper_scheduler:incoming_deferred_for_outbound",
+        SCHEDULER_INCOMING_DEFERRED,
         "Optional incoming Meeting work yielded before execution because required outbound translation currently owns the helper pipeline.",
     )
 }
@@ -246,6 +246,9 @@ fn send_worker_task_inner(task: &str, mut payload: Value, input: Option<MeetingI
     let deferred_deadline = input.and_then(MeetingInput::deferred_deadline);
     let permit = match acquire_scoped_helper_task_permit(priority, wait_generation, deferred_deadline) {
         Ok(permit) => permit,
+        Err(error) if error == SCHEDULER_INCOMING_DEFERRED => {
+            return incoming_deferred_response(task, "scheduler-incoming-deferred");
+        }
         Err(error) if error == SCHEDULER_DEFERRED_EXPIRED => {
             return expired_deferred_response(task, "scheduler-expired-before-admission", priority);
         }

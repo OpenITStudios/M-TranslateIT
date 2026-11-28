@@ -134,6 +134,16 @@ test("deferred incoming uses producer notification and age deadline, not retry p
   assert.match(deferred, /if outbound_idle \{ guard\.pop_front\(\) \} else \{ None \}/);
 });
 
+test("scoped incoming waiters yield before a permit when outbound claims the pipeline", () => {
+  const scheduler = source("src-tauri/src/commands/helper_bridge_runtime/scheduler.rs");
+  const policy = source("src-tauri/src/commands/helper_bridge/request_policy.rs");
+  assert.match(scheduler, /let incoming_must_yield = \|\| priority == HelperTaskPriority::MeetingIncoming[\s\S]*?generation\.is_some\(\)[\s\S]*?meeting_outbound_pipeline_active\(\)/);
+  assert.match(scheduler, /if incoming_must_yield\(\) \{\s*if registered \{\s*scheduler_waiting_decrement\(&mut state, priority\);\s*wake\.notify_all\(\);\s*\}\s*return Err\(SCHEDULER_INCOMING_DEFERRED\.to_string\(\)\)/);
+  assert.match(policy, /previous\.is_ok_and\(\|current\| current != generation\)[\s\S]*?wake_revoked_scheduler_waiters\(\)/);
+  assert.match(transport, /Err\(error\) if error == SCHEDULER_INCOMING_DEFERRED => \{\s*return incoming_deferred_response/);
+  assert.match(scheduler, /fn incoming_waiter_yields_on_outbound_claim_before_active_permit_releases\(/);
+});
+
 test("playback capacity waits for receiver and cancellation notifications", () => {
   assert.match(playback, /mpsc::sync_channel::<PreparedPlaybackJob>\(PLAYBACK_QUEUE_CAPACITY\)/);
   assert.doesNotMatch(playback, /ENQUEUE_RETRY_DELAY/);

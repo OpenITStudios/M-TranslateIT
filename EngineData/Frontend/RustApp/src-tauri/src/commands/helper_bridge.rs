@@ -190,12 +190,17 @@ pub(crate) fn send_helper_worker_pcm_task(
     transport::send_worker_pcm_task(payload, language, utterance, noise_suppression_enabled, deferred_deadline)
 }
 
+#[cfg(test)]
+pub(crate) fn mark_outbound_pipeline_for_test(generation: u64) {
+    request_policy::mark_meeting_outbound_pipeline(generation);
+}
+
 pub(crate) fn incoming_deferred_for_required_outbound(response: &HelperBridgeWorkerResponse) -> bool {
     !response.ok && response.state == "deferred"
         && response.scheduler_priority == "meeting_incoming"
         && response.runtime_claim == "helper_scheduler_request_not_executed"
         && response.worker_response_json.get("blocker").and_then(Value::as_str)
-            == Some("helper_scheduler:incoming_deferred_for_outbound")
+            == Some(super::helper_bridge_runtime::SCHEDULER_INCOMING_DEFERRED)
 }
 
 pub(crate) fn invalidate_required_outbound_readiness_for_voice_change() {
