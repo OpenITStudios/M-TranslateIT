@@ -186,6 +186,9 @@ fn render_token(s: &str, previous: &str) -> Option<String> {
         "C#" => return Some("C sharp".into()),
         _ => {}
     }
+    // All remaining recognized forms require an ASCII digit or an interior
+    // dot (including API.fetch). Plain words cannot match any of the parsers.
+    if !s.bytes().any(|b| b.is_ascii_digit() || b == b'.') { return None; }
     if let Some(v) = s.strip_prefix("HTTP/") {
         if matches!(v, "1.0"|"1.1"|"2"|"3") { return Some(format!("HTTP version {}", number(v, false)?)); }
     }
@@ -280,6 +283,9 @@ mod tests {
             ("  café\t42\n", "  café\tforty-two\n"),
             ("42, then 7; keep this text.", "forty-two, then seven; keep this text."),
             ("The difference is -2026.", "The difference is minus two thousand twenty-six."),
+            ("VERSION 1.2 and IN 2026.", "VERSION one point two and IN twenty twenty-six."),
+            ("Voice verification via API.fetch uses C++ and C#.", "Voice verification via API dot fetch uses C plus plus and C sharp."),
+            ("Words, café, １２３, %, and ¥.", "Words, café, １２３, %, and ¥."),
         ] {
             assert_eq!(normalize(input).unwrap().as_ref(), expected, "{input}");
         }
@@ -288,7 +294,10 @@ mod tests {
     #[test]
     fn normalization_is_bounded_and_does_not_rewrite_plain_text() {
         let text = "Please confirm the final schedule.";
-        assert!(matches!(normalize(text), Ok(Cow::Borrowed(_))));
+        assert!(matches!(normalize(text), Ok(Cow::Borrowed(value)) if value.as_ptr() == text.as_ptr()));
+        for word in ["version", "Voice", "café", "１２３", "%", "¥", "HTTP/"] {
+            assert_eq!(render_token(word, "version"), None);
+        }
         for input in ["", " \t", "hello <|control|>", "a\0b"] {
             assert_eq!(normalize(input), Err(Error::InvalidInput));
         }

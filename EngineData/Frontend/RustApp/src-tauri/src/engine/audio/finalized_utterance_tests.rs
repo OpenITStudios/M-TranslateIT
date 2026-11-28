@@ -353,6 +353,23 @@ fn clipped_burst_during_active_speech_does_not_become_a_silence_boundary() {
         clear_speech.len() * 2 + clipped_burst.len()
     );
     assert!(state.pending.is_empty());
+
+    // At the retention ceiling, a further speech frame must not grow the
+    // buffer merely to discard it. The natural boundary policy is unchanged.
+    let limit = samples_for_duration(state.sample_rate_hz, MAX_IN_PROGRESS_UTTERANCE_MS);
+    state.current_samples = vec![0.12; limit];
+    state.speech_samples = limit;
+    let capacity = state.current_samples.capacity();
+    assert!(!ingest_observation(
+        &mut state,
+        &clear_speech,
+        &clear_evidence,
+        &clear_gate,
+    ).unwrap());
+    assert!(state.overflowed && state.in_utterance);
+    assert!(state.current_samples.is_empty());
+    assert_eq!(state.current_samples.capacity(), capacity);
+    assert!(state.pending.is_empty());
 }
 
 #[test]

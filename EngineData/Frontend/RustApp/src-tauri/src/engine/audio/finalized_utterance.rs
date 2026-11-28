@@ -974,28 +974,26 @@ fn ingest_observation(
     }
 
     if !state.overflowed {
-        extend_safe_samples(&mut state.current_samples, samples);
         let max_samples = samples_for_duration(
             state.sample_rate_hz, MAX_IN_PROGRESS_UTTERANCE_MS,
         );
-        // The additional checks matter only for rare near-limit utterances,
-        // not for every ordinary audio callback.
-        if state.current_samples.len() > max_samples {
-            // A phrase just under 60 s must not be discarded merely because
-            // its closing VAD-rejected quiet frame makes the buffer longer.
-            let closing_quiet = silence_like
-                && state.speech_samples < max_samples
-                && state.current_samples.len()
-                    <= samples_for_duration(
-                        state.sample_rate_hz,
-                        MAX_IN_PROGRESS_UTTERANCE_MS + MAX_FINALIZING_QUIET_OVERHANG_MS,
-                    );
-            if !closing_quiet {
-                // Never invent a cut during continuous speech. The genuinely
-                // overlong utterance still fails closed until a natural reset.
-                state.current_samples.clear();
-                state.overflowed = true;
-            }
+        let next_len = state.current_samples.len().saturating_add(samples.len());
+        // Check the retained bound before copying a callback that would
+        // immediately be discarded. Preserve the bounded closing quiet tail.
+        let closing_quiet = next_len > max_samples
+            && silence_like
+            && state.speech_samples < max_samples
+            && next_len <= samples_for_duration(
+                state.sample_rate_hz,
+                MAX_IN_PROGRESS_UTTERANCE_MS + MAX_FINALIZING_QUIET_OVERHANG_MS,
+            );
+        if next_len <= max_samples || closing_quiet {
+            extend_safe_samples(&mut state.current_samples, samples);
+        } else {
+            // Never invent a cut during continuous speech. The genuinely
+            // overlong utterance still fails closed until a natural reset.
+            state.current_samples.clear();
+            state.overflowed = true;
         }
     }
 
