@@ -107,7 +107,7 @@ test("explicit diagnostics refresh is not served from the event-reuse cache", ()
   assert.match(productFacade, /!WORKER_REUSE_SAFE_REASONS\.has\(reason \?\? ""\)/);
   assert.match(
     productFacade,
-    /refreshWorker\s*\?\s*\(helper\.state === "ready"\s*\? runtimeApi\.helperBridgeWorkerStatus\(\)/,
+    /refreshWorker\s*\?\s*\(helper\.state === "ready"\s*\? await runtimeApi\.helperBridgeWorkerStatus\(\)/,
   );
   assert.match(
     productFacade,

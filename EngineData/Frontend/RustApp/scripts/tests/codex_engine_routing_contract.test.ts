@@ -112,13 +112,23 @@ test("P11 protects worker, final transcript and native playback without a second
   assert.ok(consumerGuard >= 0 && consumer.indexOf("!super::local_translated_meeting_route_admitted()", consumerGuard) < consumerSpawn);
   assert.match(consumer, /meeting_outbound:codex_voice_not_admitted/);
 
-  const pipeline = outbound.slice(outbound.indexOf("pub(super) fn process_outbound_wav("));
-  assert.ok(pipeline.indexOf("!super::local_translated_meeting_route_admitted()") <
-      pipeline.indexOf('send_helper_worker_task(\n        "transcribe"'));
+  const pcmStart = outbound.indexOf("pub(super) fn process_outbound_pcm(");
+  const transcriptStart = outbound.indexOf("fn process_outbound_transcript(", pcmStart);
+  assert.ok(pcmStart >= 0 && transcriptStart > pcmStart);
+  const pcm = outbound.slice(pcmStart, transcriptStart);
+  const asrGuard = pcm.indexOf("!super::local_translated_meeting_route_admitted()");
+  const asr = pcm.indexOf("send_helper_worker_pcm_task(");
+  assert.ok(asrGuard >= 0 && asr > asrGuard);
+  const pipeline = outbound.slice(transcriptStart);
+  for (const dispatch of ["let translation = send_helper_meeting_translation(", "let (tts, native_pcm) = synthesize_native_voice("]) {
+    const call = pipeline.indexOf(dispatch);
+    const guard = pipeline.lastIndexOf("!super::local_translated_meeting_route_admitted()", call);
+    assert.ok(call >= 0 && guard >= 0 && call > guard, dispatch);
+  }
+  assert.ok(pipeline.indexOf("let (tts, native_pcm) = synthesize_native_voice(") >
+    pipeline.indexOf("let translation = send_helper_meeting_translation("));
   assert.match(outbound, /state: "engine_not_admitted"/);
   assert.match(outbound, /"meeting_outbound:codex_voice_not_admitted"/);
-  assert.match(pipeline, /"translate"/);
-  assert.match(pipeline, /"voice_actor_synthesize"/);
 
   for (const mutation of [
     "pub(super) fn commit_meeting_turn(",
@@ -132,8 +142,11 @@ test("P11 protects worker, final transcript and native playback without a second
   }
   assert.match(committed, /delivery_state != "interrupted" && !super::local_translated_meeting_route_admitted\(\)/);
   assert.match(playback, /"meeting_playback:codex_voice_not_admitted"/);
-  assert.match(playback, /let route = deliver_meeting_output_open_wav_for_source\(/);
-  assert.match(playback, /begin_committed_playback\(/);
+  const delivery = playback.indexOf("let route = deliver_meeting_output_native_pcm_for_source(");
+  const playbackGuard = playback.lastIndexOf("!super::local_translated_meeting_route_admitted()", delivery);
+  const claim = playback.indexOf("if !begin_committed_playback(");
+  assert.ok(claim >= 0 && playbackGuard > claim && delivery > playbackGuard);
+  assert.match(playback, /std::mem::take\(&mut job\.audio\)/);
   assert.doesNotMatch(consumer, /codex_gateway::/);
 });
 
@@ -199,14 +212,14 @@ test("P12 preserves Original Microphone and limits incoming AI to the admitted L
   assert.match(lifecycle, /let original_eligible = preflight.microphone_ready && preflight.meeting_route_ready/);
   assert.match(meetingPage, /currentSource === "original" && !meeting.hasSession/);
   assert.match(quickAccess, /choice === "original" \|\| meeting.preflight.start_eligible/);
-  for (const [owner, task] of [
-    ["process_incoming_wav_with_direction", "transcribe"],
-    ["translate_and_commit_incoming_transcript", "translate"],
+  for (const [owner, dispatchName] of [
+    ["process_incoming_pcm_with_direction", "send_helper_worker_pcm_task("],
+    ["translate_and_commit_incoming_transcript", "send_helper_meeting_translation("],
   ]) {
     const start = incoming.indexOf(`fn ${owner}(`);
     const guard = incoming.indexOf("!super::local_translated_meeting_route_admitted()", start);
-    const dispatch = incoming.indexOf(`send_helper_worker_task(\n        "${task}"`, start);
-    assert.ok(start >= 0 && guard > start && dispatch > guard, `${task} requires Local admission`);
+    const dispatch = incoming.indexOf(dispatchName, start);
+    assert.ok(start >= 0 && guard > start && dispatch > guard, `${dispatchName} requires Local admission`);
   }
   assert.match(committed, /if lane == "you" && !super::local_translated_meeting_route_admitted\(\)/);
   assert.match(incoming, /session_id, event_sequence, None, utterance_id, "incoming"/);
@@ -334,7 +347,7 @@ test("P16 explicit engine confirmation is narrow, native and reuses one Settings
   const write = native.indexOf("RuntimeSettings::recover_unverified_engine(&settings_path, expected)");
   assert.ok(verifyBeforeSave >= 0 && write > verifyBeforeSave);
   assert.match(settings, /pub fn recover_unverified_engine\(/);
-  assert.match(settings, /if meeting_engine_admission_locked\(path\) != MeetingEngineAdmission::Unverified/);
+  assert.match(settings, /if meeting_engine_admission_locked\(path, &mut guard\) != MeetingEngineAdmission::Unverified/);
   assert.match(settings, /save_settings_locked\(&settings, path\)\?/);
   assert.match(settings, /if read_settings_file\(path\)\.map\(\|settings\| persisted_engine\(&settings\)\) != Some\(chosen\)/);
   assert.doesNotMatch(native, /save_runtime_settings\(settings\)/);

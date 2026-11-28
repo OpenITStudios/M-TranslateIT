@@ -273,3 +273,40 @@ def test_same_size_corruption_and_bad_download_do_not_publish(tmp_path: Path, mo
     monkeypatch.setattr(module._core, "snapshot_download", correct_download)
     assert module.replace_target_from_snapshot(item)["replaced_existing"] is True
     assert (target / "model.gguf").read_bytes() == b"good"
+
+
+def test_model_plan_rejects_same_root_directory_redirect_before_resolving(tmp_path: Path, monkeypatch) -> None:
+    import pytest
+
+    module = load_module()
+    monkeypatch.setattr(module._core, "PROJECT_ROOT", tmp_path)
+    assets = tmp_path / "EngineData/Backend/RuntimeAssets"
+    monkeypatch.setattr(module._core, "RUNTIME_ASSETS_ROOT", assets)
+    other = assets / "ASR/ModelData/other"
+    other.mkdir(parents=True)
+    sentinel = other / "keep.bin"
+    sentinel.write_bytes(b"preserve")
+    alias = other.parent / "alias"
+    try:
+        alias.symlink_to(other, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("directory symlinks unavailable on this host")
+    with pytest.raises(RuntimeError, match="filesystem indirection"):
+        module._core.resolve_target(str(alias.relative_to(tmp_path)))
+    with pytest.raises(RuntimeError, match="filesystem indirection"):
+        module._core.resolve_target(str((alias / "nested").relative_to(tmp_path)))
+    assert sentinel.read_bytes() == b"preserve"
+
+
+def test_stage_plan_rejects_reserved_transaction_roots(tmp_path: Path, monkeypatch) -> None:
+    import pytest
+
+    module = load_module()
+    monkeypatch.setattr(module._core, "PROJECT_ROOT", tmp_path)
+    assets = tmp_path / "EngineData/Backend/RuntimeAssets"
+    monkeypatch.setattr(module._core, "RUNTIME_ASSETS_ROOT", assets)
+    for name in ("release-active", "release-rollback"):
+        candidate = tmp_path / ".workspace/staging" / name
+        (candidate / "EngineData/Backend").mkdir(parents=True)
+        with pytest.raises(RuntimeError, match="reserved"):
+            module._core.stage_download_plan([{"target": assets / "ASR/ModelData/example"}], candidate)

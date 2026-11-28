@@ -14,7 +14,7 @@ from huggingface_hub import snapshot_download
 
 MANIFEST_PATH = Path(__file__).with_name("model_manifest.json")
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
-RUNTIME_ASSETS_ROOT = (PROJECT_ROOT / "EngineData/Backend/RuntimeAssets").resolve()
+RUNTIME_ASSETS_ROOT = PROJECT_ROOT / "EngineData/Backend/RuntimeAssets"
 FULL_REVISION = re.compile(r"^[0-9a-f]{40}$")
 REVISION_MARKER = ".translateit_model_revision"
 FULL_SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -32,17 +32,35 @@ def load_manifest() -> dict[str, Any]:
     return data
 
 
+def require_plain_directory_path(root: Path, target: Path) -> None:
+    # Check the lexical path BEFORE resolving it. resolve() would hide a
+    # junction or symlink pointing to a different model under the same root.
+    try:
+        relative = target.relative_to(root)
+    except ValueError as exc:
+        raise RuntimeError("Model target escapes its authorized root") from exc
+    if ".." in relative.parts:
+        raise RuntimeError("Model target contains parent traversal")
+    current = root
+    for part in ("", *relative.parts):
+        current = current / part
+        try:
+            meta = current.lstat()
+        except FileNotFoundError:
+            # No existing descendants can redirect a missing directory.
+            return
+        if is_redirected(meta) or not stat.S_ISDIR(meta.st_mode):
+            raise RuntimeError(f"Model target cannot be a filesystem indirection or non-directory: {current}")
+
+
 def resolve_target(expected_path: str) -> Path:
     raw = Path(expected_path)
-    if raw.is_absolute():
-        raise RuntimeError(f"Model expected_path must be repository-relative: {expected_path}")
-    target = (PROJECT_ROOT / raw).resolve()
-    try:
-        target.relative_to(RUNTIME_ASSETS_ROOT)
-    except ValueError as exc:
-        raise RuntimeError(
-            f"Model expected_path escapes the canonical RuntimeAssets root: {expected_path}"
-        ) from exc
+    if raw.is_absolute() or raw.drive or ".." in raw.parts:
+        raise RuntimeError(f"Model expected_path must be repository-relative without traversal: {expected_path}")
+    target = PROJECT_ROOT / raw
+    if target == RUNTIME_ASSETS_ROOT or not target.is_relative_to(RUNTIME_ASSETS_ROOT):
+        raise RuntimeError(f"Model expected_path escapes the canonical RuntimeAssets root: {expected_path}")
+    require_plain_directory_path(PROJECT_ROOT, target)
     return target
 
 
@@ -201,6 +219,7 @@ def build_plan(
 
 def clean_huggingface_local_cache(directory: Path) -> None:
     cache = directory / ".cache" / "huggingface"
+    require_plain_directory_path(directory, cache)
     if cache.exists():
         shutil.rmtree(cache)
     cache_parent = directory / ".cache"
@@ -216,6 +235,10 @@ def replace_target_from_snapshot(item: dict[str, Any]) -> dict[str, Any]:
     merely because a new Python process happens to get the same PID.
     """
     target: Path = item["target"]
+    # CLI plans are rooted at PROJECT_ROOT. Direct test fixtures may own a
+    # disposable root; still reject an indirect target or immediate parent.
+    boundary = PROJECT_ROOT if target.is_relative_to(PROJECT_ROOT) else target.parent
+    require_plain_directory_path(boundary, target)
     hashes, _ = artifact_pins(item, item.get("download_allow_patterns"))
     if target.exists() or target.is_symlink():
         if is_redirected(target.lstat()) or not target.is_dir():
@@ -244,6 +267,7 @@ def replace_target_from_snapshot(item: dict[str, Any]) -> dict[str, Any]:
         if item.get("download_allow_patterns"):
             download_args["allow_patterns"] = item["download_allow_patterns"]
         snapshot_download(**download_args)
+        require_plain_directory_path(boundary, staging)
         clean_huggingface_local_cache(staging)
         if not exact_snapshot_matches(staging, item, marked=False):
             raise RuntimeError(f"Downloaded snapshot for {item['model_id']} failed exact artifact verification")
@@ -253,6 +277,7 @@ def replace_target_from_snapshot(item: dict[str, Any]) -> dict[str, Any]:
         (staging / REVISION_MARKER).write_text(
             str(item["revision"]).strip() + "\n", encoding="utf-8"
         )
+        require_plain_directory_path(boundary, target)
         if had_previous:
             target.replace(backup)
             moved_previous = True
@@ -291,21 +316,21 @@ def stage_download_plan(
     items: list[dict[str, Any]], destination_root: Path
 ) -> list[dict[str, Any]]:
     """Redirect only vetted manifest targets into a private release staging tree."""
-    root = destination_root.resolve()
-    project_root = PROJECT_ROOT.resolve()
-    if any((PROJECT_ROOT / name).is_symlink() for name in (".workspace",)):
-        raise RuntimeError("Release staging cannot use a redirected workspace root")
-    safe_parent = (PROJECT_ROOT / ".workspace" / "staging").resolve()
-    if not safe_parent.is_relative_to(project_root):
-        raise RuntimeError("Release staging cannot leave the repository volume")
+    root = destination_root.absolute()
+    safe_parent = PROJECT_ROOT / ".workspace" / "staging"
     if root == safe_parent or not root.is_relative_to(safe_parent):
         raise RuntimeError("Release model staging must stay below .workspace/staging")
+    relative_stage = root.relative_to(safe_parent)
+    if relative_stage.parts[0] in {"release-active", "release-rollback"} or ".." in relative_stage.parts:
+        raise RuntimeError("Release model staging cannot use reserved or redirected workspace paths")
+    require_plain_directory_path(PROJECT_ROOT, root / "EngineData" / "Backend")
     if not (root / "EngineData" / "Backend").is_dir():
         raise RuntimeError("Release staging Backend root must already exist")
     redirected: list[dict[str, Any]] = []
     for item in items:
         relative = item["target"].relative_to(RUNTIME_ASSETS_ROOT)
         target = root / "EngineData" / "Backend" / "RuntimeAssets" / relative
+        require_plain_directory_path(PROJECT_ROOT, target)
         redirected.append({**item, "target": target})
     return redirected
 
