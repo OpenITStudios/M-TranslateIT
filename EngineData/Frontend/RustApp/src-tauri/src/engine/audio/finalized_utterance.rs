@@ -994,6 +994,9 @@ fn ingest_observation(
             // overlong utterance still fails closed until a natural reset.
             state.current_samples.clear();
             state.overflowed = true;
+            // Loss is irreversible at this point. Count it once even if Stop
+            // occurs before the next natural silence boundary.
+            OVERFLOW_DROPPED_UTTERANCES.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -1020,9 +1023,6 @@ fn ingest_observation(
     }
 
     if speech_duration_ms < state.profile.minimum_speech_duration_ms || state.overflowed {
-        if state.overflowed {
-            OVERFLOW_DROPPED_UTTERANCES.fetch_add(1, Ordering::Relaxed);
-        }
         reset_current_utterance(state);
         return Ok(false);
     }

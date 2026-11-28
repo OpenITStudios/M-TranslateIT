@@ -165,6 +165,9 @@ fn incoming_lane_segmentation_eviction_and_overflow_are_observable() {
     for _ in 0..101 {
         observe_finalized_incoming_f32_samples(&chunk, 8_000, 1);
     }
+    assert_eq!(overflow_dropped_utterance_count() - overflow_before, 1, "irreversible loss must be visible before silence or Stop");
+    observe_finalized_incoming_f32_samples(&chunk, 8_000, 1);
+    assert_eq!(overflow_dropped_utterance_count() - overflow_before, 1, "continued speech must not count the same loss twice");
     observe_finalized_incoming_f32_samples(&silence_of(8_000, 400), 8_000, 1);
 
     assert_eq!(overflow_dropped_utterance_count() - overflow_before, 1, "overlong speech must land in the overflow counter");
