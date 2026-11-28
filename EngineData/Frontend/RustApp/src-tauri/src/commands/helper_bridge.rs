@@ -473,7 +473,7 @@ fn start_helper_bridge_internal(
             {
                 runtime.state = "ready".into();
                 runtime.last_error = None;
-                super::helper_bridge_runtime::project_candidate_status(&mut runtime);
+                let _ = super::helper_bridge_runtime::project_candidate_status(&mut runtime, false);
                 action_result(true, &runtime)
             }
             #[cfg(not(windows))]

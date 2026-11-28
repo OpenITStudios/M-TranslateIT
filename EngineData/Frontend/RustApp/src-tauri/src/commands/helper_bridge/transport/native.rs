@@ -200,7 +200,8 @@ pub(super) fn control(task: &str, payload: &Value, permit: &HelperTaskPermit, pr
             "native_inference:lifecycle_not_ready", "Native lifecycle is stopped, busy or requires cleanup.");
     }
     let mut body = if task == "status" {
-        crate::commands::helper_bridge_runtime::project_candidate_status(&mut host)
+        crate::commands::helper_bridge_runtime::project_candidate_status(&mut host, true)
+            .expect("explicit status requests a capability payload")
     } else {
         json!({"ok": true, "stage": "ping", "blocker": "",
             "note": "Native Rust lifecycle initialized; no model execution was attempted."})

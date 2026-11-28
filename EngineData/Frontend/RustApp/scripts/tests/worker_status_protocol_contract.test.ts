@@ -118,3 +118,18 @@ test("explicit diagnostics refresh is not served from the event-reuse cache", ()
     /async refresh\(knownSettings\?: RuntimeSettings\)[\s\S]*?loadProductRuntimeSnapshot\(knownSettings\)/,
   );
 });
+
+test("candidate readiness updates runtime directly and emits JSON only for explicit status", () => {
+  const project = rust.slice(rust.indexOf("pub(super) fn project_candidate_status("), rust.indexOf("pub fn apply_worker_response("));
+  assert.equal((project.match(/ProjectPaths::discover\(\)/g) ?? []).length, 1);
+  assert.match(project, /if admitted \{\s*let paths = .*ProjectPaths::discover\(\)/);
+  assert.match(project, /NativeInferenceOwner::assets_present_at\(&paths\)/);
+  assert.match(project, /selected_native_identity\(&paths\)/);
+  assert.match(project, /include_payload\.then\(\|\| candidate_status_payload/);
+  assert.match(project, /runtime\.provider_ready = readiness\.ready/);
+  assert.doesNotMatch(project, /worker_bool\(&projected|worker_text\(&projected/);
+  const startup = readFileSync(new URL("../../src-tauri/src/commands/helper_bridge.rs", import.meta.url), "utf8");
+  const native = readFileSync(new URL("../../src-tauri/src/commands/helper_bridge/transport/native.rs", import.meta.url), "utf8");
+  assert.match(startup, /project_candidate_status\(&mut runtime, false\)/);
+  assert.match(native, /project_candidate_status\(&mut host, true\)/);
+});
