@@ -202,7 +202,17 @@ diff --git a/tools/mtmd/mtmd-helper.h b/tools/mtmd/mtmd-helper.h
 diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
 --- a/tools/mtmd/mtmd-helper-gen.cpp
 +++ b/tools/mtmd/mtmd-helper-gen.cpp
-@@ -113,7 +113,8 @@
+@@ -6,7 +6,8 @@
+ 
+-#include <algorithm>
++#include <algorithm>
++#include <array>
+ #include <cctype>
+ #include <cmath>
+ #include <cstring>
+ #include <functional>
+ #include <memory>
+@@ -113,7 +114,8 @@
      virtual bool check_context() const { return true; }
      // see mtmd_helper_gen_audio_max_frames()
      virtual int32_t max_frames() const { return 512; }
@@ -212,7 +222,7 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
      virtual int32_t set_input(const mtmd_helper_gen_audio_inp * inp) = 0;
      // decodes at most n_batch prompt tokens; returns remaining count (0 = done), <0 on error
      virtual int32_t step_prompt(int32_t n_batch) = 0;
-@@ -3403,7 +3404,21 @@
+@@ -3403,7 +3405,21 @@
  public:
      using mtmd_gen_audio_pipeline::mtmd_gen_audio_pipeline;
  
@@ -235,7 +245,7 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
  
      void reset() override {
          seq_id = 0;
-@@ -3453,10 +3468,14 @@
+@@ -3453,10 +3469,14 @@
              if (!encode_speaker(inp->speaker_ref, seg.embd)) {
                  return 1;
              }
@@ -254,7 +264,53 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
          auto bucket = [](const std::vector<float> & edges, float v) {
              return std::to_string(std::upper_bound(edges.begin(), edges.end(), v) - edges.begin());
          };
-@@ -3602,11 +3621,16 @@
+@@ -3471,24 +3491,30 @@
+             }
+             text.tokens.push_back(t);
+         }
+-        const std::string prompt(inp->prompt, inp->prompt_len);
+-        std::vector<llama_token> ids(prompt.size() + 16);
+-        const int32_t n_ids = llama_tokenize(vocab, prompt.c_str(), (int32_t) prompt.size(), ids.data(), (int32_t) ids.size(), true, false);
++        if (!inp->prompt || inp->prompt_len > (size_t) INT32_MAX - 16) {
++            return 1;
++        }
++        const size_t token_offset = text.tokens.size();
++        const int32_t token_capacity = (int32_t) inp->prompt_len + 16;
++        text.tokens.resize(token_offset + (size_t) token_capacity);
++        const int32_t n_ids = llama_tokenize(vocab, inp->prompt, (int32_t) inp->prompt_len,
++                text.tokens.data() + token_offset, token_capacity, true, false);
+         if (n_ids <= 2) {
+             LOG_ERR("mtmd_helper_gen_audio: empty prompt or tokenization failed\n");
+             return 1;
+         }
+-        text.tokens.insert(text.tokens.end(), ids.begin(), ids.begin() + n_ids);
++        text.tokens.resize(token_offset + (size_t) n_ids);
+         segments.push_back(std::move(text));
+ 
+         // codec silence, delayed
+         segment silence;
+         for (int k = 0; k < n_prefill; k++) {
+-            std::vector<int32_t> row(n_cb, audio_pad);
++            std::array<int32_t, n_cb> row;
++            row.fill(audio_pad);
+             for (int cb = 0; cb <= k && cb < n_cb; cb++) {
+                 row[cb] = silence_frame[cb];
+             }
+             const float * embd = embed_row(row);
+             if (!embd) {
+                 return 1;
+             }
+@@ -3579,8 +3605,8 @@
+             return 1;
+         }
+ 
+-        std::vector<int32_t> frame(n_cb);
++        std::array<int32_t, n_cb> frame;
+         for (int cb = 0; cb < n_cb; cb++) {
+             frame[cb] = sample(out.feats + (size_t) cb * n_vocab, cb);
+         }
+         // codebooks whose delayed stream has not started yet are pad
+@@ -3602,11 +3628,16 @@
              eos_row   = std::max(0, r - max_eoa);
              countdown = n_cb + 1;
          }
@@ -276,7 +332,7 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
  
          const float * next = embed_row(frame);
          if (!next) {
-@@ -3633,8 +3657,13 @@
+@@ -3633,8 +3664,13 @@
      int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples) override {
          *out_sample_rate = info.sample_rate;
  
@@ -292,7 +348,19 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
                  return 1;
              }
              if (out_n_samples) {
-@@ -3727,81 +3756,95 @@
+@@ -3714,10 +3750,10 @@
+         size_t n_rows(int n) const { return tokens.empty() ? embd.size() / (size_t) n : tokens.size(); }
+     };
+ 
+-    const float * embed_row(const std::vector<int32_t> & codes) {
++    const float * embed_row(const std::array<int32_t, n_cb> & codes) {
+         mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
+         inp.type    = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
+         inp.codes   = const_cast<int32_t *>(codes.data());
+         inp.n_codes = codes.size();
+         mtmd_gen_out out{};
+         if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
+@@ -3727,81 +3763,95 @@
          return out.embd;
      }
  
@@ -394,7 +462,28 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
  
      // frames with all codebooks known
      size_t n_ready() const {
-@@ -3892,7 +3935,8 @@
+@@ -3846,18 +3896,17 @@
+     // the silence frames are decoded too, as left context
+     bool decode_wav(bool final) {
+         const size_t n_frames = n_ready();
+-        std::vector<int32_t> codes;
++        std::array<int32_t, 64 * n_cb> codes;
+         while (n_decoded < n_frames) {
+             const size_t n = std::min(n_frames - n_decoded, (size_t) 64);
+-            codes.resize(n * n_cb);
+             for (size_t f = 0; f < n; f++) {
+                 for (int cb = 0; cb < n_cb; cb++) {
+                     // EOA and pad have no codec row
+                     const int32_t c = rows[(n_decoded + f + cb) * n_cb + cb];
+                     codes[f * n_cb + cb] = std::clamp(c, 0, audio_eoa - 1);
+                 }
+             }
+-            if (!run_codec(codes.data(), codes.size())) {
++            if (!run_codec(codes.data(), n * n_cb)) {
+                 return false;
+             }
+             n_decoded += n;
+@@ -3892,7 +3941,8 @@
          return true;
      }
  
@@ -404,7 +493,7 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
      size_t seg_idx = 0;
      int    seg_pos = 0;
  
-@@ -5659,7 +5703,11 @@
+@@ -5659,7 +5709,11 @@
      }
  }
  

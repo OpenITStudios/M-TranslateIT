@@ -691,10 +691,18 @@ fn decode_meeting_audio_input(input: MeetingAudioInput<'_>) -> Result<audio_form
             decode_wav_bytes(&bytes)
         }
         MeetingAudioInput::NativePcm(samples) => {
-            if samples.is_empty() || samples.len() > MAX_NATIVE_VOICE_SAMPLES
-                || samples.iter().any(|sample| !sample.is_finite() || sample.abs() > 1.0)
-                || !samples.iter().any(|sample| sample.abs() >= 0.0001)
-            {
+            if samples.is_empty() || samples.len() > MAX_NATIVE_VOICE_SAMPLES {
+                return Err("meeting_output:native_pcm_invalid".into());
+            }
+            let mut has_signal = false;
+            for &sample in &samples {
+                let level = sample.abs();
+                if !sample.is_finite() || level > 1.0 {
+                    return Err("meeting_output:native_pcm_invalid".into());
+                }
+                has_signal |= level >= 0.0001;
+            }
+            if !has_signal {
                 return Err("meeting_output:native_pcm_invalid".into());
             }
             Ok(audio_format::DecodedWav {
@@ -1379,7 +1387,13 @@ mod tests {
         assert_eq!(decoded.channels, 1);
         assert_eq!(decoded.samples.as_ptr(), allocation);
         assert_eq!(decoded.samples, vec![0.0, 0.25, -0.5, 1.0]);
-        for invalid in [vec![], vec![0.0], vec![f32::NAN], vec![0.1, 1.1]] {
+        for valid in [vec![-0.0001], vec![0.0, 0.0001], vec![1.0, -1.0]] {
+            assert!(decode_meeting_audio_input(MeetingAudioInput::NativePcm(valid)).is_ok());
+        }
+        for invalid in [
+            vec![], vec![0.0], vec![0.000099], vec![f32::NAN],
+            vec![0.1, 1.1], vec![0.1, f32::INFINITY], vec![0.1, -1.1],
+        ] {
             assert_eq!(
                 decode_meeting_audio_input(MeetingAudioInput::NativePcm(invalid)).err().as_deref(),
                 Some("meeting_output:native_pcm_invalid"),

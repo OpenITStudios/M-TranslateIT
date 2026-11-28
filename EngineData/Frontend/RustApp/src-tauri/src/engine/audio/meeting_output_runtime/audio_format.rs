@@ -285,6 +285,9 @@ pub(super) fn prepare_output_samples(
     // frames usually reuse the same two source averages, especially when
     // upsampling, so retain only that pair in a tiny rolling cache.
     let frame_mono = |frame: usize| {
+        if source_channels == 1 {
+            return source.samples[frame];
+        }
         let start = frame * source_channels;
         let sum = source.samples[start..start + source_channels]
             .iter().copied().sum::<f32>();
@@ -403,6 +406,9 @@ mod resampling_buffer_tests {
              vec![0.1, 0.2, 0.3, 0.4, -0.5, 0.0, 0.5, 1.0,
                   -0.2, -0.1, 0.6, 0.7, 0.4, -0.4, -0.4, 0.4]),
             (16_000, 48_000, 1, 1, vec![0.5]),
+            (44_100, 44_100, 1, 2, vec![-1.0, -0.0, 0.0, 0.0001, 1.0]),
+            (44_100, 48_000, 1, 2, vec![-0.0, -0.8, 0.4, -0.0, 1.0]),
+            (44_100, 16_000, 1, 1, vec![0.3, -0.4, 0.0, 0.9, -0.7]),
         ];
         for (source_rate, target_rate, source_channels, target_channels, samples) in cases {
             let source = DecodedWav {

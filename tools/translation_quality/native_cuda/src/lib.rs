@@ -490,6 +490,13 @@ mod tests {
             text: "The second sentence starts at 10:05.".into(), binding,
         }, Instant::now() + Duration::from_secs(90)).unwrap().wait_output(),
             Ok(InferenceOutput::Voice(_))));
+        // A shorter subsequent utterance exercises the same owner after
+        // the previous prompt, codebook rows and codec scratch are cleared.
+        let third = owner.begin(InferenceInput::Voice {
+            text: "Thank you.".into(), binding,
+        }, Instant::now() + Duration::from_secs(90)).unwrap().wait_output().unwrap();
+        let InferenceOutput::Voice(third_pcm) = third else { panic!("missing complete PCM"); };
+        validate_voice_pcm(&third_pcm).expect("bounded finite non-silent PCM");
         // Invalid replacement revokes prior authority rather than falling back.
         assert!(owner.begin(InferenceInput::BindVoice { reference: Vec::new() },
             Instant::now() + Duration::from_secs(30)).unwrap().wait_output().is_err());
