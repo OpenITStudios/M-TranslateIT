@@ -491,6 +491,9 @@ test("committed turn mutations pass their exact archive receipt without searchin
   const store = memory.slice(memory.indexOf("fn commit_at("), memory.indexOf("fn interrupt_generation_at("));
   assert.equal((store.match(/binary_search_by_key\(&sequence, \|turn\| turn\.sequence\)/g) ?? []).length, 3);
   assert.match(store, /turn\.lane == lane && turn\.generation == generation && turn\.utterance_id == utterance_id/);
+  assert.equal((store.match(/self\.outbound_turn_mut\(session_id, generation, sequence, utterance_id\)/g) ?? []).length, 3);
+  assert.doesNotMatch(store, /iter_mut\(\)\.rev\(\)\.find/);
+  assert.match(store, /turn\.session_id != session_id \|\| turn\.generation != Some\(generation\)\s*\|\| turn\.utterance_id != utterance_id \|\| turn\.lane != "you"/);
   assert.match(store, /return \(turn\.delivery_state\.as_deref\(\) == Some\(delivery_state\)\)\.then\(\|\| turn\.clone\(\)\)/);
 });
 

@@ -94,6 +94,7 @@ fn mark_interrupted(job: &PreparedPlaybackJob) {
     let _ = update_committed_turn_delivery_state(
         &job.session_id,
         job.generation,
+        job.event_sequence,
         job.utterance_id,
         "interrupted",
     );
@@ -109,6 +110,7 @@ fn process_playback_job(mut job: PreparedPlaybackJob, last_sequence: &mut u64) {
         let _ = update_committed_turn_delivery_state(
             &job.session_id,
             job.generation,
+            job.event_sequence,
             job.utterance_id,
             "output_failed",
         );
@@ -147,6 +149,7 @@ fn process_playback_job(mut job: PreparedPlaybackJob, last_sequence: &mut u64) {
     let _ = update_committed_turn_outbound_timing(
         &job.session_id,
         job.generation,
+        job.event_sequence,
         job.utterance_id,
         &timing.metrics,
     );
@@ -158,6 +161,7 @@ fn process_playback_job(mut job: PreparedPlaybackJob, last_sequence: &mut u64) {
             let _ = update_committed_turn_delivery_state(
                 &job.session_id,
                 job.generation,
+                job.event_sequence,
                 job.utterance_id,
                 "output_failed",
             );
@@ -265,6 +269,7 @@ fn process_playback_job(mut job: PreparedPlaybackJob, last_sequence: &mut u64) {
     let _ = update_committed_turn_outbound_timing(
         &job.session_id,
         job.generation,
+        job.event_sequence,
         job.utterance_id,
         &timing.metrics,
     );
@@ -307,6 +312,7 @@ fn process_playback_job(mut job: PreparedPlaybackJob, last_sequence: &mut u64) {
         let _ = update_committed_turn_delivery_state(
             &job.session_id,
             job.generation,
+            job.event_sequence,
             job.utterance_id,
             "output_failed",
         );
@@ -326,6 +332,7 @@ fn process_playback_job(mut job: PreparedPlaybackJob, last_sequence: &mut u64) {
     let _ = update_committed_turn_delivery_state(
         &job.session_id,
         job.generation,
+        job.event_sequence,
         job.utterance_id,
         "output_complete",
     );

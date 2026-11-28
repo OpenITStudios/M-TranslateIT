@@ -121,7 +121,7 @@ fn stale_outbound_result(
     utterance_id: u64,
 ) -> MeetingOutboundProcessResult {
     let _ =
-        update_committed_turn_delivery_state(session_id, generation, utterance_id, "interrupted");
+        update_committed_turn_delivery_state(session_id, generation, event_sequence, utterance_id, "interrupted");
     MeetingOutboundProcessResult {
         ok: false,
         delivered: false,
@@ -145,7 +145,7 @@ fn unadmitted_outbound_result(
     utterance_id: u64,
 ) -> MeetingOutboundProcessResult {
     let _ = update_committed_turn_delivery_state(
-        session_id, generation, utterance_id, "interrupted",
+        session_id, generation, event_sequence, utterance_id, "interrupted",
     );
     update_outbound_status(
         generation, session_id, "attention_needed", event_sequence,
@@ -428,6 +428,7 @@ fn process_outbound_transcript(
         let _ = update_committed_turn_delivery_state(
             session_id,
             generation,
+            event_sequence,
             utterance_id,
             "output_failed",
         );
@@ -468,6 +469,7 @@ fn process_outbound_transcript(
     let _ = update_committed_turn_outbound_timing(
         session_id,
         generation,
+        event_sequence,
         utterance_id,
         &timing.metrics,
     );
@@ -484,6 +486,7 @@ fn process_outbound_transcript(
         let _ = update_committed_turn_delivery_state(
             session_id,
             generation,
+            event_sequence,
             utterance_id,
             "output_failed",
         );
@@ -524,6 +527,7 @@ fn process_outbound_transcript(
     if !update_committed_turn_delivery_state(
         session_id,
         generation,
+        event_sequence,
         utterance_id,
         "queued",
     ) {
@@ -562,6 +566,7 @@ fn process_outbound_transcript(
         let _ = update_committed_turn_delivery_state(
             session_id,
             generation,
+            event_sequence,
             utterance_id,
             if stale { "interrupted" } else { "output_failed" },
         );
