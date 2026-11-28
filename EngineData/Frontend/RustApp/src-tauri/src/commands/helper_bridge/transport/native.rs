@@ -343,20 +343,26 @@ pub(super) fn dispatch(
         if !scope_is_current(&request_scope) || Instant::now() >= deadline {
             return fail("native_voice:scope_revoked", "Voice preparation authority expired.");
         }
-        // Preserve the device identity check that previously compared the
-        // separate status receipt with the bind receipt.
-        let previous_device = host.native_inference.as_ref()
-            .map(|native| native.owner.device_id().to_owned());
-        // A stale idle Text pair has no voice context. Release it through the
-        // existing cleanup owner before opening the exact five-asset closure.
-        if host.native_inference.is_some() && !host.release_idle_native_inference() {
+        // A Meeting-owned runtime cannot be replaced by this preparation.
+        if host.native_meeting_session_id().is_some() {
             return fail("native_voice:owner_busy", "Existing inference ownership could not be released.");
         }
+        // Verify the authorized reference before evicting a healthy idle
+        // Text pair. Reference preparation is CPU-only, not a second GPU owner.
         let paths = crate::engine::paths::ProjectPaths::discover();
         let reference = match crate::commands::voice_lab::selected_native_reference(&paths) {
             Ok(reference) => reference,
             Err(blocker) => return fail(blocker, "Selected native reference is not approved or verified."),
         };
+        if !scope_is_current(&request_scope) || Instant::now() >= deadline {
+            return fail("native_voice:scope_revoked", "Voice preparation authority expired.");
+        }
+        let previous_device = host.native_inference.as_ref()
+            .map(|native| native.owner.device_id().to_owned());
+        // Open the exact five-asset closure only after the old owner closes.
+        if host.native_inference.is_some() && !host.release_idle_native_inference() {
+            return fail("native_voice:owner_busy", "Existing inference ownership could not be released.");
+        }
         if !scope_is_current(&request_scope) || Instant::now() >= deadline {
             return fail("native_voice:scope_revoked", "Voice preparation authority expired.");
         }

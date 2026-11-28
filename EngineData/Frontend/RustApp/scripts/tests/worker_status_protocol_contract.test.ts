@@ -143,16 +143,21 @@ test("functional preparation refreshes capability inside the bind permit without
   const previous = bind.indexOf("let previous_device");
   const close = bind.indexOf("host.release_idle_native_inference()");
   const reference = bind.indexOf("selected_native_reference(&paths)");
-  const scopeBeforeRelease = bind.indexOf("!scope_is_current(&request_scope)");
-  const scope = bind.indexOf("!scope_is_current(&request_scope)", reference);
+  const initialScope = bind.indexOf("!scope_is_current(&request_scope)");
+  const meetingOwner = bind.indexOf("host.native_meeting_session_id().is_some()");
+  const scopeBeforeRelease = bind.indexOf("!scope_is_current(&request_scope)", reference);
+  const scopeAfterRelease = bind.indexOf("!scope_is_current(&request_scope)", close);
   const open = bind.indexOf("NativeInferenceOwner::open_voice_candidate(");
   const compare = bind.indexOf("observed != owner.owner.device_id()");
   const retain = bind.indexOf("host.native_inference = Some(owner)");
   const reject = bind.indexOf("if device_changed");
-  assert.ok(refresh >= 0 && refresh < gate && gate < scopeBeforeRelease
-    && scopeBeforeRelease < previous && previous < close
-    && close < reference && reference < scope && scope < open && open < compare
+  assert.ok(refresh >= 0 && refresh < gate && gate < initialScope
+    && initialScope < meetingOwner && meetingOwner < reference
+    && reference < scopeBeforeRelease && scopeBeforeRelease < previous && previous < close
+    && close < scopeAfterRelease && scopeAfterRelease < open && open < compare
     && compare < retain && retain < reject);
+  assert.match(bind.slice(reference, scopeBeforeRelease), /Err\(blocker\) => return fail\(blocker,/);
+  assert.match(bind.slice(close, scopeAfterRelease), /return fail\("native_voice:owner_busy"/);
   assert.match(bind.slice(reject), /host\.provider_ready = false;[\s\S]*invalidate_required_outbound_ai_readiness\(\);[\s\S]*return fail\("native_inference:cuda_device_changed"/);
   assert.doesNotMatch(probe, /send_worker_task\(\s*"status"/);
   assert.match(probe, /response\.state == "ready" && response\.generation_token != 0/);

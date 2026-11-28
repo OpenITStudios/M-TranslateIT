@@ -46,3 +46,12 @@ test("native review binds actual audio, source and model identity before approva
   assert.match(owner, /preserve_native_version/);
   assert.match(ui, /myVoiceBuildApi\.approve\(reviewedLineIds, qualityConfirmed, build\.evaluation_review_id\)/);
 });
+
+test("voice preparation rechecks cancellation after idle cleanup and before cold model open", () => {
+  const setup = runtime.slice(runtime.indexOf("pub(super) fn with_runtime"), runtime.indexOf("host.native_inference = Some(native)"));
+  const release = setup.indexOf("!host.release_idle_native_inference()");
+  const authorityAfter = setup.indexOf("if !authority(generation, deadline)", release);
+  const open = setup.indexOf("NativeInferenceOwner::open_voice_candidate(None)");
+  assert.ok(release >= 0 && release < authorityAfter && authorityAfter < open);
+  assert.match(setup.slice(authorityAfter, open), /return Err\("preview_cancelled_or_timed_out"\.into\(\)\)/);
+});

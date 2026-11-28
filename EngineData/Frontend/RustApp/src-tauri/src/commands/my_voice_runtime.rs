@@ -34,6 +34,11 @@ pub(super) fn with_runtime<T>(
         || host.active_request_id.is_some() || !host.release_idle_native_inference() {
         return Err("preview_owner_busy".into());
     }
+    // Closing the idle owner may consume the cleanup budget. Never begin
+    // a cold GPU open for a cancelled or expired voice operation.
+    if !authority(generation, deadline) {
+        return Err("preview_cancelled_or_timed_out".into());
+    }
     let native = unsafe { NativeInferenceOwner::open_voice_candidate(None) }
         .map_err(|_| "preview_native_model_unavailable")?;
     host.native_inference = Some(native);
