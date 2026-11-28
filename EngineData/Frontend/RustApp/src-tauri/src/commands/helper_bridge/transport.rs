@@ -227,7 +227,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value, input: Option<MeetingI
             )
         }
     };
-    let request_id = permit.request_id().to_string();
+    let request_id = permit.request_id();
     let scheduler_wait_ms = permit.scheduler_wait_ms();
     let response_deadline_ms = worker_response_deadline_for_priority(task, priority);
 
@@ -238,12 +238,12 @@ fn send_worker_task_inner(task: &str, mut payload: Value, input: Option<MeetingI
     // pipeline. Re-check after permit acquisition so queued optional work cannot slip
     // between required outbound ASR -> translation -> TTS stages.
     if priority == HelperTaskPriority::MeetingIncoming && meeting_outbound_pipeline_active() {
-        return incoming_deferred_response(task, &request_id);
+        return incoming_deferred_response(task, request_id);
     }
 
     if let Some(response) = stale_meeting_request(
         task,
-        &request_id,
+        request_id,
         priority,
         meeting_generation,
         meeting_session_id.as_deref(),
@@ -258,14 +258,14 @@ fn send_worker_task_inner(task: &str, mut payload: Value, input: Option<MeetingI
         return native::dispatch(task, &mut payload, input, voice, priority, &permit, response_deadline_ms, meeting_lane);
         #[cfg(not(windows))]
         return standalone_blocked_response(
-            task, &request_id, priority, "error", "native_inference:platform_unsupported",
+            task, request_id, priority, "error", "native_inference:platform_unsupported",
             "Native CUDA translation requires Windows.",
         );
     }
     #[cfg(windows)]
     return native::control(task, &payload, &permit, priority);
     #[cfg(not(windows))]
-    return standalone_blocked_response(task, &request_id, priority, "error",
+    return standalone_blocked_response(task, request_id, priority, "error",
         "native_inference:platform_unsupported", "Native CUDA requires Windows.");
     })();
     attach_admitted_wait_to_failure(response, scheduler_wait_ms)

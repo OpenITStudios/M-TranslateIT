@@ -35,3 +35,13 @@ test("native synthesis borrows text and actor authority through admission and re
     assert.match(call, /\}\), &?translated_(?:text|fixture), &actor_token\)/);
   }
 });
+
+test("native scope fences observe borrowed session identity without building diagnostics", () => {
+  const state = readFileSync(new URL("../../src-tauri/src/engine/runtime_state.rs", import.meta.url), "utf8");
+  assert.match(state, /Some\(observe\(guard\.as_ref\(\)\)\)/);
+  assert.doesNotMatch(native + policy, /latest_runtime_session_state\(\)/);
+  assert.equal((native.match(/!scope_is_current\(payload, &request_scope\)/g) ?? []).length, 4);
+  assert.match(native, /== Some\(\(expected\.generation, expected\.session_id\.as_deref\(\)\)\)/);
+  assert.match(native, /\}\)\.unwrap_or\(false\)/);
+  assert.match(transport, /let request_id = permit\.request_id\(\);/);
+});

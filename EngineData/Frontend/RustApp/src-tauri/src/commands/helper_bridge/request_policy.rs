@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::engine::audio::finalized_utterance::wake_incoming_consumer;
 
 use crate::engine::runtime_state::{
-    latest_runtime_session_state, runtime_generation_is_authoritative, runtime_generation_matches_epoch,
+    observe_runtime_session, runtime_generation_is_authoritative, runtime_generation_matches_epoch,
     RuntimeSessionSnapshot, APPLICATION_MEETING_OWNER_ID,
 };
 
@@ -17,15 +17,14 @@ pub(super) fn live_outbound_generation_is_authoritative(generation: u64) -> bool
     if !runtime_generation_is_authoritative(generation) {
         return false;
     }
-    latest_runtime_session_state()
-        .snapshot
-        .map(|snapshot| {
+    observe_runtime_session(|snapshot| {
+        snapshot.is_some_and(|snapshot| {
             snapshot.owner_id == APPLICATION_MEETING_OWNER_ID
                 && snapshot.generation == generation
                 && snapshot.authority_active
                 && snapshot.phase == "live"
         })
-        .unwrap_or(false)
+    }).unwrap_or(false)
 }
 
 pub(super) fn meeting_generation(payload: &Value) -> Option<u64> {
@@ -109,10 +108,10 @@ fn matching_session_pipeline_generation(
 }
 
 pub(super) fn clear_meeting_outbound_pipeline_for_session(session_id: &str) {
-    let snapshot = latest_runtime_session_state().snapshot;
-    if let Some(generation) = snapshot.as_ref().and_then(|snapshot| {
-        matching_session_pipeline_generation(session_id, snapshot)
-    }) {
+    let generation = observe_runtime_session(|snapshot| {
+        snapshot.and_then(|snapshot| matching_session_pipeline_generation(session_id, snapshot))
+    }).flatten();
+    if let Some(generation) = generation {
         // Generation-scoped CAS also protects a newer pipeline that claimed
         // the marker between snapshot lookup and this clear.
         clear_meeting_outbound_pipeline(generation);
@@ -124,15 +123,14 @@ pub(super) fn incoming_session_is_eligible(session_id: &str) -> bool {
 }
 
 pub(super) fn incoming_session_generation(session_id: &str) -> Option<u64> {
-    latest_runtime_session_state()
-        .snapshot
-        .filter(|snapshot| {
+    observe_runtime_session(|snapshot| {
+        snapshot.filter(|snapshot| {
             snapshot.owner_id == APPLICATION_MEETING_OWNER_ID
                 && snapshot.session_id == session_id
                 && snapshot.authority_active
                 && snapshot.phase == "live"
-        })
-        .map(|snapshot| snapshot.generation)
+        }).map(|snapshot| snapshot.generation)
+    }).flatten()
 }
 
 // Scheduling metadata is parsed once per request. It is not a live

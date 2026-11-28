@@ -1,7 +1,7 @@
 //! Native ASR/MT dispatch at the existing helper permit, not a second scheduler.
 use super::*;
 use crate::engine::audio::evidence::condition_asr_pcm;
-use crate::engine::runtime_state::{latest_runtime_session_state, RuntimeSessionSnapshot,
+use crate::engine::runtime_state::{observe_runtime_session, RuntimeSessionSnapshot,
     APPLICATION_MEETING_OWNER_ID};
 use crate::commands::helper_bridge_runtime::HelperTaskPermit;
 use crate::commands::helper_bridge::{
@@ -80,7 +80,7 @@ struct Scope {
     session_id: Option<String>,
 }
 
-fn scope_from_snapshot(payload: &Value, snapshot: Option<RuntimeSessionSnapshot>) -> Option<Scope> {
+fn scope_from_snapshot<'a>(payload: &Value, snapshot: Option<&'a RuntimeSessionSnapshot>) -> Option<(Option<u64>, Option<&'a str>)> {
     // Native admission must compare exact metadata, not the legacy
     // presentation sanitizer's normalized/truncated string values.
     let generation = match payload.get("meeting_generation") {
@@ -104,7 +104,7 @@ fn scope_from_snapshot(payload: &Value, snapshot: Option<RuntimeSessionSnapshot>
         Some(value) => value.as_bool()?,
     };
     if generation.is_none() && session.is_none() && lane.is_none() && !prepare {
-        return snapshot.is_none().then_some(Scope { generation: None, session_id: None });
+        return snapshot.is_none().then_some((None, None));
     }
     let snapshot = snapshot.filter(|value| {
         value.owner_id == APPLICATION_MEETING_OWNER_ID && value.authority_active
@@ -122,15 +122,24 @@ fn scope_from_snapshot(payload: &Value, snapshot: Option<RuntimeSessionSnapshot>
                 lane == Some("you") && session.is_some() && snapshot.phase == "live"
             })
     };
-    matches.then(|| Scope {
-        generation: Some(snapshot.generation), session_id: Some(snapshot.session_id),
-    })
+    matches.then_some((Some(snapshot.generation), Some(snapshot.session_id.as_str())))
 }
 
 fn scope(payload: &Value) -> Option<Scope> {
-    let state = latest_runtime_session_state();
-    if state.snapshot.is_none() && (state.has_active_session || state.blocker != "runtime_session:no_active_session") { return None; }
-    scope_from_snapshot(payload, state.snapshot)
+    observe_runtime_session(|snapshot| {
+        scope_from_snapshot(payload, snapshot).map(|(generation, session_id)| Scope {
+            generation, session_id: session_id.map(str::to_owned),
+        })
+    }).flatten()
+}
+
+// Recheck current owner, phase and exact identity at every existing fence;
+// do not clone a diagnostic report or allocate a new session ID.
+fn scope_is_current(payload: &Value, expected: &Scope) -> bool {
+    observe_runtime_session(|snapshot| {
+        scope_from_snapshot(payload, snapshot)
+            == Some((expected.generation, expected.session_id.as_deref()))
+    }).unwrap_or(false)
 }
 
 fn error_blocker(error: Error, task: &str) -> (&'static str, bool) {
@@ -270,7 +279,7 @@ pub(super) fn dispatch(
             Ok(reference) => reference,
             Err(blocker) => return fail(blocker, "Selected native reference is not approved or verified."),
         };
-        if scope(payload).as_ref() != Some(&request_scope) || Instant::now() >= deadline {
+        if !scope_is_current(payload, &request_scope) || Instant::now() >= deadline {
             return fail("native_voice:scope_revoked", "Voice preparation authority expired.");
         }
         match unsafe { crate::commands::helper_bridge_runtime::NativeInferenceOwner::open_voice_candidate(request_scope.session_id.clone()) } {
@@ -321,7 +330,7 @@ pub(super) fn dispatch(
         host.native_inference.as_mut().expect("checked owner").session_id = request_scope.session_id.clone();
     }
     if host.native_meeting_session_id() != request_scope.session_id.as_deref()
-        || scope(payload).as_ref() != Some(&request_scope)
+        || !scope_is_current(payload, &request_scope)
     {
         return fail("native_inference:scope_revoked", "Native owner no longer matches the current session.");
     }
@@ -438,7 +447,7 @@ pub(super) fn dispatch(
     // After taking PCM, the request is committed to execution or terminal
     // failure; never requeue an already-conditioned buffer. Stop may still
     // revoke authority during conditioning, so check before beginning.
-    if scope(payload).as_ref() != Some(&request_scope) {
+    if !scope_is_current(payload, &request_scope) {
         return fail("native_inference:scope_revoked", "Inference authority was revoked before execution.");
     }
     let bridge_generation = host.generation_token;
@@ -487,7 +496,7 @@ pub(super) fn dispatch(
         || host.active_request_id.as_deref() != Some(request_id)
         || host.native_inference.is_none()
         || host.native_meeting_session_id() != request_scope.session_id.as_deref()
-        || scope(payload).as_ref() != Some(&request_scope)
+        || !scope_is_current(payload, &request_scope)
     {
         clear_active_request(&mut host, request_id);
         let mut response = fail("native_inference:scope_revoked", "Native inference result was discarded because its owner changed.");
@@ -626,12 +635,10 @@ mod tests {
     fn scope_rejects_foreign_session_generation_and_unowned_text() {
         let current = snapshot();
         let outbound = json!({"meeting_generation":41,"meeting_session_id":"meeting-1","meeting_lane":"you"});
-        let owned_snapshot = current.clone();
-        let session_ptr = owned_snapshot.session_id.as_ptr();
-        let scope = scope_from_snapshot(&outbound, Some(owned_snapshot)).unwrap();
-        assert_eq!(scope.session_id.as_ref().unwrap().as_ptr(), session_ptr);
-        assert_eq!(scope.generation, Some(41));
-        assert_eq!(scope.session_id.as_deref(), Some("meeting-1"));
+        let session_ptr = current.session_id.as_ptr();
+        let scope = scope_from_snapshot(&outbound, Some(&current)).unwrap();
+        assert_eq!(scope.1.unwrap().as_ptr(), session_ptr);
+        assert_eq!(scope, (Some(41), Some("meeting-1")));
         for (key, bad) in [
             ("meeting_generation", json!(42)),
             ("meeting_generation", json!("41")),
@@ -641,15 +648,23 @@ mod tests {
         ] {
             let mut invalid = outbound.clone();
             invalid[key] = bad;
-            assert!(scope_from_snapshot(&invalid, Some(current.clone())).is_none());
+            assert!(scope_from_snapshot(&invalid, Some(&current)).is_none());
         }
         let incoming = json!({"meeting_session_id":"meeting-1","meeting_lane":"incoming"});
-        assert_eq!(scope_from_snapshot(&incoming, Some(current.clone())), Some(scope));
-        assert!(scope_from_snapshot(&json!({}), Some(current.clone())).is_none());
+        assert_eq!(scope_from_snapshot(&incoming, Some(&current)), Some(scope));
+        assert!(scope_from_snapshot(&json!({}), Some(&current)).is_none());
         assert!(scope_from_snapshot(&json!({}), None).is_some());
-        let mut revoked = current;
+        let mut revoked = current.clone();
         revoked.authority_active = false;
-        assert!(scope_from_snapshot(&outbound, Some(revoked)).is_none());
+        assert!(scope_from_snapshot(&outbound, Some(&revoked)).is_none());
+        revoked.authority_active = true;
+        revoked.phase = "stopping".into();
+        assert!(scope_from_snapshot(&outbound, Some(&revoked)).is_none());
+        assert!(scope_from_snapshot(&incoming, Some(&revoked)).is_none());
+        revoked.phase = "starting".into();
+        let prepare = json!({"meeting_generation":41,"meeting_start_prepare":true});
+        assert_eq!(scope_from_snapshot(&prepare, Some(&revoked)), Some(scope));
+        assert!(scope_from_snapshot(&outbound, Some(&revoked)).is_none());
     }
 
     #[test]

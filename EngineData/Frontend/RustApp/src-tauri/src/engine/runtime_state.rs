@@ -263,13 +263,21 @@ pub fn runtime_generation_is_authoritative(generation: u64) -> bool {
     if !runtime_generation_matches_epoch(generation) {
         return false;
     }
+    observe_runtime_session(|snapshot| {
+        snapshot.is_some_and(|snapshot| snapshot.generation == generation && snapshot.authority_active)
+    }).unwrap_or(false)
+}
+
+// Read only the fields needed by an authority predicate or owned projection.
+// The callback must not acquire other locks, call lifecycle methods or perform
+// I/O. The borrowed snapshot cannot escape this short-held session mutex.
+// None means lock failure; an idle session is observed as Some(callback(None)).
+pub(crate) fn observe_runtime_session<T>(
+    observe: impl FnOnce(Option<&RuntimeSessionSnapshot>) -> T,
+) -> Option<T> {
     let store = RUNTIME_SESSION_STATE.get_or_init(|| Mutex::new(None));
-    store
-        .lock()
-        .ok()
-        .and_then(|guard| guard.as_ref().cloned())
-        .map(|snapshot| snapshot.generation == generation && snapshot.authority_active)
-        .unwrap_or(false)
+    let guard = store.lock().ok()?;
+    Some(observe(guard.as_ref()))
 }
 
 pub fn begin_mic_test_session() -> RuntimeSessionStateReport {
