@@ -6,6 +6,9 @@ import tarfile
 import urllib.request
 from pathlib import Path
 
+# This script stages retired Python distribution licenses, not the native closure.
+raise SystemExit("Native packaging is held: legacy Python license staging is disabled.")
+
 REPO_ROOT = Path(__file__).resolve().parents[4]
 ROOT = REPO_ROOT / "EngineData" / "Backend" / "LocalWorker" / "PythonRuntime"
 

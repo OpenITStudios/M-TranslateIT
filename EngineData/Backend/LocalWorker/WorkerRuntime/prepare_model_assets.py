@@ -15,25 +15,13 @@ build_plan = _core.build_plan
 clean_huggingface_local_cache = _core.clean_huggingface_local_cache
 serializable_plan = _core.serializable_plan
 
-_CORE_REPLACE_TARGET_FROM_SNAPSHOT = _core.replace_target_from_snapshot
-REVISION_MARKER = ".translateit_model_revision"
-
-
-def replace_target_from_snapshot(item):
-    result = _CORE_REPLACE_TARGET_FROM_SNAPSHOT(item)
-    marker = item["target"] / REVISION_MARKER
-    marker.write_text(str(item["revision"]).strip() + "\n", encoding="utf-8")
-    result["revision_marker"] = REVISION_MARKER
-    return result
+# The core owns the atomic .translateit_model_revision publication.
+REVISION_MARKER = _core.REVISION_MARKER
+replace_target_from_snapshot = _core.replace_target_from_snapshot
 
 
 def main() -> int:
-    previous = _core.replace_target_from_snapshot
-    _core.replace_target_from_snapshot = replace_target_from_snapshot
-    try:
-        return _core.main()
-    finally:
-        _core.replace_target_from_snapshot = previous
+    return _core.main()
 
 
 if __name__ == "__main__":

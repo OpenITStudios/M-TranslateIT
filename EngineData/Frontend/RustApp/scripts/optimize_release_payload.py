@@ -262,6 +262,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend-root", required=True)
     args = parser.parse_args()
+    raise SystemExit("Native packaging is held: legacy Python payload optimizer is disabled.")
 
     backend_root = Path(args.backend_root).resolve()
     python_root = backend_root / "LocalWorker" / "PythonRuntime"

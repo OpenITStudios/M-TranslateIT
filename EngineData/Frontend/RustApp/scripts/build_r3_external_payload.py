@@ -365,6 +365,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    raise RuntimeError("Native packaging is held: legacy payload builder cannot emit a release.")
     repo_root = args.repo_root.resolve()
     if not (repo_root / "AGENTS.md").is_file():
         raise RuntimeError(f"invalid TranslateIT repository root: {repo_root}")

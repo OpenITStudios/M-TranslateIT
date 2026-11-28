@@ -33,6 +33,8 @@ const paths = {
   build: join(scriptDir, "build_release.ps1"),
   stage: join(scriptDir, "stage_release_inputs_impl.ps1"),
   builder: join(scriptDir, "build_r3_external_payload.py"),
+  optimizer: join(scriptDir, "optimize_release_payload.py"),
+  licenseStager: join(scriptDir, "stage_release_license_material.py"),
   hook: join(tauriRoot, "windows", "r3_payload_hooks.template.nsh"),
   helper: join(tauriRoot, "windows", "r3_payload_installer.ps1"),
 };
@@ -48,6 +50,8 @@ const manifest = readJson(paths.manifest);
 const build = readText(paths.build);
 const stage = readText(paths.stage);
 const builder = readText(paths.builder);
+const optimizer = readText(paths.optimizer);
+const licenseStager = readText(paths.licenseStager);
 const hook = readText(paths.hook);
 const helper = readText(paths.helper);
 
@@ -195,6 +199,14 @@ for (const retired of ["realtime_local_worker.py","realtime_local_worker_base.py
 if (!build.includes("Native My Voice release is held") || !stage.includes("Native packaging is held")) {
   fail("Incomplete native packaging must remain blocked.");
 }
+for (const [body, label, sideEffect] of [
+  [builder, "legacy payload builder", "repo_root = args.repo_root.resolve()"],
+  [optimizer, "legacy payload optimizer", "backend_root = Path(args.backend_root).resolve()"],
+  [licenseStager, "legacy Python license stager", "REPO_ROOT = Path(__file__)"],
+]) {
+  const hold = body.indexOf('raise ' + (label === "legacy payload builder" ? 'RuntimeError(' : 'SystemExit(') + '"Native packaging is held:');
+  if (hold < 0 || body.indexOf(sideEffect) <= hold) fail(`${label} must remain held before side effects.`);
+}
 
 const scripts = packageJson.scripts ?? {};
 if (!String(scripts["preflight:tauri-package"] ?? "").includes("validate_release_package_contract.mjs")) fail("Tauri package preflight must include the R3 release contract.");
@@ -204,4 +216,4 @@ if (errors.length) {
   for (const error of errors) console.error(`[release-package] ${error}`);
   process.exit(1);
 }
-console.log("[release-package] R3 source contract PASS: pinned FFmpeg release asset identity, exact builder/installer payload-root closure, version/hash-bound external payload, app-only /UPDATE preserves only a fully verified compatible installed runtime, no filesystem-indirection payload roots, transactional full runtime replacement including built-in Meeting voice references, symmetric uninstall cleanup, native-only inference source closure, Setup-owned VB-CABLE install/restart, user-data and system-driver preservation policy, and small Tauri resource closure are aligned.");
+console.log("[release-package] Historical R3 source-contract checks passed; native package/release remains HELD. No artifact, installer or installed-runtime proof.");

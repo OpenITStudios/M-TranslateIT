@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 from pathlib import Path
 
@@ -139,6 +140,8 @@ def test_failed_model_download_preserves_existing_and_interrupted_backups(
         "model_id": "test",
         "repo_id": "offline/example",
         "revision": "a" * 40,
+        "download_allow_patterns": ["partial.bin"],
+        "artifact_hashes": {"partial.bin": hashlib.sha256(b"complete").hexdigest()},
     }
     try:
         module._core.replace_target_from_snapshot(item)
@@ -170,6 +173,8 @@ def test_promoted_snapshot_has_revision_marker_before_directory_cutover(
         "model_id": "test",
         "repo_id": "offline/example",
         "revision": "b" * 40,
+        "download_allow_patterns": ["model.bin"],
+        "artifact_hashes": {"model.bin": hashlib.sha256(b"new").hexdigest()},
     }
     result = module._core.replace_target_from_snapshot(item)
     assert result["replaced_existing"] is True
@@ -205,6 +210,8 @@ def test_failed_promotion_restores_previous_model_without_deleting_backups(
         "model_id": "test",
         "repo_id": "offline/example",
         "revision": "c" * 40,
+        "download_allow_patterns": ["next.bin"],
+        "artifact_hashes": {"next.bin": hashlib.sha256(b"next").hexdigest()},
     }
     try:
         module._core.replace_target_from_snapshot(item)
@@ -214,3 +221,55 @@ def test_failed_promotion_restores_previous_model_without_deleting_backups(
         raise AssertionError("A failed model promotion must not pass")
     assert (target / "original.bin").read_bytes() == b"original"
     assert not (target / "next.bin").exists()
+
+
+def test_exact_existing_snapshot_is_reused_without_network_or_marker_write(tmp_path: Path, monkeypatch) -> None:
+    module = load_module()
+    target = tmp_path / "model"
+    target.mkdir()
+    (target / "model.gguf").write_bytes(b"good")
+    marker = target / module.REVISION_MARKER
+    marker.write_text("a" * 40 + "\n", encoding="utf-8")
+    before = marker.stat().st_mtime_ns
+    item = {"target": target, "model_id": "test", "repo_id": "offline/example",
+            "revision": "a" * 40, "download_allow_patterns": ["model.gguf"],
+            "artifact_hashes": {"model.gguf": hashlib.sha256(b"good").hexdigest()},
+            "artifact_bytes": {"model.gguf": 4}}
+    def no_download(**kwargs):
+        raise AssertionError("Verified snapshot must not download again")
+    monkeypatch.setattr(module._core, "snapshot_download", no_download)
+    result = module.replace_target_from_snapshot(item)
+    assert result["reused_verified"] is True and result["replaced_existing"] is False
+    assert marker.stat().st_mtime_ns == before
+    assert not list(tmp_path.glob(".model.download-*"))
+
+
+def test_same_size_corruption_and_bad_download_do_not_publish(tmp_path: Path, monkeypatch) -> None:
+    module = load_module()
+    target = tmp_path / "model"
+    target.mkdir()
+    (target / "model.gguf").write_bytes(b"evil")
+    (target / module.REVISION_MARKER).write_text("a" * 40 + "\n", encoding="utf-8")
+    item = {"target": target, "model_id": "test", "repo_id": "offline/example",
+            "revision": "a" * 40, "download_allow_patterns": ["model.gguf"],
+            "artifact_hashes": {"model.gguf": hashlib.sha256(b"good").hexdigest()},
+            "artifact_bytes": {"model.gguf": 4}}
+    def bad_download(**kwargs):
+        stage = kwargs["local_dir"]
+        stage.mkdir()
+        (stage / "model.gguf").write_bytes(b"oops")
+    monkeypatch.setattr(module._core, "snapshot_download", bad_download)
+    try:
+        module.replace_target_from_snapshot(item)
+    except RuntimeError as exc:
+        assert "exact artifact verification" in str(exc)
+    else:
+        raise AssertionError("Unverified bytes must not be published")
+    assert (target / "model.gguf").read_bytes() == b"evil"
+    def correct_download(**kwargs):
+        stage = kwargs["local_dir"]
+        stage.mkdir()
+        (stage / "model.gguf").write_bytes(b"good")
+    monkeypatch.setattr(module._core, "snapshot_download", correct_download)
+    assert module.replace_target_from_snapshot(item)["replaced_existing"] is True
+    assert (target / "model.gguf").read_bytes() == b"good"

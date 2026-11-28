@@ -22,43 +22,25 @@ validate:quick
 
 The bridge contract is intentionally one owner. Do not add a second validator that separately re-checks command parity or bridge type escape rules. Frontend reachability catches orphan `.ts`/`.svelte` modules that normal unused-local checks cannot see.
 
-Functional behavior coverage remains with the owning runtime: GPU worker smoke (`WorkerRuntime/run_realtime_worker_smoke.ps1`), Rust unit tests for session/audio decisions, and pytest contract tests. Static source checks do not claim target-Windows runtime behavior.
+Functional behavior coverage remains with the owning native runtime and its Rust/session/audio fixtures. Python acquisition fixtures cover developer tooling, not native inference. Static source checks do not claim target-Windows runtime behavior.
 
 `check:tauri-rust-local` is explicit local compile verification and is not run merely to validate documentation/source routing.
 
-## R3 release boundary
+## R3 release boundary — HELD
 
-User-facing release shape:
+The desired offline release remains `TranslateIT-Setup.exe` plus `TranslateIT-Payload.7z`. The current staging, payload builder, optimizer and Python license stager describe the historical Python-based package, not the native runtime. Their direct entrypoints are blocked; do not bypass the holds.
 
-```text
-src-tauri/target/translateit-release/
-├─ TranslateIT-Setup.exe
-└─ TranslateIT-Payload.7z
-```
+Native release requires a coherent package and installer/update contract, reviewed DLL/model/ONNX identities, the independent speaker verifier export pin, complete third-party notices, and integrated target acceptance. The existing model manifest is the inventory owner. No package build or download is implied by source checks.
 
-`build_release.ps1` is the controlled Windows release entry. It requires a committed tracked working tree, records the exact Git source commit, validates staged inputs, applies the reviewed release optimizer, regenerates third-party notices, builds the external payload, renders the NSIS hook, builds Tauri/NSIS, and requires the user-facing release directory to contain exactly Setup + Payload. Build evidence under ignored `src-tauri/target/` records the source commit, both SHA-256 values, and the app/payload identity.
-
-## Release input staging
-
-A plain Git clone intentionally does **not** contain the large release runtime/model payload. `stage_release_inputs.ps1` (PowerShell-version compatibility entrypoint over `stage_release_inputs_impl.ps1`) prepares the controlled inputs for `build_release.ps1` and for CI's payload-proof job:
-
-```text
-Node.js / npm
-host Python 3.12.x + uv (no system pip installs)
-Rust toolchain (cargo/rustc)
-7-Zip CLI
-Visual Studio 2022 C++ Build Tools
-```
-
-It stages the private Python/dependencies, ASR, MiLMMT, GPT-SoVITS assets/source, NLTK data, FFmpeg, and VB-CABLE, then `stage_release_license_material.py` completes reviewed license material. Its package environment is now isolated from developer `.venv` and system pip; shared downloads/cache live under the repository `.workspace`. Runtime inputs are now built in an isolated payload tree; promotion has reviewed source-level backup/rollback logic and fails closed on a retained interrupted backup. Full GB-scale native execution and crash recovery are **not yet proven**, so this staging must not be run automatically by development `prepare`. Pinned release archives with reviewed SHA-256 are now reused from the repository-local `.workspace/downloads/verified/` cache, rejecting poisoned bytes; the unpinned GPT-SoVITS source archive is never treated as a verified cached input. The first preparation may download several GB. Do not manually copy models, install a second Python runtime into the product, or bypass the staged identity/hash checks.
-
-Windows PowerShell 5.1 cannot run `Set-Content -Encoding utf8NoBOM`; staging keeps an explicit compatibility boundary in which PowerShell 7+ executes the implementation unchanged while 5.1 executes a temporary same-directory copy with only the unsupported encoding enum replaced for the temporary generated Python helper. Runtime/model sources, revisions, hashes, identity, and staging behavior are otherwise unchanged.
+Developer model acquisition remains separate: `WorkerRuntime/prepare_model_assets.py` can reuse exact verified snapshots and reports the pending independent offline export separately. It does not authorize release.
 
 ## Acceptance
 
 Acceptance runs one scenario at a time per `docs/foundation/03-acceptance-scenarios.md`. Installer-bound checks are deferred Group E scenarios that call `build_release.ps1` directly; its build evidence under ignored `src-tauri/target/` records the source commit plus both SHA-256 values. Headless runtime evidence lands under `UserData/LogData/RustAppValidation/`.
 
-## CI ownership
+## CI ownership — paused
+
+The project profile currently prohibits CI/test dispatch and hosted compute. The following describes the historical workflow layout, not active execution permission.
 
 `.github/workflows/release-payload-verify.yml` is the single R3 release workflow owner:
 

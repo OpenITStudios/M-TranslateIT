@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
+import stat
 import uuid
 from pathlib import Path
 from typing import Any
@@ -14,6 +16,8 @@ MANIFEST_PATH = Path(__file__).with_name("model_manifest.json")
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 RUNTIME_ASSETS_ROOT = (PROJECT_ROOT / "EngineData/Backend/RuntimeAssets").resolve()
 FULL_REVISION = re.compile(r"^[0-9a-f]{40}$")
+REVISION_MARKER = ".translateit_model_revision"
+FULL_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def load_manifest() -> dict[str, Any]:
@@ -72,6 +76,8 @@ def validate_huggingface_model(model: dict[str, Any]) -> dict[str, Any]:
     if not FULL_REVISION.fullmatch(revision):
         raise RuntimeError(f"{model_id} must pin a full Hugging Face commit revision")
     target = resolve_target(expected_path)
+    patterns = validate_download_allow_patterns(model_id, model.get("download_allow_patterns"))
+    hashes, sizes = artifact_pins(model, patterns)
     return {
         "model_id": model_id,
         "repo_id": repo_id,
@@ -79,10 +85,64 @@ def validate_huggingface_model(model: dict[str, Any]) -> dict[str, Any]:
         "required": bool(model.get("required")),
         "stage": str(model.get("stage", "")),
         "target": target,
-        "download_allow_patterns": validate_download_allow_patterns(
-            model_id, model.get("download_allow_patterns")
-        ),
+        "download_allow_patterns": patterns,
+        "artifact_hashes": hashes,
+        "artifact_bytes": sizes,
     }
+
+
+def artifact_pins(item: dict[str, Any], patterns: list[str] | None) -> tuple[dict[str, str], dict[str, int]]:
+    hashes = item.get("artifact_hashes")
+    sizes = item.get("artifact_bytes", {})
+    if not isinstance(hashes, dict) or not hashes or not isinstance(sizes, dict):
+        raise RuntimeError("Exact native artifact hashes are required")
+    if patterns is not None and set(patterns) != set(hashes):
+        raise RuntimeError("Native artifact pins must match exact download allow patterns")
+    for name, digest in hashes.items():
+        if (not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", name)
+                or name in (".", "..", REVISION_MARKER) or ".." in name
+                or not isinstance(digest, str) or not FULL_SHA256.fullmatch(digest)):
+            raise RuntimeError("Invalid native artifact pin")
+    if any(name not in hashes or type(size) is not int or size <= 0 for name, size in sizes.items()):
+        raise RuntimeError("Invalid native artifact size pin")
+    return hashes, sizes
+
+
+def is_redirected(meta: Any) -> bool:
+    return stat.S_ISLNK(meta.st_mode) or bool(
+        getattr(meta, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+    )
+
+
+def exact_snapshot_matches(target: Path, item: dict[str, Any], *, marked: bool) -> bool:
+    hashes, sizes = artifact_pins(item, item.get("download_allow_patterns"))
+    try:
+        directory = target.lstat()
+        if not stat.S_ISDIR(directory.st_mode) or is_redirected(directory):
+            return False
+        expected = set(hashes) | ({REVISION_MARKER} if marked else set())
+        if {path.name for path in target.iterdir()} != expected:
+            return False
+        if marked:
+            marker = target / REVISION_MARKER
+            meta = marker.lstat()
+            if is_redirected(meta) or not stat.S_ISREG(meta.st_mode) or meta.st_size > 128:
+                return False
+            with marker.open("rb") as stream:
+                if stream.read(129).strip() != item["revision"].encode("ascii"):
+                    return False
+        for name, digest in hashes.items():
+            path = target / name
+            meta = path.lstat()
+            if (is_redirected(meta) or not stat.S_ISREG(meta.st_mode) or meta.st_size <= 0
+                    or (name in sizes and meta.st_size != sizes[name])):
+                return False
+            with path.open("rb") as stream:
+                if hashlib.file_digest(stream, "sha256").hexdigest() != digest:
+                    return False
+        return True
+    except OSError:
+        return False
 
 
 def build_plan(
@@ -156,8 +216,17 @@ def replace_target_from_snapshot(item: dict[str, Any]) -> dict[str, Any]:
     merely because a new Python process happens to get the same PID.
     """
     target: Path = item["target"]
-    if target.is_symlink():
-        raise RuntimeError("Model target cannot be a filesystem symlink")
+    hashes, _ = artifact_pins(item, item.get("download_allow_patterns"))
+    if target.exists() or target.is_symlink():
+        if is_redirected(target.lstat()) or not target.is_dir():
+            raise RuntimeError("Model target cannot be a filesystem indirection or non-directory")
+        if exact_snapshot_matches(target, item, marked=True):
+            return {
+                "model_id": item["model_id"], "repo_id": item["repo_id"],
+                "revision": item["revision"], "file_count": len(hashes),
+                "replaced_existing": False, "reused_verified": True,
+                "revision_marker": REVISION_MARKER,
+            }
     target.parent.mkdir(parents=True, exist_ok=True)
     transaction = uuid.uuid4().hex
     staging = target.parent / f".{target.name}.download-{transaction}"
@@ -176,13 +245,12 @@ def replace_target_from_snapshot(item: dict[str, Any]) -> dict[str, Any]:
             download_args["allow_patterns"] = item["download_allow_patterns"]
         snapshot_download(**download_args)
         clean_huggingface_local_cache(staging)
-        files = [path for path in staging.rglob("*") if path.is_file()]
-        if not files:
-            raise RuntimeError(f"Downloaded snapshot for {item['model_id']} contains no files")
+        if not exact_snapshot_matches(staging, item, marked=False):
+            raise RuntimeError(f"Downloaded snapshot for {item['model_id']} failed exact artifact verification")
         # The marker must be committed along with the snapshot, not written
         # after replacing the live model. A crash cannot publish an unmarked
         # model while claiming that the previous version was verified.
-        (staging / ".translateit_model_revision").write_text(
+        (staging / REVISION_MARKER).write_text(
             str(item["revision"]).strip() + "\n", encoding="utf-8"
         )
         if had_previous:
@@ -204,8 +272,10 @@ def replace_target_from_snapshot(item: dict[str, Any]) -> dict[str, Any]:
             "model_id": item["model_id"],
             "repo_id": item["repo_id"],
             "revision": item["revision"],
-            "file_count": len(files),
+            "file_count": len(hashes),
             "replaced_existing": had_previous,
+            "reused_verified": False,
+            "revision_marker": REVISION_MARKER,
         }
     finally:
         if promoted:
@@ -264,7 +334,7 @@ def main() -> int:
     parser.add_argument(
         "--include-optional",
         action="store_true",
-        help="Also acquire optional Hugging Face entries such as the ASR fallback.",
+        help="Also acquire optional Hugging Face entries if present in the manifest.",
     )
     parser.add_argument(
         "--model-id",
@@ -298,7 +368,7 @@ def main() -> int:
         "downloads": [],
         "note": (
             "Pinned Hugging Face assets are acquired from model_manifest.json. Required release assets "
-            "such as the pinned GPT-SoVITS VoiceLab bundle remain separate and are not fabricated by this developer downloader."
+            "such as the pending independent speaker-verifier export remain separate and are not fabricated by this developer downloader."
         ),
     }
 
