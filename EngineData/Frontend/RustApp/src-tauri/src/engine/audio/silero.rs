@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use ort::{session::Session, value::Tensor};
+use ort::{session::Session, value::TensorRef};
 use sha2::{Digest, Sha256};
 
 use crate::engine::paths::ProjectPaths;
@@ -54,11 +54,28 @@ fn verified_ort_environment_at(root: &Path) -> Result<ort::environment::Environm
     Ok(env)
 }
 
+const CONTEXT_SAMPLES: usize = 64;
+const STATE_SAMPLES: usize = 128;
+
 pub struct Silero {
     session: Session,
-    context: [f32; 64],
-    h: Vec<f32>,
-    c: Vec<f32>,
+    context: [f32; CONTEXT_SAMPLES],
+    h: [f32; STATE_SAMPLES],
+    c: [f32; STATE_SAMPLES],
+}
+
+// The pinned graph has one probability and two recurrent state vectors.
+// Validate all three outputs before changing either state or context.
+fn checked_recurrent_output(
+    probability: &[f32], h: &[f32], c: &[f32],
+) -> Result<(f32, [f32; STATE_SAMPLES], [f32; STATE_SAMPLES]), String> {
+    let [p] = probability else { return Err("silero:invalid_output".into()); };
+    if !p.is_finite() || !(0.0..=1.0).contains(p) || h.len() != STATE_SAMPLES || c.len() != STATE_SAMPLES {
+        return Err("silero:invalid_output".into());
+    }
+    let h = h.try_into().map_err(|_| "silero:invalid_output".to_string())?;
+    let c = c.try_into().map_err(|_| "silero:invalid_output".to_string())?;
+    Ok((*p, h, c))
 }
 
 impl Silero {
@@ -70,7 +87,7 @@ impl Silero {
             .and_then(|b| Ok(b.with_inter_threads(1)?))
             .and_then(|mut b| b.commit_from_memory(&model))
             .map_err(|_| "silero:model_load_failed".to_string())?;
-        Ok(Self { session, context: [0.0; 64], h: vec![0.0; 128], c: vec![0.0; 128] })
+        Ok(Self { session, context: [0.0; CONTEXT_SAMPLES], h: [0.0; STATE_SAMPLES], c: [0.0; STATE_SAMPLES] })
     }
 
     pub fn reset(&mut self) {
@@ -80,26 +97,30 @@ impl Silero {
     }
 
     pub fn probability(&mut self, pcm: &[f32; WINDOW]) -> Result<f32, String> {
-        let mut run = || -> ort::Result<(f32, Vec<f32>, Vec<f32>)> {
-            let mut input = self.context.to_vec();
-            input.extend_from_slice(pcm);
+        // Fixed-size contiguous input on this speech CPU owner's stack.
+        // ORT's synchronous tensor views borrow these slices only for the run.
+        // No Vec growth or recurrent-state clones for each 32 ms window.
+        let mut input = [0.0_f32; CONTEXT_SAMPLES + WINDOW];
+        input[..CONTEXT_SAMPLES].copy_from_slice(&self.context);
+        input[CONTEXT_SAMPLES..].copy_from_slice(pcm);
+        let (p, h, c) = {
+            let input_tensor = TensorRef::from_array_view(([1usize, CONTEXT_SAMPLES + WINDOW], &input[..]))
+                .map_err(|_| "silero:inference_failed".to_string())?;
+            let h_tensor = TensorRef::from_array_view(([1usize, 1, STATE_SAMPLES], &self.h[..]))
+                .map_err(|_| "silero:inference_failed".to_string())?;
+            let c_tensor = TensorRef::from_array_view(([1usize, 1, STATE_SAMPLES], &self.c[..]))
+                .map_err(|_| "silero:inference_failed".to_string())?;
             let outputs = self.session.run(ort::inputs![
-                "input" => Tensor::from_array(([1usize, 576], input))?,
-                "h" => Tensor::from_array(([1usize, 1, 128], self.h.clone()))?,
-                "c" => Tensor::from_array(([1usize, 1, 128], self.c.clone()))?,
-            ])?;
-            let (_, p) = outputs[0].try_extract_tensor::<f32>()?;
-            let (_, h) = outputs[1].try_extract_tensor::<f32>()?;
-            let (_, c) = outputs[2].try_extract_tensor::<f32>()?;
-            Ok((p[0], h.to_vec(), c.to_vec()))
+                "input" => input_tensor, "h" => h_tensor, "c" => c_tensor,
+            ]).map_err(|_| "silero:inference_failed".to_string())?;
+            let (_, p) = outputs[0].try_extract_tensor::<f32>().map_err(|_| "silero:inference_failed".to_string())?;
+            let (_, h) = outputs[1].try_extract_tensor::<f32>().map_err(|_| "silero:inference_failed".to_string())?;
+            let (_, c) = outputs[2].try_extract_tensor::<f32>().map_err(|_| "silero:inference_failed".to_string())?;
+            checked_recurrent_output(p, h, c)?
         };
-        let (p, h, c) = run().map_err(|_| "silero:inference_failed".to_string())?;
-        if !p.is_finite() || !(0.0..=1.0).contains(&p) || h.len() != 128 || c.len() != 128 {
-            return Err("silero:invalid_output".to_string());
-        }
         self.h = h;
         self.c = c;
-        self.context.copy_from_slice(&pcm[WINDOW - 64..]);
+        self.context.copy_from_slice(&pcm[WINDOW - CONTEXT_SAMPLES..]);
         Ok(p)
     }
 }
@@ -244,6 +265,19 @@ mod tests {
         paths.development_root_verified = false;
         paths.packaged_context_initialized = true;
         assert_eq!(native_ort_root(&paths).unwrap(), expected);
+    }
+
+    #[test]
+    fn recurrent_output_preserves_exact_state_and_rejects_invalid_lengths() {
+        let h = std::array::from_fn::<_, STATE_SAMPLES, _>(|index| index as f32 / 128.0);
+        let c = std::array::from_fn::<_, STATE_SAMPLES, _>(|index| -(index as f32) / 128.0);
+        assert_eq!(checked_recurrent_output(&[0.0], &h, &c).unwrap(), (0.0, h, c));
+        assert_eq!(checked_recurrent_output(&[1.0], &h, &c).unwrap(), (1.0, h, c));
+        for p in [&[][..], &[0.5, 0.5][..], &[f32::NAN][..], &[-0.1][..], &[1.1][..]] {
+            assert!(checked_recurrent_output(p, &h, &c).is_err());
+        }
+        assert!(checked_recurrent_output(&[0.5], &h[..127], &c).is_err());
+        assert!(checked_recurrent_output(&[0.5], &h, &c[..127]).is_err());
     }
 
     #[test]
