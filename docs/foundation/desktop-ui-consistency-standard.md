@@ -31,7 +31,7 @@ The brand and workspace header share `--ti-header-height: 60px` as their minimum
 3. Outer height includes border and padding (`box-sizing: border-box`). Children must not expand the fixed dock height.
 4. Sidebar navigation and Meeting body scroll independently; footer and dock stay pinned.
 5. Popovers overlay rather than change footer height, anchor to their triggers, and stay within viewport.
-6. The Meeting dock is conditional: it is not present on every Saved/Settings/My Voice route. Do not invent a fake dock merely to continue the divider.
+6. Live Meeting always has one primary action in the bottom dock (Start, setup, Stop or recovery). Saved/Last Meeting shows it only for an existing session or pending Stop. Settings/My Voice do not get a fake dock merely to continue the divider.
 7. Where both docks are visible, the top-border Y positions must differ by no more than **1 CSS pixel** in an actual rendered measurement. Check 100%, 125%, 150%, 200% scaling and high-DPI rasterization separately.
 
 ## Visual system

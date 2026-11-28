@@ -27,7 +27,7 @@
 - Bubble max-width and responsive wrapping must be consistent; short phrases should not produce unnecessarily wide empty rectangles. Preserve original/translation hierarchy and fallback/error states.
 - Channel header is concise. Do not repeat large titles in every toolbar and content section. A larger beginning-of-channel title is acceptable only when it adds useful context.
 - Toolbar owners: Live has audio source and session state; channel reading has Search/Display; archive-specific Copy/Export/Refresh/Delete belong to one contextual action owner. Do not duplicate destructive actions across list and channel.
-- Stop/recovery controls must remain accessible during live or cleanup-incomplete states, even when navigating to a saved channel. Never fabricate a Stop button on a static archived channel.
+- Live Meeting uses one persistent bottom action dock for Start, setup, Stop and recovery. Stop/recovery controls must remain accessible during live or cleanup-incomplete states, even when navigating to a saved channel. Never fabricate a Stop button on a static archived channel.
 - Search is scoped to a single channel and resets on channel switch. Archive read responses from an old session must not replace newer channel content.
 - 240-entry preview limit is not full archive completeness; export and warning semantics must be truthful.
 

@@ -83,7 +83,7 @@
   // asynchronous; Stop remains visible when the source control is updating.
   const actionEnabled = $derived(!resumeBusy && !meeting.busy && !actionBusy
     && (primaryControl.enabled || originalAvailable || needsSetup || needsVoice || needsSettings));
-  const activityVisible = $derived(Boolean(meetingStatus && meeting.applicationOwned && meeting.live));
+  const activityVisible = $derived(Boolean(meetingStatus && meeting.applicationOwned && meeting.live && meetingStatus.audio_source !== "original"));
   const primaryLabel = $derived(
     // Transition states take precedence over source-specific setup labels.
     meeting.busy || actionBusy ? primaryControl.label
@@ -91,64 +91,75 @@
       : primaryControl.action === "stop"
         ? meeting.lifecycle === "cleanup_incomplete" ? primaryControl.label : "Stop Meeting"
       : meeting.hasSession ? primaryControl.label
-      : meeting.lifecycle === "unavailable" ? primaryControl.label
       : needsSetup ? "Finish Setup"
       : currentSource === "original" && originalAvailable ? "Start Meeting"
       : currentSource === "original" && !meeting.hasSession ? "Check Audio Setup"
       : needsVoice ? "Choose Voice"
       : needsSettings ? "Open Settings"
+      : meeting.lifecycle === "unavailable" ? primaryControl.label
       : "Start Meeting"
   );
+  const readyToStart = $derived(primaryLabel === "Start Meeting" && actionEnabled);
+  const statusTitle = $derived(
+    meeting.lifecycle === "cleanup_incomplete" ? "Stop Needed"
+      : meeting.busy || actionBusy || resumeBusy ? primaryLabel
+      : meeting.live ? (meetingStatus?.audio_source === "original" ? "Original Microphone is Live" : "Translation is Live")
+      : meeting.hasSession ? "Meeting Needs Attention"
+      : meeting.lifecycle === "unavailable" ? "Meeting Status Unavailable"
+      : readyToStart ? (currentSource === "original" ? "Original Microphone Ready" : "Ready to Translate")
+      : primaryLabel === "Finish Setup" ? "Setup Needed"
+      : primaryLabel === "Choose Voice" ? "Voice Needed"
+      : primaryLabel === "Check Audio Setup" ? "Audio Setup Needed"
+      : "Meeting Needs Attention",
+  );
   const statusMessage = $derived(
-    meeting.canStop || meeting.hasSession
-      ? meeting.live && meetingStatus?.muted
-        ? "Microphone muted. No voice is being sent to the meeting."
-        : meeting.live && meetingStatus?.audio_source === "original"
-          ? "Original microphone is live. Audio bypasses translation and AI."
+    resumeBusy ? "Opening initial setup."
+      : meeting.busy || actionBusy ? (meeting.canStop || meeting.lifecycle === "stopping" ? "Stopping Meeting audio safely." : "Starting Meeting audio.")
+      : meeting.canStop || meeting.hasSession || meeting.lifecycle === "unavailable"
+        ? meeting.live && meetingStatus?.muted
+          ? "Microphone muted. No voice is being sent to the meeting."
           : meeting.message
-    : currentSource === "original"
-      ? originalAvailable
-        ? "Original Microphone is ready. Select the virtual microphone in your calling app."
-        : "Original Microphone needs a working microphone and virtual route. Check Voice & Audio in Settings."
-    : snapshot.settings.meeting_setup_state === "deferred" || snapshot.settings.meeting_setup_state === "new"
-      ? "Finish initial setup before starting."
-    : snapshot.readiness.level === "unavailable"
-      ? "Translation is unavailable. Check Help in Settings."
-    : snapshot.readiness.approvedVoiceReady === false
-      ? "Choose a voice in My Voice before starting."
-    : !snapshot.readiness.microphoneReady
-      ? "No microphone available. Check Voice & Audio in Settings."
-    : !snapshot.readiness.meetingRouteReady
-      ? "Meeting audio needs setup. Check Voice & Audio in Settings."
-    : snapshot.readiness.meetingReady
-      ? "Ready to translate. Start when your call is open."
-      : "Checking translation readiness. If this persists, open Help in Settings."
+      : needsSetup ? "Finish initial setup before starting."
+      : currentSource === "original"
+        ? originalAvailable
+          ? "Original Microphone sends your voice without translation. Select TranslateIT as your microphone in your calling app, then select Start Meeting."
+          : "Original Microphone needs a working microphone and virtual route. Check Voice & Audio in Settings."
+      : snapshot.readiness.level === "unavailable"
+        ? "Translation is unavailable. Check Help in Settings."
+      : snapshot.readiness.approvedVoiceReady === false
+        ? "Choose a voice in My Voice before starting."
+      : !snapshot.readiness.microphoneReady
+        ? "No microphone available. Check Voice & Audio in Settings."
+      : !snapshot.readiness.meetingRouteReady
+        ? "Meeting audio needs setup. Check Voice & Audio in Settings."
+      : readyToStart
+        ? "Select TranslateIT as your microphone in Discord or Zoom, then select Start Meeting."
+        : "Checking translation readiness. If this persists, open Help in Settings.",
+  );
+  const primaryTitle = $derived(
+    meeting.canStop ? "Stop TranslateIT audio without leaving your Discord or Zoom call"
+      : meeting.busy || actionBusy || resumeBusy ? primaryLabel
+      : needsSetup ? "Continue Meeting setup"
+      : meeting.hasSession ? "Meeting status must be resolved before another session can start"
+      : primaryLabel === "Choose Voice" ? "Choose a voice for translation"
+      : primaryLabel === "Open Settings" || primaryLabel === "Check Audio Setup" ? "Open audio settings"
+      : !actionEnabled ? "Meeting status must be resolved before another session can start"
+      : "Start TranslateIT Meeting audio; this does not join a Discord or Zoom call",
   );
 </script>
 <section class="flex h-full min-h-0 flex-col bg-[var(--ti-bg)]" aria-label="Meeting workspace">
   {#if section === "live"}
-    <div class="min-h-0 flex-1 overflow-hidden px-5 py-4 sm:px-7" role="region" aria-label="Live Meeting transcript and status">
-      {#if activityVisible && meetingStatus && meetingStatus.audio_source !== "original"}
+    <div class={"min-h-0 flex-1 px-5 py-4 sm:px-7 " + (activityVisible ? "overflow-hidden" : "overflow-y-auto")} role="region" aria-label="Live Meeting transcript and status">
+      {#if activityVisible && meetingStatus}
         <MeetingActivity status={meetingStatus} turns={meetingTurns} {previewReadOnly} />
       {:else}
         <div class="flex h-full min-h-[280px] flex-col items-center justify-center gap-4 text-center">
           <Hash size={28} class="text-[var(--ti-text-soft)]" aria-hidden="true"/>
-          <h3 class="m-0 text-[19px] font-semibold">{meeting.lifecycle === "cleanup_incomplete" ? "Stop Needed" : meeting.busy ? meeting.label + " Meeting" : meeting.live ? (meetingStatus?.audio_source === "original" ? "Original Microphone is Live" : "Translation is Live") : meeting.hasSession ? "Meeting Needs Attention" : "Ready to Translate"}</h3>
-          <p class="m-0 max-w-[520px] text-[13px] leading-6 text-[var(--ti-text-muted)]" role="status" aria-live="polite">
-            {meeting.live ? statusMessage
-              : originalAvailable ? "Original Microphone sends your voice without translation. Select Start to begin."
-              : snapshot.readiness.meetingReady && !needsSetup && !needsVoice
-                ? "Select TranslateIT as your microphone in Discord or Zoom, then select Start."
-                : statusMessage}
-          </p>
-          {#if !meeting.hasSession && !meeting.busy && meeting.lifecycle === "idle"}
-            <button type="button" class="ti-button mt-2 min-h-11 min-w-[200px] px-6"
-              disabled={!actionEnabled} onclick={handlePrimary}
-              title={needsSetup ? "Continue Meeting setup" : needsVoice ? "Choose a voice for translation" : needsSettings ? "Open audio settings" : "Start TranslateIT Meeting audio without joining a call"}>
-              <Mic size={17} aria-hidden="true"/> {primaryLabel}
-            </button>
+          <h3 class="m-0 text-[19px] font-semibold">{statusTitle}</h3>
+          <p class="m-0 max-w-[520px] text-[13px] leading-6 text-[var(--ti-text-muted)]" role="status" aria-live="polite">{statusMessage}</p>
+          {#if readyToStart && currentSource === "translateit"}
             <p class="m-0 max-w-[440px] text-[12px] leading-5 text-[var(--ti-text-soft)]">
-              Start opens a live transcript channel here. Your speech appears on the right and incoming Meeting Sound on the left. TranslateIT does not join your call.
+              Your speech appears on the right and incoming Meeting Sound on the left. TranslateIT does not join your call.
             </p>
           {/if}
           {#if meeting.live && meetingStatus?.audio_source === "original"}
@@ -180,12 +191,12 @@
     </div>
   {/if}
 
-  {#if (section === "live" && (meeting.hasSession || meeting.busy || meeting.canStop || meeting.lifecycle !== "idle")) || meeting.hasSession || meeting.canStop}
+  {#if section === "live" || meeting.hasSession || meeting.canStop}
     <footer class="ti-call-dock flex h-[var(--ti-bottom-dock-height)] min-h-[var(--ti-bottom-dock-height)] shrink-0 items-center justify-center px-5 py-3"
       aria-label="Meeting main action">
       <button type="button"
-        class={"ti-button min-h-11 min-w-[172px] px-5 " + (primaryControl.action === "stop" ? "ti-call-stop" : "")}
-        title={meeting.canStop ? "Stop TranslateIT audio without leaving your Discord or Zoom call" : meeting.hasSession || meeting.lifecycle === "unavailable" ? "Meeting status must be resolved before another session can start" : "Start TranslateIT meeting audio; this does not join a Discord or Zoom call"}
+        class={"ti-button min-h-11 min-w-[200px] px-5 " + (primaryControl.action === "stop" ? "ti-call-stop" : "")}
+        title={primaryTitle}
         disabled={!actionEnabled} onclick={handlePrimary}>
         {#if primaryControl.action === "stop" || (meeting.canStop && actionBusy) || meeting.lifecycle === "stopping"}<PhoneOff size={18} aria-hidden="true"/>{:else}<Mic size={18} aria-hidden="true"/>{/if}
         {primaryLabel}

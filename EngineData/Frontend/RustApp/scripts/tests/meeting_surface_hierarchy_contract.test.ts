@@ -62,6 +62,8 @@ test("Meeting Live reports local output truth, not fabricated participant delive
   assert.match(live, /label: "Speaking"/);
   assert.match(live, /label: "Translating"/);
   assert.match(live, /label: "Listening"/);
+  assert.match(live, /if \(status\.muted\) return \{ label: "Output muted"/);
+  assert.match(live, /role="status">\{activity\.label\}<\/span>/);
   assert.match(live, /case "output_complete": return "Local playback complete"/);
   assert.match(live, /case "output_failed": return "Not played"/);
   assert.doesNotMatch(live, /"Sent"|"Delivered to participants"|"Sending"/);
@@ -324,10 +326,16 @@ test("Meetings organize by native ID, retaining archive source and storage statu
   assert.match(registry, /update_meeting_library/);
 });
 
-test("Ready state uses one Start action and a concise call setup instruction", () => {
+test("Ready state uses the same dock as Live and recovery, and a concise call setup instruction", () => {
+  const dock = meeting.indexOf('aria-label="Meeting main action"');
+  assert.ok(dock > 0 && meeting.indexOf("onclick={handlePrimary}") > dock);
+  assert.match(meeting, /\{#if section === "live" \|\| meeting\.hasSession \|\| meeting\.canStop\}/);
+  assert.match(meeting, /readyToStart \? \(currentSource === "original" \? "Original Microphone Ready" : "Ready to Translate"\)/);
+  assert.match(meeting, /Meeting Status Unavailable/);
+  assert.match(meeting, /title=\{primaryTitle\}/);
   assert.match(meeting, /Ready to Translate/);
   assert.match(meeting, /Select TranslateIT as your microphone in Discord or Zoom, then select Start/);
-  assert.match(meeting, /: "Start"/);
+  assert.match(meeting, /: "Start Meeting"/);
   assert.equal((meeting.match(/onclick=\{handlePrimary\}/g) ?? []).length, 1);
   assert.doesNotMatch(live, /Meeting audio capture active · speakers not identified/);
   assert.doesNotMatch(live, /Meeting audio is combined; individual speakers are not identified/);

@@ -63,6 +63,7 @@
         warning: true,
       };
     }
+    if (status.muted) return { label: "Output muted", detail: "", warning: false };
     if (["transcribing", "translating", "synthesizing", "queued"].includes(status.outbound.stage)) {
       return { label: "Translating", detail: "", warning: false };
     }
@@ -164,16 +165,14 @@
     </p>
   {/if}
 
-  <section class="flex min-h-0 flex-1 flex-col border-t border-[var(--ti-border)] pt-3" aria-label="Translated conversation">
+  <section class="flex min-h-0 flex-1 flex-col" aria-label="Translated conversation">
     <header class="flex shrink-0 flex-wrap items-center justify-between gap-3 pb-3">
-      <div class="flex min-w-0 items-center gap-3">
+      <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
         <h3 class="m-0 text-base font-semibold">Transcript</h3>
         {#if orderedTurns.length > 0}
           <span class="text-[12px] text-[var(--ti-text-muted)]">{orderedTurns.length} phrase{orderedTurns.length === 1 ? "" : "s"}</span>
         {/if}
-        {#if activity.label !== "Listening" && !activity.warning}
-          <span class="text-[12px] text-[var(--ti-text-muted)]" role="status">{activity.label}</span>
-        {/if}
+        <span class={"text-[12px] " + (activity.warning ? "text-[var(--ti-warning)]" : "text-[var(--ti-text-muted)]")} role="status">{activity.label}</span>
       </div>
       <div class="flex shrink-0 items-center gap-2">
         <label for="ti-transcript-display" class="text-[12px] text-[var(--ti-text-muted)]">Display</label>
