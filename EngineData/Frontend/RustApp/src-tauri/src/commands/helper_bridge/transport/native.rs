@@ -246,6 +246,7 @@ pub(super) fn dispatch(
     );
     let pcm = input.and_then(MeetingInput::pcm);
     let translation = input.and_then(MeetingInput::translation);
+    let deferred_deadline = input.and_then(MeetingInput::deferred_deadline);
     if input.is_some() && (voice.is_some()
         || !matches!((task, input), ("transcribe", Some(MeetingInput::Pcm(_)))
             | ("translate", Some(MeetingInput::Translation(_))))) {
@@ -285,6 +286,9 @@ pub(super) fn dispatch(
         } else { StaleMeetingScope::Generation };
         return stale.response(task, request_id, priority);
     }
+    if deferred_deadline_elapsed(deferred_deadline) {
+        return expired_deferred_response(task, request_id, priority);
+    }
     if host.pending_meeting_cleanup_session_id.is_some() || host.active_request_id.is_some()
         || !host.native_lifecycle_ready() || !host.native_owner_healthy()
         || host.last_error.as_deref() == Some("helper_bridge:cleanup_incomplete")
@@ -299,6 +303,33 @@ pub(super) fn dispatch(
     if (is_bind || is_probe_speech) && !preparing {
         return fail("native_voice:preparation_required", "Voice preparation and probe PCM require preparation authority.");
     }
+    // Reject invalid translation direction/content after scope admission and
+    // before opening a cold model owner. The Rust ABI repeats its own guard.
+    let translation_direction = if matches!(task, "translate" | "translation_preload") {
+        let (from, to) = match translation {
+            Some(input) => (parse_language(input.source_language), parse_language(input.target_language)),
+            None => (language(payload, "source_language"), language(payload, "target_language")),
+        };
+        let (Some(from), Some(to)) = (from, to) else {
+            return fail("translation:direction_not_supported", "Only Indonesian and English translation is supported.");
+        };
+        if from == to {
+            return fail("translation:direction_not_supported", "Translation must change language.");
+        }
+        if task == "translate" {
+            let source = match translation {
+                Some(input) => Some(input.source),
+                None => payload.get("text").and_then(Value::as_str),
+            };
+            let Some(source) = source else {
+                return fail("translation:empty_text", "Translation source text is required.");
+            };
+            if !translateit_native_cuda::translation_source_admitted(source) {
+                return fail("native_inference:invalid_input", "Translation source text is invalid or outside the admitted limit.");
+            }
+        }
+        Some((from, to))
+    } else { None };
     let reference = if is_bind {
         // Refresh the same current capability facts inside the bind permit.
         // No separate status receipt, scheduler turn or stale provider reuse.
@@ -419,12 +450,7 @@ pub(super) fn dispatch(
             body["model_id"] = json!(NATIVE_ASR_MODEL);
             body["compute_type"] = json!("q8_0");
         } else {
-            let (Some(from), Some(to)) = (language(payload, "source_language"), language(payload, "target_language")) else {
-                return fail("translation:direction_not_supported", "Only Indonesian and English translation is supported.");
-            };
-            if from == to {
-                return fail("translation:direction_not_supported", "Translation must change language.");
-            }
+            let (from, _) = translation_direction.expect("checked translation preload direction");
             body["model_id"] = json!(NATIVE_MT_MODEL);
             body["model_revision"] = json!(NATIVE_MT_REVISION);
             body["precision"] = json!("q6_k");
@@ -434,6 +460,9 @@ pub(super) fn dispatch(
         }
         return response_with_runtime(true, task, request_id, priority,
             worker_message(task, &body), body, &host, NATIVE_INFERENCE_CLAIM.into());
+    }
+    if deferred_deadline_elapsed(deferred_deadline) {
+        return expired_deferred_response(task, request_id, priority);
     }
     let mut bound_id = None;
     let mut actor_token = None;
@@ -481,16 +510,7 @@ pub(super) fn dispatch(
         };
         (Some(InferenceInput::Speech { pcm: samples, language: from }), from, None)
     } else {
-        let (from, to) = match translation {
-            Some(input) => (parse_language(input.source_language), parse_language(input.target_language)),
-            None => (language(payload, "source_language"), language(payload, "target_language")),
-        };
-        let (Some(from), Some(to)) = (from, to) else {
-            return fail("translation:direction_not_supported", "Only Indonesian and English translation is supported.");
-        };
-        if from == to {
-            return fail("translation:direction_not_supported", "Translation must change language.");
-        }
+        let (from, to) = translation_direction.expect("checked translation direction");
         let source = match translation {
             Some(input) => input.source.to_owned(),
             None => {
@@ -507,6 +527,9 @@ pub(super) fn dispatch(
     // revoke authority during conditioning, so check before beginning.
     if !scope_is_current(&request_scope) {
         return fail("native_inference:scope_revoked", "Inference authority was revoked before execution.");
+    }
+    if deferred_deadline_elapsed(deferred_deadline) {
+        return expired_deferred_response(task, request_id, priority);
     }
     let bridge_generation = host.generation_token;
     let pending_result = {

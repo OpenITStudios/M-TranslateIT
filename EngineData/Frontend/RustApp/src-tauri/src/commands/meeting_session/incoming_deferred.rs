@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance;
 
@@ -10,7 +10,7 @@ use super::committed_turns::finish_meeting_turn_translation;
 use super::super::helper_bridge::{incoming_deferred_for_required_outbound, meeting_outbound_pipeline_active, HelperBridgeWorkerResponse};
 
 pub(super) const MAX_DEFERRED_INCOMING: usize = 4;
-const MAX_DEFERRED_INCOMING_AGE_MS: u64 = 20_000;
+const MAX_DEFERRED_INCOMING_AGE: Duration = Duration::from_secs(20);
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum IncomingAsrDisposition<'a> {
@@ -39,9 +39,9 @@ pub(super) struct DeferredIncomingJob {
     pub(super) event_sequence: u64,
     pub(super) utterance_id: u64,
     pub(super) stage: DeferredIncomingStage,
-    // First deferral time. Requeues must retain this value so the 20-second
-    // bounded age budget cannot be refreshed by repeated outbound preemption.
-    pub(super) enqueued_unix_ms: u64,
+    // Absolute monotonic deadline from the first deferral. Requeues and
+    // subsequent stage admission must retain it, never renew the budget.
+    pub(super) expires_at: Instant,
 }
 
 static DEFERRED_INCOMING_QUEUE: OnceLock<Mutex<VecDeque<DeferredIncomingJob>>> = OnceLock::new();
@@ -75,11 +75,22 @@ pub(super) fn classify_incoming_asr_response<'a>(
     }
 }
 
-pub(super) fn deferred_enqueue_unix_ms(
-    first_deferred_unix_ms: Option<u64>,
-    now_unix_ms: u64,
-) -> u64 {
-    first_deferred_unix_ms.unwrap_or(now_unix_ms)
+pub(super) fn deferred_expiration(first_deadline: Option<Instant>, now: Instant) -> Instant {
+    first_deadline.unwrap_or_else(|| now + MAX_DEFERRED_INCOMING_AGE)
+}
+
+// The dequeued job may expire while waiting for the inference permit.
+// Count this terminal receipt once, just as expiration in the queue.
+pub(super) fn record_deferred_expiration(response: &HelperBridgeWorkerResponse) -> bool {
+    let expired = !response.ok && response.state == "expired"
+        && response.generation_token == 0
+        && response.runtime_claim == "helper_scheduler_request_not_executed"
+        && response.worker_response_json.get("blocker").and_then(serde_json::Value::as_str)
+            == Some(crate::commands::helper_bridge_runtime::SCHEDULER_DEFERRED_EXPIRED);
+    if expired {
+        DEFERRED_DROPPED_STALE.fetch_add(1, Ordering::Relaxed);
+    }
+    expired
 }
 
 fn cleanup_deferred_incoming_job(job: DeferredIncomingJob) {
@@ -146,11 +157,11 @@ pub(super) fn requeue_deferred_incoming_front(job: DeferredIncomingJob) -> usize
 
 pub(super) fn take_due_deferred_incoming(
     session_id: &str,
-    now_unix_ms: u64,
+    now: Instant,
 ) -> Option<DeferredIncomingJob> {
     take_due_deferred_incoming_with_admission(
         session_id,
-        now_unix_ms,
+        now,
         super::incoming_session_is_eligible,
         !meeting_outbound_pipeline_active(),
     )
@@ -158,12 +169,10 @@ pub(super) fn take_due_deferred_incoming(
 
 // Called outside the audio producer lock by the sole incoming consumer.
 // Expire the oldest queued job at its original age; no retry interval.
-pub(super) fn deferred_incoming_wait_budget(now_unix_ms: u64) -> Option<Duration> {
+pub(super) fn deferred_incoming_wait_budget(now: Instant) -> Option<Duration> {
     let guard = deferred_incoming_queue().lock().ok()?;
     let front = guard.front()?;
-    Some(Duration::from_millis(
-        (MAX_DEFERRED_INCOMING_AGE_MS + 1).saturating_sub(now_unix_ms.saturating_sub(front.enqueued_unix_ms))
-    ))
+    Some(front.expires_at.saturating_duration_since(now))
 }
 
 // The live owner may retire old-session or expired work. A stopped consumer
@@ -171,7 +180,7 @@ pub(super) fn deferred_incoming_wait_budget(now_unix_ms: u64) -> Option<Duration
 // Check authority under the same queue lock as the dequeue itself.
 fn take_due_deferred_incoming_with_admission(
     session_id: &str,
-    now_unix_ms: u64,
+    now: Instant,
     admitted: impl FnOnce(&str) -> bool,
     outbound_idle: bool,
 ) -> Option<DeferredIncomingJob> {
@@ -185,7 +194,7 @@ fn take_due_deferred_incoming_with_admission(
             break None;
         };
         if front.session_id != session_id
-            || now_unix_ms.saturating_sub(front.enqueued_unix_ms) > MAX_DEFERRED_INCOMING_AGE_MS
+            || now >= front.expires_at
         {
             if let Some(stale) = guard.pop_front() {
                 removed.push(stale);
@@ -271,7 +280,12 @@ pub(super) fn clear_deferred_incoming_queue() -> Result<(), String> {
 mod tests {
     use super::*;
 
-    fn job(session: &str, seq: u64, transcript: &str, enqueued_unix_ms: u64) -> DeferredIncomingJob {
+    fn test_time(ms: u64) -> Instant {
+        static BASE: OnceLock<Instant> = OnceLock::new();
+        *BASE.get_or_init(Instant::now) + Duration::from_millis(ms)
+    }
+
+    fn job(session: &str, seq: u64, transcript: &str, first_deferred_ms: u64) -> DeferredIncomingJob {
         DeferredIncomingJob {
             session_id: session.to_string(),
             event_sequence: seq,
@@ -281,7 +295,7 @@ mod tests {
                 source_language: "en".to_string(),
                 target_language: "id".to_string(),
             },
-            enqueued_unix_ms,
+            expires_at: deferred_expiration(None, test_time(first_deferred_ms)),
         }
     }
 
@@ -291,6 +305,7 @@ mod tests {
     fn deferred_queue_state_contracts_are_serialized() {
         deferred_admission_serializes_with_cleanup();
         deferred_retry_preserves_first_deferral_age_budget();
+        deferred_expiration_receipt_counts_only_verified_discard();
         deferred_work_stays_queued_while_outbound_owns_inference();
         deferred_queue_caps_evicts_expired_and_respects_session();
         stale_consumer_cannot_evict_a_new_meeting_queue();
@@ -350,7 +365,7 @@ mod tests {
                 source_language: "en".into(),
                 target_language: "id".into(),
             },
-            enqueued_unix_ms: 101,
+            expires_at: deferred_expiration(None, test_time(101)),
         };
         let pcm = pcm_job("next", 20);
         let storage = match &pcm.stage {
@@ -455,7 +470,7 @@ mod tests {
         let stale_before = DEFERRED_DROPPED_STALE.load(Ordering::Relaxed);
 
         assert!(take_due_deferred_incoming_with_admission(
-            "old-meeting", 5_000,
+            "old-meeting", test_time(5_000),
             |session| {
                 assert_eq!(session, "old-meeting");
                 assert!(deferred_incoming_queue().try_lock().is_err());
@@ -467,7 +482,7 @@ mod tests {
         assert_eq!(DEFERRED_DROPPED_STALE.load(Ordering::Relaxed), stale_before);
         // A valid current consumer retains its own queued job.
         assert_eq!(
-            take_due_deferred_incoming_with_admission("new-meeting", 5_000, |_| true, true)
+            take_due_deferred_incoming_with_admission("new-meeting", test_time(5_000), |_| true, true)
                 .expect("current consumer owns pending job")
                 .event_sequence,
             14,
@@ -502,20 +517,47 @@ mod tests {
         assert_eq!(deferred_incoming_health_counts().0, 0);
     }
 
+    // The only receipt that counts as expired is the host-owned, nonexecuted
+    // incoming request result. A backend failure cannot impersonate it.
+    fn deferred_expiration_receipt_counts_only_verified_discard() {
+        let mut receipt = HelperBridgeWorkerResponse {
+            ok: false, state: "expired".into(), task: "transcribe".into(),
+            request_id: "fixture".into(), scheduler_priority: "meeting_incoming".into(),
+            message: String::new(), generation_token: 0,
+            runtime_claim: "helper_scheduler_request_not_executed".into(),
+            worker_response_json: serde_json::json!({
+                "blocker": crate::commands::helper_bridge_runtime::SCHEDULER_DEFERRED_EXPIRED,
+            }),
+        };
+        let before = DEFERRED_DROPPED_STALE.load(Ordering::Relaxed);
+        receipt.runtime_claim = "native_cuda_inference_receipt".into();
+        assert!(!record_deferred_expiration(&receipt));
+        receipt.runtime_claim = "helper_scheduler_request_not_executed".into();
+        receipt.generation_token = 1;
+        assert!(!record_deferred_expiration(&receipt));
+        receipt.generation_token = 0;
+        assert!(record_deferred_expiration(&receipt));
+        assert_eq!(DEFERRED_DROPPED_STALE.load(Ordering::Relaxed) - before, 1);
+    }
+
     fn deferred_retry_preserves_first_deferral_age_budget() {
         clear_deferred_incoming_queue().expect("clear deferred queue");
-        let first_deferred_unix_ms = 10_000;
-        let retry_unix_ms = 29_000;
-        let preserved = deferred_enqueue_unix_ms(Some(first_deferred_unix_ms), retry_unix_ms);
-        assert_eq!(preserved, first_deferred_unix_ms);
-        assert_eq!(deferred_enqueue_unix_ms(None, retry_unix_ms), retry_unix_ms);
+        let first = test_time(10_000);
+        let retry = test_time(29_000);
+        let original = deferred_expiration(None, first);
+        let preserved = deferred_expiration(Some(original), retry);
+        assert_eq!(preserved, original);
+        assert_eq!(deferred_expiration(None, retry), retry + MAX_DEFERRED_INCOMING_AGE);
 
-        enqueue_with_admission(job("sess", 1, "t", preserved), true, |_| true);
+        let mut held = job("sess", 1, "t", 10_000);
+        held.expires_at = preserved;
+        enqueue_with_admission(held, true, |_| true);
+        assert_eq!(deferred_incoming_wait_budget(retry), Some(Duration::from_secs(1)));
         let stale_before = DEFERRED_DROPPED_STALE.load(Ordering::Relaxed);
         assert!(
             take_due_deferred_incoming_with_admission(
                 "sess",
-                first_deferred_unix_ms + MAX_DEFERRED_INCOMING_AGE_MS + 1,
+                original,
                 |_| true,
                 false,
             )
@@ -532,11 +574,11 @@ mod tests {
     fn deferred_work_stays_queued_while_outbound_owns_inference() {
         clear_deferred_incoming_queue().unwrap();
         enqueue_with_admission(job("sess", 1, "t", 1_000), false, |_| true);
-        assert!(take_due_deferred_incoming_with_admission("sess", 2_000, |_| true, false).is_none());
+        assert!(take_due_deferred_incoming_with_admission("sess", test_time(2_000), |_| true, false).is_none());
         assert_eq!(deferred_incoming_health_counts().0, 1);
-        assert_eq!(deferred_incoming_wait_budget(2_000), Some(Duration::from_millis(19_001)));
-        assert_eq!(take_due_deferred_incoming_with_admission("sess", 2_000, |_| true, true).unwrap().event_sequence, 1);
-        assert_eq!(deferred_incoming_wait_budget(2_000), None);
+        assert_eq!(deferred_incoming_wait_budget(test_time(2_000)), Some(Duration::from_millis(19_000)));
+        assert_eq!(take_due_deferred_incoming_with_admission("sess", test_time(2_000), |_| true, true).unwrap().event_sequence, 1);
+        assert_eq!(deferred_incoming_wait_budget(test_time(2_000)), None);
         clear_deferred_incoming_queue().unwrap();
     }
 
@@ -546,7 +588,7 @@ mod tests {
 
         enqueue_with_admission(job("sess", 1, "t", 1_000), false, |_| true);
         let stale_before = DEFERRED_DROPPED_STALE.load(Ordering::Relaxed);
-        assert!(take_due_deferred_incoming_with_admission("other-sess", 2_000, |_| true, true).is_none());
+        assert!(take_due_deferred_incoming_with_admission("other-sess", test_time(2_000), |_| true, true).is_none());
         assert_eq!(
             DEFERRED_DROPPED_STALE.load(Ordering::Relaxed) - stale_before,
             1,
@@ -565,7 +607,7 @@ mod tests {
 
         let stale_before = DEFERRED_DROPPED_STALE.load(Ordering::Relaxed);
         let mut delivered = 0;
-        while take_due_deferred_incoming_with_admission("sess", 40_000, |_| true, true).is_some() {
+        while take_due_deferred_incoming_with_admission("sess", test_time(40_000), |_| true, true).is_some() {
             delivered += 1;
         }
         assert_eq!(delivered, 0, "expired jobs are dropped, not delivered");
@@ -576,8 +618,8 @@ mod tests {
 
         enqueue_with_admission(job("sess", 7, "a", 50_000), false, |_| true);
         enqueue_with_admission(job("sess", 8, "b", 51_000), false, |_| true);
-        let first = take_due_deferred_incoming_with_admission("sess", 52_000, |_| true, true).expect("fresh job due");
-        let second = take_due_deferred_incoming_with_admission("sess", 52_000, |_| true, true).expect("second fresh job due");
+        let first = take_due_deferred_incoming_with_admission("sess", test_time(52_000), |_| true, true).expect("fresh job due");
+        let second = take_due_deferred_incoming_with_admission("sess", test_time(52_000), |_| true, true).expect("second fresh job due");
         assert_eq!(first.event_sequence, 7);
         assert_eq!(second.event_sequence, 8);
 

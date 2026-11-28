@@ -22,7 +22,7 @@ use super::{
     worker_message, HelperBridgeWorkerResponse,
 };
 use super::super::helper_bridge_runtime::{
-    acquire_scoped_helper_task_permit, apply_worker_response, clear_active_request, SCHEDULER_SCOPE_REVOKED,
+    acquire_scoped_helper_task_permit, apply_worker_response, clear_active_request, SCHEDULER_SCOPE_REVOKED, SCHEDULER_DEFERRED_EXPIRED,
     runtime, runtime_claim, unix_ms,
     worker_response_deadline_for_priority,
     HelperBridgeRuntime, HelperTaskPriority,
@@ -107,6 +107,16 @@ fn status_busy_response(request_id: &str) -> HelperBridgeWorkerResponse {
         "Worker capability was not checked because the runtime is busy.")
 }
 
+fn deferred_deadline_elapsed(deadline: Option<Instant>) -> bool {
+    deadline.is_some_and(|deadline| Instant::now() >= deadline)
+}
+
+fn expired_deferred_response(task: &str, request_id: &str, priority: HelperTaskPriority) -> HelperBridgeWorkerResponse {
+    standalone_blocked_response(task, request_id, priority, "expired",
+        SCHEDULER_DEFERRED_EXPIRED,
+        "Deferred incoming Meeting work expired before native inference.")
+}
+
 fn incoming_deferred_response(task: &str, request_id: &str) -> HelperBridgeWorkerResponse {
     standalone_blocked_response(
         task,
@@ -170,6 +180,7 @@ struct MeetingPcmInput<'a> {
     language: &'a str,
     noise_suppression_enabled: bool,
     prepare_ms: &'a Cell<u64>,
+    deferred_deadline: Option<Instant>,
 }
 
 impl MeetingPcmInput<'_> {
@@ -196,6 +207,7 @@ struct MeetingTranslationInput<'a> {
     source: &'a str,
     source_language: &'a str,
     target_language: &'a str,
+    deferred_deadline: Option<Instant>,
 }
 
 #[derive(Clone, Copy)]
@@ -211,6 +223,12 @@ impl<'a> MeetingInput<'a> {
     fn translation(self) -> Option<MeetingTranslationInput<'a>> {
         match self { Self::Translation(input) => Some(input), _ => None }
     }
+    fn deferred_deadline(self) -> Option<Instant> {
+        match self {
+            Self::Pcm(input) => input.deferred_deadline,
+            Self::Translation(input) => input.deferred_deadline,
+        }
+    }
 }
 
 // PCM stays in Rust ownership, never in the public worker JSON.
@@ -225,8 +243,12 @@ fn send_worker_task_inner(task: &str, mut payload: Value, input: Option<MeetingI
                           wait_generation: Option<u64>) -> HelperBridgeWorkerResponse {
     let RequestAdmission { priority, generation: meeting_generation,
         session_id: meeting_session_id, lane: meeting_lane } = admission;
-    let permit = match acquire_scoped_helper_task_permit(priority, wait_generation) {
+    let deferred_deadline = input.and_then(MeetingInput::deferred_deadline);
+    let permit = match acquire_scoped_helper_task_permit(priority, wait_generation, deferred_deadline) {
         Ok(permit) => permit,
+        Err(error) if error == SCHEDULER_DEFERRED_EXPIRED => {
+            return expired_deferred_response(task, "scheduler-expired-before-admission", priority);
+        }
         Err(error) if error == SCHEDULER_SCOPE_REVOKED => {
             let stale = if meeting_generation.is_some() { StaleMeetingScope::Generation } else { StaleMeetingScope::Session };
             return stale.response(task, "scheduler-scope-revoked", priority);
@@ -249,6 +271,9 @@ fn send_worker_task_inner(task: &str, mut payload: Value, input: Option<MeetingI
     // All early exits below occur AFTER this request acquired its permit.
     // Preserve its measured wait even when no valid Python reply exists.
     let response = (|| -> HelperBridgeWorkerResponse {
+    if deferred_deadline_elapsed(deferred_deadline) {
+        return expired_deferred_response(task, request_id, priority);
+    }
     // An incoming request may have entered the scheduler before outbound claimed the
     // pipeline. Re-check after permit acquisition so queued optional work cannot slip
     // between required outbound ASR -> translation -> TTS stages.
@@ -368,8 +393,9 @@ pub(super) fn transcribe_native_voice_probe(payload: Value, samples: Vec<f32>) -
 
 pub(super) fn send_meeting_translation(
     payload: Value, source: &str, source_language: &str, target_language: &str,
+    deferred_deadline: Option<Instant>,
 ) -> HelperBridgeWorkerResponse {
-    let input = MeetingTranslationInput { source, source_language, target_language };
+    let input = MeetingTranslationInput { source, source_language, target_language, deferred_deadline };
     send_worker_task_with_input("translate", payload, Some(MeetingInput::Translation(input)), None)
 }
 
@@ -378,11 +404,12 @@ pub(super) fn send_worker_pcm_task(
     language: &str,
     utterance: FinalizedMeetingUtterance,
     noise_suppression_enabled: bool,
+    deferred_deadline: Option<Instant>,
 ) -> (HelperBridgeWorkerResponse, Option<FinalizedMeetingUtterance>) {
     let rejection = finalized_asr_frame_rejection(&utterance);
     let utterance = RefCell::new(Some(utterance));
     let prepare_ms = Cell::new(0);
-    let input = MeetingPcmInput { utterance: &utterance, language, noise_suppression_enabled, prepare_ms: &prepare_ms };
+    let input = MeetingPcmInput { utterance: &utterance, language, noise_suppression_enabled, prepare_ms: &prepare_ms, deferred_deadline };
     let mut response = if !input.matches("transcribe", &payload) {
         standalone_blocked_response(
             "transcribe", "invalid-meeting-pcm", task_priority("transcribe", &payload),
@@ -423,6 +450,9 @@ fn send_worker_task_with_input(task: &str, payload: Value, input: Option<Meeting
         Ok(generation) => generation,
         Err(stale) => return stale.response(task, "scheduler-stale-before-admission", priority),
     };
+    if deferred_deadline_elapsed(input.and_then(MeetingInput::deferred_deadline)) {
+        return expired_deferred_response(task, "incoming-expired-before-scheduler", priority);
+    }
     // Reject new optional incoming stages immediately while a required outbound
     // utterance owns the helper pipeline. The post-permit check in the inner path
     // also catches incoming work that was already queued before this claim existed.
@@ -594,7 +624,7 @@ mod finalized_pcm_handoff_tests {
         });
         assert!(finalized_asr_frame_rejection(&utterance).is_none());
         let utterance = RefCell::new(Some(utterance));
-        let input = MeetingPcmInput { utterance: &utterance, language: "id", noise_suppression_enabled: false, prepare_ms: &prepare_ms };
+        let input = MeetingPcmInput { utterance: &utterance, language: "id", noise_suppression_enabled: false, prepare_ms: &prepare_ms, deferred_deadline: None };
         assert!(input.matches("transcribe", &payload));
         for (key, value) in [
             ("meeting_session_id", json!("another")),

@@ -9,7 +9,7 @@ const native = read("helper_bridge/transport/native.rs");
 const startup = read("helper_bridge.rs");
 
 test("native requests retain scheduler identity, exact Meeting scope and a bounded deadline", () => {
-  assert.match(transport, /acquire_scoped_helper_task_permit\(priority, wait_generation\)/);
+  assert.match(transport, /acquire_scoped_helper_task_permit\(priority, wait_generation, deferred_deadline\)/);
   assert.match(transport, /permit\.request_id\(\)/);
   assert.match(native, /checked_add\(Duration::from_millis\(ms\)\)/);
   assert.match(native, /scope\(payload\)/);
@@ -66,4 +66,22 @@ test("scheduler fast path avoids wait registration and native scope keeps the qu
   assert.match(transport, /Ok\(current\) if current != wait_generation/);
   assert.match(native, /request_scope\.generation != wait_generation/);
   assert.match(native, /scope\.generation == wait_generation/);
+});
+
+test("invalid text and language direction are rejected before model preparation", () => {
+  const dispatch = native.slice(native.indexOf("pub(super) fn dispatch("), native.indexOf("let mut bound_id = None;"));
+  const direction = dispatch.indexOf("let translation_direction =");
+  const invalid = dispatch.indexOf("translation_source_admitted(source)");
+  const lock = dispatch.indexOf("runtime().lock()");
+  const open = dispatch.indexOf("NativeInferenceOwner::open(");
+  const scope = dispatch.indexOf("request_scope.generation != wait_generation");
+  const lifecycle = dispatch.indexOf("!host.native_lifecycle_ready()");
+  assert.ok(lock >= 0 && lock < scope && scope < lifecycle && lifecycle < direction
+    && direction < invalid && invalid < open);
+  assert.match(dispatch.slice(direction, open), /if from == to/);
+  assert.match(native, /translation_direction\.expect\("checked translation direction"\)/);
+  assert.match(native, /translation_direction\.expect\("checked translation preload direction"\)/);
+  const abi = readFileSync(new URL("../../../../../tools/translation_quality/native_cuda/src/lib.rs", import.meta.url), "utf8");
+  assert.match(abi, /pub fn translation_source_admitted\(source: &str\)/);
+  assert.match(abi, /if from == to \|\| !translation_source_admitted\(source\)/);
 });

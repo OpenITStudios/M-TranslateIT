@@ -13,7 +13,6 @@ use crate::engine;
 
 use super::incoming_deferred::{clear_deferred_incoming_queue_for_session, deferred_incoming_wait_budget};
 use super::super::helper_bridge::meeting_outbound_pipeline_active;
-use super::super::helper_bridge_runtime::unix_ms;
 use super::incoming_pipeline::{
     drain_due_deferred_incoming, process_authoritative_finalized_incoming_pcm,
 };
@@ -255,7 +254,7 @@ pub(super) fn start_meeting_incoming_consumer(session_id: &str) -> Result<(), St
             loop {
                 if !incoming_session_is_eligible(&thread_session_id) { break; }
                 drain_due_deferred_incoming(&thread_session_id);
-                let budget = deferred_incoming_wait_budget(unix_ms() as u64);
+                let budget = deferred_incoming_wait_budget(Instant::now());
                 let utterance = match wait_for_incoming_work(
                     &thread_session_id, budget, || !meeting_outbound_pipeline_active(),
                 ) {

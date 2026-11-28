@@ -221,6 +221,7 @@ pub(super) fn process_outbound_pcm(
         "id",
         utterance,
         noise_suppression_enabled,
+        None,
     );
     let asr_wall_ms = elapsed_millis(asr_started_at, Instant::now());
     timing.metrics.audio_prepare_ms = asr.worker_response_json.get("audio_prepare_ms")
@@ -361,7 +362,7 @@ fn process_outbound_transcript(
             "meeting_sequence": event_sequence,
             "utterance_id": utterance_id,
         }),
-        transcript, "id", "en",
+        transcript, "id", "en", None,
     );
     timing.metrics.translation_ms = Some(elapsed_millis(translation_started_at, Instant::now()));
     timing.metrics.translation_scheduler_wait_ms = super::worker_scheduler_wait_ms(&translation);

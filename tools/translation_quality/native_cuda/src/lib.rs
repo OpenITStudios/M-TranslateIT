@@ -102,6 +102,13 @@ fn native_path(path: &Path) -> Result<CString, Error> {
         .map_err(|_| Error::InvalidInput)
 }
 
+/// The same text admission predicate is shared by the host before model
+/// preparation and by the ABI caller before native execution.
+pub fn translation_source_admitted(source: &str) -> bool {
+    !source.trim().is_empty() && !source.contains('\0') &&
+        source.chars().take(MAX_TRANSLATION_INPUT_CHARS + 1).count() <= MAX_TRANSLATION_INPUT_CHARS
+}
+
 impl Runtime {
     /// One resident pair. The native owner validates all pinned artifacts
     /// and checks free VRAM before publication. No partial model opens.
@@ -195,9 +202,7 @@ impl Runtime {
     /// complete result. No external prompt, context, or generation options.
     pub fn translate<'a>(&mut self, source: &str, from: Language, to: Language,
                          control: &RequestControl<'_>, output: &'a mut [u8]) -> Result<&'a str, Error> {
-        if from == to || source.trim().is_empty() || source.contains('\0') ||
-            source.chars().take(MAX_TRANSLATION_INPUT_CHARS + 1).count() > MAX_TRANSLATION_INPUT_CHARS ||
-            output.len() < MAX_OUTPUT_BYTES {
+        if from == to || !translation_source_admitted(source) || output.len() < MAX_OUTPUT_BYTES {
             return Err(Error::InvalidInput);
         }
         let mut len = 0;

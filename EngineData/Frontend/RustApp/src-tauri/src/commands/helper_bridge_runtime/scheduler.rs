@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use crate::engine::runtime_state::runtime_generation_matches_epoch;
 
 pub(crate) const SCHEDULER_SCOPE_REVOKED: &str = "helper_scheduler:meeting_scope_revoked";
+pub(crate) const SCHEDULER_DEFERRED_EXPIRED: &str = "helper_scheduler:deferred_incoming_expired";
 
 pub const HELPER_SCHEDULER_TOTAL_ADMISSION_CAP: u32 = 8;
 pub const HELPER_SCHEDULER_MEETING_OUTBOUND_WAIT_MS: u64 = 120_000;
@@ -174,13 +175,14 @@ fn acquire_helper_task_permit_with_wait_deadline(
     priority: HelperTaskPriority,
     wait_deadline: Duration,
 ) -> Result<HelperTaskPermit, String> {
-    acquire_scoped_permit_with_deadline(priority, wait_deadline, None)
+    acquire_scoped_permit_with_deadline(priority, wait_deadline, None, None)
 }
 
 fn acquire_scoped_permit_with_deadline(
     priority: HelperTaskPriority,
     wait_deadline: Duration,
     generation: Option<u64>,
+    deferred_deadline: Option<Instant>,
 ) -> Result<HelperTaskPermit, String> {
     let wait_started = Instant::now();
     let (lock, wake) = scheduler();
@@ -190,6 +192,9 @@ fn acquire_scoped_permit_with_deadline(
 
     if generation.is_some_and(|generation| !runtime_generation_matches_epoch(generation)) {
         return Err(SCHEDULER_SCOPE_REVOKED.to_string());
+    }
+    if deferred_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        return Err(SCHEDULER_DEFERRED_EXPIRED.to_string());
     }
     if !scheduler_can_admit(&state, priority) {
         return Err(format!(
@@ -212,13 +217,17 @@ fn acquire_scoped_permit_with_deadline(
             return Err(SCHEDULER_SCOPE_REVOKED.to_string());
         }
         let remaining = wait_deadline.saturating_sub(wait_started.elapsed());
-        if remaining.is_zero() {
+        let deferred_remaining = deferred_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+        let deferred_expired = deferred_remaining.is_some_and(|budget| budget.is_zero());
+        if deferred_expired || remaining.is_zero() {
             if registered {
                 scheduler_waiting_decrement(&mut state, priority);
                 wake.notify_all();
             }
-            return Err(scheduler_wait_deadline_error(priority, wait_deadline));
+            return Err(if deferred_expired { SCHEDULER_DEFERRED_EXPIRED.to_string() }
+                else { scheduler_wait_deadline_error(priority, wait_deadline) });
         }
+        let remaining = deferred_remaining.map_or(remaining, |budget| remaining.min(budget));
 
         if scheduler_can_enter(&state, priority) {
             break;
@@ -284,10 +293,10 @@ pub fn acquire_helper_task_permit(
 // Callers establish exact session authority before queuing. The epoch is
 // only a cancellation fence; the existing post-permit authority check stays.
 pub(crate) fn acquire_scoped_helper_task_permit(
-    priority: HelperTaskPriority, generation: Option<u64>,
+    priority: HelperTaskPriority, generation: Option<u64>, deferred_deadline: Option<Instant>,
 ) -> Result<HelperTaskPermit, String> {
     acquire_scoped_permit_with_deadline(
-        priority, Duration::from_millis(priority.scheduler_wait_deadline_ms()), generation,
+        priority, Duration::from_millis(priority.scheduler_wait_deadline_ms()), generation, deferred_deadline,
     )
 }
 
@@ -458,6 +467,30 @@ mod scheduler_policy_tests {
     }
 
     #[test]
+    fn deferred_deadline_caps_scheduler_wait_and_never_claims_expired_work() {
+        let _serial = scheduler_test_guard();
+        reset_scheduler();
+        let expired = acquire_scoped_permit_with_deadline(
+            HelperTaskPriority::MeetingIncoming, Duration::from_secs(1), None, Some(Instant::now()),
+        );
+        assert_eq!(expired.err().as_deref(), Some(SCHEDULER_DEFERRED_EXPIRED));
+        let active = acquire_helper_task_permit(HelperTaskPriority::MeetingOutbound).unwrap();
+        let deadline = Instant::now() + Duration::from_millis(25);
+        let expired = acquire_scoped_permit_with_deadline(
+            HelperTaskPriority::MeetingIncoming, Duration::from_secs(1), None, Some(deadline),
+        );
+        assert_eq!(expired.err().as_deref(), Some(SCHEDULER_DEFERRED_EXPIRED));
+        {
+            let state = scheduler().0.lock().unwrap();
+            assert!(state.active);
+            assert_eq!(state.waiting_meeting_incoming, 0);
+            assert_eq!(state.next_request_sequence, 1);
+        }
+        drop(active);
+        reset_scheduler();
+    }
+
+    #[test]
     fn scheduler_capacity_rejection_does_not_add_waiting_callers() {
         let _serial = scheduler_test_guard();
         reset_scheduler();
@@ -546,7 +579,7 @@ mod scheduler_policy_tests {
         for priority in [HelperTaskPriority::MeetingOutbound, HelperTaskPriority::MeetingIncoming] {
             let tx = tx.clone();
             handles.push(thread::spawn(move || {
-                let result = acquire_scoped_permit_with_deadline(priority, Duration::from_secs(5), Some(generation));
+                let result = acquire_scoped_permit_with_deadline(priority, Duration::from_secs(5), Some(generation), None);
                 let _ = tx.send(result.err());
             }));
         }
@@ -572,7 +605,7 @@ mod scheduler_policy_tests {
         assert_eq!(second.unwrap().as_deref(), Some(SCHEDULER_SCOPE_REVOKED));
         assert!(still_active);
         assert_eq!((waiting, sequence), (0, 1));
-        assert_eq!(acquire_scoped_helper_task_permit(HelperTaskPriority::MeetingOutbound, Some(generation)).err().as_deref(),
+        assert_eq!(acquire_scoped_helper_task_permit(HelperTaskPriority::MeetingOutbound, Some(generation), None).err().as_deref(),
             Some(SCHEDULER_SCOPE_REVOKED));
         let next = acquire_helper_task_permit(HelperTaskPriority::Text).unwrap();
         assert_eq!(next.request_id(), "helper-2");

@@ -7,7 +7,8 @@ use super::committed_turns::{
     commit_meeting_turn, finish_meeting_turn_translation,
 };
 use super::incoming_deferred::{
-    classify_incoming_asr_response, deferred_enqueue_unix_ms, enqueue_deferred_incoming,
+    classify_incoming_asr_response, deferred_expiration, enqueue_deferred_incoming,
+    record_deferred_expiration,
     requeue_deferred_incoming_front,
     take_due_deferred_incoming, DeferredIncomingJob, DeferredIncomingStage,
     IncomingAsrDisposition, MAX_DEFERRED_INCOMING,
@@ -17,7 +18,7 @@ use super::session_state::update_incoming_status;
 use super::super::helper_bridge::{
     incoming_deferred_for_required_outbound, send_helper_worker_pcm_task, send_helper_meeting_translation,
 };
-use super::super::helper_bridge_runtime::unix_ms;
+use std::time::Instant;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum IncomingAudioProcessResult {
@@ -36,13 +37,13 @@ pub(super) fn process_authoritative_finalized_incoming_pcm(
 fn process_incoming_pcm_with_direction(
     utterance: FinalizedMeetingUtterance,
     noise_suppression_enabled: bool,
-    deferred_enqueued_unix_ms: Option<u64>,
+    deferred_deadline: Option<Instant>,
     deferred_direction: Option<(String, String)>,
 ) -> IncomingAudioProcessResult {
     let session_id = utterance.session_id.as_str();
     let event_sequence = utterance.sequence;
     let utterance_id = utterance.utterance_id;
-    let retrying_deferred = deferred_enqueued_unix_ms.is_some();
+    let retrying_deferred = deferred_deadline.is_some();
     // Codex selection must not borrow Local Faster-Whisper even for optional
     // incoming captions. Check outside deferred queue ownership so no
     // settings-IO lock is taken while the queue mutex is held.
@@ -78,15 +79,21 @@ fn process_incoming_pcm_with_direction(
         &source_language,
         utterance,
         noise_suppression_enabled,
+        deferred_deadline,
     );
     if !incoming_session_is_eligible(session_id) {
         return IncomingAudioProcessResult::Complete;
     }
 
+    if record_deferred_expiration(&asr) {
+        update_incoming_status(session_id, "listening", false, "",
+            "Expired deferred Meeting Sound was discarded before inference.");
+        return IncomingAudioProcessResult::Complete;
+    }
     let transcript = match classify_incoming_asr_response(&asr, &source_language) {
         IncomingAsrDisposition::Deferred => {
-            let enqueued_unix_ms =
-                deferred_enqueue_unix_ms(deferred_enqueued_unix_ms, unix_ms() as u64);
+            let expires_at =
+                deferred_expiration(deferred_deadline, Instant::now());
             // Only a verified pre-execution deferral returns owned PCM.
             let Some(utterance) = deferred_utterance else {
                 update_incoming_status(
@@ -106,7 +113,7 @@ fn process_incoming_pcm_with_direction(
                     source_language,
                     target_language,
                 },
-                enqueued_unix_ms,
+                expires_at,
             };
             let held = if retrying_deferred {
                 requeue_deferred_incoming_front(job)
@@ -179,6 +186,7 @@ fn process_incoming_pcm_with_direction(
         &source_language,
         &target_language,
         !retrying_deferred,
+        deferred_deadline,
     );
     if held && retrying_deferred {
         let held_count = requeue_deferred_incoming_front(DeferredIncomingJob {
@@ -190,9 +198,9 @@ fn process_incoming_pcm_with_direction(
                 source_language: source_language.clone(),
                 target_language: target_language.clone(),
             },
-            enqueued_unix_ms: deferred_enqueue_unix_ms(
-                deferred_enqueued_unix_ms,
-                unix_ms() as u64,
+            expires_at: deferred_expiration(
+                deferred_deadline,
+                Instant::now(),
             ),
         });
         if held_count == 0 {
@@ -231,6 +239,7 @@ fn translate_and_commit_incoming_transcript(
     source_language: &str,
     target_language: &str,
     allow_defer: bool,
+    deferred_deadline: Option<Instant>,
 ) -> bool {
     // A deferred transcript can outlive the earlier ASR admission. Never
     // start MiLMMT under a Codex/unverified engine or revoked Meeting.
@@ -253,9 +262,17 @@ fn translate_and_commit_incoming_transcript(
             "meeting_sequence": event_sequence,
             "utterance_id": utterance_id,
         }),
-        transcript, source_language, target_language,
+        transcript, source_language, target_language, deferred_deadline,
     );
     if !incoming_session_is_eligible(session_id) {
+        return false;
+    }
+    if record_deferred_expiration(&translation) {
+        let _ = finish_meeting_turn_translation(
+            session_id, event_sequence, None, utterance_id, "incoming", None,
+        );
+        update_incoming_status(session_id, "listening", false, "",
+            "Expired deferred translation was discarded; recognized speech was retained.");
         return false;
     }
     if incoming_deferred_for_required_outbound(&translation) {
@@ -269,7 +286,7 @@ fn translate_and_commit_incoming_transcript(
                     source_language: source_language.to_string(),
                     target_language: target_language.to_string(),
                 },
-                enqueued_unix_ms: unix_ms() as u64,
+                expires_at: deferred_expiration(None, Instant::now()),
             });
             if held == 0 {
                 update_incoming_status(
@@ -341,14 +358,14 @@ fn translate_and_commit_incoming_transcript(
 
 pub(super) fn drain_due_deferred_incoming(session_id: &str) {
     for _ in 0..MAX_DEFERRED_INCOMING {
-        let Some(job) = take_due_deferred_incoming(session_id, unix_ms() as u64) else {
+        let Some(job) = take_due_deferred_incoming(session_id, Instant::now()) else {
             break;
         };
         let DeferredIncomingJob {
             event_sequence,
             utterance_id,
             stage,
-            enqueued_unix_ms,
+            expires_at,
             ..
         } = job;
         match stage {
@@ -361,7 +378,7 @@ pub(super) fn drain_due_deferred_incoming(session_id: &str) {
                 let result = process_incoming_pcm_with_direction(
                     utterance,
                     noise_suppression_enabled,
-                    Some(enqueued_unix_ms),
+                    Some(expires_at),
                     Some((source_language, target_language)),
                 );
                 if result != IncomingAudioProcessResult::Complete {
@@ -381,6 +398,7 @@ pub(super) fn drain_due_deferred_incoming(session_id: &str) {
                     &source_language,
                     &target_language,
                     false,
+                    Some(expires_at),
                 );
                 if held {
                     // Outbound still has priority; keep the original job at the
@@ -394,7 +412,7 @@ pub(super) fn drain_due_deferred_incoming(session_id: &str) {
                             source_language,
                             target_language,
                         },
-                        enqueued_unix_ms,
+                        expires_at,
                     });
                     if held_count == 0 {
                         update_incoming_status(

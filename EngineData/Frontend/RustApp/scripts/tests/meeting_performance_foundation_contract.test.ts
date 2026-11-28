@@ -99,7 +99,7 @@ test("finalized Meeting PCM enters the existing scheduler and only native infere
   assert.doesNotMatch(incoming, /utterance\.clone\(|drop\(utterance\.frame\)/);
   assert.doesNotMatch(outbound, /utterance\.clone\(|drop\(utterance\.frame\)/);
   const inner = transport.indexOf("fn send_worker_task_inner(");
-  const permit = transport.indexOf("acquire_scoped_helper_task_permit(priority, wait_generation)", inner);
+  const permit = transport.indexOf("acquire_scoped_helper_task_permit(priority, wait_generation, deferred_deadline)", inner);
   const defer = transport.indexOf("return incoming_deferred_response", permit);
   const nativeDispatch = transport.indexOf("return native::dispatch(", defer);
   const metadata = transport.indexOf("return native::control(", nativeDispatch);
@@ -127,7 +127,10 @@ test("deferred incoming uses producer notification and age deadline, not retry p
   assert.doesNotMatch(consumer, /DEFERRED_INCOMING_RETRY_WAIT/);
   assert.match(policy, /compare_exchange\([\s\S]*?wake_incoming_consumer\(\)/);
   assert.match(producer, /fn wake_incoming_consumer\([\s\S]*?sync\.state\.lock\(\)[\s\S]*?sync\.ready\.notify_all\(\)/);
-  assert.match(deferred, /MAX_DEFERRED_INCOMING_AGE_MS \+ 1/);
+  assert.match(deferred, /MAX_DEFERRED_INCOMING_AGE: Duration = Duration::from_secs\(20\)/);
+  assert.match(deferred, /front\.expires_at\.saturating_duration_since\(now\)/);
+  assert.match(deferred, /now >= front\.expires_at/);
+  assert.match(consumer, /deferred_incoming_wait_budget\(Instant::now\(\)\)/);
   assert.match(deferred, /if outbound_idle \{ guard\.pop_front\(\) \} else \{ None \}/);
 });
 
@@ -155,4 +158,26 @@ test("outbound priority cannot survive an early utterance return", () => {
   assert.ok(scope.indexOf("OutboundPipelineRelease::new(generation)") < scope.indexOf("send_helper_worker_pcm_task("));
   assert.match(policy, /impl Drop for OutboundPipelineRelease \{[\s\S]*?clear_meeting_outbound_pipeline\(self\.0\)/);
   assert.match(policy, /current <= generation && runtime_generation_matches_epoch\(generation\)/);
+});
+
+test("deferred deadline survives dequeue and scheduler admission without changing inference deadline", () => {
+  const deferred = source("src-tauri/src/commands/meeting_session/incoming_deferred.rs");
+  const incoming = source("src-tauri/src/commands/meeting_session/incoming_pipeline.rs");
+  const scheduler = source("src-tauri/src/commands/helper_bridge_runtime/scheduler.rs");
+  const native = source("src-tauri/src/commands/helper_bridge/transport/native.rs");
+  assert.match(deferred, /first_deadline\.unwrap_or_else\(\|\| now \+ MAX_DEFERRED_INCOMING_AGE\)/);
+  assert.match(incoming, /deferred_deadline: Option<Instant>/);
+  assert.match(incoming, /transcript, source_language, target_language, deferred_deadline/);
+  assert.equal((incoming.match(/Some\(expires_at\)/g) ?? []).length, 2);
+  assert.match(scheduler, /remaining\.min\(budget\)/);
+  assert.match(scheduler, /SCHEDULER_DEFERRED_EXPIRED/);
+  const afterPermit = transport.indexOf("let response = (|| -> HelperBridgeWorkerResponse");
+  const afterExpiry = transport.indexOf("if deferred_deadline_elapsed(deferred_deadline)", afterPermit);
+  const nativeDispatch = transport.indexOf("return native::dispatch(", afterExpiry);
+  assert.ok(afterPermit >= 0 && afterPermit < afterExpiry && afterExpiry < nativeDispatch);
+  const lastExpiry = native.lastIndexOf("if deferred_deadline_elapsed(deferred_deadline)");
+  const begin = native.indexOf("let pending_result = {", lastExpiry);
+  assert.ok(lastExpiry >= 0 && lastExpiry < begin);
+  assert.match(native, /owner\.owner\.begin\(input\.expect\("checked text or speech input"\), deadline\)/);
+  assert.match(incoming, /record_deferred_expiration\(&translation\)[\s\S]*?finish_meeting_turn_translation\(/);
 });
