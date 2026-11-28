@@ -20,21 +20,20 @@ test("live reliability monitor is Meeting-owner scoped and advisory only", () =>
   assert.match(monitor, /getMeetingReliabilitySnapshot/);
   assert.doesNotMatch(monitor, /getRuntimeWatchdogStatus\(/);
   assert.doesNotMatch(monitor, /getDeviceLossGuardStatus\(/);
-  assert.match(monitor, /getLongSessionHealthStatus/);
+  assert.doesNotMatch(monitor, /getLongSessionHealthStatus/);
   assert.doesNotMatch(monitor, /stopMeetingTranslation|startMeetingTranslation|selectAudioDevice|startHelperBridge/);
 });
 
 test("live reliability uses one aggregated IPC and stays low frequency", () => {
   assert.match(monitor, /getMeetingReliabilitySnapshot/);
-  assert.match(monitor, /const \{ watchdog, devices \}/);
-  assert.match(monitor, /getLongSessionHealthStatus/);
+  assert.match(monitor, /function liveReliabilityNotice\(\{ watchdog, devices \}/);
+  assert.doesNotMatch(monitor, /getLongSessionHealthStatus/);
 
   assert.match(monitor, /LIVE_RELIABILITY_POLL_MS = 8_000/);
-  assert.match(monitor, /LONG_SESSION_POLL_MS = 30_000/);
-  assert.match(monitor, /notice\.key !== lastKey/);
-  assert.match(monitor, /inFlight/);
-  assert.match(monitor, /longSessionInFlight/);
-  assert.match(monitor, /disposed \|\| longSessionInFlight/);
+  assert.doesNotMatch(monitor, /LONG_SESSION_POLL_MS|longSessionInFlight|longSessionTimer/);
+  assert.match(monitor, /if \(key === lastKeys\[channel\]\) return/);
+  assert.match(monitor, /disposed \|\| inFlight/);
+  assert.equal((monitor.match(/await getMeetingReliabilitySnapshot\(\)/g) ?? []).length, 1);
 });
 
 test("Meeting freshness is event-first with slow reconciliation fallback", () => {
@@ -64,20 +63,14 @@ test("backend publishes lightweight Meeting change tokens from authoritative tur
 });
 
 test("long-session health is advisory and change-deduplicated", () => {
-  assert.match(monitor, /health\.warning_count > 0/);
-  assert.match(monitor, /lastLongSessionState/);
+  assert.match(monitor, /pressure\.state !== "attention" \|\| pressure\.warning_count === 0/);
+  assert.match(monitor, /lastKeys\[channel\]/);
+  assert.match(monitor, /publish\("session", sessionPressureNotice\(observation\.pressure\)\)/);
   assert.doesNotMatch(monitor, /clearDeferred|cleanup.*temp|replay|restart/i);
 });
 
 test("completed reliability reads cannot notify after Meeting monitor disposal", () => {
-  assert.match(
-    monitor,
-    /const notice = await readLiveReliabilityNotice\(\);\s*\/\/[^\n]*\n\s*if \(disposed\) return;/,
-  );
-  assert.match(
-    monitor,
-    /const health = await getLongSessionHealthStatus\(\);\s*\/\/[^\n]*\n\s*if \(disposed\) return;/,
-  );
+  assert.match(monitor, /const observation = await getMeetingReliabilitySnapshot\(\);\s*\/\/[^\n]*\n\s*if \(disposed\) return;/);
   assert.match(monitor, /return \(\) => \{\s*disposed = true;\s*window.clearInterval\(timer\);/);
 });
 
@@ -86,15 +79,16 @@ test("Meeting monitor lifetime is stable across status-only snapshot refreshes",
   assert.ok(app.includes("const meetingReliabilityEnabled = $derived("));
   assert.match(app, /\$effect\(\(\) => \{\s*if \(!meetingMonitorsActive\)/);
   assert.match(app, /startMeetingRuntimeMonitors\(\s*pollMeeting,\s*updateHealthNotice,\s*meetingReliabilityEnabled/);
-  assert.ok(monitor.includes('lastKey !== "reliability_unavailable"'));
-  assert.ok(monitor.includes('lastLongSessionState !== "long_session_unavailable"'));
+  assert.ok(monitor.includes('key: "reliability_unavailable"'));
+  assert.ok(monitor.includes('key: "long_session_unavailable"'));
   assert.ok(app.includes("Couldn't refresh the meeting display"));
 });
 
 test("reliability warnings have typed severity and clear on their own healthy observation", () => {
   assert.match(monitor, /type ReliabilityNoticeCallback = \(channel: ReliabilityChannel, notice: ReliabilityNotice \| null\)/);
-  assert.match(monitor, /if \(lastKey\) onNotice\("live", null\)/);
-  assert.match(monitor, /if \(lastLongSessionState\) onNotice\("session", null\)/);
+  assert.match(monitor, /const key = notice\?\.key \?\? ""/);
+  assert.match(monitor, /onNotice\(channel, notice\)/);
+  assert.match(monitor, /if \(!pressure \|\| pressure\.state === "unavailable"\)/);
   assert.match(monitor, /kind: "unverified"/);
   assert.match(monitor, /kind: "attention"/);
   assert.match(app, /liveHealthNotice = null;/);
@@ -111,6 +105,9 @@ test("combined reliability reuses fresh Meeting and device observations without 
   assert.equal((combined.match(/get_meeting_session_status\(\)/g) ?? []).length, 1);
   assert.match(combined, /runtime_watchdog_for_meeting\(&meeting\)/);
   assert.match(combined, /device_loss_guard_for_meeting\(&meeting\)/);
+  assert.match(combined, /session_pressure_for_meeting\(&meeting\)/);
+  assert.match(combined, /record_pressure_if_needed\(&pressure\)/);
+  assert.doesNotMatch(combined, /get_long_session_health_status|meeting_temp_file_count|get_recent_runtime_incidents/);
   assert.match(watchdog, /let meeting = get_meeting_session_status\(\);\s*runtime_watchdog_for_meeting\(&meeting\)/);
   assert.match(guard, /let meeting = get_meeting_session_status\(\);\s*device_loss_guard_for_meeting\(&meeting\)/);
   assert.equal((guard.match(/list_audio_devices\(\)/g) ?? []).length, 1);

@@ -14,6 +14,21 @@ use super::meeting_session::{
 
 const TEMP_FILE_WARNING_THRESHOLD: usize = 12;
 
+// In-memory pressure only; filesystem and incident-history inspection are on demand.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionPressureStatus {
+    pub state: String,
+    pub outbound_overflow_dropped: u64,
+    pub outbound_evicted_pending: u64,
+    pub deferred_incoming_depth: usize,
+    pub deferred_incoming_dropped_overflow: u64,
+    pub deferred_incoming_dropped_stale: u64,
+    pub transcript_dropped_turns: u64,
+    pub transcript_truncated: bool,
+    pub warning_count: usize,
+    pub note: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LongSessionHealthStatus {
     pub state: String,
@@ -74,16 +89,11 @@ pub fn get_long_session_health_status() -> LongSessionHealthStatus {
     long_session_health_for_observation(&meeting, &incident_history)
 }
 
-pub(super) fn long_session_health_for_observation(
-    meeting: &MeetingSessionStatus,
-    incident_history: &RuntimeIncidentSnapshot,
-) -> LongSessionHealthStatus {
+pub(super) fn session_pressure_for_meeting(meeting: &MeetingSessionStatus) -> SessionPressureStatus {
     let (_turn_count, transcript_dropped, transcript_truncated) =
         committed_turn_health_counts();
     let (deferred_depth, deferred_overflow, deferred_stale) =
         deferred_incoming_health_counts();
-    let temp_count = meeting_temp_file_count(&ProjectPaths::discover());
-    let incident_count = observed_incident_count(incident_history.coverage, incident_history.count);
 
     let meeting_owned =
         meeting.has_session && meeting.owner_id.as_deref() == Some(APPLICATION_MEETING_OWNER_ID);
@@ -103,7 +113,47 @@ pub(super) fn long_session_health_for_observation(
     warnings += usize::from(deferred_overflow > 0);
     warnings += usize::from(deferred_stale > 0);
     warnings += usize::from(transcript_dropped > 0);
-    warnings += usize::from(temp_count > TEMP_FILE_WARNING_THRESHOLD);
+    SessionPressureStatus {
+        state: if !meeting_owned { "idle" } else if warnings == 0 { "healthy" } else { "attention" }.into(),
+        outbound_overflow_dropped: overflow,
+        outbound_evicted_pending: evicted,
+        deferred_incoming_depth: deferred_depth,
+        deferred_incoming_dropped_overflow: deferred_overflow,
+        deferred_incoming_dropped_stale: deferred_stale,
+        transcript_dropped_turns: transcript_dropped,
+        transcript_truncated,
+        warning_count: warnings,
+        note: if warnings == 0 {
+            "No bounded queue or transcript pressure has been observed."
+        } else {
+            "Some queued speech or transcript entries were dropped. Open Diagnostics for details; no work is silently replayed."
+        }.into(),
+    }
+}
+
+fn record_pressure_incident() {
+    // Exceptional pressure uses the existing bounded incident writer and deduplication.
+    let _ = record_runtime_incident(
+        "long_session_health", "meeting_runtime", "long_session_health:pressure_detected",
+        "One or more bounded long-session pressure counters are non-zero. This status is diagnostic only; TranslateIT does not silently clear or replay work.",
+    );
+}
+
+pub(super) fn record_pressure_if_needed(pressure: &SessionPressureStatus) {
+    if pressure.state == "attention" {
+        record_pressure_incident();
+    }
+}
+
+pub(super) fn long_session_health_for_observation(
+    meeting: &MeetingSessionStatus,
+    incident_history: &RuntimeIncidentSnapshot,
+) -> LongSessionHealthStatus {
+    let pressure = session_pressure_for_meeting(meeting);
+    let meeting_owned = pressure.state != "idle";
+    let temp_count = meeting_temp_file_count(&ProjectPaths::discover());
+    let incident_count = observed_incident_count(incident_history.coverage, incident_history.count);
+    let warnings = pressure.warning_count + usize::from(temp_count > TEMP_FILE_WARNING_THRESHOLD);
 
     let healthy = warnings == 0;
     let state = if !meeting_owned {
@@ -129,13 +179,13 @@ pub(super) fn long_session_health_for_observation(
         } else {
             0
         },
-        outbound_overflow_dropped: overflow,
-        outbound_evicted_pending: evicted,
-        deferred_incoming_depth: deferred_depth,
-        deferred_incoming_dropped_overflow: deferred_overflow,
-        deferred_incoming_dropped_stale: deferred_stale,
-        transcript_dropped_turns: transcript_dropped,
-        transcript_truncated: transcript_truncated,
+        outbound_overflow_dropped: pressure.outbound_overflow_dropped,
+        outbound_evicted_pending: pressure.outbound_evicted_pending,
+        deferred_incoming_depth: pressure.deferred_incoming_depth,
+        deferred_incoming_dropped_overflow: pressure.deferred_incoming_dropped_overflow,
+        deferred_incoming_dropped_stale: pressure.deferred_incoming_dropped_stale,
+        transcript_dropped_turns: pressure.transcript_dropped_turns,
+        transcript_truncated: pressure.transcript_truncated,
         meeting_temp_file_count: temp_count,
         incident_count,
         incident_history_coverage: incident_history.coverage.to_string(),
@@ -145,12 +195,7 @@ pub(super) fn long_session_health_for_observation(
     };
 
     if meeting_owned && !result.healthy {
-        let _ = record_runtime_incident(
-            "long_session_health",
-            "meeting_runtime",
-            "long_session_health:pressure_detected",
-            &result.note,
-        );
+        record_pressure_incident();
     }
     result
 }

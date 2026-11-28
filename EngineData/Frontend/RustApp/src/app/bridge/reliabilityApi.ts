@@ -173,9 +173,23 @@ export async function getStartupRecoveryStatus(): Promise<StartupRecoveryReport>
 }
 
 
+export type SessionPressureStatus = {
+  state: string;
+  outbound_overflow_dropped: number;
+  outbound_evicted_pending: number;
+  deferred_incoming_depth: number;
+  deferred_incoming_dropped_overflow: number;
+  deferred_incoming_dropped_stale: number;
+  transcript_dropped_turns: number;
+  transcript_truncated: boolean;
+  warning_count: number;
+  note: string;
+};
+
 export type MeetingReliabilitySnapshot = {
   watchdog: RuntimeWatchdogStatus;
   devices: DeviceLossGuardStatus;
+  pressure: SessionPressureStatus;
 };
 
 export async function getMeetingReliabilitySnapshot(): Promise<MeetingReliabilitySnapshot> {
@@ -202,6 +216,18 @@ export async function getMeetingReliabilitySnapshot(): Promise<MeetingReliabilit
       blocker: "frontend_bridge_unavailable",
       note: "Device-loss status is unavailable right now.",
       updated_unix_ms: Date.now(),
+    },
+    pressure: {
+      state: "unavailable",
+      outbound_overflow_dropped: 0,
+      outbound_evicted_pending: 0,
+      deferred_incoming_depth: 0,
+      deferred_incoming_dropped_overflow: 0,
+      deferred_incoming_dropped_stale: 0,
+      transcript_dropped_turns: 0,
+      transcript_truncated: false,
+      warning_count: 0,
+      note: "Session pressure could not be checked.",
     },
   };
 }

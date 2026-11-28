@@ -122,7 +122,12 @@
     </div>
   </div>
 
-  {#if longSession}
+  {#if longSession?.state === "unavailable"}
+    <p class="mt-4 text-[13px] text-[var(--ti-warning)]" role="status">Session diagnostics could not be verified.</p>
+  {:else if longSession}
+    {#if !longSession.healthy}
+      <p class="mt-4 text-[13px] text-[var(--ti-warning)]" role="status">{sanitizeDiagnosticText(longSession.note)}</p>
+    {/if}
     <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-4">
       <div class="ti-state-card min-w-0"><span class="ti-field-label">Session age</span><strong class="mt-1 block text-[13px]">{Math.round(longSession.session_age_ms / 60000)} min</strong></div>
       <div class="ti-state-card min-w-0"><span class="ti-field-label">Queue drops</span><strong class="mt-1 block text-[13px]">{longSession.outbound_overflow_dropped + longSession.outbound_evicted_pending}</strong></div>

@@ -42,3 +42,21 @@ test("meeting start resets pressure counters for the new session", () => {
   assert.match(lifecycle, /reset_finalized_drop_counters\(\)/);
   assert.match(lifecycle, /reset_deferred_incoming_drop_counters\(\)/);
 });
+
+
+test("routine pressure checks use only counters; full filesystem and history checks are on demand", () => {
+  const live = health.slice(health.indexOf("pub(super) fn session_pressure_for_meeting("), health.indexOf("fn record_pressure_incident("));
+  assert.match(live, /committed_turn_health_counts\(\)/);
+  assert.match(live, /deferred_incoming_health_counts\(\)/);
+  assert.doesNotMatch(live, /meeting_temp_file_count|ProjectPaths|fs::|get_recent_runtime_incidents|record_runtime_incident/);
+  const logging = health.slice(health.indexOf("fn record_pressure_incident("), health.indexOf("pub(super) fn long_session_health_for_observation("));
+  assert.match(logging, /if pressure\.state == "attention"/);
+  assert.match(logging, /record_runtime_incident/);
+  const diagnostics = health.slice(health.indexOf("pub(super) fn long_session_health_for_observation("));
+  assert.match(diagnostics, /session_pressure_for_meeting\(meeting\)/);
+  assert.match(diagnostics, /meeting_temp_file_count\(&ProjectPaths::discover\(\)\)/);
+  assert.match(diagnostics, /pressure\.warning_count \+ usize::from\(temp_count > TEMP_FILE_WARNING_THRESHOLD\)/);
+  const panel = readFileSync(new URL("../../src/components/settings/RuntimeReliabilityDiagnostics.svelte", import.meta.url), "utf8");
+  assert.match(panel, /getLongSessionHealthStatus\(\)/);
+  assert.match(panel, /longSession\.healthy/);
+});

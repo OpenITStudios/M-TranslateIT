@@ -1,12 +1,11 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { createMeetingReconcileSchedule } from "./meetingReconcileSchedule";
 import {
-  getLongSessionHealthStatus,
   getMeetingReliabilitySnapshot,
+  type MeetingReliabilitySnapshot,
 } from "../bridge/reliabilityApi";
 
 const LIVE_RELIABILITY_POLL_MS = 8_000;
-const LONG_SESSION_POLL_MS = 30_000;
 const MEETING_RECONCILIATION_POLL_MS = 10_000;
 const MEETING_EVENT_COALESCE_MS = 80;
 const MEETING_RUNTIME_EVENT = "translateit://meeting-runtime";
@@ -26,8 +25,7 @@ export type MeetingRuntimeEvent = {
   sequence: number | null;
 };
 
-async function readLiveReliabilityNotice(): Promise<ReliabilityNotice | null> {
-  const { watchdog, devices } = await getMeetingReliabilitySnapshot();
+function liveReliabilityNotice({ watchdog, devices }: MeetingReliabilitySnapshot): ReliabilityNotice | null {
 
   if (devices.action_required && devices.blocker) {
     return { key: devices.blocker, message: devices.note, kind: "attention" };
@@ -35,10 +33,28 @@ async function readLiveReliabilityNotice(): Promise<ReliabilityNotice | null> {
   if (watchdog.action_required && watchdog.blocker) {
     return { key: watchdog.blocker, message: watchdog.note, kind: "attention" };
   }
+  if (watchdog.state === "unavailable" || devices.state === "unavailable") {
+    return { key: "reliability_unavailable", message: "Meeting health could not be checked. Open Help if this continues.", kind: "unverified" };
+  }
   if (!devices.healthy && devices.blocker) {
     return { key: devices.blocker, message: devices.note, kind: "attention" };
   }
   return null;
+}
+
+function sessionPressureNotice(pressure: MeetingReliabilitySnapshot["pressure"] | undefined): ReliabilityNotice | null {
+  if (!pressure || pressure.state === "unavailable") {
+    return { key: "long_session_unavailable", message: "Session health could not be checked. Open Help if this continues.", kind: "unverified" };
+  }
+  if (pressure.state !== "attention" || pressure.warning_count === 0) return null;
+  const key = [
+    pressure.outbound_overflow_dropped,
+    pressure.outbound_evicted_pending,
+    pressure.deferred_incoming_dropped_overflow,
+    pressure.deferred_incoming_dropped_stale,
+    pressure.transcript_dropped_turns,
+  ].join(":");
+  return { key, message: pressure.note, kind: "attention" };
 }
 
 function startMeetingReliabilityMonitor(
@@ -46,32 +62,28 @@ function startMeetingReliabilityMonitor(
 ): () => void {
   let disposed = false;
   let inFlight = false;
-  let lastKey = "";
+  const lastKeys: Record<ReliabilityChannel, string> = { live: "", session: "" };
+
+  function publish(channel: ReliabilityChannel, notice: ReliabilityNotice | null): void {
+    const key = notice?.key ?? "";
+    if (key === lastKeys[channel]) return;
+    lastKeys[channel] = key;
+    onNotice(channel, notice);
+  }
 
   const poll = async () => {
     if (disposed || inFlight) return;
     inFlight = true;
     try {
-      const notice = await readLiveReliabilityNotice();
+      const observation = await getMeetingReliabilitySnapshot();
       // Stop may have disposed this monitor while the IPC read was pending.
       if (disposed) return;
-      if (!notice) {
-        if (lastKey) onNotice("live", null);
-        lastKey = "";
-        return;
-      }
-      if (notice.key !== lastKey) {
-        lastKey = notice.key;
-        onNotice("live", notice);
-      }
+      publish("live", liveReliabilityNotice(observation));
+      publish("session", sessionPressureNotice(observation.pressure));
     } catch {
-      if (!disposed && lastKey !== "reliability_unavailable") {
-        lastKey = "reliability_unavailable";
-        onNotice("live", {
-          key: "reliability_unavailable",
-          message: "Meeting health could not be checked. Open Help if this continues.",
-          kind: "unverified",
-        });
+      if (!disposed) {
+        publish("live", { key: "reliability_unavailable", message: "Meeting health could not be checked. Open Help if this continues.", kind: "unverified" });
+        publish("session", sessionPressureNotice(undefined));
       }
     } finally {
       inFlight = false;
@@ -80,55 +92,9 @@ function startMeetingReliabilityMonitor(
 
   void poll();
   const timer = window.setInterval(() => void poll(), LIVE_RELIABILITY_POLL_MS);
-
-  let lastLongSessionState = "";
-  let longSessionInFlight = false;
-  const pollLongSession = async () => {
-    if (disposed || longSessionInFlight) return;
-    longSessionInFlight = true;
-    try {
-      const health = await getLongSessionHealthStatus();
-      // Do not surface an old session's warning after monitor teardown.
-      if (disposed) return;
-      if (!health.healthy && health.warning_count > 0) {
-        const key = [
-          health.outbound_overflow_dropped,
-          health.outbound_evicted_pending,
-          health.deferred_incoming_dropped_overflow,
-          health.deferred_incoming_dropped_stale,
-          health.transcript_dropped_turns,
-          health.meeting_temp_file_count,
-        ].join(":");
-        if (key !== lastLongSessionState) {
-          lastLongSessionState = key;
-          onNotice("session", { key, message: health.note, kind: "attention" });
-        }
-      } else {
-        if (lastLongSessionState) onNotice("session", null);
-        lastLongSessionState = "";
-      }
-    } catch {
-      if (!disposed && lastLongSessionState !== "long_session_unavailable") {
-        lastLongSessionState = "long_session_unavailable";
-        onNotice("session", {
-          key: "long_session_unavailable",
-          message: "Session health could not be checked. Open Help if this continues.",
-          kind: "unverified",
-        });
-      }
-    } finally {
-      longSessionInFlight = false;
-    }
-  };
-  const longSessionTimer = window.setInterval(
-    () => void pollLongSession(),
-    LONG_SESSION_POLL_MS,
-  );
-
   return () => {
     disposed = true;
     window.clearInterval(timer);
-    window.clearInterval(longSessionTimer);
   };
 }
 
