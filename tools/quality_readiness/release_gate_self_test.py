@@ -29,6 +29,7 @@ def ready_report(identity: str) -> dict:
                 "ready": True,
                 "candidate_source_identity": identity,
                 "report_sha256": char * 64,
+                **({"promotion_safe_on_quality_metrics": True} if domain == "tts" else {}),
             }
             for domain, char in (
                 ("translation", "a"),
@@ -76,6 +77,19 @@ def main() -> int:
         else:
             raise AssertionError("identity mismatch must fail closed")
 
+        for missing in (True, False):
+            old = ready_report(identity)
+            if missing:
+                del old["domains"]["tts"]["promotion_safe_on_quality_metrics"]
+            else:
+                old["domains"]["tts"]["promotion_safe_on_quality_metrics"] = False
+            path.write_text(json.dumps(old), encoding="utf-8")
+            try:
+                validator.validate_release_quality(path, identity)
+            except ValueError as exc:
+                assert str(exc) == "quality_readiness_tts_metrics_missing_or_failed"
+            else:
+                raise AssertionError("old or failed TTS metric evidence must not pass")
         failed = ready_report(identity)
         failed["domains"]["tts"]["ready"] = False
         path.write_text(json.dumps(failed), encoding="utf-8")

@@ -26,6 +26,8 @@ def comparison(schema: str, candidate: str, safe: bool = True) -> dict:
         "promotion_provenance_complete": True,
         "complete_result_sets": True,
         "promotion_safe_on_declared_critical_invariants": safe,
+        **({"promotion_safe_on_quality_metrics": True}
+           if schema == "translateit.tts_quality.comparison.v1" else {}),
     }
 
 
@@ -99,6 +101,18 @@ def main() -> int:
         asr_path.write_bytes(old_asr)
 
         tts_path = root / "tts.json"
+        original_tts = tts_path.read_bytes()
+        for missing in (True, False):
+            old = json.loads(original_tts)
+            if missing:
+                del old["promotion_safe_on_quality_metrics"]
+            else:
+                old["promotion_safe_on_quality_metrics"] = False
+            tts_path.write_text(json.dumps(old), encoding="utf-8")
+            blocked = evaluator.evaluate_manifest(manifest_path)
+            assert not blocked["ready_on_declared_quality_evidence"]
+            assert "tts:quality_metric_regression_or_missing" in blocked["blockers"]
+        tts_path.write_bytes(original_tts)
         tts_path.write_text(
             json.dumps(
                 comparison(

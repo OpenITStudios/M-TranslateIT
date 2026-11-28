@@ -26,6 +26,21 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def critical_tokens(text: str) -> list[str]:
+    # Keep dotted version numbers and signed numeric tokens intact; ordinary
+    # punctuation still separates words. Do not match within another token.
+    text = unicodedata.normalize("NFKC", text).casefold().replace("−", "-")
+    return re.findall(r"(?<!\w)[+-]?\d+(?:\.\d+)*(?!\w)|\w+", text)
+
+
+def contains_critical_phrase(tokens: list[str], phrase: str) -> bool:
+    wanted = critical_tokens(phrase)
+    return bool(wanted) and any(
+        tokens[i:i + len(wanted)] == wanted
+        for i in range(len(tokens) - len(wanted) + 1)
+    )
+
+
 def edit_distance(reference: list[str], hypothesis: list[str]) -> int:
     previous = list(range(len(hypothesis) + 1))
     for i, ref_token in enumerate(reference, start=1):
@@ -95,14 +110,14 @@ def load_corpus(path: Path) -> dict:
 def validate_corpus(corpus: dict) -> dict:
     failures = []
     for case in corpus["cases"]:
-        norm = normalize(case["text"])
+        tokens = critical_tokens(case["text"])
         missing_literals = [
-            item for item in case["preserve"] if normalize(item) not in norm
+            item for item in case["preserve"] if not contains_critical_phrase(tokens, item)
         ]
         missing_concepts = [
             group
             for group in case["required_any"]
-            if not any(normalize(option) in norm for option in group)
+            if not any(contains_critical_phrase(tokens, option) for option in group)
         ]
         if missing_literals or missing_concepts:
             failures.append(
@@ -220,14 +235,14 @@ def evaluate(
     for case in corpus["cases"]:
         result = results.get(case["id"], {})
         transcript = str(result.get("intelligibility_text", ""))
-        norm = normalize(transcript)
+        tokens = critical_tokens(transcript)
         missing_literals = [
-            item for item in case["preserve"] if normalize(item) not in norm
+            item for item in case["preserve"] if not contains_critical_phrase(tokens, item)
         ]
         missing_concepts = [
             group
             for group in case["required_any"]
-            if not any(normalize(option) in norm for option in group)
+            if not any(contains_critical_phrase(tokens, option) for option in group)
         ]
         artifacts = list(result.get("artifact_flags", []))
         critical_pass = not missing_literals and not missing_concepts and not artifacts
@@ -327,15 +342,25 @@ def compare_reports(
     critical_regressions = []
     critical_recoveries = []
     artifact_regressions = []
+    speaker_regressions = []
+    intelligibility_regressions = []
     for case_id in sorted(baseline_cases):
         base_row = baseline_cases[case_id]
         cand_row = candidate_cases[case_id]
-        if base_row["critical_pass"] and not cand_row["critical_pass"]:
+        new_literals = set(cand_row["missing_literals"]) - set(base_row["missing_literals"])
+        new_concepts = {tuple(group) for group in cand_row["missing_concepts"]} - {
+            tuple(group) for group in base_row["missing_concepts"]
+        }
+        if new_literals or new_concepts or (base_row["critical_pass"] and not cand_row["critical_pass"]):
             critical_regressions.append(case_id)
         elif not base_row["critical_pass"] and cand_row["critical_pass"]:
             critical_recoveries.append(case_id)
-        if not base_row["artifact_flags"] and cand_row["artifact_flags"]:
+        if set(cand_row["artifact_flags"]) - set(base_row["artifact_flags"]):
             artifact_regressions.append(case_id)
+        if cand_row["speaker_similarity"] < base_row["speaker_similarity"]:
+            speaker_regressions.append(case_id)
+        if cand_row["intelligibility_wer"] > base_row["intelligibility_wer"]:
+            intelligibility_regressions.append(case_id)
 
     provenance_complete = (
         bool(baseline["source_identity"])
@@ -356,6 +381,8 @@ def compare_reports(
         "critical_regressions": critical_regressions,
         "critical_recoveries": critical_recoveries,
         "artifact_regressions": artifact_regressions,
+        "speaker_similarity_regressions": speaker_regressions,
+        "intelligibility_wer_regressions": intelligibility_regressions,
         "mean_speaker_similarity_delta": round(
             candidate["mean_speaker_similarity"] - baseline["mean_speaker_similarity"],
             6,
@@ -372,9 +399,18 @@ def compare_reports(
             and not critical_regressions
             and not artifact_regressions
         ),
+        # Conservative zero-regression gate at existing reported precision.
+        # No evidence-based tolerance is available; keep per-case changes visible.
+        "promotion_safe_on_quality_metrics": (
+            baseline["complete_result_set"]
+            and candidate["complete_result_set"]
+            and provenance_complete
+            and candidate["mean_speaker_similarity"] >= baseline["mean_speaker_similarity"]
+            and candidate["mean_intelligibility_wer"] <= baseline["mean_intelligibility_wer"]
+        ),
         "note": (
-            "Promotion-safe means no new declared critical/artifact regression on matched "
-            "evidence. It is not a standalone listening-quality verdict."
+            "Both critical/artifact and mean metric gates are required for readiness. "
+            "Per-case metric regressions remain visible; neither gate proves listening quality."
         ),
     }
 
@@ -437,7 +473,8 @@ def main() -> int:
             candidate_source_identity=candidate["source_identity"],
         )
         print(json.dumps(report, ensure_ascii=False, indent=2))
-        return 0 if report["promotion_safe_on_declared_critical_invariants"] else 1
+        return 0 if (report["promotion_safe_on_declared_critical_invariants"]
+                     and report["promotion_safe_on_quality_metrics"]) else 1
 
     if args.results is None:
         parser.error("--results is required for evaluate")

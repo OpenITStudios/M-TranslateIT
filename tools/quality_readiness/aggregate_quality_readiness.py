@@ -258,6 +258,7 @@ def evaluate_manifest(manifest_path: Path) -> dict:
         complete_sets = report.get("complete_result_sets") is True
         safe = report.get("promotion_safe_on_declared_critical_invariants") is True
         identity_matches = candidate_identity == expected_candidate
+        metrics_safe = domain != "tts" or report.get("promotion_safe_on_quality_metrics") is True
 
         if not provenance_complete:
             blockers.append(f"{domain}:provenance_incomplete")
@@ -268,8 +269,11 @@ def evaluate_manifest(manifest_path: Path) -> dict:
         if not safe:
             blockers.append(f"{domain}:critical_regression")
 
+        if not metrics_safe:
+            blockers.append("tts:quality_metric_regression_or_missing")
+
         domain_rows[domain] = {
-            "ready": provenance_complete and complete_sets and identity_matches and safe,
+            "ready": provenance_complete and complete_sets and identity_matches and safe and metrics_safe,
             "report": config["report"],
             "report_sha256": report_digest,
             "candidate_source_identity": candidate_identity or None,
@@ -278,6 +282,8 @@ def evaluate_manifest(manifest_path: Path) -> dict:
             "complete_result_sets": complete_sets,
             "promotion_safe_on_declared_critical_invariants": safe,
         }
+        if domain == "tts":
+            domain_rows[domain]["promotion_safe_on_quality_metrics"] = metrics_safe
 
     meeting_trace = None
     if "meeting_trace" in manifest:

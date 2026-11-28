@@ -64,6 +64,13 @@ def main() -> int:
     assert report["mean_intelligibility_wer"] == 0.0
     assert report["mean_speaker_similarity"] == 0.9
     assert report["native_timing"] is None  # historical bundles stay valid
+    for bad, expected in [("capital", "API"), ("191320", "19132"),
+                          ("unconfirmed", "confirm"), ("different", "if"),
+                          ("1.21.4.5", "1.21.4"), ("-19132", "19132")]:
+        assert not evaluator.contains_critical_phrase(evaluator.critical_tokens(bad), expected)
+    for good, expected in [("The API, endpoint.", "API"), ("not yet!", "not yet"),
+                           ("version 1.21.4.", "1.21.4"), ("eight forty-five", "eight forty five")]:
+        assert evaluator.contains_critical_phrase(evaluator.critical_tokens(good), expected)
     timed = evidence(corpus)
     for index, case in enumerate(corpus["cases"], 1):
         timed[case["id"]].update(elapsed_ms=index * 100, sample_count=44_100)
@@ -119,6 +126,36 @@ def main() -> int:
     assert valid_comparison["complete_result_sets"] is True
     assert valid_comparison["promotion_provenance_complete"] is True
     assert valid_comparison["promotion_safe_on_declared_critical_invariants"] is True
+    assert valid_comparison["promotion_safe_on_quality_metrics"] is True
+
+    def compare(base, cand):
+        return evaluator.compare_reports(
+            corpus, base, cand,
+            baseline_corpus_fingerprint=fingerprint,
+            candidate_corpus_fingerprint=fingerprint,
+            baseline_source_identity="baseline-sha",
+            candidate_source_identity="candidate-sha",
+        )
+    degraded = evidence(corpus, 0.5)
+    assert compare(perfect, degraded)["promotion_safe_on_declared_critical_invariants"] is True
+    assert compare(perfect, degraded)["promotion_safe_on_quality_metrics"] is False
+    degraded = evidence(corpus)
+    degraded["tts-meeting-001"]["intelligibility_text"] += " extra words"
+    wer_regression = compare(perfect, degraded)
+    assert wer_regression["promotion_safe_on_declared_critical_invariants"] is True
+    assert wer_regression["promotion_safe_on_quality_metrics"] is False
+    assert wer_regression["intelligibility_wer_regressions"] == ["tts-meeting-001"]
+    base_artifact = evidence(corpus)
+    more_artifacts = evidence(corpus)
+    base_artifact["tts-meeting-001"]["artifact_flags"] = ["clipping"]
+    more_artifacts["tts-meeting-001"]["artifact_flags"] = ["clipping", "dropout"]
+    assert compare(base_artifact, more_artifacts)["artifact_regressions"] == ["tts-meeting-001"]
+    # An already-failing case can still acquire a new missing invariant.
+    base_bad = evidence(corpus)
+    cand_bad = evidence(corpus)
+    base_bad["tts-technical-001"]["intelligibility_text"] = "Do not change the API endpoint before the final review."
+    cand_bad["tts-technical-001"]["intelligibility_text"] = "Do not change the endpoint before the final review."
+    assert compare(base_bad, cand_bad)["critical_regressions"] == ["tts-technical-001"]
 
     # Even a perfect candidate may not be promoted without an exact fingerprint.
     for baseline_fingerprint, candidate_fingerprint in (

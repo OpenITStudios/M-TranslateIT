@@ -48,7 +48,8 @@ The aggregate result is ready only when all three domains:
 - contain complete matched result sets;
 - have complete promotion provenance;
 - match the candidate identity declared by the manifest;
-- pass their own fail-closed critical-regression gate.
+- pass their own fail-closed critical-regression gate;
+- for TTS, also pass the separate mean speaker-similarity and intelligibility-WER non-regression gate (`promotion_safe_on_quality_metrics`). Missing or false TTS metric evidence blocks both aggregation and release validation; regenerate comparison/readiness reports under the current evaluator. Other domain contracts are unchanged.
 
 This is a release **evidence aggregation** gate, not a runtime pipeline and not native acceptance. TARGET_WINDOWS remains authoritative for physical microphone behavior, meeting routing/reception, practical latency, and audible listening quality.
 

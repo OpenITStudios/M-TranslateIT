@@ -37,6 +37,8 @@ def validate_release_quality(report_path: Path, release_identity: str) -> dict:
         row = domains[domain]
         if not isinstance(row, dict) or row.get("ready") is not True:
             raise ValueError(f"quality_readiness_domain_not_ready:{domain}")
+        if domain == "tts" and row.get("promotion_safe_on_quality_metrics") is not True:
+            raise ValueError("quality_readiness_tts_metrics_missing_or_failed")
         report_hash = str(row.get("report_sha256", "")).strip().lower()
         if len(report_hash) != 64 or any(ch not in "0123456789abcdef" for ch in report_hash):
             raise ValueError(f"quality_readiness_domain_hash_invalid:{domain}")
