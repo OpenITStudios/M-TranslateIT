@@ -543,7 +543,30 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
                  return false;
              }
              n_decoded += n;
-@@ -3892,6 +3975,14 @@
+@@ -3878,14 +3961,16 @@
+         if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
+             LOG_ERR("mtmd_helper_gen_audio: codec decode failed\n");
+             return false;
+         }
+-        // drop the audio of the silence frames, then the output gain and soft limiter of the reference
+-        const float knee = std::pow(10.0f, -1.0f / 20.0f);
+-        for (size_t i = 0; i < out.n_samples; i++, n_codec_samples++) {
+-            if (n_codec_samples < (size_t) n_prefill * samples_per_frame) {
+-                continue;
+-            }
++        // Drop the remaining prefill silence once per chunk, not per sample.
++        if (out.n_samples != 0 && !out.audio) return false;
++        const size_t prefill_samples = (size_t) n_prefill * samples_per_frame;
++        const size_t skip = n_codec_samples < prefill_samples
++            ? std::min(out.n_samples, prefill_samples - n_codec_samples) : 0;
++        n_codec_samples += out.n_samples;
++        const float knee = std::pow(10.0f, -1.0f / 20.0f);
++        for (size_t i = skip; i < out.n_samples; i++) {
+             const float x = out.audio[i] * out_gain;
+             const float a = std::fabs(x);
+             audio_pcm.push_back(a <= knee ? x : std::copysign(knee + (1.0f - knee) * std::tanh((a - knee) / (1.0f - knee)), x));
+         }
+@@ -3892,6 +3977,14 @@
          return true;
      }
  
@@ -558,7 +581,7 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
      std::vector<segment> segments;
      size_t seg_idx = 0;
      int    seg_pos = 0;
-@@ -5659,7 +5750,11 @@
+@@ -5659,7 +5752,11 @@
      }
  }
  
