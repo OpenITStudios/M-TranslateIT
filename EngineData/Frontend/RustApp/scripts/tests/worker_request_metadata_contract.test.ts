@@ -132,3 +132,21 @@ test("Zonos3 reuses bounded sampling scratch and MT reserves the intact prompt",
   assert.equal((mt.match(/llama_tokenize\(/g) ?? []).length, 1);
   assert.match(mt, /prompt\.append\(source\.data\(\), source\.size\(\)\)/);
 });
+
+test("ASR releases completed input storage and reuses decoder text batches", () => {
+  const cpp = readFileSync(new URL("../../../../../tools/translation_quality/native_cuda/inference.cpp", import.meta.url), "utf8");
+  const prefill = cpp.slice(cpp.indexOf("int32_t decode_text_prefill("), cpp.indexOf("constexpr llama_token greedy_token("));
+  assert.match(prefill, /llama_batch_ext_clear\(d\.batch\.get\(\)\)/);
+  assert.match(prefill, /llama_batch_ext_add_token\(d\.batch\.get\(\), 0, tokens\[i\]\)/);
+  assert.match(prefill, /const llama_pos pos = next_pos\+\+/);
+  assert.match(prefill, /logits_last && i \+ 1 == count/);
+  assert.match(prefill, /control\.check\(\)/);
+  assert.doesNotMatch(prefill, /llama_batch_ext_init|llama_synchronize/);
+  const asr = cpp.slice(cpp.indexOf("int32_t infer("), cpp.indexOf("static int32_t transcribe_asr("));
+  assert.match(asr, /MTMD_INPUT_CHUNK_TYPE_TEXT[\s\S]*?decode_text_prefill\(asr, tokens, count, next_pos, logits_last, control\)[\s\S]*?else if \(mtmd_helper_eval_chunk_single/);
+  assert.ok(asr.indexOf("chunks.reset();") > asr.indexOf("if (next_pos <= 0") && asr.indexOf("chunks.reset();") < asr.indexOf("return generate(asr,"));
+  const mt = cpp.slice(cpp.indexOf("int32_t translate(ti_mt"), cpp.indexOf("static int32_t translate_mt("));
+  assert.match(mt, /decode_text_prefill\(mt, tokens\.data\(\), static_cast<size_t>\(n\), next_pos, true, control\)/);
+  const patch = readFileSync(new URL("../../../../../tools/translation_quality/llama-strict-cuda.patch", import.meta.url), "utf8");
+  assert.match(patch, /mtmd_audio_fill_entries\(mels, false, out\.entries\);[\s\S]*?\+    std::vector<float>\(\)\.swap\(out\.samples\);/);
+});

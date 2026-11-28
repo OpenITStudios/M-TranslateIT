@@ -420,7 +420,18 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
 diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
 --- a/tools/mtmd/mtmd-audio.cpp
 +++ b/tools/mtmd/mtmd-audio.cpp
-@@ -353,12 +353,13 @@
+@@ -303,7 +303,9 @@
+         return false;
+     }
+     mtmd_audio_fill_entries(mels, false, out.entries);
+-    out.samples = {};
++    // Empty initializer assignment can retain the PCM allocation.
++    // The computed entries now own all values; release the deferred source.
++    std::vector<float>().swap(out.samples);
+     return true;
+ }
+ 
+@@ -353,12 +355,13 @@
  
      // Padding
      std::vector<float> samples_padded;
@@ -438,7 +449,7 @@ diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
          const auto pad_amount = frame_size / 2;
          samples_padded = std::vector<float>(n_samples + 2 * pad_amount, 0);
          std::copy(samples, samples + n_samples, samples_padded.data() + pad_amount);
-@@ -428,7 +429,7 @@
+@@ -428,7 +431,7 @@
      }
      out.data.resize(total_size);
  
@@ -447,7 +458,7 @@ diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
          return false;
      }
  
-@@ -603,82 +604,97 @@
+@@ -603,82 +606,97 @@
      mel_config.cache            = &cache;
  }
  

@@ -352,6 +352,28 @@ struct clear_utterance {
     }
 };
 
+// Reuse the decoder's batch for text prefill, including text chunks around
+// Qwen3-ASR audio. Multimodal embedding positions remain upstream-owned.
+int32_t decode_text_prefill(decoder & d, const llama_token * tokens, size_t count,
+                            llama_pos & next_pos, bool logits_last, const request_control & control) {
+    if (!tokens && count != 0) return TI_INFERENCE;
+    for (size_t i = 0; i < count;) {
+        if (const auto stop = control.check(); stop != TI_OK) return stop;
+        llama_batch_ext_clear(d.batch.get());
+        const size_t end = i + std::min<size_t>(k_batch, count - i);
+        for (; i < end; ++i) {
+            const int idx = llama_batch_ext_add_token(d.batch.get(), 0, tokens[i]);
+            const llama_pos pos = next_pos++;
+            if (idx < 0 || !llama_batch_ext_set_pos(d.batch.get(), idx, &pos) ||
+                !llama_batch_ext_set_output_logits(d.batch.get(), idx, logits_last && i + 1 == count))
+                return TI_INFERENCE;
+        }
+        if (llama_process(d.context.get(), LLAMA_PROCESS_TYPE_DECODE, d.batch.get()) != 0)
+            return TI_INFERENCE;
+    }
+    return TI_OK;
+}
+
 // Match pinned llama_sampler_greedy_apply's strict comparison in token-ID
 // order: first maximum wins, including ties. No candidate vector or state.
 constexpr llama_token greedy_token(const float * logits, int32_t count) {
@@ -466,20 +488,31 @@ int32_t infer(ti_asr & asr, const float * pcm, size_t count, const char * langua
         static_cast<uint64_t>(n_pos) > limit - k_asr_max_tokens ||
         n_tokens > limit - k_asr_max_tokens) return TI_INPUT_LIMIT;
     llama_pos next_pos = 0;
-    // Mirror the pinned upstream helper's position and final-logits contract,
-    // checking between chunks rather than duplicating its encode/decode logic.
+    // Reuse text prefill; keep the pinned helper for multimodal embeddings
+    // and M-RoPE positions. Each call consumes its input before returning.
     const size_t chunk_count = mtmd_input_chunks_size(chunks.get());
     for (size_t i = 0; i < chunk_count; ++i) {
         if (const auto stop = control.check(); stop != TI_OK) return stop;
         const auto * chunk = mtmd_input_chunks_get(chunks.get(), i);
-        if (!chunk || mtmd_helper_eval_chunk_single(projector, context, chunk, next_pos, 0,
-                                                    k_batch, i + 1 == chunk_count, &next_pos) != 0)
+        if (!chunk) return TI_INFERENCE;
+        const bool logits_last = i + 1 == chunk_count;
+        if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+            size_t count = 0;
+            const auto * tokens = mtmd_input_chunk_get_tokens_text(chunk, &count);
+            const auto status = decode_text_prefill(asr, tokens, count, next_pos, logits_last, control);
+            if (status != TI_OK) return status;
+        } else if (mtmd_helper_eval_chunk_single(projector, context, chunk, next_pos, 0,
+                                                  k_batch, logits_last, &next_pos) != 0) {
             return TI_INFERENCE;
+        }
     }
     if (const auto stop = control.check(); stop != TI_OK) return stop;
     if (next_pos <= 0 || static_cast<uint64_t>(next_pos) > limit - k_asr_max_tokens)
         return TI_INFERENCE;
 
+    // All chunk data has been consumed by prefill. The context owns the
+    // decoded state; generation needs only its logits, not the mel windows.
+    chunks.reset();
     return generate(asr, next_pos, k_asr_max_tokens, LLAMA_TOKEN_NULL, {}, control, output, out_len);
 }
 }
@@ -589,21 +622,10 @@ int32_t translate(ti_mt & mt, std::string_view source, const char * target,
 
     llama_memory_clear(llama_get_memory(context), false);
     clear_utterance clear{context};
-    for (int i = 0; i < n;) {
-        if (const auto stop = control.check(); stop != TI_OK) return stop;
-        llama_batch_ext_clear(mt.batch.get());
-        const int end = std::min(n, i + static_cast<int>(k_batch));
-        for (; i < end; ++i) {
-            const int idx = llama_batch_ext_add_token(mt.batch.get(), 0, tokens[i]);
-            const llama_pos pos = i;
-            if (idx < 0 || !llama_batch_ext_set_pos(mt.batch.get(), idx, &pos) ||
-                !llama_batch_ext_set_output_logits(mt.batch.get(), idx, i + 1 == n))
-                return TI_INFERENCE;
-        }
-        if (llama_process(context, LLAMA_PROCESS_TYPE_DECODE, mt.batch.get()) != 0)
-            return TI_INFERENCE;
-    }
-    return generate(mt, n, budget, mt.eos,
+    llama_pos next_pos = 0;
+    const auto status = decode_text_prefill(mt, tokens.data(), static_cast<size_t>(n), next_pos, true, control);
+    if (status != TI_OK) return status;
+    return generate(mt, next_pos, budget, mt.eos,
                     std::string_view(prompt).substr(body_start, body_size), control, output, out_len);
 }
 }
