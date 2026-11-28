@@ -11,6 +11,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::engine::logging::{write_jsonl_event, RuntimeLogEvent};
 
 mod scheduler;
+#[cfg(all(test, windows))]
+mod native_quality;
 
 pub(crate) use scheduler::{acquire_helper_task_permit, HelperTaskPriority};
 #[cfg(windows)]

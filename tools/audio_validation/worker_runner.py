@@ -518,61 +518,118 @@ def run(fixtures: Path, python: Path, expected_sha: str,
     return output
 
 
-def run_translation_quality(python: Path, expected_sha: str, suite: str, timeout: float) -> dict:
-    """Translation-stage diagnostics using the same persistent transport and grader."""
+NATIVE_TRANSLATION_PROOF = "NATIVE_OWNER_TRANSLATION_ONLY_NOT_MEETING_ACCEPTANCE"
+NATIVE_MT_MODEL = "hy-mt2-1.8b-q6_k"
+NATIVE_MT_REVISION = "a0c709d9fac510f2c807aa3af52872340dc37a4a"
+
+
+def native_translation_requests(corpus: dict, expected_sha: str, timeout: float, grader) -> dict:
+    if not 5 <= timeout <= 600:
+        raise ValueError("native request timeout outside 5–600 seconds")
+    # This is model-stage evaluation, not a fake Meeting generation.
+    # Context pairs remain in the corpus only. No history is sent.
+    return {
+        "schema": "translateit.native_translation.requests.v1",
+        "source_sha": expected_sha, "corpus_fingerprint": grader.corpus_fingerprint(corpus),
+        "timeout_ms": round(timeout * 1000),
+        "requests": [
+            {"case_id": item["case_id"], **{key: item["request"][key] for key in
+                ("text", "source_language", "target_language")}}
+            for item in grader.emit_requests(corpus)["requests"]
+        ],
+    }
+
+
+def native_translation_replay(requests: dict) -> dict:
+    """One explicit offline Rust test process, one resident native owner."""
+    with tempfile.TemporaryDirectory(prefix="native-translation-quality-") as work:
+        root = Path(work).resolve()
+        request_path, receipt_path = root / "requests.json", root / "receipt.json"
+        request_path.write_text(json.dumps(requests, ensure_ascii=False), encoding="utf-8")
+        request_hash = fingerprint(request_path)
+        env = {**os.environ, "CARGO_NET_OFFLINE": "true", "CARGO_BUILD_JOBS": "2",
+               "RUST_TEST_THREADS": "1", "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
+               "TRANSLATEIT_NATIVE_QUALITY_REQUESTS": str(request_path),
+               "TRANSLATEIT_NATIVE_QUALITY_RESULTS": str(receipt_path),
+               "TRANSLATEIT_NATIVE_QUALITY_REQUEST_SHA256": request_hash}
+        timeout = 900 + len(requests["requests"]) * (requests["timeout_ms"] / 1000 + 15)
+        result = subprocess.run(
+            ["cargo", "test", "--locked", "--offline", "explicit_native_translation_quality_replay",
+             "--", "--ignored", "--test-threads=1"],
+            cwd=ROOT / "EngineData/Frontend/RustApp/src-tauri", env=env, shell=False,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+        )
+        if result.returncode != 0 or not receipt_path.is_file() or receipt_path.is_symlink():
+            raise WorkerTransportError("native replay or cleanup failed: " + (result.stderr[-700:] or result.stdout[-700:]))
+        with receipt_path.open("rb") as stream:
+            data = stream.read(16 * 1024 * 1024 + 1)
+        if len(data) > 16 * 1024 * 1024:
+            raise WorkerTransportError("native receipt exceeds bound")
+        receipt = json.loads(data)
+        if (not isinstance(receipt, dict) or receipt.get("request_sha256") != request_hash
+                or receipt.get("schema") != "translateit.native_translation.replay.v1"):
+            raise WorkerTransportError("native request identity mismatch")
+        return receipt
+
+
+def run_translation_quality(expected_sha: str, suite: str, timeout: float) -> dict:
+    """Native translation-only replay and the unchanged semantic grader."""
     pinned_source(expected_sha)
     quality_root = ROOT / "tools/translation_quality"
     spec = importlib.util.spec_from_file_location("worker_translation_quality", quality_root / "evaluate_translation_quality.py")
     grader = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(grader)
     corpus = grader.select_suite(grader.load_corpus(quality_root / "corpus/translation_quality_v1.json"), suite)
-    manifest_path = WORKER.parent / "model_manifest.json"
-    models = [item for item in json.loads(manifest_path.read_text(encoding="utf-8"))["models"]
-              if item.get("stage") == "translation_bidirectional_id_en"]
-    if len(models) != 1 or models[0].get("backend") != "milmmt":
-        raise ValueError("one canonical MiLMMT manifest entry required")
-    model = models[0]
-    records, rejected = [], {}
-    worker = None
+    requests = native_translation_requests(corpus, expected_sha, timeout, grader)
+    records, rejected, receipt = [], {}, {}
     error = None
-    stopped = False
     started = time.monotonic()
     try:
-        worker = Worker(python, timeout)
-        for item in grader.emit_requests(corpus)["requests"]:
-            ident, request = item["case_id"], item["request"]
-            try:
-                response = worker.invoke(**request)
-            except WorkerTransportError as exc:
-                rejected[ident] = {"stage": "worker_transport", "error": str(exc)}
-                error = str(exc)
-                break
-            direction = f"{request['source_language']}->{request['target_language']}"
-            if (not translation_receipt_complete(response, direction)
-                    or response.get("model_id") != model["model_id"]
-                    or response.get("model_revision") != model["revision"]
+        receipt = native_translation_replay(requests)
+        pci = receipt.get("cuda_pci_id")
+        rows = receipt.get("results")
+        if (receipt.get("proof") != NATIVE_TRANSLATION_PROOF
+                or receipt.get("source_sha") != expected_sha
+                or receipt.get("corpus_fingerprint") != requests["corpus_fingerprint"]
+                or not isinstance(pci, str) or not re.fullmatch(r"(?:[a-f0-9]{4}|[a-f0-9]{8}):[a-f0-9]{2}:[a-f0-9]{2}\.[0-7]", pci)
+                or not re.fullmatch(r"[a-f0-9]{64}", str(receipt.get("dll_pins_sha256", "")))
+                or not re.fullmatch(r"[a-f0-9]{64}", str(receipt.get("request_sha256", "")))
+                or type(receipt.get("worker_pid")) is not int or receipt["worker_pid"] <= 0
+                or receipt.get("worker_terminated") is not True
+                or not isinstance(rows, list) or len(rows) > len(requests["requests"])):
+            raise WorkerTransportError("native replay receipt identity or cleanup invalid")
+        seen = set()
+        for item, row in zip(requests["requests"], rows):
+            ident = item["case_id"]
+            direction = f"{item['source_language']}->{item['target_language']}"
+            response = row.get("response") if isinstance(row, dict) else None
+            request_id = response.get("request_id") if isinstance(response, dict) else None
+            if (not isinstance(row, dict) or row.get("case_id") != ident or not isinstance(response, dict)
+                    or not isinstance(request_id, str) or not re.fullmatch(r"helper-[1-9][0-9]*", request_id)
+                    or request_id in seen or not translation_receipt_complete(response, direction)
+                    or response.get("stage") != "translate" or response.get("device") != "cuda"
+                    or response.get("cuda_pci_id") != pci or response.get("precision") != "q6_k"
+                    or response.get("model_id") != NATIVE_MT_MODEL or response.get("model_revision") != NATIVE_MT_REVISION
+                    or response.get("source_language") != item["source_language"]
+                    or response.get("target_language") != item["target_language"]
                     or response.get("translation_contract") != "canonical_bidirectional_id_en"
-                    or response.get("hit_token_ceiling") is True):
+                    or response.get("translation_degraded") is not False
+                    or response.get("translation_fallback_reason") != ""
+                    or response.get("blocker") != "" or response.get("hit_token_ceiling") is not False):
                 rejected[ident] = {"stage": "translation_output_contract", "response": response}
                 error = "translation:incomplete_or_unbound_output"
                 break
+            seen.add(request_id)
             records.append({"case_id": ident, "translated_text": response["translated_text"], "response": response})
-    except (OSError, ValueError) as exc:
+        if receipt.get("execution_error") is not None or len(records) != len(requests["requests"]):
+            error = error or str(receipt.get("execution_error") or "native replay incomplete")
+    except (OSError, ValueError, WorkerTransportError, subprocess.TimeoutExpired) as exc:
         error = str(exc)
-    finally:
-        if worker is not None:
-            try:
-                worker.close()
-                stopped = worker.child.poll() is not None
-                if not stopped:
-                    error = "worker_cleanup:not_terminated"
-            except (OSError, RuntimeError) as exc:
-                error = f"worker_cleanup:{exc}"
     try:
         pinned_source(expected_sha)
     except ValueError as exc:
         error = f"source_identity:{exc}"
-    identity = f"{expected_sha}:{model['model_id']}@{model['revision']}"
+    identity = f"{expected_sha}:{NATIVE_MT_MODEL}@{NATIVE_MT_REVISION}"
     values = {row["case_id"]: row["translated_text"] for row in records}
     evaluation = grader.evaluate(corpus, values, result_corpus_fingerprint=grader.corpus_fingerprint(corpus), source_identity=identity)
     checks = []
@@ -585,15 +642,16 @@ def run_translation_quality(python: Path, expected_sha: str, suite: str, timeout
                        "requires_linguistic_review": ident in values and not row["critical_pass"],
                        "expected": "complete canonical model output and declared semantic invariants",
                        "evidence": f"#/rejected/{ident}" if stage else f"#/evaluation/cases/{index}"})
-    complete = not error and stopped and evaluation["complete_result_set"]
-    return {"schema": "translateit.translation_quality.worker_run.v1",
+    complete = not error and receipt.get("worker_terminated") is True and evaluation["complete_result_set"]
+    return {"schema": "translateit.translation_quality.native_run.v1",
             "execution_profile": {"name": f"translation-{suite}"},
-            "proof": "INTEGRATION_FIXTURE_TRANSLATION_STAGE_NOT_SPEECH_OR_NATIVE_ACCEPTANCE",
+            "proof": NATIVE_TRANSLATION_PROOF,
             "source_identity": identity, "corpus_fingerprint": grader.corpus_fingerprint(corpus),
-            "selection": corpus.get("selection"), "model_manifest_sha256": fingerprint(manifest_path),
-            "worker_python": str(python.resolve()), "worker_terminated": stopped,
-            "worker_pid": worker.child.pid if worker is not None else None,
-            "execution_complete": complete, "execution_error": error,
+            "selection": corpus.get("selection"),
+            "dll_pins_sha256": receipt.get("dll_pins_sha256"), "request_sha256": receipt.get("request_sha256"),
+            "cuda_pci_id": receipt.get("cuda_pci_id"),
+            "worker_terminated": receipt.get("worker_terminated") is True,
+            "worker_pid": receipt.get("worker_pid"), "execution_complete": bool(complete), "execution_error": error,
             "elapsed_ms": round((time.monotonic() - started) * 1000),
             "results": records, "rejected": rejected, "evaluation": evaluation, "checks": checks,
             "counts": {state: sum(row["status"] == state for row in checks) for state in ("PASS", "REVIEW", "FAIL", "UNVERIFIED")},
@@ -681,10 +739,10 @@ def main() -> int:
     if args.output.exists() or args.output.is_symlink():
         parser.error("output must be a new report; previous evidence is immutable")
     if args.translation_suite:
-        if args.python is None or any((args.fixtures, args.include_voice, args.finalized_pipeline,
-                                       args.vad_observations, args.segments_dir, args.vad_source_sha, args.rounds is not None)):
-            parser.error("translation suite requires --python and accepts no audio/round arguments")
-        result = run_translation_quality(args.python, args.source_sha, args.translation_suite, args.timeout)
+        if any((args.python, args.fixtures, args.include_voice, args.finalized_pipeline,
+                args.vad_observations, args.segments_dir, args.vad_source_sha, args.rounds is not None)):
+            parser.error("native translation suite accepts no Python worker or audio/round arguments")
+        result = run_translation_quality(args.source_sha, args.translation_suite, args.timeout)
         publish_report(args.output, result)
         print(json.dumps(report_summary(result, args.output), ensure_ascii=False, indent=2))
         return 0 if result["verdict"] == "PASS" else 2

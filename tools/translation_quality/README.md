@@ -269,27 +269,28 @@ scoring. Never infer that a source-only self-test exercised native Hy-MT2.
 
 ### Execute the selected translation stage
 
-The existing persistent-worker runner accepts the same selection. From a clean,
-exact pinned Local checkout with the existing canonical interpreter/model assets:
+The same suite is now collected through the actual native Rust execution owner,
+not the retired Python translation endpoint. In the separately approved Local
+Windows validation phase, use a clean exact SHA, pinned native DLL closure and
+the existing three ASR/MT assets. The existing Python script only orchestrates
+the offline replay and grades its report; it never starts WorkerRuntime.
 
 ```powershell
-python -X utf8 tools/audio_validation/worker_runner.py --translation-suite fast --source-sha <clean-Local-SHA> --python EngineData/Backend/LocalWorker/WorkerRuntime/.venv/Scripts/python.exe --output <new-fast-worker-report.json>
+python -X utf8 tools/audio_validation/worker_runner.py --translation-suite fast --source-sha <clean-Local-SHA> --output <new-fast-native-report.json>
 ```
 
-Use `--translation-suite full` for complete development regression. Run relevant
-source controls once per changed candidate before model execution. Start with
-fast to find failures cheaply; use full when evaluating a viable behavior-changing
-candidate, not repeated full runs after unchanged known failures. This path uses
-one existing offline worker transport and the canonical manifest/evaluator. It
-does not preload ASR/TTS, synthesize fixtures or access a microphone. No case IDs,
-round reduction, alternate model, automatic retry or download fallback is offered.
-
-The report includes exact source, selection and manifest identities, actual
-per-case responses, process ID/termination, elapsed wall time and check evidence.
-Wall time includes cold load, requests, grading and cleanup; it is not live
-Meeting latency. Output must be new. Source mismatch prevents worker startup;
-transport, failed/empty/incomplete/EOS-capped/wrong-direction/wrong-model output
-stops further requests, marks remaining cases unverified and exits nonzero.
+Use `--translation-suite full` for complete development regression. The ignored
+Rust fixture opens one native pair once, admits each current-text case through
+the existing scheduler and waits for real complete output. It performs no ASR,
+voice inference, VAD or Meeting session creation. The existing pair must be
+resident even for translation-only diagnostics. No alternate provider, context,
+automatic retry or model download. The native report records exact SHA/corpus,
+request and DLL pin digests, PCI identity, per-case receipts and joined owner
+cleanup. `translateit.translation_quality.native_run.v1` and
+`NATIVE_OWNER_TRANSLATION_ONLY_NOT_MEETING_ACCEPTANCE` distinguish this evidence
+from retained legacy reports. Both are graded using the same semantic checks.
+Missing/incomplete/mismatched output, cleanup or source identity blocks a pass.
+The source-phase hold remains active; no replay has been executed.
 Incomplete execution reports cannot be loaded as quality-result bundles.
 
 An executed declared-invariant failure is labeled `translation_quality_check`

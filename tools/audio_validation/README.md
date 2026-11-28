@@ -13,7 +13,7 @@
 ## Workflow
 
 The same persistent transport also supports direct translation-only `fast|full`
-diagnostics via `--translation-suite`; see the [quality execution contract](../translation_quality/README.md#execute-the-selected-translation-stage).
+diagnostics via `--translation-suite` now use the Rust native owner, without `--python`; see the [quality execution contract](../translation_quality/README.md#execute-the-selected-translation-stage). The older audio/finalized Python runner still requires migration and cannot provide current native ASR/MT evidence.
 This is a separate stage selection, not an audio profile or replacement for
 VAD→ASR→translation→TTS core acceptance. It has no audio fixture, recording,
 voice, rounds or device arguments and reuses the canonical translation evaluator.

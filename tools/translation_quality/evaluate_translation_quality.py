@@ -321,15 +321,18 @@ def corpus_stats(corpus: dict) -> dict:
 
 def declared_worker_receipt_suite(raw: dict | list) -> str | None:
     """Identify a structurally consistent worker-run claim, not authenticate inference."""
-    if not isinstance(raw, dict) or raw.get("schema") != "translateit.translation_quality.worker_run.v1":
+    if not isinstance(raw, dict) or raw.get("schema") not in (
+        "translateit.translation_quality.worker_run.v1", "translateit.translation_quality.native_run.v1",
+    ):
         return None
+    native = raw["schema"] == "translateit.translation_quality.native_run.v1"
     profile = raw.get("execution_profile")
     name = profile.get("name") if isinstance(profile, dict) else None
     if name not in ("translation-fast", "translation-full"):
         return None
     identity = raw.get("source_identity")
     match = re.fullmatch(r"([0-9a-f]{40}):([A-Za-z0-9._-]+)@([0-9a-f]{40})", identity) if isinstance(identity, str) else None
-    digest = raw.get("model_manifest_sha256")
+    digest = raw.get("dll_pins_sha256" if native else "model_manifest_sha256")
     pid = raw.get("worker_pid")
     rows = raw.get("results")
     if (
@@ -340,11 +343,18 @@ def declared_worker_receipt_suite(raw: dict | list) -> str | None:
         or raw.get("execution_complete") is not True
         or raw.get("worker_terminated") is not True
         or raw.get("execution_error") is not None
-        or raw.get("proof") != "INTEGRATION_FIXTURE_TRANSLATION_STAGE_NOT_SPEECH_OR_NATIVE_ACCEPTANCE"
+        or raw.get("proof") != ("NATIVE_OWNER_TRANSLATION_ONLY_NOT_MEETING_ACCEPTANCE" if native
+                               else "INTEGRATION_FIXTURE_TRANSLATION_STAGE_NOT_SPEECH_OR_NATIVE_ACCEPTANCE")
         or not isinstance(rows, list) or not rows
     ):
         return None
     model_id, revision = match.group(2), match.group(3)
+    pci = raw.get("cuda_pci_id")
+    if native and (model_id != "hy-mt2-1.8b-q6_k" or revision != "a0c709d9fac510f2c807aa3af52872340dc37a4a"
+                   or not isinstance(pci, str) or not re.fullmatch(r"(?:[a-f0-9]{4}|[a-f0-9]{8}):[a-f0-9]{2}:[a-f0-9]{2}\.[0-7]", pci)
+                   or not re.fullmatch(r"[a-f0-9]{64}", str(raw.get("request_sha256", "")))):
+        return None
+    native_ids = set()
     for row in rows:
         if not isinstance(row, dict):
             return None
@@ -361,6 +371,15 @@ def declared_worker_receipt_suite(raw: dict | list) -> str | None:
             response.get("translated_text") != row.get("translated_text"),
         )):
             return None
+        if native:
+            request_id = response.get("request_id")
+            if (not isinstance(request_id, str) or not re.fullmatch(r"helper-[1-9][0-9]*", request_id)
+                    or request_id in native_ids or response.get("cuda_pci_id") != pci
+                    or response.get("device") != "cuda" or response.get("precision") != "q6_k"
+                    or response.get("translation_degraded") is not False
+                    or response.get("translation_fallback_reason") != "" or response.get("blocker") != ""):
+                return None
+            native_ids.add(request_id)
         pair = response.get("direction_pair")
         if pair not in ("id->en", "en->id"):
             return None
@@ -386,9 +405,10 @@ def load_result_bundle(path: Path) -> dict:
         raise ValueError("result bundle must be an object or list")
     if isinstance(raw, dict):
         schema = raw.get("schema")
-        if schema is not None and schema != "translateit.translation_quality.worker_run.v1":
+        worker_schemas = ("translateit.translation_quality.worker_run.v1", "translateit.translation_quality.native_run.v1")
+        if schema is not None and schema not in worker_schemas:
             raise ValueError("unsupported result bundle schema")
-        if schema == "translateit.translation_quality.worker_run.v1" and raw.get("execution_complete") is not True:
+        if schema in worker_schemas and raw.get("execution_complete") is not True:
             raise ValueError("incomplete worker execution cannot be used as a quality result bundle")
         for field in ("corpus_fingerprint", "source_identity"):
             if field in raw and not isinstance(raw[field], str):
@@ -416,6 +436,8 @@ def load_result_bundle(path: Path) -> dict:
         # Empty text is retained for normal FAIL grading; never synthesize "None".
         output[case_id] = translated.strip()
     worker_suite = declared_worker_receipt_suite(raw)
+    if isinstance(raw, dict) and raw.get("schema") == "translateit.translation_quality.native_run.v1" and worker_suite is None:
+        raise ValueError("invalid native worker receipt")
     return {
         "results": output,
         "result_file_sha256": hashlib.sha256(raw_bytes).hexdigest(),
