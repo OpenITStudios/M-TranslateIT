@@ -146,7 +146,6 @@ const contractPairs = [
   ["src-tauri/src/commands/voice_lab_recording.rs", "GuidedLineStatus", "src/app/bridge/myVoiceApi.ts", "GuidedLineStatus"],
   ["src-tauri/src/commands/voice_lab_recording.rs", "GuidedRecordingState", "src/app/bridge/myVoiceApi.ts", "GuidedRecordingState"],
   ["src-tauri/src/commands/voice_lab_recording.rs", "GuidedRecordingActionResult", "src/app/bridge/myVoiceApi.ts", "GuidedRecordingActionResult"],
-  ["src-tauri/src/commands/voice_lab_build.rs", "VoiceLabCoverageGuidance", "src/app/bridge/myVoiceBuildApi.ts", "MyVoiceCoverageGuidance"],
   ["src-tauri/src/commands/voice_lab_build.rs", "VoiceLabBuildStatus", "src/app/bridge/myVoiceBuildApi.ts", "MyVoiceBuildStatus"],
   ["src-tauri/src/commands/voice_lab_build.rs", "VoiceLabBuildActionResult", "src/app/bridge/myVoiceBuildApi.ts", "MyVoiceBuildActionResult"],
   ["src-tauri/src/commands/voice_lab_build/evaluation.rs", "VoiceLabEvaluationSample", "src/app/bridge/myVoiceBuildApi.ts", "MyVoiceEvaluationSample"],

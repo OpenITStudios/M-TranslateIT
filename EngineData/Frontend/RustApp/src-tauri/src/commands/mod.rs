@@ -1,7 +1,6 @@
 pub mod app_update;
 pub mod application_runtime;
 pub mod audio;
-pub mod bridge_paths;
 pub mod codex_gateway;
 pub mod builtin_voice;
 pub mod diagnostic_support;

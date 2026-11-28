@@ -294,14 +294,15 @@ export function makeMyVoicePreviewFixture(scenario: MyVoicePreviewScenario): MyV
     active: inTraining,
     preview_active: false,
     generation: inTraining ? 7 : null,
-    phase: inTraining ? "training" : inReview ? "evaluation_ready" : "idle",
+    phase: inTraining ? "evaluating" : inReview ? "evaluation_ready" : "idle",
     message: inTraining
-      ? "Synthetic training stage. No GPU, model or audio task is running."
+      ? "Synthetic evaluation stage. No GPU, model or audio task is running."
       : "Synthetic My Voice layout data; no native status was queried.",
     accepted_take_count: accepted,
     accepted_duration_ms: hasAccepted ? 65_000 : 0,
-    minimum_duration_ms: 60_000,
-    missing_coverage: null,
+    minimum_duration_ms: 6_000,
+    native_pins_ready: true,
+
     recording_suggestions: [],
     can_build: hasAccepted,
     evaluation_ready: inReview,
@@ -316,8 +317,8 @@ export function makeMyVoicePreviewFixture(scenario: MyVoicePreviewScenario): MyV
       intelligibility_wer: 0.15,
       artifact_flags: [],
     })) : [],
-    evaluation_comparison: [],
-    reference_selection: null,
+
+
     approved_voice_ready: false,
     selected_voice_kind: "built_in",
     selected_builtin_voice_id: "MaleVoice",

@@ -55,41 +55,6 @@ pub struct VoiceLabEvaluationSample {
     pub artifact_flags: Vec<String>,
 }
 
-// Comparison data is strictly advisory. It describes only checkpoints from
-// the SAME completed training run, never a previous approved voice.
-#[derive(Debug, Clone, Serialize)]
-pub struct VoiceLabCandidateComparison {
-    pub candidate_id: String,
-    pub selected_for_review: bool,
-    pub mean_intelligibility_wer: f64,
-    pub maximum_intelligibility_wer: f64,
-    pub mean_speaker_similarity: f64,
-    pub minimum_speaker_similarity: f64,
-    pub artifact_case_count: usize,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum VoiceLabReferenceCriterion {
-    OnlyEligible,
-    LowerClippingFraction,
-    LowerRelativeEdgeEnergy,
-    LowerSilenceFraction,
-    LowerDcOffset,
-    HigherSpeakerConsistency,
-    CloserToTargetDuration,
-    LineIdTiebreak,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct VoiceLabReferenceSelection {
-    pub line_id: u32,
-    pub duration_ms: u64,
-    pub eligible_take_count: usize,
-    pub criterion: VoiceLabReferenceCriterion,
-    pub quiet_edge_comparable: bool,
-}
-
 pub(super) fn evaluation_dir(paths: &VoiceLabStoragePaths) -> PathBuf {
     paths.cache_root.join("Evaluation")
 }

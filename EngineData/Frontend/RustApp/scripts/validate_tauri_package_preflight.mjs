@@ -29,7 +29,6 @@ const cargoTomlPath = join(tauriRoot, "Cargo.toml");
 const mainRsPath = join(tauriRoot, "src", "main.rs");
 const appBootstrapPath = join(tauriRoot, "src", "app_bootstrap.rs");
 const pathsOwnerPath = join(tauriRoot, "src", "engine", "paths.rs");
-const bridgePathsPath = join(tauriRoot, "src", "commands", "bridge_paths.rs");
 const helperBridgePath = join(tauriRoot, "src", "commands", "helper_bridge.rs");
 const meetingOutputPath = join(tauriRoot, "src", "engine", "audio", "meeting_output.rs");
 const meetingOutputRuntimePath = join(tauriRoot, "src", "engine", "audio", "meeting_output_runtime.rs");
@@ -65,7 +64,6 @@ for (const path of [
   mainRsPath,
   appBootstrapPath,
   pathsOwnerPath,
-  bridgePathsPath,
   helperBridgePath,
   meetingOutputPath,
   meetingOutputRuntimePath,
@@ -157,17 +155,6 @@ requireMarkers(pathsOwnerRs, "canonical path owner", [
   '.join("PythonRuntime")',
   "pub fn initialize_tauri_path_context(",
   "pub fn ensure_user_data_dirs(&self)",
-]);
-
-const bridgePathsRs = readText(bridgePathsPath);
-requireMarkers(bridgePathsRs, "packaged Python resolver", [
-  "ProjectPaths::discover().worker_runtime_dir",
-  "paths.python_runtime_dir",
-  "paths.packaged_context_initialized",
-  "if !paths.is_repository_development() {",
-  '.join("python.exe")',
-  'source: "packaged_python_runtime".to_string()',
-  "pub fn resolve_worker_python_command()",
 ]);
 
 const helperBridgeRs = readText(helperBridgePath);

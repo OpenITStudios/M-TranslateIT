@@ -42,15 +42,16 @@
     message: "Checking My Voice recordings...",
     accepted_take_count: 0,
     accepted_duration_ms: 0,
-    minimum_duration_ms: 60_000,
-    missing_coverage: null,
+    minimum_duration_ms: 6_000,
+    native_pins_ready: false,
+
     recording_suggestions: [],
     can_build: false,
     evaluation_ready: false,
     evaluation_review_id: null,
     evaluation_samples: [],
-    evaluation_comparison: [],
-    reference_selection: null,
+
+
     approved_voice_ready: false,
     selected_voice_kind: "unknown",
     selected_builtin_voice_id: null,

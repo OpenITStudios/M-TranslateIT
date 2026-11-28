@@ -76,8 +76,15 @@ if (asr.length !== 1 || asr[0].model_id !== "qwen3-asr-1.7b-q8_0"
     || asr[0].revision !== "3b2c29585c2180452ccb14d3b6b58127f352400d"
     || asr[0].backend !== "llama.cpp/mtmd" || asr[0].cpu_fallback !== false
     || translation.cpu_fallback !== false) fail("native_model_identity");
-const expectedEvaluation = manifest.models.find(model => model.model_id === "faster-whisper-large-v3-turbo");
-if (expectedEvaluation?.stage !== "voice_actor_evaluation_asr" || expectedEvaluation.required !== true) fail("voice_evaluation_model_missing");
+const voice = manifest.models.find(model => model.model_id === "zonos3-mini-q8_0");
+if (voice?.required !== true || voice.stage !== "voice_actor_reference_synthesis"
+    || voice.revision !== "2e7bc4126a2343787298e1a297a3d1c4a13165aa"
+    || voice.cpu_fallback !== false || voice.backend !== "llama.cpp/mtmd") fail("native_voice_model_identity");
+const verifier = manifest.models.find(model => model.model_id === "eres2netv2-forward3-f32");
+if (verifier?.required !== true || verifier.stage !== "voice_actor_speaker_verification") fail("speaker_verifier_missing");
+// No reviewed export pin exists yet. Do not allow the old release gate to
+// report success based on arbitrary ONNX bytes.
+if (verifier.pin_status === "pending_reviewed_export") fail("speaker_verifier_export_pin_pending");
 
 const prefix = "EngineData/Backend/";
 for (const model of manifest.models ?? []) {

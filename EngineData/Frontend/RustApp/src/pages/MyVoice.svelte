@@ -1280,11 +1280,6 @@
                 aria-valuetext={formatRecordingDuration(buildSnapshot.accepted_duration_ms) + " of " + formatRecordingDuration(buildSnapshot.minimum_duration_ms) + " minimum"}>
                 <div class="h-full rounded-full bg-[var(--ti-accent)]" style:width={minimumProgress + "%"}></div>
               </div>
-              {#if buildSnapshot.missing_coverage && buildSnapshot.accepted_duration_ms >= buildSnapshot.minimum_duration_ms}
-                <p class="m-0 mt-2 text-[12px] leading-5 text-[var(--ti-text-muted)]">
-                  Next: Add a sentence covering {buildSnapshot.missing_coverage.label}.
-                </p>
-              {/if}
               {#if buildSnapshot.evaluation_ready && !isRecording && pendingLineId === null}
                 <button type="button" class="ti-button ti-button-secondary mt-3"
                   disabled={busy || recordingStatusUnknown}

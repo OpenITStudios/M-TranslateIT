@@ -6,35 +6,9 @@
   "backend_policy": {
     "gpu_primary": true,
     "cpu_fallback_allowed": false,
-    "cpu_fallback_label": "not_supported_for_meeting_asr_mt"
+    "cpu_fallback_label": "no_cpu_fallback_for_native_asr_mt_tts; independent_speaker_verifier_cpu"
   },
   "models": [
-    {
-      "model_id": "faster-whisper-large-v3-turbo",
-      "required": true,
-      "stage": "voice_actor_evaluation_asr",
-      "backend": "whisper",
-      "source_type": "huggingface",
-      "repo_id": "dropbox-dash/faster-whisper-large-v3-turbo",
-      "expected_path": "EngineData/Backend/RuntimeAssets/ASR/ModelData/faster-whisper-large-v3-turbo",
-      "legacy_paths": [],
-      "gpu_capable": true,
-      "cpu_fallback": true,
-      "download_url": "https://huggingface.co/dropbox-dash/faster-whisper-large-v3-turbo",
-      "install_method": "huggingface_snapshot_download",
-      "license": "mit",
-      "notes": "Required for existing My Voice intelligibility evaluation only. Not a Meeting ASR engine. Preserve Faster Whisper/CTranslate2 and bundled Silero ONNX asset.",
-      "artifact_hashes": {
-        ".gitattributes": "11ad7efa24975ee4b0c3c3a38ed18737f0658a5f75a0a96787b576a78a023361",
-        "config.json": "b0253ea6c0d3bea6b1e19e91a02acfd3b53f4467362efcb5a3e6b16c9b3a9b7e",
-        "model.bin": "e76620f83d5f5b69efd3d87e3dc180c1bd21df9fbebacfd4335e5e1efcc018da",
-        "preprocessor_config.json": "7ccc62c6f2765af1f3b46c00c9b5894426835a05021c8b9c01eecb6dfb542711",
-        "README.md": "b3068692728faed23580cce5cd569fc47ff76c690c032b2641ffd5554ea64d8f",
-        "tokenizer.json": "297b13372ac43916285644fb9687add3cc62ee2a1adb60da3dc25cc94c1871fd",
-        "vocabulary.json": "c69260f2ab26d659b7c398f9a2b2b48ed0df16c3b47d7326782fd9cba71690c1"
-      },
-      "revision": "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf"
-    },
     {
       "model_id": "qwen3-asr-1.7b-q8_0",
       "required": true,
@@ -84,29 +58,52 @@
       "revision": "a0c709d9fac510f2c807aa3af52872340dc37a4a"
     },
     {
-      "model_id": "gpt-sovits-v2proplus-voicelab",
+      "model_id": "zonos3-mini-q8_0",
       "required": true,
-      "stage": "voice_actor_build_and_inference",
-      "backend": "gpt-sovits-v2proplus",
-      "source_type": "release_asset",
-      "repo_id": "RVC-Boss/GPT-SoVITS",
-      "expected_path": "EngineData/Backend/RuntimeAssets/Voice/GPTSoVITS/Source",
+      "stage": "voice_actor_reference_synthesis",
+      "backend": "llama.cpp/mtmd",
+      "source_type": "huggingface",
+      "repo_id": "ggml-org/ZONOS3-Mini-GGUF",
+      "expected_path": "EngineData/Backend/RuntimeAssets/Voice/ModelData/zonos3-mini",
       "legacy_paths": [],
       "gpu_capable": true,
-      "cpu_fallback": true,
+      "cpu_fallback": false,
+      "download_url": "https://huggingface.co/ggml-org/ZONOS3-Mini-GGUF",
+      "install_method": "huggingface_snapshot_download",
+      "download_allow_patterns": [
+        "ZONOS3-Mini-Q8_0.gguf",
+        "mmproj-ZONOS3-Mini-F32.gguf"
+      ],
+      "license": "apache-2.0 (publisher declaration; release notice and provenance review pending)",
+      "notes": "Pinned reference-conditioned native TTS and codec; no personal training weights. Qwen3-ASR also evaluates held-out voice samples.",
+      "artifact_hashes": {
+        "ZONOS3-Mini-Q8_0.gguf": "60568efc88e2f9231f4f5c061e246421f575986642d72ab9ae68f77d6cf76be4",
+        "mmproj-ZONOS3-Mini-F32.gguf": "aeeb92325b4b6927bef656390b78e1246148065f947d8b59c2663557a809414d"
+      },
+      "artifact_bytes": {
+        "ZONOS3-Mini-Q8_0.gguf": 854726208,
+        "mmproj-ZONOS3-Mini-F32.gguf": 1142502880
+      },
+      "revision": "2e7bc4126a2343787298e1a297a3d1c4a13165aa"
+    },
+    {
+      "model_id": "eres2netv2-forward3-f32",
+      "required": true,
+      "stage": "voice_actor_speaker_verification",
+      "backend": "onnxruntime",
+      "source_type": "offline_export",
+      "repo_id": "RVC-Boss/GPT-SoVITS",
+      "expected_path": "EngineData/Backend/RuntimeAssets/Voice/ModelData/SpeakerVerifier/eres2netv2-forward3-f32.onnx",
+      "legacy_paths": [],
+      "gpu_capable": false,
+      "cpu_fallback": false,
       "download_url": null,
-      "install_method": "approved_release_asset",
-      "license": "mit (RVC-Boss/GPT-SoVITS source); bundled pretrained and third-party runtime assets retain their own license/attribution requirements",
-      "notes": "Required full-product-release VoiceLab creation and trained My Voice inference asset at the pinned V2ProPlus source boundary. Preserve upstream and third-party notices; FFmpeg and the frozen Python dependency graph have separate release-license gates documented by controlled payload owners.",
-      "revision": "d523079fc05d9a8028d6085bffe4a2757c32abb6",
-      "asset_repo_id": "lj1995/GPT-SoVITS",
-      "asset_revision": "336b2ec4e8d4ac74740798dd40af44e74659ecaf",
-      "asset_hashes": {
-        "s1v3.ckpt": "87133414860ea14ff6620c483a3db5ed07b44be42e2c3fcdad65523a729a745a",
-        "sv/pretrained_eres2netv2w24s4ep4.ckpt": "4f5a0bf73c61eb41b174e1bb54e7ee3c83233892be8e0af1f187024e8e581a35",
-        "v2Pro/s2Dv2ProPlus.pth": "635cd84bf6f7f9b8d41c88c7106f81d782c794c61f931845214ea037b0c5bef2",
-        "v2Pro/s2Gv2ProPlus.pth": "d42a22bbbf65fb2bbdd45ad6a66841156977db45c7aabe0a6992ff378d9c7d3b"
-      }
+      "install_method": "reviewed_offline_export",
+      "license": "pending export and upstream checkpoint provenance review",
+      "notes": "Independent CPU speaker scoring, not inference fallback. Exact export SHA-256, size and feature/graph parity are pending; no fabricated artifact pin.",
+      "pin_status": "pending_reviewed_export",
+      "source_revision": "d523079fc05d9a8028d6085bffe4a2757c32abb6",
+      "source_checkpoint_sha256": "4f5a0bf73c61eb41b174e1bb54e7ee3c83233892be8e0af1f187024e8e581a35"
     }
   ]
 }

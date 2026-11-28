@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -41,7 +41,7 @@ pub(super) mod native_review;
 mod native_build;
 mod receipts;
 use receipts::{completion_file, commit_completion, create_identity, identity_file, manual_stop_file};
-pub use evaluation::{VoiceLabCandidateComparison, VoiceLabEvaluationSample, VoiceLabReferenceSelection};
+pub use evaluation::VoiceLabEvaluationSample;
 use evaluation::{evaluation_dir, held_out_contract, MAX_EVALUATION_WAV_BYTES};
 const MAX_TRAINING_TAKES: usize = 128;
 
@@ -72,65 +72,9 @@ pub(crate) fn voice_selection_guard() -> Result<VoiceSelectionGuard, ()> {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct VoiceLabCoverageGuidance {
-    pub start_line_id: u32,
-    pub end_line_id: u32,
-    pub label: &'static str,
-    pub suggested_line_id: Option<u32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MyVoiceComputeStatus {
-    pub state: String,
-    pub cpu_name: String,
-    pub gpu_name: Option<String>,
-    pub gpu_uuid: Option<String>,
-    pub compute_capability: Option<String>,
-    pub precision_profile: Option<String>,
-    pub cuda_index: Option<u32>,
-    pub visible_cuda_devices: u32,
-    pub vram_mib: Option<u64>,
-    pub free_vram_mib: Option<u64>,
-    pub reserve_mib: Option<u64>,
-    pub safe_budget_mib: Option<u64>,
-    pub admission_state: String,
-    pub profile: String,
-    pub detail: String,
-}
-
-impl MyVoiceComputeStatus {
-    fn unavailable(detail: &str) -> Self {
-        Self {
-            state: "unavailable".into(),
-            cpu_name: "CPU name unavailable".into(),
-            gpu_name: None,
-            gpu_uuid: None,
-            compute_capability: None,
-            precision_profile: None,
-            cuda_index: None,
-            visible_cuda_devices: 0,
-            vram_mib: None,
-            free_vram_mib: None,
-            reserve_mib: None,
-            safe_budget_mib: None,
-            admission_state: "unknown".into(),
-            profile: "SAFE_CUDA_V1".into(),
-            detail: detail.into(),
-        }
-    }
-}
-
-// Compatibility command; GPU admission belongs to the native runtime.
-#[tauri::command]
-pub async fn get_my_voice_compute_status() -> MyVoiceComputeStatus {
-    MyVoiceComputeStatus::unavailable("Native My Voice checks GPU admission when creating the voice.")
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct VoiceLabBuildStatus {
     pub active: bool,
     pub preview_active: bool,
-    pub native_candidate: bool,
     pub native_pins_ready: bool,
     pub generation: Option<u64>,
     pub phase: String,
@@ -138,16 +82,11 @@ pub struct VoiceLabBuildStatus {
     pub accepted_take_count: usize,
     pub accepted_duration_ms: u64,
     pub minimum_duration_ms: u64,
-    pub missing_coverage: Option<VoiceLabCoverageGuidance>,
     pub recording_suggestions: Vec<RecordingSuggestion>,
     pub can_build: bool,
     pub evaluation_ready: bool,
     pub evaluation_review_id: Option<String>,
     pub evaluation_samples: Vec<VoiceLabEvaluationSample>,
-    // Advisory comparison of checkpoints from this SAME completed build only.
-    pub evaluation_comparison: Vec<VoiceLabCandidateComparison>,
-    // Advisory-only; absent when legacy or when source origin is unverified.
-    pub reference_selection: Option<VoiceLabReferenceSelection>,
     pub approved_voice_ready: bool,
     pub selected_voice_kind: String,
     pub selected_builtin_voice_id: Option<String>,
@@ -309,7 +248,6 @@ fn current_status() -> VoiceLabBuildStatus {
     let process_cleanup_pending = build_process_cleanup_pending();
     let recording_active = voice_lab_recording_active();
     let (takes, duration_ms, native_reference_count) = accepted_contract();
-    let native_candidate = super::helper_bridge::native_voice_candidate_enabled();
     #[cfg(windows)]
     let native_pins_ready = native_review::pins_ready();
     #[cfg(not(windows))]
@@ -341,7 +279,7 @@ fn current_status() -> VoiceLabBuildStatus {
         "Finalizing My Voice and checking saved files.".to_string()
     } else if native_evaluation.is_some() {
         "Voice samples are ready to listen to and save. Choose the saved version for Meeting.".to_string()
-    } else if !native_candidate {
+    } else if !cfg!(windows) {
         "Native My Voice requires Windows.".to_string()
     } else if !terminal_message.is_empty() {
         terminal_message
@@ -357,7 +295,7 @@ fn current_status() -> VoiceLabBuildStatus {
     VoiceLabBuildStatus {
         active: snapshot.active || process_cleanup_pending,
         preview_active,
-        native_candidate,
+
         native_pins_ready,
         generation: snapshot.generation,
         phase: if !snapshot.active && process_cleanup_pending { "finalizing".to_string() } else { snapshot.phase },
@@ -365,7 +303,7 @@ fn current_status() -> VoiceLabBuildStatus {
         accepted_take_count: takes.len(),
         accepted_duration_ms: duration_ms,
         minimum_duration_ms: 2 * MIN_REFERENCE_MS,
-        missing_coverage: None,
+
         recording_suggestions,
         can_build: !snapshot.active
             && !process_cleanup_pending && !recording_active && takes.len() <= MAX_TRAINING_TAKES
@@ -373,8 +311,8 @@ fn current_status() -> VoiceLabBuildStatus {
         evaluation_ready: native_evaluation.is_some(),
         evaluation_review_id: native_evaluation.as_ref().map(|(id, _)| id.clone()),
         evaluation_samples: native_evaluation.map(|(_, samples)| samples).unwrap_or_default(),
-        evaluation_comparison: Vec::new(),
-        reference_selection: None,
+
+
         approved_voice_ready: approved_ready,
         selected_voice_kind: selected_voice.kind,
         selected_builtin_voice_id: selected_voice.builtin_id,

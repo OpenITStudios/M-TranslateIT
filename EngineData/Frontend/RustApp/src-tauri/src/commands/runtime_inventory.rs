@@ -48,6 +48,12 @@ struct ModelManifestEntry {
     gpu_capable: Option<bool>,
     cpu_fallback: Option<bool>,
     download_url: Option<String>,
+    #[serde(default)]
+    artifact_hashes: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    artifact_bytes: std::collections::BTreeMap<String, u64>,
+    #[serde(default)]
+    pin_status: Option<String>,
 }
 
 fn now_iso() -> String {
@@ -74,7 +80,12 @@ fn manifest_contract_valid(manifest: &ModelManifest) -> bool {
 fn read_model_manifest(path: &Path) -> Option<ModelManifest> {
     let text = fs::read_to_string(path).ok()?;
     let manifest = serde_json::from_str::<ModelManifest>(&text).ok()?;
-    manifest_contract_valid(&manifest).then_some(manifest)
+    let required: std::collections::BTreeSet<&str> = manifest.models.iter()
+        .filter(|entry| entry.required).map(|entry| entry.model_id.as_str()).collect();
+    let expected = std::collections::BTreeSet::from(["qwen3-asr-1.7b-q8_0",
+        "hy-mt2-1.8b-q6_k", "zonos3-mini-q8_0", "eres2netv2-forward3-f32"]);
+    (manifest_contract_valid(&manifest) && required == expected
+        && manifest.models.len() == expected.len()).then_some(manifest)
 }
 
 fn count_files(root: &Path) -> (usize, u64) {
@@ -110,7 +121,20 @@ fn build_model_inventory(
     if let Some(manifest) = manifest {
         for entry in manifest.models {
             let expected_path = runtime_root.join(&entry.expected_path);
-            let found = expected_path.is_dir() || expected_path.is_file();
+            // Inventory checks exact expected filenames and known sizes, not
+            // only directory existence. Cryptographic verification belongs
+            // to the native loader and explicit release admission.
+            let pending_pin = entry.pin_status.as_deref() == Some("pending_reviewed_export");
+            let found = !pending_pin && if entry.artifact_hashes.is_empty() {
+                fs::symlink_metadata(&expected_path).is_ok_and(|m| m.is_file() && m.len() > 0)
+            } else {
+                entry.artifact_hashes.keys().all(|name| {
+                    !name.contains('/') && !name.contains('\\') && !name.contains("..")
+                        && fs::symlink_metadata(expected_path.join(name)).is_ok_and(|m|
+                            m.is_file() && m.len() > 0 &&
+                            entry.artifact_bytes.get(name).is_none_or(|size| m.len() == *size))
+                })
+            };
             let (file_count, size_bytes) = if expected_path.is_dir() {
                 count_files(&expected_path)
             } else if expected_path.is_file() {
@@ -124,7 +148,9 @@ fn build_model_inventory(
                 .unwrap_or_else(|| "unknown".to_string());
             let cpu_fallback = entry.cpu_fallback.unwrap_or(false);
             let metadata_incomplete = entry.download_url.is_none();
-            let status = if found {
+            let status = if pending_pin {
+                "required_artifact_pin_pending"
+            } else if found {
                 "installed"
             } else if entry.required {
                 "missing_release_required"
@@ -138,7 +164,9 @@ fn build_model_inventory(
             } else {
                 None
             };
-            let next_action = if found {
+            let next_action = if pending_pin {
+                "A reviewed offline speaker-verifier export, exact hash/size and parity evidence are required.".to_string()
+            } else if found {
                 "Installed asset path detected. Runtime load/inference must be checked separately."
                     .to_string()
             } else {

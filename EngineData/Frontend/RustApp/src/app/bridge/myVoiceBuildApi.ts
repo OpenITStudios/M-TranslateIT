@@ -18,77 +18,26 @@ export type MyVoiceEvaluationSample = {
   artifact_flags: string[];
 };
 
-export type MyVoiceCandidateComparison = {
-  candidate_id: string;
-  selected_for_review: boolean;
-  mean_intelligibility_wer: number;
-  maximum_intelligibility_wer: number;
-  mean_speaker_similarity: number;
-  minimum_speaker_similarity: number;
-  artifact_case_count: number;
-};
-
-export type MyVoiceReferenceSelection = {
-  line_id: number;
-  duration_ms: number;
-  eligible_take_count: number;
-  criterion: "only_eligible" | "lower_clipping_fraction" | "lower_relative_edge_energy"
-    | "lower_silence_fraction" | "lower_dc_offset" | "higher_speaker_consistency"
-    | "closer_to_target_duration" | "line_id_tiebreak";
-  quiet_edge_comparable: boolean;
-};
-
 export type MyVoiceRecordingSuggestion = {
   line_id: number;
   reason: string;
 };
 
-export type MyVoiceCoverageGuidance = {
-  start_line_id: number;
-  end_line_id: number;
-  label: string;
-  suggested_line_id: number | null;
-};
-
-export type MyVoiceComputeStatus = {
-  state: "cuda_detected" | "cpu_only" | "unavailable";
-  cpu_name: string;
-  gpu_name: string | null;
-  gpu_uuid: string | null;
-  compute_capability: string | null;
-  precision_profile: "mixed_fp16" | "unsupported_pinned_precision" | null;
-  cuda_index: number | null;
-  visible_cuda_devices: number;
-  vram_mib: number | null;
-  free_vram_mib: number | null;
-  reserve_mib: number | null;
-  safe_budget_mib: number | null;
-  admission_state: "admitted" | "blocked_gpu_headroom" | "blocked_unsupported_precision" | "unknown";
-  profile: string;
-  detail: string;
-};
-
 export type MyVoiceBuildStatus = {
   active: boolean;
   preview_active: boolean;
-  native_candidate?: boolean;
-  native_pins_ready?: boolean;
+  native_pins_ready: boolean;
   generation: number | null;
   phase: string;
   message: string;
   accepted_take_count: number;
   accepted_duration_ms: number;
   minimum_duration_ms: number;
-  missing_coverage: MyVoiceCoverageGuidance | null;
   recording_suggestions: MyVoiceRecordingSuggestion[];
   can_build: boolean;
   evaluation_ready: boolean;
   evaluation_review_id: string | null;
   evaluation_samples: MyVoiceEvaluationSample[];
-  // Older review receipts legitimately have no optional comparison.
-  evaluation_comparison?: MyVoiceCandidateComparison[];
-  // Optional: old evaluation files have no verified source-selection witness.
-  reference_selection?: MyVoiceReferenceSelection | null;
   approved_voice_ready: boolean;
   selected_voice_kind: "built_in" | "personal" | "none" | "unknown";
   selected_builtin_voice_id: "MaleVoice" | "FemaleVoice" | null;
@@ -129,14 +78,14 @@ function unavailableStatus(): MyVoiceBuildStatus {
     message: "My Voice build status is unavailable.",
     accepted_take_count: 0,
     accepted_duration_ms: 0,
-    minimum_duration_ms: 60_000,
-    missing_coverage: null,
+    minimum_duration_ms: 6_000,
+    native_pins_ready: false,
     recording_suggestions: [],
     can_build: false,
     evaluation_ready: false,
     evaluation_review_id: null,
     evaluation_samples: [],
-    reference_selection: null,
+
     approved_voice_ready: false,
     selected_voice_kind: "unknown",
     selected_builtin_voice_id: null,
@@ -151,7 +100,6 @@ function productMessage(message: string): string {
 function normalizeStatus(status: MyVoiceBuildStatus): MyVoiceBuildStatus {
   return {
     ...status,
-    missing_coverage: status.missing_coverage ?? null,
     recording_suggestions: status.recording_suggestions ?? [],
     message: productMessage(status.message),
   };
@@ -170,11 +118,6 @@ function normalizeAction(action: MyVoiceBuildActionResult): MyVoiceBuildActionRe
 }
 
 export const myVoiceBuildApi = {
-  // Explicit and bounded. Never invoke this from build-status polling.
-  async getComputeStatus(): Promise<MyVoiceComputeStatus | null> {
-    return runCommand<MyVoiceComputeStatus>("get_my_voice_compute_status");
-  },
-
   async listActorVersions(after: string | null = null): Promise<ActorVersionPage | null> {
     return runCommand<ActorVersionPage>("get_voice_lab_actor_versions", { after });
   },

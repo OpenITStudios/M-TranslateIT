@@ -17,20 +17,20 @@ def test_required_huggingface_plan_is_revision_pinned_and_runtime_asset_scoped()
     module = load_module()
     selected, manual = module.build_plan(module.load_manifest())
     assert {item["model_id"] for item in selected} == {
-        "faster-whisper-large-v3-turbo",
+        "zonos3-mini-q8_0",
         "qwen3-asr-1.7b-q8_0",
         "hy-mt2-1.8b-q6_k",
     }
     assert all(module.FULL_REVISION.fullmatch(item["revision"]) for item in selected)
     assert all(item["target"].is_relative_to(module.RUNTIME_ASSETS_ROOT) for item in selected)
-    assert {item["model_id"] for item in manual} == {"gpt-sovits-v2proplus-voicelab"}
+    assert {item["model_id"] for item in manual} == {"eres2netv2-forward3-f32"}
 
 
 def test_native_assets_have_only_exact_pinned_gguf_downloads() -> None:
     module = load_module()
     manifest = module.load_manifest()
     native = {m["model_id"]: m for m in manifest["models"] if m["backend"].startswith("llama.cpp")}
-    assert set(native) == {"qwen3-asr-1.7b-q8_0", "hy-mt2-1.8b-q6_k"}
+    assert set(native) == {"qwen3-asr-1.7b-q8_0", "hy-mt2-1.8b-q6_k", "zonos3-mini-q8_0"}
     for model in native.values():
         assert model["required"] is True and model["cpu_fallback"] is False
         assert set(model["download_allow_patterns"]) == set(model["artifact_hashes"])
@@ -52,7 +52,7 @@ def test_optional_plan_never_restores_retired_meeting_fallback_assets() -> None:
     module = load_module()
     selected, _manual = module.build_plan(module.load_manifest(), include_optional=True)
     assert {item["model_id"] for item in selected} == {
-        "faster-whisper-large-v3-turbo",
+        "zonos3-mini-q8_0",
         "qwen3-asr-1.7b-q8_0",
         "hy-mt2-1.8b-q6_k",
     }
@@ -63,13 +63,13 @@ def test_specific_model_selection_rejects_manual_asset() -> None:
     try:
         module.build_plan(
             module.load_manifest(),
-            requested_ids={"gpt-sovits-v2proplus-voicelab"},
+            requested_ids={"eres2netv2-forward3-f32"},
         )
     except RuntimeError as exc:
         assert "not Hugging Face-acquirable" in str(exc)
     else:
         raise AssertionError(
-            "manual GPT-SoVITS asset must not be promoted to Hugging Face acquisition"
+            "manual speaker verifier export must not be promoted to Hugging Face acquisition"
         )
 
 

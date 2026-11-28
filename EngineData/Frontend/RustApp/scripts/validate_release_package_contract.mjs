@@ -182,8 +182,8 @@ requireMarkers(build, "release build", [
 
 if (manifest.schema !== "translateit.local_model_inventory.v2" || manifest.inventory_scope !== "full_product_release_assets") fail("model_manifest.json release inventory contract drifted.");
 const requiredIds = new Set((manifest.models ?? []).filter((item) => item.required === true).map((item) => item.model_id));
-for (const id of ["faster-whisper-large-v3-turbo", "qwen3-asr-1.7b-q8_0", "hy-mt2-1.8b-q6_k", "gpt-sovits-v2proplus-voicelab"]) if (!requiredIds.has(id)) fail(`Required model missing: ${id}`);
-for (const legacy of ["marianmt-id-en", "marianmt-en-id", "m2m100-418m", "milmmt-46-1b-v1.0", "faster-whisper-medium"]) if (requiredIds.has(legacy)) fail(`Legacy translator remains required: ${legacy}`);
+for (const id of ["qwen3-asr-1.7b-q8_0", "hy-mt2-1.8b-q6_k", "zonos3-mini-q8_0", "eres2netv2-forward3-f32"]) if (!requiredIds.has(id)) fail(`Required model missing: ${id}`);
+for (const legacy of ["marianmt-id-en", "marianmt-en-id", "m2m100-418m", "milmmt-46-1b-v1.0", "faster-whisper-medium", "faster-whisper-large-v3-turbo", "gpt-sovits-v2proplus-voicelab"]) if (requiredIds.has(legacy)) fail(`Legacy translator remains required: ${legacy}`);
 const mt = (manifest.models ?? []).filter((item) => item.stage === "translation_bidirectional_id_en");
 if (mt.length !== 1 || mt[0].model_id !== "hy-mt2-1.8b-q6_k" || mt[0].revision !== "a0c709d9fac510f2c807aa3af52872340dc37a4a" || mt[0].cpu_fallback !== false) fail("Native MT identity drifted.");
 const asr = (manifest.models ?? []).filter((item) => item.stage === "asr_primary");
