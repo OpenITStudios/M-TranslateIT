@@ -1,4 +1,4 @@
-//! Immutable, content-addressed GPT-SoVITS actor package history.
+//! Immutable, content-addressed legacy and native personal voice history.
 //! A version is a *saved inference package*, NOT an optimizer training checkpoint.
 //! No deletion, no activation, and no implicit change to the Meeting voice.
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,9 @@ use super::{
     REFERENCE_WAV_FILE, SOVITS_WEIGHT_FILE, VOICE_ACTOR_ENGINE_REVISION,
 };
 const HISTORY_SCHEMA: u32 = 1;
+pub(super) const NATIVE_REVISION: &str = "zonos3-mini-reference-v1";
+const NATIVE_PROFILE: &str = "native-profile.json";
+const MAX_NATIVE_PROFILE_BYTES: u64 = 128 * 1024;
 const MAX_WEIGHT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_REFERENCE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
@@ -38,13 +41,31 @@ fn voice_root(storage: &VoiceLabStoragePaths) -> PathBuf {
     storage.saved_root.join("VoiceVersions")
 }
 
-fn expected_files() -> [(&'static str, u64); 4] {
-    [
-        (ACTOR_MANIFEST_FILE, MAX_MANIFEST_BYTES),
-        (GPT_WEIGHT_FILE, MAX_WEIGHT_BYTES),
-        (SOVITS_WEIGHT_FILE, MAX_WEIGHT_BYTES),
-        (REFERENCE_WAV_FILE, MAX_REFERENCE_BYTES),
-    ]
+const LEGACY_FILES: [(&str, u64); 4] = [
+    (ACTOR_MANIFEST_FILE, MAX_MANIFEST_BYTES), (GPT_WEIGHT_FILE, MAX_WEIGHT_BYTES),
+    (SOVITS_WEIGHT_FILE, MAX_WEIGHT_BYTES), (REFERENCE_WAV_FILE, MAX_REFERENCE_BYTES),
+];
+
+fn expected_files() -> [(&'static str, u64); 4] { LEGACY_FILES }
+
+pub(super) fn version_files(revision: &str) -> Option<&'static [(&'static str, u64)]> {
+    const NATIVE: &[(&str, u64)] = &[
+        (NATIVE_PROFILE, MAX_NATIVE_PROFILE_BYTES), (REFERENCE_WAV_FILE, MAX_REFERENCE_BYTES),
+    ];
+    match revision {
+        VOICE_ACTOR_ENGINE_REVISION => Some(&LEGACY_FILES),
+        NATIVE_REVISION => Some(NATIVE),
+        _ => None,
+    }
+}
+
+fn receipt_shape(receipt: &VersionReceipt) -> bool {
+    receipt.schema_version == HISTORY_SCHEMA
+        && version_files(&receipt.engine_revision).is_some_and(|files| {
+            receipt.files.len() == files.len()
+                && receipt.files.iter().zip(files).all(|(actual, &(name, cap))|
+                    actual.name == name && valid_id(&actual.sha256) && (1..=cap).contains(&actual.bytes))
+        })
 }
 
 fn fingerprint(source: &Path) -> Result<VersionReceipt, String> {
@@ -77,16 +98,15 @@ fn verify_version(dir: &Path, expected: &VersionReceipt, id: &str) -> Result<(),
         .map_err(|_| "voice_lab:version_receipt_invalid")?;
     let canonical = serde_json::to_vec(&stored).map_err(|_| "voice_lab:version_receipt_invalid")?;
     if hash_bytes(&canonical) != id || stored != *expected
-        || stored.engine_revision != VOICE_ACTOR_ENGINE_REVISION
-        || stored.schema_version != HISTORY_SCHEMA
+        || !receipt_shape(&stored)
     {
         return Err("voice_lab:version_receipt_mismatch".into());
     }
-    let expected_names = expected_files();
+    let expected_names = version_files(&stored.engine_revision).ok_or("voice_lab:version_engine_unsupported")?;
     if expected.files.len() != expected_names.len() {
         return Err("voice_lab:version_file_list_invalid".into());
     }
-    for (file, (name, limit)) in expected.files.iter().zip(expected_names) {
+    for (file, &(name, limit)) in expected.files.iter().zip(expected_names) {
         if file.name != name || !valid_id(&file.sha256) {
             return Err("voice_lab:version_file_identity_invalid".into());
         }
@@ -95,7 +115,22 @@ fn verify_version(dir: &Path, expected: &VersionReceipt, id: &str) -> Result<(),
             return Err("voice_lab:version_file_integrity_failed".into());
         }
     }
-    validate_actor_package(dir)?;
+    if stored.engine_revision == NATIVE_REVISION {
+        #[cfg(windows)]
+        {
+            let profile = read_regular_bounded(&dir.join(NATIVE_PROFILE), MAX_NATIVE_PROFILE_BYTES)?;
+            let reference = read_regular_bounded(&dir.join(REFERENCE_WAV_FILE), MAX_REFERENCE_BYTES)?;
+            // Verify the exact bytes used for semantic validation too.
+            if hash_bytes(&profile) != stored.files[0].sha256 || hash_bytes(&reference) != stored.files[1].sha256 {
+                return Err("voice_lab:version_file_integrity_failed".into());
+            }
+            crate::commands::voice_lab_build::native_review::validate_saved_profile(&profile, &reference)?;
+        }
+        #[cfg(not(windows))]
+        return Err("voice_lab:native_profile_windows_only".into());
+    } else {
+        validate_actor_package(dir)?;
+    }
     Ok(())
 }
 
@@ -116,9 +151,42 @@ pub(super) fn preserve_actor_version(
     storage: &VoiceLabStoragePaths,
     source: &Path,
 ) -> Result<String, String> {
+    let receipt = fingerprint(source)?;
+    persist_version(storage, receipt.clone(), |pending| {
+        for file in &receipt.files {
+            let from = source.join(&file.name);
+            let to = pending.join(&file.name);
+            let copied = fs::copy(&from, &to).map_err(|_| "voice_lab:version_copy_failed")?;
+            if copied != file.bytes { return Err("voice_lab:version_copy_size_mismatch".into()); }
+            OpenOptions::new().write(true).open(&to).and_then(|f| f.sync_all())
+                .map_err(|_| "voice_lab:version_sync_failed")?;
+        }
+        if fingerprint(source)? != receipt { return Err("voice_lab:version_source_changed".into()); }
+        Ok(())
+    })
+}
+
+/// Save the exact reviewed payload; no selected actor mutation. Only the
+/// native approval owner calls this after explicit listening confirmation.
+#[cfg(windows)]
+pub(crate) fn preserve_native_version(storage: &VoiceLabStoragePaths, profile: &[u8], reference: &[u8]) -> Result<String, String> {
+    crate::commands::voice_lab_build::native_review::validate_saved_profile(profile, reference)?;
+    let receipt = VersionReceipt {
+        schema_version: HISTORY_SCHEMA, engine_revision: NATIVE_REVISION.into(),
+        files: [(NATIVE_PROFILE, profile), (REFERENCE_WAV_FILE, reference)].into_iter()
+            .map(|(name, bytes)| FileFingerprint { name: name.into(), sha256: hash_bytes(bytes), bytes: bytes.len() as u64 }).collect(),
+    };
+    persist_version(storage, receipt, |pending| {
+        write_new_synced(&pending.join(NATIVE_PROFILE), profile)?;
+        write_new_synced(&pending.join(REFERENCE_WAV_FILE), reference)
+    })
+}
+
+fn persist_version(storage: &VoiceLabStoragePaths, receipt: VersionReceipt,
+    stage: impl FnOnce(&Path) -> Result<(), String>) -> Result<String, String> {
     let _lock = VOICE_HISTORY_LOCK.get_or_init(|| Mutex::new(())).lock()
         .map_err(|_| "voice_lab:version_lock_unavailable")?;
-    let receipt = fingerprint(source)?;
+    if !receipt_shape(&receipt) { return Err("voice_lab:version_receipt_invalid".into()); }
     let receipt_bytes = serde_json::to_vec(&receipt)
         .map_err(|_| "voice_lab:version_receipt_serialize_failed")?;
     let id = hash_bytes(&receipt_bytes);
@@ -137,22 +205,7 @@ pub(super) fn preserve_actor_version(
             .map_err(|_| "voice_lab:version_pending_needs_recovery".to_string())?;
     } else {
         fs::create_dir(&pending).map_err(|_| "voice_lab:version_stage_create_failed")?;
-        for file in &receipt.files {
-            let from = source.join(&file.name);
-            let to = pending.join(&file.name);
-            let copied = fs::copy(&from, &to)
-                .map_err(|_| "voice_lab:version_copy_failed")?;
-            if copied != file.bytes {
-                return Err("voice_lab:version_copy_size_mismatch".into());
-            }
-            // Windows requires a writable handle for FlushFileBuffers after copy.
-            OpenOptions::new().write(true).open(&to).and_then(|f| f.sync_all())
-                .map_err(|_| "voice_lab:version_sync_failed")?;
-        }
-        // If source bytes changed while copying, never publish this version.
-        if fingerprint(source)? != receipt {
-            return Err("voice_lab:version_source_changed".into());
-        }
+        stage(&pending)?;
         write_new_synced(&pending.join("version.json"), &receipt_bytes)?;
         verify_version(&pending, &receipt, &id)?;
     }
@@ -168,6 +221,10 @@ pub(super) fn verify_actor_version(
     storage: &VoiceLabStoragePaths,
     id: &str,
 ) -> Result<(), String> {
+    verify_version_at(&version_directory(storage, id)?, id)
+}
+
+fn version_directory(storage: &VoiceLabStoragePaths, id: &str) -> Result<PathBuf, String> {
     if !valid_id(id) { return Err("voice_lab:version_id_invalid".into()); }
     let root = voice_root(storage);
     // Neither the library root nor its shard may redirect via symlink.
@@ -183,12 +240,33 @@ pub(super) fn verify_actor_version(
         return Err("voice_lab:version_shard_invalid".into());
     }
     let dir = shard.join(id);
+    let meta = fs::symlink_metadata(&dir).map_err(|_| "voice_lab:version_directory_unavailable")?;
+    if !meta.is_dir() || meta.file_type().is_symlink() {
+        return Err("voice_lab:version_directory_untrusted".into());
+    }
+    Ok(dir)
+}
+
+pub(super) fn verify_version_at(dir: &Path, id: &str) -> Result<(), String> {
     let bytes = read_regular_bounded(&dir.join("version.json"), MAX_MANIFEST_BYTES)?;
     let receipt = serde_json::from_slice::<VersionReceipt>(&bytes)
         .map_err(|_| "voice_lab:version_receipt_invalid")?;
-    verify_version(&dir, &receipt, id)
+    verify_version(dir, &receipt, id)
 }
 
+
+/// Metadata-only dispatch: full file verification remains at the existing
+/// activation owner; do not hash legacy weights twice merely to identify kind.
+pub(crate) fn version_is_native(storage: &VoiceLabStoragePaths, id: &str) -> Result<bool, String> {
+    let bytes = read_regular_bounded(&version_directory(storage, id)?.join("version.json"), MAX_MANIFEST_BYTES)?;
+    let receipt: VersionReceipt = serde_json::from_slice(&bytes)
+        .map_err(|_| "voice_lab:version_receipt_invalid")?;
+    if !receipt_shape(&receipt)
+        || hash_bytes(&serde_json::to_vec(&receipt).map_err(|_| "voice_lab:version_receipt_invalid")?) != id {
+        return Err("voice_lab:version_receipt_mismatch".into());
+    }
+    Ok(receipt.engine_revision == NATIVE_REVISION)
+}
 
 const PAGE_SIZE: usize = 12;
 const MAX_VERSION_ENTRIES: usize = 4096;
@@ -276,29 +354,25 @@ pub(crate) fn actor_version_page(
                 Ok(data) => data,
                 Err(_) => { attention += 1; continue; }
             };
-            if data.schema_version != HISTORY_SCHEMA
-                || data.engine_revision != VOICE_ACTOR_ENGINE_REVISION
-                || data.files.len() != expected_files().len()
-                || data.files.iter().zip(expected_files()).any(|(actual, (name, _))|
-                    actual.name != name || !valid_id(&actual.sha256) || actual.bytes == 0)
+            if !receipt_shape(&data)
                 || hash_bytes(&serde_json::to_vec(&data)
                     .map_err(|_| "voice_lab:version_receipt_invalid")?) != id
             {
                 attention += 1;
                 continue;
             }
-            ids.push(id);
+            ids.push((id, data.engine_revision));
         }
     }
     ids.sort();
-    let candidates: Vec<String> = ids.into_iter()
-        .filter(|id| id.as_str() > after)
+    let candidates: Vec<(String, String)> = ids.into_iter()
+        .filter(|(id, _)| id.as_str() > after)
         .collect();
     let has_more = candidates.len() > PAGE_SIZE;
     let items: Vec<ActorVersionItem> = candidates.iter().take(PAGE_SIZE)
-        .map(|id| ActorVersionItem {
+        .map(|(id, revision)| ActorVersionItem {
             version_id: id.clone(),
-            engine_revision: VOICE_ACTOR_ENGINE_REVISION.into(),
+            engine_revision: revision.clone(),
             verification_required: true,
         })
         .collect();
@@ -316,13 +390,16 @@ pub(super) fn prepare_version_for_activation(
 ) -> Result<(), String> {
     verify_actor_version(storage, id)?;
     let source = voice_root(storage).join(&id[..2]).join(id);
+    let receipt_bytes = read_regular_bounded(&source.join("version.json"), MAX_MANIFEST_BYTES)?;
+    let receipt: VersionReceipt = serde_json::from_slice(&receipt_bytes)
+        .map_err(|_| "voice_lab:version_receipt_invalid")?;
+    if receipt.engine_revision != VOICE_ACTOR_ENGINE_REVISION {
+        return Err("voice_lab:native_version_activation_pending".into());
+    }
     for (name, _) in expected_files() {
         fs::copy(source.join(name), staging.join(name))
             .map_err(|_| "voice_lab:version_restore_copy_failed")?;
     }
-    let receipt_bytes = read_regular_bounded(&source.join("version.json"), MAX_MANIFEST_BYTES)?;
-    let receipt: VersionReceipt = serde_json::from_slice(&receipt_bytes)
-        .map_err(|_| "voice_lab:version_receipt_invalid")?;
     // Validate the copied output against every source hash, not only its shape.
     validate_actor_package(staging)?;
     for (actual, (name, cap)) in receipt.files.iter().zip(expected_files()) {

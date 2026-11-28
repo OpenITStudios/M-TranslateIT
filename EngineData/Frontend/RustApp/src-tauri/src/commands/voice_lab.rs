@@ -8,6 +8,9 @@ use crate::engine::runtime_state::{latest_runtime_session_state, APPLICATION_MEE
 mod storage;
 
 pub use storage::VoiceLabStoragePaths;
+pub(crate) use storage::version_is_native;
+#[cfg(windows)]
+pub(crate) use storage::preserve_native_version;
 #[cfg(windows)]
 pub(crate) use storage::{selected_native_builtin_identity, selected_native_builtin_reference, NativeBuiltinReference};
 pub(crate) use storage::{inspect_accepted_take_recovery, AcceptedTakeRecoveryInspection};

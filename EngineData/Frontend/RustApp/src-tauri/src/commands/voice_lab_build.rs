@@ -43,7 +43,7 @@ mod native_speaker;
 #[cfg(windows)]
 mod native_evaluation;
 #[cfg(windows)]
-mod native_review;
+pub(super) mod native_review;
 #[cfg(windows)]
 mod native_build;
 mod phase;
@@ -660,7 +660,7 @@ fn current_status() -> VoiceLabBuildStatus {
             }
         })
     } else if native_evaluation.is_some() {
-        "Native voice samples are ready to listen to. Selecting this voice for Meeting is not yet available in this candidate build.".to_string()
+        "Native voice samples are ready to listen to and save. Selecting this voice for Meeting is not yet available in this candidate build.".to_string()
     } else if native_candidate {
         if !terminal_message.is_empty() { terminal_message.clone() }
         else if !native_pins_ready { "Native voice evaluation requires reviewed runtime and speaker verifier assets.".to_string() }
@@ -1579,6 +1579,12 @@ pub fn select_archived_personal_voice_version(
             "Finish the current Meeting or My Voice action before switching versions.");
     }
     let paths = storage();
+    match super::voice_lab::version_is_native(&paths, &version_id) {
+        Ok(true) => return result(false, "native_activation_pending",
+            "This native voice is saved. Meeting activation is not yet available; current voice unchanged."),
+        Ok(false) => {},
+        Err(_) => return result(false, "version_restore_failed", "Saved voice version could not be verified."),
+    }
     if recover_selected_actor_if_missing(&paths).is_err()
         || voice_selection_recovery_pending(&paths.saved_root)
     {
@@ -1663,9 +1669,35 @@ pub fn approve_voice_lab_candidate(
         return result(false, "build_active",
             "Wait for the previous My Voice process to finish cleanup before approving.");
     }
+    #[cfg(windows)]
     if super::helper_bridge::native_voice_candidate_enabled() {
-        return result(false, "native_approval_pending",
-            "Native voice review is available, but personal profile activation is not yet enabled. Your current Meeting voice is unchanged.");
+        if voice_backup_active() || super::voice_lab_recording::voice_lab_recording_blocks_app_exit() {
+            return result(false, "voice_busy", "Finish recording or backup before saving My Voice.");
+        }
+        if !quality_confirmed {
+            return result(false, "evaluation_quality_confirmation_required", "Confirm the voice is clear, natural and resembles the authorized speaker.");
+        }
+        let paths = storage();
+        let (profile, reference) = match native_review::approved_payload(&paths, &review_id, &reviewed_line_ids, quality_confirmed) {
+            Ok(payload) => payload,
+            Err(error) => return result(false, "evaluation_candidate_mismatch", error),
+        };
+        if meeting_blocks_voice_change() || voice_lab_build_blocks_meeting() || voice_backup_active() {
+            return result(false, "voice_busy", "My Voice resources changed; try again.");
+        }
+        return match super::voice_lab::preserve_native_version(&paths, &profile, &reference) {
+            Ok(id) => {
+                let cleanup = cleanup_approved_build_workspace(&paths);
+                clear_build_terminal_message();
+                let message = if cleanup.is_ok() {
+                    format!("My Voice saved as version {}. Meeting voice is unchanged; native activation is not yet available.", &id[..10])
+                } else {
+                    format!("My Voice saved as version {}. Temporary review cleanup needs attention; Meeting voice is unchanged.", &id[..10])
+                };
+                result(true, "native_saved", message)
+            }
+            Err(error) => result(false, "approval_failed", error),
+        };
     }
     let paths = storage();
     let ready_for_review = child_status(&paths)

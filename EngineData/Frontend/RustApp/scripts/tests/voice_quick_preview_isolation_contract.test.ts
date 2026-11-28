@@ -361,6 +361,8 @@ test("native Create and Improve use the same build lifecycle and cannot approve 
   assert.doesNotMatch(nativeBuild, /resolve_worker_python_command|Command::new/);
   assert.match(nativeReview, /completion_matches\(paths, review_id\)/);
   assert.match(nativeReview, /verify_source\(paths, &manifest\)\?/);
-  assert.match(status, /native_approval_pending/);
-  assert.match(ui, /\{#if build.native_candidate\}[\s\S]*?Approval for Meeting is not yet enabled/);
+  assert.match(status, /native_review::approved_payload/);
+  assert.match(status, /preserve_native_version/);
+  assert.match(ui, /Approve & Save/);
+  assert.match(status, /native_activation_pending/);
 });

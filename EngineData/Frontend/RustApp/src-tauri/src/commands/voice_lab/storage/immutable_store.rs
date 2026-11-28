@@ -23,9 +23,9 @@ pub(super) fn read_regular_bounded(path: &Path, cap: u64) -> Result<Vec<u8>, Str
     if !meta.is_file() || meta.file_type().is_symlink() || meta.len() == 0 || meta.len() > cap {
         return Err("voice_lab:history_file_invalid".into());
     }
-    let mut file = File::open(path).map_err(|_| "voice_lab:history_file_open_failed")?;
+    let file = File::open(path).map_err(|_| "voice_lab:history_file_open_failed")?;
     let mut out = Vec::with_capacity(meta.len() as usize);
-    file.read_to_end(&mut out).map_err(|_| "voice_lab:history_file_read_failed")?;
+    file.take(cap.saturating_add(1)).read_to_end(&mut out).map_err(|_| "voice_lab:history_file_read_failed")?;
     if out.len() as u64 != meta.len() {
         return Err("voice_lab:history_file_changed".into());
     }

@@ -24,6 +24,11 @@ pub(super) fn start(current: VoiceLabBuildStatus, archive_ids: Option<Vec<String
         if !current.can_build { return result(false, "more_recording_needed", current.message); }
         None
     };
+    // Serialize admission with approval and backup's existing selection lock.
+    let _selection_guard = match voice_selection_guard() {
+        Ok(guard) => guard,
+        Err(()) => return result(false, "voice_busy", "Another voice action is active."),
+    };
     let started = match begin_voice_lab_build() {
         Ok(s) => s,
         Err(error) => return result(false, "build_blocked", error),

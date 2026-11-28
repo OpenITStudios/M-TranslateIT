@@ -97,7 +97,7 @@ fn safe_relative(path: &str) -> bool {
                 && matches!(filename.to_string().as_str(), "take.json" | "canonical.wav" | "native-rate.wav"),
         ["VoiceVersions", shard, id, filename] =>
             valid_hex(id) && shard.to_string() == id[..2].to_string()
-                && matches!(filename.to_string().as_str(), "version.json" | "actor.json" | "gpt.ckpt" | "sovits.pth" | "reference.wav"),
+                && matches!(filename.to_string().as_str(), "version.json" | "actor.json" | "gpt.ckpt" | "sovits.pth" | "reference.wav" | "native-profile.json"),
         ["TrainingRecovery", id, "recovery.json"] => valid_hex(id),
         ["TrainingRecovery", id, "files", filename] =>
             valid_hex(id) && valid_recovery_file(filename),
@@ -304,18 +304,16 @@ fn check_references(root: &Path, entries: &[BackupEntry]) -> Result<(), String> 
             let data = read_regular_bounded(&root.join(rel), 64 * 1024)?;
             let json: serde_json::Value = serde_json::from_slice(&data)
                 .map_err(|_| "voice_backup:version_receipt_invalid")?;
-            if json.get("schema_version").and_then(|v| v.as_u64()) != Some(1)
-                || json.get("engine_revision").and_then(|v| v.as_str())
-                    != Some(VOICE_ACTOR_ENGINE_REVISION)
-            {
-                return Err("voice_backup:version_receipt_unsupported".into());
-            }
+            let revision = json.get("engine_revision").and_then(|v| v.as_str()).unwrap_or("");
+            let expected_files = super::actor_history::version_files(revision)
+                .filter(|_| json.get("schema_version").and_then(|v| v.as_u64()) == Some(1))
+                .ok_or("voice_backup:version_receipt_unsupported")?;
             let files = json.get("files").and_then(|v| v.as_array())
                 .ok_or("voice_backup:version_files_missing")?;
-            if files.len() != 4 { return Err("voice_backup:version_file_count_invalid".into()); }
+            if files.len() != expected_files.len() { return Err("voice_backup:version_file_count_invalid".into()); }
             let prefix = rel.strip_suffix("version.json")
                 .ok_or("voice_backup:version_reference_invalid")?;
-            for name in ["actor.json", "gpt.ckpt", "sovits.pth", "reference.wav"] {
+            for &(name, cap) in expected_files {
                 let referenced = files.iter().find(|v| v.get("name").and_then(|f| f.as_str()) == Some(name))
                     .ok_or("voice_backup:version_file_missing")?;
                 let expected = referenced.get("sha256").and_then(|f| f.as_str())
@@ -325,15 +323,22 @@ fn check_references(root: &Path, entries: &[BackupEntry]) -> Result<(), String> 
                 let file_path = format!("{prefix}{name}");
                 let actual = map.get(file_path.as_str())
                     .ok_or("voice_backup:version_object_missing")?;
-                if actual.sha256 != expected || actual.bytes != expected_bytes {
+                if actual.sha256 != expected || actual.bytes != expected_bytes || !(1..=cap).contains(&actual.bytes) {
                     return Err("voice_backup:version_hash_or_size_mismatch".into());
                 }
                 referenced_payloads.insert(file_path);
             }
             // Verify this actor is actually usable by the same native owner
             // that will validate it on a future explicit version selection.
-            super::validate_actor_package(&root.join(prefix))
-                .map_err(|_| "voice_backup:actor_package_invalid")?;
+            if revision == super::actor_history::NATIVE_REVISION {
+                super::actor_history::verify_version_at(&root.join(prefix), id)
+                    .map_err(|_| "voice_backup:actor_package_invalid")?;
+            } else {
+                // Legacy payload hashes are already checked by the backup
+                // index; preserve its existing validation without rereading weights.
+                super::validate_actor_package(&root.join(prefix))
+                    .map_err(|_| "voice_backup:actor_package_invalid")?;
+            }
         }
         if rel.starts_with("DatasetSnapshots/") && rel.ends_with(".json") {
             // Immutable dataset snapshots are addressed by the SHA-256 of
@@ -474,7 +479,7 @@ fn check_references(root: &Path, entries: &[BackupEntry]) -> Result<(), String> 
         let is_payload = matches!(
             parts.as_slice(),
             ["Recordings", _, _, "canonical.wav" | "native-rate.wav"]
-                | ["VoiceVersions", _, _, "actor.json" | "gpt.ckpt" | "sovits.pth" | "reference.wav"]
+                | ["VoiceVersions", _, _, "actor.json" | "gpt.ckpt" | "sovits.pth" | "reference.wav" | "native-profile.json"]
                 | ["TrainingRecovery", _, "files", _]
         );
         if is_payload && !referenced_payloads.contains(&entry.path) {
@@ -670,6 +675,7 @@ mod tests {
         let digest = "a".repeat(64);
         assert!(safe_relative(&format!("Recordings/aa/{digest}/canonical.wav")));
         assert!(safe_relative(&format!("VoiceVersions/aa/{digest}/gpt.ckpt")));
+        assert!(safe_relative(&format!("VoiceVersions/aa/{digest}/native-profile.json")));
         assert!(safe_relative(&format!("DatasetSnapshots/{digest}.json")));
         assert!(safe_relative(&format!("TrainingRecovery/{digest}/recovery.json")));
         assert!(safe_relative(&format!("TrainingRecovery/{digest}/files/sovits-G-0.pth")));
@@ -688,6 +694,7 @@ mod tests {
             format!("Recordings/aa/{id}/canonical.wav"),
             format!("Recordings/aa/{id}/native-rate.wav"),
             format!("VoiceVersions/aa/{id}/gpt.ckpt"),
+            format!("VoiceVersions/aa/{id}/native-profile.json"),
             format!("TrainingRecovery/{id}/files/gpt-0.ckpt"),
         ] {
             let failure = check_references(Path::new("."), &[item(&path)]).unwrap_err();

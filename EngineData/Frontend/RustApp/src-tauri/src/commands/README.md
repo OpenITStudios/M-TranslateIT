@@ -25,7 +25,7 @@ This folder contains the Tauri command boundary for the current Meeting / Text /
 
 - `voice_lab_build/native_review.rs` — source-only unapproved native candidate package with reference/audio/model/score integrity, under the existing Candidate workspace; no selected voice, history or backup mutation.
 
-- `voice_lab_build/native_build.rs` — explicit native candidate Create/Improve lifecycle over the existing build generation, frozen dataset, cancellation, cleanup and completion receipts. Review is available only after completed identity checks; approval is held.
+- `voice_lab_build/native_build.rs` — explicit native candidate Create/Improve lifecycle over the existing build generation, frozen dataset, cancellation, cleanup and completion receipts. Review is available only after completed identity checks; approval saves an immutable native version while Meeting activation remains held.
 
 Prefer names that describe the responsibility directly. New product-facing or semantic source must use **My Voice** (`MyVoice`, `myVoice`, or `my_voice` according to language convention). Do not introduce new `VoiceLab` product terminology.
 

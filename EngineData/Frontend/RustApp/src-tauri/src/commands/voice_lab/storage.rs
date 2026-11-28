@@ -19,7 +19,9 @@ pub(crate) use backup::BackupReport;
 mod archive_dataset;
 pub(crate) use archive_dataset::{choose_archived_takes, ArchivedSelection};
 pub(crate) use dataset_history::archived_frozen_review_matches;
-pub(crate) use actor_history::{actor_version_page, ActorVersionPage};
+pub(crate) use actor_history::{actor_version_page, ActorVersionPage, version_is_native};
+#[cfg(windows)]
+pub(crate) use actor_history::preserve_native_version;
 pub(crate) use recording_archive::{
     archive_guided_take, inspect_accepted_take_recovery, AcceptedTakeRecoveryInspection,
     saved_recordings_page, saved_recording_audio, SavedRecordingPage,
@@ -432,6 +434,9 @@ pub(crate) fn activate_archived_personal_voice(
 ) -> Result<(), String> {
     // Verify candidate before touching any selected actor. Full weight hashes
     // are checked again in the staged copy before atomic replacement.
+    if actor_history::version_is_native(paths, version_id)? {
+        return Err("voice_lab:native_version_activation_pending".into());
+    }
     actor_history::verify_actor_version(paths, version_id)?;
     let selected = &paths.approved_actor_dir;
     if selected.exists() {

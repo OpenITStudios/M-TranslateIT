@@ -252,6 +252,8 @@
         return "Confirm that the trained voice sounds clear, natural, and like the authorized speaker before using it.";
       case "evaluation_candidate_mismatch":
         return "The review no longer matches the voice candidate. Create My Voice again.";
+      case "native_saved":
+        return result.message;
       case "approved":
         return "My Voice is ready and selected for meetings.";
       case "approved_cleanup_attention":
@@ -543,7 +545,7 @@
   }
 
   async function approve(): Promise<void> {
-    if (build.native_candidate || busy || statusCheckUnavailable || voiceChangesLocked || build.active || !build.evaluation_ready || !build.evaluation_review_id || !evaluationReviewComplete || !qualityConfirmed) return;
+    if (busy || statusCheckUnavailable || voiceChangesLocked || build.active || !build.evaluation_ready || !build.evaluation_review_id || !evaluationReviewComplete || !qualityConfirmed) return;
     invalidatePendingStatusReads();
     stopAudio();
     busy = true;
@@ -860,19 +862,18 @@
       </div>
       <p class="mb-0 mt-3 text-[13px] leading-5 text-[var(--ti-text-muted)]" role="status" aria-live="polite">{reviewedLineIds.length} of {build.evaluation_samples.length} previews listened</p>
       {#if build.native_candidate}
-        <p class="mb-0 mt-4 text-sm" role="status">Native voice review is available. Approval for Meeting is not yet enabled; your current voice is unchanged.</p>
-      {:else}
+        <p class="mb-0 mt-4 text-sm" role="status">Save this approved voice to Voice versions. Meeting activation is not yet available; your current voice is unchanged.</p>
+      {/if}
       <label class="mt-4 flex items-start gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-4">
         <input class="mt-0.5 size-5 shrink-0 accent-[var(--ti-accent)]" type="checkbox" bind:checked={qualityConfirmed} disabled={!evaluationReviewComplete || busy || statusCheckUnavailable} />
-        <span class="text-sm leading-5 text-[var(--ti-text-muted)]">I listened to every preview. The voice is clear, sounds natural, resembles the authorized speaker, and I want to use it for meetings.</span>
+        <span class="text-sm leading-5 text-[var(--ti-text-muted)]">I listened to every preview. The voice is clear, sounds natural, resembles the authorized speaker, and {build.native_candidate ? "I want to save this version." : "I want to use it for meetings."}</span>
       </label>
       {#if voiceChangesLocked}
         <p class="mb-0 mt-3 text-sm text-[var(--ti-text-muted)]" role="status">Finish the current Meeting or recording before selecting a new voice.</p>
       {/if}
       <button type="button" class="ti-button mt-4 w-full sm:w-auto" disabled={busy || statusCheckUnavailable || voiceChangesLocked || !evaluationReviewComplete || !qualityConfirmed} onclick={() => void approve()}>
-        <Check size={15} /><span>{busy ? "Saving..." : "Use My Voice"}</span>
+        <Check size={15} /><span>{busy ? "Saving..." : build.native_candidate ? "Approve & Save" : "Use My Voice"}</span>
       </button>
-      {/if}
       <p class="mb-0 mt-4 text-[13px] leading-5 text-[var(--ti-text-muted)]">Not satisfied? Keep the current Meeting voice and record more samples before creating another candidate.</p>
       {#if build.can_build}
         <label class="mt-3 flex items-start gap-2 text-[13px] text-[var(--ti-text-muted)]">

@@ -80,7 +80,9 @@ struct Manifest {
 
 impl Manifest {
     fn valid(&self) -> bool {
-        self.schema == 1 && (2..=3).contains(&self.anchors.len())
+        self.schema == 1 && valid_digest(&self.models.speaker_sha256)
+            && (1..=512 * 1024 * 1024).contains(&self.models.speaker_bytes)
+            && (2..=3).contains(&self.anchors.len())
             && self.anchors.iter().any(|a| *a == (self.reference_line_id, self.reference_sha256))
             && self.anchors.iter().enumerate().all(|(i, (id, digest))| {
                 *id != 0 && !self.anchors[..i].iter().any(|(a, d)| a == id || d == digest)
@@ -282,7 +284,41 @@ pub(super) fn review_audio(paths: &VoiceLabStoragePaths, review_id: &str, line_i
     verified_bytes(&sample_path(root, line_id), MAX_SAMPLE, &sample.wav_sha256)
 }
 
-/// Before a future approval transaction, verify complete review, reference
+/// An immutable approved package keeps the exact review manifest (including
+/// all audio hashes) and the original reference only. Historical packages can
+/// be backed up without current model pins; this is not runtime admission.
+pub(in crate::commands) fn validate_saved_profile(profile: &[u8], reference: &[u8]) -> Result<(), String> {
+    if profile.is_empty() || profile.len() as u64 > MAX_MANIFEST || reference.len() as u64 > MAX_REFERENCE {
+        return Err("native_profile:size_invalid".into());
+    }
+    let manifest: Manifest = serde_json::from_slice(profile).map_err(|_| "native_profile:manifest_invalid")?;
+    if !manifest.valid() || hash(reference) != manifest.reference_sha256 {
+        return Err("native_profile:identity_mismatch".into());
+    }
+    let pcm = decode_native_voice_source(reference)?;
+    if !(32_000*3..=32_000*10).contains(&pcm.len()) {
+        return Err("native_profile:reference_invalid".into());
+    }
+    Ok(())
+}
+
+pub(super) fn approved_payload(paths: &VoiceLabStoragePaths, review_id: &str,
+    reviewed: &[u32], quality_confirmed: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
+    if !quality_confirmed || reviewed.len() != HELD_OUT_LINES.len()
+        || !HELD_OUT_LINES.iter().all(|(id, _)| reviewed.contains(id)) {
+        return Err("native_review:listening_confirmation_required".into());
+    }
+    verify_review(paths, review_id)?;
+    let root = &paths.candidate_actor_dir;
+    let profile = read_exact(&root.join(MANIFEST), MAX_MANIFEST)?;
+    if hex(&hash(&profile)) != review_id { return Err("native_review:review_changed".into()); }
+    let manifest: Manifest = serde_json::from_slice(&profile).map_err(|_| "native_review:invalid_manifest")?;
+    let reference = verified_bytes(&root.join(REFERENCE), MAX_REFERENCE, &manifest.reference_sha256)?;
+    validate_saved_profile(&profile, &reference)?;
+    Ok((profile, reference))
+}
+
+/// Before an approval transaction, verify complete review, reference
 /// and frozen/current source integrity. This does not grant listening approval
 /// or permission to change Meeting's voice.
 pub(super) fn verify_review(paths: &VoiceLabStoragePaths, review_id: &str) -> Result<(), String> {
@@ -320,6 +356,57 @@ mod tests {
         assert_ne!(id, hash(&serde_json::to_vec(&m).unwrap()));
         m.reference_sha256 = [7;32];
         assert!(!m.valid());
+    }
+
+    #[test]
+    fn native_version_save_backup_restore_is_additive_and_weightless() {
+        use super::super::super::voice_lab::{
+            preserve_native_version, actor_version_page, create_voice_backup,
+            check_voice_backup, restore_voice_backup, version_is_native,
+        };
+        use crate::engine::audio::live_segment_writer::encode_pcm16_wav;
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("translateit-native-profile-{}-{stamp}", std::process::id()));
+        let paths = |name: &str| {
+            let saved_root = root.join(name).join("saved");
+            let cache_root = root.join(name).join("cache");
+            VoiceLabStoragePaths {
+                takes_dir: cache_root.join("Takes"), build_dataset_dir: cache_root.join("Build/Dataset"),
+                candidate_actor_dir: cache_root.join("Candidate"),
+                approved_actor_dir: saved_root.join("MyVoice"), stored_personal_actor_dir: saved_root.join("PersonalVoice"),
+                cache_root, saved_root,
+            }
+        };
+        let original = paths("original");
+        let restored = paths("restored");
+        let mut m = fixture();
+        let pcm: Vec<f32> = (0..32_000 * 4).map(|i| if i % 64 < 32 { 0.15 } else { -0.15 }).collect();
+        let reference = encode_pcm16_wav(32_000, 1, &pcm);
+        m.reference_sha256 = hash(&reference);
+        m.anchors[0].1 = m.reference_sha256;
+        let profile = serde_json::to_vec(&m).unwrap();
+        assert!(approved_payload(&original, "unavailable", &[1001], true).is_err());
+        assert!(approved_payload(&original, "unavailable", &HELD_OUT_LINES.iter().map(|(id, _)| *id).collect::<Vec<_>>(), false).is_err());
+        let id = preserve_native_version(&original, &profile, &reference).unwrap();
+        assert_eq!(id, preserve_native_version(&original, &profile, &reference).unwrap());
+        assert!(version_is_native(&original, &id).unwrap());
+        let page = actor_version_page(&original, None).unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].version_id, id);
+        let version = original.saved_root.join("VoiceVersions").join(&id[..2]).join(&id);
+        assert_eq!(fs::read_dir(&version).unwrap().count(), 3);
+        assert!(!original.approved_actor_dir.exists());
+        let target = root.join("backup");
+        fs::create_dir_all(&target).unwrap();
+        let backup = create_voice_backup(&original, target.to_str().unwrap()).unwrap().backup_folder.unwrap();
+        assert!(check_voice_backup(&backup).unwrap().ok);
+        assert!(restore_voice_backup(&restored, &backup).unwrap().ok);
+        assert!(version_is_native(&restored, &id).unwrap());
+        assert!(!restored.approved_actor_dir.exists());
+        fs::write(version.join("reference.wav"), b"changed").unwrap();
+        assert!(preserve_native_version(&original, &profile, &reference).is_err());
+        assert!(create_voice_backup(&original, target.to_str().unwrap()).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
