@@ -63,7 +63,7 @@
         <option value="original-first">Original first</option>
         <option value="translation-first">Translation first</option>
       </select>
-      <small class="text-[12px] leading-5 text-[var(--ti-text-muted)]">Both languages remain visible in every bubble.</small>
+      <small class="text-[12px] leading-5 text-[var(--ti-text-muted)]">Applies when both languages are displayed.</small>
     </label>
     <label class="grid min-w-0 gap-2">
       <span class="ti-field-label">Timestamps</span>
@@ -80,7 +80,7 @@
     <label class="flex min-h-[60px] items-start justify-between gap-4 py-3">
       <span class="min-w-0 flex-1">
         <strong class="block text-[13px] font-semibold">Show speaker icons</strong>
-        <small class="mt-1 block text-[12px] leading-5 text-[var(--ti-text-muted)]">Keep speaker names even when icons are hidden.</small>
+        <small class="mt-1 block text-[12px] leading-5 text-[var(--ti-text-muted)]">Keep audio lane labels even when icons are hidden.</small>
       </span>
       <input type="checkbox" class="mt-1 size-5 shrink-0 accent-[var(--ti-accent)]"
         checked={preferences.showSpeakerIcons}

@@ -63,6 +63,7 @@
   let deviceMessage = $state("Loading audio devices...");
 
   const meetingResourcesLocked = $derived(snapshot.resources.audio_locked);
+  const engineNeedsReconfirmation = $derived(snapshot.meetingSession?.preflight?.blockers?.includes("meeting_session:settings_unverified") === true);
   const micTestOwnsResources = $derived(snapshot.resources.owner_kind === "mic_test");
   const micTestBlockedByMeeting = $derived(snapshot.resources.audio_locked && !micTestOwnsResources);
   const meetingResourceLockMessage = $derived(
@@ -222,18 +223,27 @@
     <header class="ti-page-header">
       <div>
         <h2 class="ti-page-title">{tab === "meeting" ? "Voice & Audio" : tab === "translation" ? "Meeting & Transcript" : tab === "keybinds" ? "Keybinds" : tab === "saved-data" ? "Saved Data" : tab === "appearance" ? "Appearance" : "Help & Diagnostics"}</h2>
-        <p class="ti-page-copy">{tab === "meeting" ? "Choose your microphone, meeting sound and audio options." : tab === "translation" ? "Transcript presentation and floating caption preferences." : tab === "keybinds" ? "View verified shortcut preferences. Native registration is not yet available." : tab === "saved-data" ? "Review local storage usage without changing or deleting files." : tab === "appearance" ? "The current visual language of TranslateIT." : "Review setup health and recovery options."}</p>
+        <p class="ti-page-copy">{tab === "meeting" ? "Choose your input devices, call routing, and audio preferences." : tab === "translation" ? "Transcript presentation and floating caption preferences." : tab === "keybinds" ? "Review saved keyboard shortcuts. Editing is not available yet." : tab === "saved-data" ? "Review local storage usage without changing or deleting files." : tab === "appearance" ? "Review the current interface defaults." : "Review setup health and recovery options."}</p>
       </div>
     </header>
       <div id="settings-category-panel" class="min-w-0" role="region"
         aria-label={tab === "meeting" ? "Voice & Audio settings" : tab === "translation" ? "Meeting & Transcript settings" : tab === "keybinds" ? "Keybind settings" : tab === "saved-data" ? "Saved Data settings" : tab === "appearance" ? "Appearance settings" : "Help and diagnostics"}>
     {#if tab === "meeting"}
       <article class="ti-panel ti-settings-panel overflow-hidden" aria-label="Voice and audio configuration">
-        <header class="flex flex-wrap items-start justify-between gap-3 px-5 pb-3 pt-5">
+        <header class="flex flex-wrap items-start justify-between gap-3 pb-4">
           <div class="min-w-0 flex-1">
             <h3 class="m-0 text-[17px] font-semibold tracking-[-0.015em]">Microphone &amp; Meeting Sound</h3>
-            <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">Choose your spoken microphone and incoming meeting audio source. These are separate from the virtual microphone used by your calling app. TranslateIT verifies each change before saving.</p>
+            <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">Choose the devices used to capture your voice and incoming meeting audio.</p>
           </div>
+          <button type="button" class="ti-button ti-button-secondary min-h-9 shrink-0 px-3 text-[12px]"
+            disabled={devicesLoading || deviceSaving} onclick={() => void loadDevices()}>
+            {devicesLoading ? "Checking devices..." : "Refresh devices"}
+          </button>
+        </header>
+        <div class="flex flex-wrap items-center justify-between gap-3 pb-4" role="group" aria-label="Audio device status and microphone test">
+          <p class="m-0 min-w-0 flex-1 break-words text-[12px] leading-5 text-[var(--ti-text-muted)]" aria-live="polite" aria-atomic="true">
+            {meetingResourcesLocked ? meetingResourceLockMessage : deviceMessage}
+          </p>
           {#if meetingResourcesLocked}
             <StatusBadge label="In Use" tone="neutral" />
           {:else if !snapshot.readiness.meetingReady}
@@ -242,18 +252,15 @@
               tone={snapshot.readiness.level === "unavailable" ? "danger" : snapshot.readiness.level === "checking" ? "neutral" : "warning"}
             />
           {/if}
-        </header>
-
-        <div class="flex items-center justify-end px-5 pb-3">
-          <button type="button" class="ti-button ti-button-secondary min-h-9 px-3 text-[12px]"
-            disabled={devicesLoading || deviceSaving} onclick={() => void loadDevices()}>
-            {devicesLoading ? "Checking devices..." : "Refresh devices"}
+          <button type="button" class="ti-button ti-button-secondary min-h-9 shrink-0 px-3 text-[12px]"
+            disabled={micTestBlockedByMeeting || micTestBusy || setupBusy || deviceSaving} onclick={() => void onMicTest()}>
+            {micTestBusy ? "Working..." : snapshot.readiness.recording || micTestOwnsResources ? "Stop Mic Test" : "Test microphone"}
           </button>
         </div>
 
-        <div class="grid grid-cols-1 gap-3 px-5 pb-5 lg:grid-cols-2" aria-busy={devicesLoading || deviceSaving}
+        <div class="grid grid-cols-1 gap-5 pb-5 lg:grid-cols-2" aria-busy={devicesLoading || deviceSaving}
           role="group" aria-label="Microphone input and incoming meeting sound device selection">
-          <label class="grid min-w-0 content-start gap-2 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] p-4">
+          <label class="grid min-w-0 content-start gap-2">
             <span class="ti-field-label">Microphone Input</span>
             <select class="ti-field min-h-10 px-3" disabled={meetingResourcesLocked || devicesLoading || deviceSaving || !devices?.ok} value={currentDevice("microphone")} onchange={(event) => void changeDevice("microphone", selectValue(event))}>
               <option value="">Windows Default</option>
@@ -264,10 +271,10 @@
                 <option value={currentDevice("microphone")}>{currentDevice("microphone")} · unavailable</option>
               {/if}
             </select>
-            <small class="text-[13px] leading-5 text-[var(--ti-text-muted)]">Choose the microphone you speak into, not the virtual audio device used in your calling app.</small>
+            <small class="text-[13px] leading-5 text-[var(--ti-text-muted)]">Choose your physical microphone, not the virtual microphone.</small>
           </label>
 
-          <label class="grid min-w-0 content-start gap-2 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] p-4">
+          <label class="grid min-w-0 content-start gap-2">
             <span class="ti-field-label">Incoming Meeting Sound</span>
             <select class="ti-field min-h-10 px-3" disabled={meetingResourcesLocked || devicesLoading || deviceSaving || !devices?.ok} value={currentDevice("meeting-sound")} onchange={(event) => void changeDevice("meeting-sound", selectValue(event))}>
               <option value="">Windows Default</option>
@@ -278,26 +285,26 @@
                 <option value={currentDevice("meeting-sound")}>{currentDevice("meeting-sound")} · unavailable</option>
               {/if}
             </select>
-            <small class="text-[13px] leading-5 text-[var(--ti-text-muted)]">Optional for incoming captions. Use the headphones or speakers for your call. Your calling app's settings stay unchanged.</small>
+            <small class="text-[13px] leading-5 text-[var(--ti-text-muted)]">Optional for incoming captions. Choose the headphones or speakers used by your calling app.</small>
           </label>
         </div>
 
         {#if (devices?.ambiguous_input_names.length ?? 0) > 0 || (devices?.ambiguous_output_names.length ?? 0) > 0}
-          <p class="mx-5 mb-4 mt-0 text-[12px] leading-5 text-[var(--ti-text-muted)]" role="status">
+          <p class="mb-4 mt-0 text-[12px] leading-5 text-[var(--ti-text-muted)]" role="status">
             Multiple Windows audio endpoints have identical names. Those selections are disabled to prevent accidental routing to the wrong device.
           </p>
         {/if}
 
-        <div class="mx-5 mb-5 flex flex-wrap items-start justify-between gap-4 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] p-4" aria-busy={routeLoading}
+        <div class="mb-5 flex flex-wrap items-start justify-between gap-4 border-t border-[var(--ti-border)] pt-5" aria-busy={routeLoading}
           role="group" aria-label="Virtual microphone and calling app routing">
-          <div class="min-w-0">
-            <span class="ti-field-label">Virtual Microphone / Call Routing</span>
+          <div class="min-w-0 flex-1">
+            <h3 class="m-0 text-[16px] font-semibold">Virtual Microphone / Call Routing</h3>
             <strong class="mt-1.5 block break-words text-[13px] font-semibold leading-5">{meetingMicrophoneDevice}</strong>
             <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]" role={routeCheck === "unavailable" ? "alert" : "status"}>
               {routeCheck === "unavailable" ? "Couldn't check this Windows audio device. Select Check route."
                 : routeCheck === "checking" ? "Checking the audio device in Windows..."
                 : virtualMicrophoneReady
-                  ? "Select the exact device name above as the microphone input in your calling app. Windows availability does not confirm the app's selection."
+                  ? "Select the exact device name above as the microphone input in your calling app. TranslateIT cannot verify which microphone your calling app has selected."
                   : "The virtual audio route is not ready. Check VB-CABLE or select Repair Setup."}
             </p>
           </div>
@@ -321,39 +328,26 @@
           </div>
         </div>
 
-        <details class="group mx-5 mb-5 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)]" open={settings.translation_engine === "codex" || snapshot.meetingSession?.preflight?.blockers?.includes("meeting_session:settings_unverified") === true}>
-          <summary class="flex min-h-12 cursor-pointer items-center gap-2 px-5 py-3 text-[13px] font-semibold text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-hover)]">
+        <MeetingTranslationEngine
+          {settings}
+          needsReconfirmation={engineNeedsReconfirmation}
+          locked={meetingResourcesLocked}
+          onSettingsChange={onSettingsChange}
+          onNotice={onNotice}
+        />
+
+        <details class="group border-t border-[var(--ti-border)]">
+          <summary class="flex min-h-12 cursor-pointer flex-wrap items-center gap-2 py-3 text-[13px] font-semibold text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-hover)]">
             <span aria-hidden="true" class="inline-block text-[11px] transition-transform group-open:rotate-90">▸</span> Advanced audio options
-            <span class="ml-auto text-[12px] font-normal">Noise suppression &amp; recovery</span>
+            <span class="ml-auto text-[12px] font-normal">Noise suppression</span>
           </summary>
-          <div class="border-t border-[var(--ti-border)]">
-            <MeetingTranslationEngine
-              {settings}
-              needsReconfirmation={snapshot.meetingSession?.preflight?.blockers?.includes("meeting_session:settings_unverified") === true}
-              locked={meetingResourcesLocked}
-              onSettingsChange={onSettingsChange}
-              onNotice={onNotice}
-            />
-
-            <MeetingNoiseSuppression
-              {settings}
-              locked={meetingResourcesLocked}
-              onSettingsChange={onSettingsChange}
-              onNotice={onNotice}
-            />
-
-          </div>
+          <MeetingNoiseSuppression
+            {settings}
+            locked={meetingResourcesLocked}
+            onSettingsChange={onSettingsChange}
+            onNotice={onNotice}
+          />
         </details>
-
-        <footer class="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-4">
-          <p class="m-0 min-w-0 flex-1 break-words text-[12px] leading-5 text-[var(--ti-text-muted)]" aria-live="polite" aria-atomic="true">
-            {meetingResourcesLocked ? meetingResourceLockMessage : deviceMessage}
-          </p>
-          <button type="button" class="ti-button ti-button-secondary min-h-9 shrink-0 px-3 text-[12px]"
-            disabled={micTestBlockedByMeeting || micTestBusy || setupBusy || deviceSaving} onclick={() => void onMicTest()}>
-            {micTestBusy ? "Working..." : snapshot.readiness.recording || micTestOwnsResources ? "Stop Mic Test" : "Test microphone"}
-          </button>
-        </footer>
       </article>
     {:else if tab === "translation"}
       <div class="grid min-w-0 gap-7">
@@ -394,8 +388,7 @@
           </div>
         </dl>
         <p class="m-0 text-[13px] leading-6 text-[var(--ti-text-muted)]">
-          These are the current visual defaults. There are no appearance switches that silently reset or change only this screen.
-          Customize message bubbles in Meeting & Transcript. Global themes and font-size controls remain unavailable until they have verified persistence and responsive validation.
+          These settings are read-only. Customize message bubbles in Meeting & Transcript.
         </p>
       </section>
     {:else if !diagnosticsOpen}
@@ -421,7 +414,6 @@
       </article>
       <TranslationFeedbackReview {onNotice} />
     {:else}
-      <div >
       <SettingsDiagnostics
         {snapshot}
         {setupBusy}
@@ -431,7 +423,6 @@
         {onSetupAction}
         onBack={() => { diagnosticsOpen = false; }}
       />
-      </div>
     {/if}
       </div>
   </div>

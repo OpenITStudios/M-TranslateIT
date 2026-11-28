@@ -93,6 +93,21 @@ test("Settings and ApplicationRuntime block device rebind during no-session Meet
   assert.match(ui, /const meetingResourcesLocked = \$derived\(snapshot\.resources\.audio_locked\)/);
 });
 
+test("Voice & Audio groups device controls and keeps required engine recovery visible", () => {
+  const ui = readFileSync(new URL("../../src/pages/Settings.svelte", import.meta.url), "utf8");
+  const devices = ui.indexOf('aria-label="Microphone input and incoming meeting sound device selection"');
+  const routing = ui.indexOf('aria-label="Virtual microphone and calling app routing"');
+  const recovery = ui.indexOf("<MeetingTranslationEngine");
+  const advanced = ui.indexOf("<details", recovery);
+  assert.ok(devices > 0 && routing > devices && recovery > routing && advanced > recovery);
+  assert.equal((ui.match(/onclick=\{\(\) => void onMicTest\(\)\}/g) ?? []).length, 1);
+  assert.ok(ui.indexOf("onclick={() => void onMicTest()}") < routing);
+  assert.equal((ui.match(/disabled=\{meetingResourcesLocked \|\| devicesLoading \|\| deviceSaving \|\| !devices\?\.ok\}/g) ?? []).length, 2);
+  assert.match(ui, /needsReconfirmation=\{engineNeedsReconfirmation\}/);
+  assert.match(ui, /locked=\{meetingResourcesLocked\}/);
+  assert.match(ui, /disabled=\{meetingResourcesLocked \|\| setupBusy \|\| deviceSaving\}/);
+});
+
 test("settings sanitizers keep product enum-like values bounded", () => {
   assert.match(rust, /"off" => "off"/);
   assert.match(rust, /"deferred" => "deferred"/);

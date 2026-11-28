@@ -36,10 +36,10 @@
   });
 </script>
 
-<section class="ti-panel mt-4 overflow-hidden" aria-label="Saved Data storage inventory">
+<section class="ti-panel overflow-hidden" aria-label="Saved Data storage inventory">
   <header class="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-5 py-4">
     <div>
-      <h3 class="m-0 text-[16px] font-semibold">Saved Data</h3>
+      <h3 class="m-0 text-[16px] font-semibold">Storage overview</h3>
       <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">Read-only storage overview. No files are changed or deleted.</p>
     </div>
     <button type="button" class="ti-button ti-button-secondary min-h-9 px-3 text-[12px]" disabled={loading} onclick={() => void refresh()}>

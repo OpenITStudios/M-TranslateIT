@@ -1,6 +1,6 @@
 # TranslateIT Settings — Discord-inspired contract (design specification)
 
-Status: DESIGN_APPROVED_IN_PRINCIPLE / IMPLEMENTATION_NOT_STARTED / NATIVE_QA_NOT_EXECUTED
+Status: SOURCE_AUTHORED / NATIVE_QA_NOT_EXECUTED
 Branch: Local
 Scope: Settings IA, interaction safety, feature preservation. This is not a claim of runtime capability.
 
@@ -22,7 +22,7 @@ Scope: Settings IA, interaction safety, feature preservation. This is not a clai
 8. Advanced / Diagnostics
 9. About
 
-Only expose target tabs when a usable implementation exists. Existing four tabs remain operational during migration.
+Current source retains six categories: Voice & Audio, Meeting & Transcript, Keybinds, Saved Data, Appearance, and Help & Diagnostics. Keybinds, Saved Data and global Appearance remain read-only where editing is not implemented. The target list above is not an instruction to add empty tabs.
 
 ## Voice & Audio: one page, grouped sections
 A. Microphone Input — native input device selection, Windows Default, missing/ambiguous endpoint warnings, microphone test.
@@ -31,7 +31,7 @@ C. Virtual Microphone / Call Routing — verify selected virtual endpoint, check
 D. Monitoring Output — proposed; requires separate native capability validation.
 E. Input profile, input/output volume, level meter, Push to Talk — proposed only; require backend audit and native tests.
 
-Never conflate physical microphone, incoming meeting capture, virtual translated output and monitoring speaker. Changing devices while an audio resource is owned remains locked as currently implemented. Show the reason and recovery action.
+Current UI uses one device group with Refresh devices and Test microphone, a separate virtual routing group, visible required Local engine recovery, and a collapsed Noise suppression section. Never conflate physical microphone, incoming meeting capture, virtual translated output and monitoring speaker. Changing devices while an audio resource is owned remains locked as currently implemented. Show the reason and recovery action.
 
 ## Keybinds (proposed)
 - Actions: mute, deafen (if native), Push to Talk (if native), show/hide app, floating captions, optional meeting start/stop.
