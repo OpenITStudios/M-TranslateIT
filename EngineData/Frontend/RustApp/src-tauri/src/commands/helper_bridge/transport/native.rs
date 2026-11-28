@@ -250,12 +250,12 @@ pub(super) fn dispatch(
     let is_bind = matches!(voice.as_ref(), Some(NativeVoiceIo::Bind));
     let is_voice = matches!(voice.as_ref(), Some(NativeVoiceIo::Synthesize(_)));
     let is_probe_speech = matches!(voice.as_ref(), Some(NativeVoiceIo::ProbeSpeech(_)));
-    if voice.is_some() && (!super::super::native_voice_candidate_enabled() || pcm.is_some()
+    if voice.is_some() && (pcm.is_some()
         || !matches!((task, voice.as_ref()),
             ("voice_actor_preflight", Some(NativeVoiceIo::Bind))
             | ("voice_actor_synthesize", Some(NativeVoiceIo::Synthesize(_)))
             | ("transcribe", Some(NativeVoiceIo::ProbeSpeech(_))))) {
-        return fail("native_voice:typed_request_invalid", "Native voice requires the explicit candidate build and typed input.");
+        return fail("native_voice:typed_request_invalid", "Native voice requires typed input.");
     }
     let Some(deadline) = u64::try_from(deadline_ms).ok()
         .and_then(|ms| admitted_at.checked_add(Duration::from_millis(ms))) else {
@@ -268,9 +268,7 @@ pub(super) fn dispatch(
         return fail("native_inference:scope_invalid", "Native inference requires current exact session authority.");
     };
     if host.pending_meeting_cleanup_session_id.is_some() || host.active_request_id.is_some()
-        || (if super::super::native_voice_candidate_enabled() {
-            !host.native_lifecycle_ready() || !host.native_owner_healthy()
-        } else { host.state != "ready" || host.child.is_none() })
+        || !host.native_lifecycle_ready() || !host.native_owner_healthy()
         || host.last_error.as_deref() == Some("helper_bridge:cleanup_incomplete")
         || crate::commands::voice_lab::voice_lab_build_blocks_meeting()
     {
@@ -320,8 +318,7 @@ pub(super) fn dispatch(
         }
         // Standalone Text needs only the ASR/MT pair, not an approved voice.
         // Preserve the existing full-stack requirement for Meeting.
-        let standalone_candidate_text = super::super::native_voice_candidate_enabled()
-            && request_scope.session_id.is_none() && task == "translate"
+        let standalone_candidate_text = request_scope.session_id.is_none() && task == "translate"
             && crate::commands::helper_bridge_runtime::NativeInferenceOwner::assets_present();
         if !host.provider_ready && !standalone_candidate_text {
             return fail("native_inference:assets_or_voice_unavailable", "Native preparation requires current asset and voice capability.");

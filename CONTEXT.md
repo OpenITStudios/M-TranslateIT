@@ -58,7 +58,7 @@ Alternate Meeting source: **Original Microphone** passes the selected physical m
 - Direct text translation is internal worker/developer verification only; no Text application workspace or standalone native command.
 - Full English UI copy.
 - Session Listening is the normal Meeting translation capture mode; Original Microphone passthrough and source switching share the same session. Push to Talk and Pause/Resume are outside current scope.
-- Two ready built-in English voices allow day-one Meeting use without My Voice training.
+- Two built-in English reference voices require no personal voice training; native runtime readiness is verified before Meeting.
 - My Voice is an optional native reference-based voice created from authorized recordings, reviewed and explicitly selected for Meeting. Legacy personal model training is retired; existing recordings and saved history are preserved.
 - No silent cloud fallback or parallel normal AI engine.
 - App updates use a signed one-shot startup check: no updater daemon, polling timer, tray service, or forced restart. Release signing and GitHub Release publication remain explicit release operations.

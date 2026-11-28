@@ -1,6 +1,5 @@
 use serde_json::{json, Value};
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::engine::runtime_state::runtime_generation_is_authoritative;
@@ -111,41 +110,23 @@ pub(super) fn run_required_outbound_ai_probe(
     }
     let generation_token = helper.generation_token;
 
-    let native_candidate = super::native_voice_candidate_enabled();
-    // Binding opens all five native assets atomically. In the candidate
-    // path there is no need for a second scheduled ASR preload receipt.
-    // Legacy still needs its pair preload and later voice preflight.
-    let preparation = if native_candidate {
-        super::transport::bind_native_voice(json!({
-            "meeting_start_prepare": meeting_start_prepare,
-            "meeting_generation": meeting_generation,
-        }))
-    } else {
-        send_worker_task(
-            "asr_preload",
-            json!({
-                "meeting_start_prepare": meeting_start_prepare,
-                "meeting_generation": meeting_generation,
-            }),
-        )
-    };
+    let preparation = super::transport::bind_native_voice(json!({
+        "meeting_start_prepare": meeting_start_prepare,
+        "meeting_generation": meeting_generation,
+    }));
     let Some(native_device) = preparation.worker_response_json.get("cuda_pci_id").and_then(Value::as_str)
         .filter(|pci| !pci.is_empty()) else {
         invalidate_required_outbound_ai_readiness();
         return Err("native CUDA identity");
     };
-    let preparation_valid = if native_candidate {
-        native_binding_compute_admitted(&preparation)
-    } else {
-        meeting_asr_compute_admitted(&preparation)
-    };
+    let preparation_valid = native_binding_compute_admitted(&preparation);
     if !same_probe_inference(&preparation, generation_token, native_device)
         || !preparation_valid
         || refreshed.worker_response_json.get("cuda_pci_id").and_then(Value::as_str)
             .is_some_and(|observed| observed != native_device)
     {
         invalidate_required_outbound_ai_readiness();
-        return Err(if native_candidate { "native selected voice" } else { "speech recognition" });
+        return Err("native selected voice");
     }
 
     let translation = send_worker_task(
@@ -168,14 +149,7 @@ pub(super) fn run_required_outbound_ai_probe(
         return Err("Indonesian to English translation");
     };
 
-    let legacy_preflight = (!native_candidate).then(|| send_worker_task(
-        "voice_actor_preflight",
-        json!({
-            "meeting_start_prepare": meeting_start_prepare,
-            "meeting_generation": meeting_generation,
-        }),
-    ));
-    let actor_preflight = legacy_preflight.as_ref().unwrap_or(&preparation);
+    let actor_preflight = &preparation;
     if !actor_preflight.ok || actor_preflight.generation_token != generation_token
         || actor_preflight.task != "voice_actor_preflight"
         || actor_preflight.worker_response_json.get("stage").and_then(Value::as_str) != Some("voice_actor_preflight")
@@ -188,66 +162,22 @@ pub(super) fn run_required_outbound_ai_probe(
         return Err("My Voice");
     };
 
-    let asr_inference = if native_candidate {
-        let (voice, samples) = super::transport::synthesize_native_voice(json!({
-            "text": translated_fixture,
-            "expected_actor_token": actor_token.clone(),
-            "meeting_start_prepare": meeting_start_prepare,
-            "meeting_generation": meeting_generation,
-        }));
-        if !same_probe_inference(&voice, generation_token, native_device)
-            || !super::native_voice_pcm_receipt_matches(&voice, &actor_token, samples.as_deref()) {
-            invalidate_required_outbound_ai_readiness();
-            return Err("native voice synthesis");
-        }
-        super::transport::transcribe_native_voice_probe(json!({
-            "language": "en",
-            "meeting_start_prepare": meeting_start_prepare,
-            "meeting_generation": meeting_generation,
-        }), samples.expect("checked PCM receipt"))
-    } else {
-        let Some(output_path) = required_probe_output_path(meeting_generation, &preparation.request_id) else {
-            invalidate_required_outbound_ai_readiness();
-            return Err("voice probe output root");
-        };
-        let output = match OwnedProbeOutput::reserve(output_path) {
-            Ok(output) => output,
-            Err(_) => {
-                invalidate_required_outbound_ai_readiness();
-                return Err("voice probe output reservation");
-            }
-        };
-        let voice = send_worker_task(
-            "voice_actor_synthesize",
-            json!({
-                "text": translated_fixture,
-                "output_path": output.0.to_string_lossy(),
-                "expected_actor_token": actor_token.clone(),
-                "meeting_start_prepare": meeting_start_prepare,
-                "meeting_generation": meeting_generation,
-            }),
-        );
-        if voice.generation_token != generation_token
-            || !voice_only_receipt_matches(&voice, &actor_token, &output.0)
-            || !voice_only_probe_has_wav_header(&output.0)
-        {
-            invalidate_required_outbound_ai_readiness();
-            return Err("My Voice");
-        }
-
-        let asr_inference = send_worker_task(
-            "transcribe",
-            json!({
-                "audio_path": output.0.to_string_lossy(),
-                "probe_request_id": preparation.request_id,
-                "language": "en",
-                "meeting_start_prepare": meeting_start_prepare,
-                "meeting_generation": meeting_generation,
-            }),
-        );
-        drop(output);
-        asr_inference
-    };
+    let (voice, samples) = super::transport::synthesize_native_voice(json!({
+        "text": translated_fixture,
+        "expected_actor_token": actor_token.clone(),
+        "meeting_start_prepare": meeting_start_prepare,
+        "meeting_generation": meeting_generation,
+    }));
+    if !same_probe_inference(&voice, generation_token, native_device)
+        || !super::native_voice_pcm_receipt_matches(&voice, &actor_token, samples.as_deref()) {
+        invalidate_required_outbound_ai_readiness();
+        return Err("native voice synthesis");
+    }
+    let asr_inference = super::transport::transcribe_native_voice_probe(json!({
+        "language": "en",
+        "meeting_start_prepare": meeting_start_prepare,
+        "meeting_generation": meeting_generation,
+    }), samples.expect("checked PCM receipt"));
     if !same_probe_inference(&asr_inference, generation_token, native_device)
         || !functional_asr_output(&asr_inference)
         || !meeting_asr_compute_admitted(&asr_inference)
@@ -277,68 +207,6 @@ pub(super) fn run_required_outbound_ai_probe(
 }
 
 
-/// Source-only Codex voice preparation: GPT-SoVITS without local ASR or MT.
-/// No Codex Meeting Start caller or cloud-audio admission exists yet.
-pub(super) fn run_codex_voice_only_probe(
-    meeting_generation: u64,
-) -> Result<(u64, String), &'static str> {
-    if meeting_generation == 0 || !runtime_generation_is_authoritative(meeting_generation) {
-        return Err("codex_voice:meeting_authority_missing");
-    }
-    let helper = get_helper_bridge_status();
-    // provider_ready verifies the *entire Local* pipeline, not voice alone.
-    if helper.state != "ready" || helper.generation_token == 0 {
-        return Err("codex_voice:helper_not_running");
-    }
-    let helper_generation = helper.generation_token;
-    let output_path = PathBuf::from(
-        crate::engine::paths::ProjectPaths::discover().user_cache_dir
-    ).join("helper_functional_readiness/codex_voice_only.wav");
-    if !output_path.is_absolute() {
-        return Err("codex_voice:output_root_unverified");
-    }
-    let requested = output_path.to_string_lossy().into_owned();
-    let preflight = send_worker_task(
-        "voice_actor_preflight",
-        json!({"meeting_generation":meeting_generation, "meeting_start_prepare":true}),
-    );
-    let preflight_json = &preflight.worker_response_json;
-    let Some(token) = preflight_json.get("actor_token").and_then(Value::as_str)
-        .filter(|value| !value.is_empty() && value.len() <= 512)
-        .filter(|_| preflight.ok && preflight.task == "voice_actor_preflight"
-            && preflight.generation_token == helper_generation
-            && preflight_json.get("stage").and_then(Value::as_str)
-                == Some("voice_actor_preflight"))
-        .map(str::to_owned)
-    else { return Err("codex_voice:actor_preflight_failed"); };
-    if !runtime_generation_is_authoritative(meeting_generation) {
-        return Err("codex_voice:meeting_authority_lost");
-    }
-    let voice = send_worker_task(
-        "voice_actor_synthesize",
-        json!({
-            "text":"Please continue.",
-            "output_path":requested,
-            "expected_actor_token":token,
-            "meeting_generation":meeting_generation,
-            "meeting_start_prepare":true,
-        }),
-    );
-    let valid = voice.generation_token == helper_generation
-        && voice_only_receipt_matches(&voice, &token, &output_path)
-        && voice_only_probe_has_wav_header(&output_path);
-    // Delete only the fixed request path, never an arbitrary worker-supplied path.
-    let _ = fs::remove_file(&output_path);
-    if !valid { return Err("codex_voice:synthesis_unverified"); }
-    let after = get_helper_bridge_status();
-    if after.state != "ready" || after.generation_token != helper_generation
-        || !runtime_generation_is_authoritative(meeting_generation)
-    {
-        return Err("codex_voice:voice_or_meeting_authority_changed");
-    }
-    Ok((helper_generation, token))
-}
-
 /// Compare file identity rather than Rust/Python path spelling. On Windows
 /// ProjectPaths emits forward slashes while Python Path.resolve() reports
 /// native separators. Reject missing, relative or symlinked files.
@@ -358,28 +226,6 @@ pub(super) fn voice_only_probe_path_matches(reported: &str, requested: &Path) ->
     }
 }
 
-/// A receipt alone cannot establish sound quality or semantic correctness.
-fn voice_only_receipt_matches(
-    response: &super::HelperBridgeWorkerResponse, token: &str, expected_path: &Path
-) -> bool {
-    let body = &response.worker_response_json;
-    response.ok && response.task == "voice_actor_synthesize" && !token.is_empty()
-        && body.get("stage").and_then(Value::as_str) == Some("voice_actor_synthesize")
-        && body.get("actor_token").and_then(Value::as_str) == Some(token)
-        && body.get("output_path").and_then(Value::as_str)
-            .is_some_and(|path| voice_only_probe_path_matches(path, expected_path))
-}
-
-/// Minimum WAV signature only, never a claim of audible/verified output.
-fn voice_only_probe_has_wav_header(path: &Path) -> bool {
-    let Ok(meta) = fs::symlink_metadata(path) else { return false; };
-    if !meta.file_type().is_file() || meta.len() <= 44 { return false; }
-    let Ok(mut file) = fs::File::open(path) else { return false; };
-    let mut header = [0_u8; 12];
-    file.read_exact(&mut header).is_ok()
-        && header.starts_with(b"RIFF") && &header[8..12] == b"WAVE"
-}
-
 #[cfg(test)]
 mod tests {
     use super::{OwnedProbeOutput, same_probe_inference};
@@ -394,41 +240,6 @@ mod tests {
             .map(|value| value.as_nanos())
             .unwrap_or(0);
         std::env::temp_dir().join(format!("translateit-probe-{label}-{nonce}.wav"))
-    }
-
-    #[test]
-    fn codex_voice_only_receipt_rejects_foreign_actor_path_or_stage() {
-        let path = temp_path("codex-requested");
-        let foreign_path = temp_path("codex-foreign");
-        fs::write(&path, b"owned fixture").expect("write requested fixture");
-        fs::write(&foreign_path, b"foreign fixture").expect("write foreign fixture");
-        let response = |actor: &str, reported: &str, stage: &str| super::super::HelperBridgeWorkerResponse {
-            ok: true, state: "ready".into(), task: "voice_actor_synthesize".into(),
-            request_id: "test".into(), scheduler_priority: "meeting_outbound".into(),
-            message: String::new(), generation_token: 7, runtime_claim: "synthetic".into(),
-            worker_response_json: serde_json::json!({
-                "actor_token":actor, "output_path":reported, "stage":stage
-            }),
-        };
-        let requested = path.to_string_lossy().into_owned();
-        let foreign = foreign_path.to_string_lossy().into_owned();
-        assert!(super::voice_only_receipt_matches(
-            &response("actor", &requested, "voice_actor_synthesize"), "actor", &path
-        ));
-        assert!(!super::voice_only_receipt_matches(
-            &response("other", &requested, "voice_actor_synthesize"), "actor", &path
-        ));
-        assert!(!super::voice_only_receipt_matches(
-            &response("actor", &foreign, "voice_actor_synthesize"), "actor", &path
-        ));
-        assert!(!super::voice_only_receipt_matches(
-            &response("actor", "relative_voice.wav", "voice_actor_synthesize"), "actor", &path
-        ));
-        assert!(!super::voice_only_receipt_matches(
-            &response("actor", &requested, "transcribe"), "actor", &path
-        ));
-        fs::remove_file(&path).expect("remove requested fixture");
-        fs::remove_file(&foreign_path).expect("remove foreign fixture");
     }
 
     #[cfg(windows)]

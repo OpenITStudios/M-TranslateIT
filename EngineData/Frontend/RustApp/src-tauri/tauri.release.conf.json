@@ -9,12 +9,6 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../../../Backend/LocalWorker/WorkerRuntime/realtime_local_worker.py": "EngineData/Backend/LocalWorker/WorkerRuntime/realtime_local_worker.py",
-      "../../../Backend/LocalWorker/WorkerRuntime/realtime_local_worker_base.py": "EngineData/Backend/LocalWorker/WorkerRuntime/realtime_local_worker_base.py",
-      "../../../Backend/LocalWorker/WorkerRuntime/worker_runtime_common.py": "EngineData/Backend/LocalWorker/WorkerRuntime/worker_runtime_common.py",
-      "../../../Backend/LocalWorker/WorkerRuntime/worker_io_runtime.py": "EngineData/Backend/LocalWorker/WorkerRuntime/worker_io_runtime.py",
-      "../../../Backend/LocalWorker/WorkerRuntime/voice_lab_gpt_sovits.py": "EngineData/Backend/LocalWorker/WorkerRuntime/voice_lab_gpt_sovits.py",
-      "../../../Backend/LocalWorker/WorkerRuntime/voice_lab_upstream_stage.py": "EngineData/Backend/LocalWorker/WorkerRuntime/voice_lab_upstream_stage.py",
       "../../../Backend/LocalWorker/WorkerRuntime/model_manifest.json": "EngineData/Backend/LocalWorker/WorkerRuntime/model_manifest.json",
       "../../../Backend/RuntimeAssets/ThirdPartyNotices/THIRD_PARTY_NOTICES.txt": "EngineData/Backend/RuntimeAssets/ThirdPartyNotices/THIRD_PARTY_NOTICES.txt",
       "../../../Backend/RuntimeAssets/AudioProvider/VBCABLE/NOTICE.txt": "EngineData/Backend/RuntimeAssets/AudioProvider/VBCABLE/NOTICE.txt"

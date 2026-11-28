@@ -427,16 +427,10 @@ pub fn unix_ms() -> u128 {
 }
 
 pub fn runtime_claim(runtime: &HelperBridgeRuntime) -> String {
-    if super::helper_bridge::native_voice_candidate_enabled() {
-        if runtime.native_lifecycle_ready() && runtime.native_owner_healthy() {
-            "native_rust_lifecycle_initialized".to_string()
-        } else {
-            "native_rust_lifecycle_not_ready".to_string()
-        }
-    } else if runtime.child.is_some() && runtime.state == "ready" {
-        "helper_process_ready_ping_verified".to_string()
+    if runtime.native_lifecycle_ready() && runtime.native_owner_healthy() {
+        "native_rust_lifecycle_initialized".to_string()
     } else {
-        "bridge_lifecycle_visible_process_not_ready".to_string()
+        "native_rust_lifecycle_not_ready".to_string()
     }
 }
 

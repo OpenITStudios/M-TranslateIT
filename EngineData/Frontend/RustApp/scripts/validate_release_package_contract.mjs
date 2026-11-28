@@ -30,8 +30,6 @@ const paths = {
   package: join(appRoot, "package.json"),
   config: join(tauriRoot, "tauri.release.conf.json"),
   manifest: join(workerRoot, "model_manifest.json"),
-  entrypoint: join(workerRoot, "realtime_local_worker.py"),
-  base: join(workerRoot, "realtime_local_worker_base.py"),
   build: join(scriptDir, "build_release.ps1"),
   stage: join(scriptDir, "stage_release_inputs_impl.ps1"),
   builder: join(scriptDir, "build_r3_external_payload.py"),
@@ -47,8 +45,6 @@ if (errors.length) {
 const packageJson = readJson(paths.package);
 const config = readJson(paths.config);
 const manifest = readJson(paths.manifest);
-const entrypoint = readText(paths.entrypoint);
-const base = readText(paths.base);
 const build = readText(paths.build);
 const stage = readText(paths.stage);
 const builder = readText(paths.builder);
@@ -78,12 +74,6 @@ else {
 }
 
 const expectedResources = {
-  "../../../Backend/LocalWorker/WorkerRuntime/realtime_local_worker.py": "EngineData/Backend/LocalWorker/WorkerRuntime/realtime_local_worker.py",
-  "../../../Backend/LocalWorker/WorkerRuntime/realtime_local_worker_base.py": "EngineData/Backend/LocalWorker/WorkerRuntime/realtime_local_worker_base.py",
-  "../../../Backend/LocalWorker/WorkerRuntime/worker_runtime_common.py": "EngineData/Backend/LocalWorker/WorkerRuntime/worker_runtime_common.py",
-  "../../../Backend/LocalWorker/WorkerRuntime/worker_io_runtime.py": "EngineData/Backend/LocalWorker/WorkerRuntime/worker_io_runtime.py",
-  "../../../Backend/LocalWorker/WorkerRuntime/voice_lab_gpt_sovits.py": "EngineData/Backend/LocalWorker/WorkerRuntime/voice_lab_gpt_sovits.py",
-  "../../../Backend/LocalWorker/WorkerRuntime/voice_lab_upstream_stage.py": "EngineData/Backend/LocalWorker/WorkerRuntime/voice_lab_upstream_stage.py",
   "../../../Backend/LocalWorker/WorkerRuntime/model_manifest.json": "EngineData/Backend/LocalWorker/WorkerRuntime/model_manifest.json",
   "../../../Backend/RuntimeAssets/ThirdPartyNotices/THIRD_PARTY_NOTICES.txt": "EngineData/Backend/RuntimeAssets/ThirdPartyNotices/THIRD_PARTY_NOTICES.txt",
   "../../../Backend/RuntimeAssets/AudioProvider/VBCABLE/NOTICE.txt": "EngineData/Backend/RuntimeAssets/AudioProvider/VBCABLE/NOTICE.txt",
@@ -198,12 +188,12 @@ const mt = (manifest.models ?? []).filter((item) => item.stage === "translation_
 if (mt.length !== 1 || mt[0].model_id !== "hy-mt2-1.8b-q6_k" || mt[0].revision !== "a0c709d9fac510f2c807aa3af52872340dc37a4a" || mt[0].cpu_fallback !== false) fail("Native MT identity drifted.");
 const asr = (manifest.models ?? []).filter((item) => item.stage === "asr_primary");
 if (asr.length !== 1 || asr[0].model_id !== "qwen3-asr-1.7b-q8_0" || asr[0].revision !== "3b2c29585c2180452ccb14d3b6b58127f352400d" || asr[0].cpu_fallback !== false) fail("Native ASR identity drifted.");
-if (!entrypoint.includes("import realtime_local_worker_base as runtime") || !entrypoint.includes("runtime.HANDLERS.get(command)")) fail("Canonical worker entrypoint drifted.");
-if (entrypoint.includes("exec(") || entrypoint.includes("compile(") || entrypoint.includes('globals()["__name__"]')) fail("Canonical worker entrypoint returned to dynamic exec bootstrap.");
-const handlers = base.match(/HANDLERS\s*=\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
-compareExact([...handlers.matchAll(/"([a-z_]+)"\s*:/g)].map(match => match[1]).sort(), ["ping", "status", "voice_actor_preflight", "voice_actor_synthesize"], "voice worker command closure");
-for (const legacy of ["milmmt_translation_provider", "translation_envelope", "AutoModelForCausalLM", "handle_transcribe", "handle_translate"]) {
-  if (entrypoint.includes(legacy) || base.includes(legacy)) fail(`Legacy inference in voice worker: ${legacy}`);
+// Native-only source must not ship the retired Python inference worker.
+for (const retired of ["realtime_local_worker.py","realtime_local_worker_base.py","worker_runtime_common.py","worker_io_runtime.py","voice_lab_gpt_sovits.py","voice_lab_upstream_stage.py"]) {
+  if (existsSync(join(workerRoot, retired))) fail(`Retired Python inference file remains: ${retired}`);
+}
+if (!build.includes("Native My Voice release is held") || !stage.includes("Native packaging is held")) {
+  fail("Incomplete native packaging must remain blocked.");
 }
 
 const scripts = packageJson.scripts ?? {};
@@ -214,4 +204,4 @@ if (errors.length) {
   for (const error of errors) console.error(`[release-package] ${error}`);
   process.exit(1);
 }
-console.log("[release-package] R3 source contract PASS: pinned FFmpeg release asset identity, exact builder/installer payload-root closure, version/hash-bound external payload, app-only /UPDATE preserves only a fully verified compatible installed runtime, no filesystem-indirection payload roots, transactional full runtime replacement including built-in Meeting voice references, symmetric uninstall cleanup, explicit non-exec WorkerRuntime composition, Setup-owned VB-CABLE install/restart, user-data and system-driver preservation policy, and small Tauri resource closure are aligned.");
+console.log("[release-package] R3 source contract PASS: pinned FFmpeg release asset identity, exact builder/installer payload-root closure, version/hash-bound external payload, app-only /UPDATE preserves only a fully verified compatible installed runtime, no filesystem-indirection payload roots, transactional full runtime replacement including built-in Meeting voice references, symmetric uninstall cleanup, native-only inference source closure, Setup-owned VB-CABLE install/restart, user-data and system-driver preservation policy, and small Tauri resource closure are aligned.");

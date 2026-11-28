@@ -1,7 +1,5 @@
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::io::BufReader;
-use std::process::{Command, Stdio};
 use std::sync::TryLockError;
 
 use crate::commands::diagnostic_trace::{
@@ -12,16 +10,9 @@ use crate::engine::runtime_state::{
     runtime_generation_is_authoritative,
 };
 
-use super::bridge_paths::{
-    helper_stderr_log_path, resolve_worker_python_command, slash_path,
-    worker_python_unavailable_message, worker_root, worker_script,
-};
 use super::helper_bridge_runtime::{
-    action_result, project_native_status, read_worker_response_direct_with_deadline, runtime,
-    set_blocked, spawn_stderr_logger, status_from_runtime, stop_child, unix_ms,
-    worker_response_deadline_ms, write_worker_request_direct_with_deadline,
-    validate_worker_response_contract, HelperBridgeActionResult,
-    HelperBridgeRuntime, HelperBridgeStatus, WorkerDeadline,
+    action_result, runtime, set_blocked, status_from_runtime, stop_child, unix_ms,
+    HelperBridgeActionResult, HelperBridgeStatus,
 };
 
 mod functional_probe;
@@ -29,7 +20,7 @@ mod functional_readiness;
 mod request_policy;
 mod transport;
 
-use functional_probe::{run_required_outbound_ai_probe, run_codex_voice_only_probe};
+use functional_probe::run_required_outbound_ai_probe;
 use transport::send_worker_task;
 use functional_readiness::{
     decorate_functional_readiness_status, invalidate_required_outbound_ai_readiness,
@@ -42,8 +33,6 @@ use request_policy::{
     live_outbound_generation_is_authoritative,
 };
 
-const STARTUP_PING_REQUEST_ID: &str = "helper-startup-ping";
-const STARTUP_STATUS_REQUEST_ID: &str = "helper-startup-status";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct HelperBridgeWorkerResponse {
@@ -254,13 +243,11 @@ pub(crate) fn prepare_codex_voice_only_runtime(
     {
         return Err("codex_voice:engine_not_selected");
     }
-    if native_voice_candidate_enabled() {
-        return Err("codex_voice:native_voice_integration_pending");
-    }
-    run_codex_voice_only_probe(meeting_generation)
+    let _ = meeting_generation;
+    Err("codex_voice:native_voice_integration_pending")
 }
 
-// The canonical helper mutex owns cold Python ping/status and worker transport.
+// The canonical helper mutex owns native lifecycle and inference.
 // Read-only status cannot wait for that owner. A busy lock is UNKNOWN, never
 // Ready, Stopped, a guessed generation, or a reason to restart the worker.
 fn status_lock_busy() -> HelperBridgeStatus {
@@ -288,47 +275,7 @@ fn status_lock_busy() -> HelperBridgeStatus {
 pub fn get_helper_bridge_status() -> HelperBridgeStatus {
     let started = trace_command_start("get_helper_bridge_status", "reading helper bridge status");
     match runtime().try_lock() {
-        Ok(mut runtime) => {
-            let child_exited = runtime
-                .child
-                .as_mut()
-                .and_then(|child| child.try_wait().ok().flatten())
-                .is_some();
-            if child_exited {
-                invalidate_required_outbound_ai_readiness();
-                let clean = stop_child(&mut runtime);
-                // Reaping an exited Python process is NOT permission to
-                // release the previous Meeting's Stop/cleanup attribution.
-                // Preserve it until its exact Meeting Stop verifies release.
-                let meeting_cleanup_pending =
-                    runtime.pending_meeting_cleanup_session_id.is_some();
-                runtime.state = if clean && !meeting_cleanup_pending {
-                    "stopped"
-                } else {
-                    "blocked"
-                }.to_string();
-                runtime.message = if clean && !meeting_cleanup_pending {
-                    "Helper worker process exited.".to_string()
-                } else if meeting_cleanup_pending {
-                    "Helper process exited, but the previous Meeting still requires Retry Stop cleanup verification.".to_string()
-                } else {
-                    "Helper worker exited but process and I/O cleanup are not yet verified.".to_string()
-                };
-                runtime.cuda_ready = false;
-                runtime.provider_ready = false;
-                runtime.degraded_mode = false;
-                runtime.last_error = Some(if clean && !meeting_cleanup_pending {
-                    "helper_bridge:worker_exited"
-                } else {
-                    "helper_bridge:cleanup_incomplete"
-                }.to_string());
-                runtime.active_task = None;
-                runtime.active_request_id = None;
-                runtime.active_meeting_generation = None;
-                runtime.active_meeting_session_id = None;
-                runtime.active_meeting_lane = None;
-                runtime.updated_unix_ms = unix_ms();
-            }
+        Ok(runtime) => {
             let result = decorate_functional_readiness_status(status_from_runtime(&runtime));
             // Filesystem tracing must never extend this transport-mutex lease.
             drop(runtime);
@@ -376,24 +323,6 @@ pub fn get_helper_bridge_status() -> HelperBridgeStatus {
             result
         }
     }
-}
-
-// A failed startup cannot report its ordinary ping/status error as final
-// if the child or stderr reader is still owned. Preserve those handles for
-// the next explicit attempt and keep readiness blocked until reaped.
-fn fail_start_after_spawn(
-    runtime: &mut HelperBridgeRuntime,
-    message: &str,
-    code: &str,
-) -> HelperBridgeActionResult {
-    if !stop_child(runtime) {
-        return set_blocked(
-            runtime,
-            "Python helper startup failed and process/stderr cleanup remains unverified. Retry only after cleanup completes.",
-            "helper_bridge:cleanup_incomplete",
-        );
-    }
-    set_blocked(runtime, message, code)
 }
 
 // User/setup worker start must not replace the one Python helper while the
@@ -484,10 +413,7 @@ fn start_helper_bridge_internal(
             // A competing Start may have completed while this caller waited.
             // Recheck the selected lifecycle under the single authoritative mutex.
             let native_available = !cfg!(windows) || runtime.native_owner_healthy();
-            if runtime.effective_state(native_available) == "ready"
-                && (native_voice_candidate_enabled()
-                    || runtime.child.as_mut().is_some_and(|child| matches!(child.try_wait(), Ok(None))))
-            {
+            if runtime.effective_state(native_available) == "ready" {
                 return action_result(true, &runtime);
             }
             runtime.generation_token = runtime.generation_token.saturating_add(1);
@@ -495,7 +421,7 @@ fn start_helper_bridge_internal(
             if !stop_child(&mut runtime) {
                 return set_blocked(
                     &mut runtime,
-                    "The previous Python helper process or stderr reader has not finished cleanup. No new worker was started.",
+                    "The previous native helper has not finished cleanup. No new owner was started.",
                     "helper_bridge:cleanup_incomplete",
                 );
             }
@@ -507,7 +433,7 @@ fn start_helper_bridge_internal(
 
             // stop_child can consume the bounded cleanup budget. Recheck
             // native ownership after it, BEFORE clearing Meeting outbound
-            // admission or starting a replacement Python worker.
+            // admission or initializing a replacement native owner.
             if clear_outbound_pipeline && !public_worker_start_has_idle_audio_owner() {
                 runtime.state = "stopped".to_string();
                 runtime.message = "The native audio owner changed while the old helper was being cleaned up.".to_string();
@@ -523,7 +449,7 @@ fn start_helper_bridge_internal(
             }
             if !worker_restart_generation_allowed(recovery_generation) {
                 runtime.state = "stopped".to_string();
-                runtime.message = "Live Meeting helper recovery was revoked before Python startup.".to_string();
+                runtime.message = "Live Meeting helper recovery was revoked before native initialization.".to_string();
                 runtime.provider_ready = false;
                 runtime.cuda_ready = false;
                 runtime.updated_unix_ms = unix_ms();
@@ -534,7 +460,7 @@ fn start_helper_bridge_internal(
                     runtime.generation_token,
                 );
             }
-            // Old Meeting attribution is retained through Python startup.
+            // Old Meeting attribution is retained through native initialization.
             // A revoked generation during cold import must not leave the
             // orphan unowned or produce a stale Ready worker.
             // The marker is shared with live outbound scheduling; never
@@ -544,212 +470,17 @@ fn start_helper_bridge_internal(
             }
 
             #[cfg(windows)]
-            if native_voice_candidate_enabled() {
-                // No worker script lookup, Python launch, ping or imports.
-                // Cold status is only an eligibility observation; the existing
-                // functional probe still opens and executes the selected stack.
+            {
                 runtime.state = "ready".into();
                 runtime.last_error = None;
                 runtime.stderr_log_path = None;
                 super::helper_bridge_runtime::project_candidate_status(&mut runtime);
-                return action_result(true, &runtime);
+                action_result(true, &runtime)
             }
-
-            let worker = worker_script();
-            if !worker.is_file() {
-                return set_blocked(&mut runtime, "Missing realtime worker script. Restore EngineData/Backend/LocalWorker/WorkerRuntime/realtime_local_worker.py before starting the helper bridge.", "helper_bridge:worker_script_missing");
+            #[cfg(not(windows))]
+            {
+                set_blocked(&mut runtime, "Native CUDA requires Windows.", "native_inference:platform_unsupported")
             }
-
-            let Some(python) = resolve_worker_python_command() else {
-                let message = worker_python_unavailable_message();
-                return set_blocked(
-                    &mut runtime,
-                    &message,
-                    "helper_bridge:python_runtime_missing",
-                );
-            };
-
-            runtime.state = "starting".to_string();
-            runtime.message = format!("Starting Python helper worker using {}.", python.source);
-            runtime.updated_unix_ms = unix_ms();
-
-            let mut command = Command::new(&python.program);
-            command.args(&python.bootstrap_args);
-            command.arg(&worker);
-            command.current_dir(worker_root());
-            command.stdin(Stdio::piped());
-            command.stdout(Stdio::piped());
-            command.stderr(Stdio::piped());
-
-            let child = match command.spawn() {
-                Ok(child) => child,
-                Err(error) => {
-                    return set_blocked(
-                        &mut runtime,
-                        &format!(
-                            "Failed to spawn Python helper worker using {}: {error}",
-                            python.source
-                        ),
-                        "helper_bridge:spawn_failed",
-                    )
-                }
-            };
-
-            // Transfer ownership immediately so even partial pipe setup
-            // failures use the same bounded, retryable stop path.
-            runtime.child = Some(child);
-            let stderr_log_path = helper_stderr_log_path();
-            if let Some(stderr) = runtime.child.as_mut().and_then(|owned| owned.stderr.take()) {
-                // Thread admission is fallible: preserve the child owner and
-                // use the same bounded cleanup as other partial boot failures.
-                let logger = match spawn_stderr_logger(stderr, stderr_log_path.clone()) {
-                    Ok(logger) => logger,
-                    Err(error) => {
-                        return fail_start_after_spawn(
-                            &mut runtime,
-                            &format!("Could not start the Python stderr logger: {error}"),
-                            "helper_bridge:stderr_logger_spawn_failed",
-                        );
-                    }
-                };
-                runtime.stderr_logger = Some(logger);
-                runtime.stderr_log_path = Some(slash_path(&stderr_log_path));
-            }
-
-            let stdin = match runtime.child.as_mut().and_then(|owned| owned.stdin.take()) {
-                Some(stdin) => stdin,
-                None => {
-                    return fail_start_after_spawn(
-                        &mut runtime,
-                        "Python helper stdin was not available after spawn.",
-                        "helper_bridge:stdin_missing",
-                    );
-                }
-            };
-            let stdout = match runtime.child.as_mut().and_then(|owned| owned.stdout.take()) {
-                Some(stdout) => stdout,
-                None => {
-                    return fail_start_after_spawn(
-                        &mut runtime,
-                        "Python helper stdout was not available after spawn.",
-                        "helper_bridge:stdout_missing",
-                    );
-                }
-            };
-            let stdout = BufReader::new(stdout);
-
-            let ping_deadline = WorkerDeadline::new(worker_response_deadline_ms("ping"));
-            // The runtime mutex is already owned during cold bootstrap.
-            // Register the one writer before pipe I/O and await its real
-            // deadline; a timeout retains the writer for bounded cleanup.
-            let stdin = match write_worker_request_direct_with_deadline(
-                &mut runtime,
-                stdin,
-                json!({ "command": "ping", "request_id": STARTUP_PING_REQUEST_ID }),
-                ping_deadline,
-            ) {
-                Ok(stdin) => stdin,
-                Err(error) => return fail_start_after_spawn(
-                    &mut runtime,
-                    &format!("Failed to send ping to helper worker: {error}"),
-                    "helper_bridge:ping_write_failed",
-                ),
-            };
-            let (ping, mut stdout) =
-                match read_worker_response_direct_with_deadline(&mut runtime, stdout, ping_deadline) {
-                    Ok((value, stdout)) => (value, stdout),
-                    Err(error) => {
-                        return fail_start_after_spawn(
-                            &mut runtime,
-                            &format!(
-                            "Failed to read helper worker ping response before deadline: {error}"
-                        ),
-                            "helper_bridge:ping_read_failed",
-                        );
-                    }
-                };
-            if let Err(error) = validate_worker_response_contract(
-                "ping", STARTUP_PING_REQUEST_ID, &ping,
-            ) {
-                return fail_start_after_spawn(
-                    &mut runtime,
-                    &format!("Helper startup ping response violated protocol: {error}"),
-                    "helper_bridge:ping_response_invalid",
-                );
-            }
-            if ping.get("ok").and_then(Value::as_bool) != Some(true) {
-                return fail_start_after_spawn(
-                    &mut runtime,
-                    "Helper worker ping returned a non-ready response.",
-                    "helper_bridge:ping_not_ok",
-                );
-            }
-
-            let status_deadline = WorkerDeadline::new(worker_response_deadline_ms("status"));
-            // A failed or timed-out status request must not silently promote
-            // ping-only startup into Ready while stdin is still being written.
-            let stdin = match write_worker_request_direct_with_deadline(
-                &mut runtime,
-                stdin,
-                json!({ "command": "status", "request_id": STARTUP_STATUS_REQUEST_ID }),
-                status_deadline,
-            ) {
-                Ok(stdin) => stdin,
-                Err(error) => return fail_start_after_spawn(
-                    &mut runtime,
-                    &format!("Failed to send helper startup status request: {error}"),
-                    "helper_bridge:status_write_failed",
-                ),
-            };
-            let mut status = match read_worker_response_direct_with_deadline(
-                &mut runtime, stdout, status_deadline,
-            ) {
-                Ok((value, next_stdout)) => {
-                    if let Err(error) = validate_worker_response_contract(
-                        "status", STARTUP_STATUS_REQUEST_ID, &value,
-                    ) {
-                        return fail_start_after_spawn(
-                            &mut runtime,
-                            &format!("Helper startup status response violated protocol: {error}"),
-                            "helper_bridge:status_response_invalid",
-                        );
-                    }
-                    stdout = next_stdout;
-                    value
-                }
-                Err(error) => return fail_start_after_spawn(
-                    &mut runtime,
-                    &format!("Failed to read helper worker status response before deadline: {error}"),
-                    "helper_bridge:status_read_failed",
-                ),
-            };
-
-            // This may have taken many seconds in Python imports. Recheck
-            // the original Live generation immediately before publishing
-            // Ready or transferring its old pending cleanup attribution.
-            if !worker_restart_generation_allowed(recovery_generation) {
-                return fail_start_after_spawn(
-                    &mut runtime,
-                    "Live Meeting generation was revoked while the Python helper was starting; no stale worker readiness was committed.",
-                    "helper_bridge:stale_generation_during_startup",
-                );
-            }
-            if recovery_generation.is_some() {
-                runtime.pending_meeting_cleanup_session_id = None;
-            }
-
-            runtime.stdin = Some(stdin);
-            runtime.stdout = Some(stdout);
-            runtime.state = "ready".to_string();
-            runtime.active_task = None;
-            runtime.active_request_id = None;
-            runtime.active_meeting_generation = None;
-            runtime.active_meeting_session_id = None;
-            runtime.active_meeting_lane = None;
-            runtime.last_error = None;
-            runtime.updated_unix_ms = unix_ms();
-            project_native_status(&mut runtime, &mut status);
-            action_result(true, &runtime)
         }
         Err(_) => HelperBridgeActionResult {
             ok: false,
@@ -797,9 +528,7 @@ pub fn start_helper_bridge() -> HelperBridgeActionResult {
         return HelperBridgeActionResult {
             ok: true,
             state: current.state,
-            message: if native_voice_candidate_enabled() {
-                "Native Rust helper lifecycle is already initialized.".into()
-            } else { "Python helper worker is already running and ready.".into() },
+            message: "Native Rust helper lifecycle is already initialized.".into(),
             generation_token: current.generation_token,
             runtime_claim: current.runtime_claim,
         };

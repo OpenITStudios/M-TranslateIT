@@ -35,8 +35,6 @@ const meetingOutputPath = join(tauriRoot, "src", "engine", "audio", "meeting_out
 const meetingOutputRuntimePath = join(tauriRoot, "src", "engine", "audio", "meeting_output_runtime.rs");
 const meetingOutputAudioFormatPath = join(tauriRoot, "src", "engine", "audio", "meeting_output_runtime", "audio_format.rs");
 const runtimeInventoryPath = join(tauriRoot, "src", "commands", "runtime_inventory.rs");
-const workerEntrypointPath = join(workerRoot, "realtime_local_worker.py");
-const workerCommonPath = join(workerRoot, "worker_runtime_common.py");
 const workerPyprojectPath = join(workerRoot, "pyproject.toml");
 const defaultCapabilityPath = join(tauriRoot, "capabilities", "default.json");
 const overlayCapabilityPath = join(tauriRoot, "capabilities", "translation-overlay.json");
@@ -73,8 +71,6 @@ for (const path of [
   meetingOutputRuntimePath,
   meetingOutputAudioFormatPath,
   runtimeInventoryPath,
-  workerEntrypointPath,
-  workerCommonPath,
   workerPyprojectPath,
   defaultCapabilityPath,
   overlayCapabilityPath,
@@ -175,14 +171,13 @@ requireMarkers(bridgePathsRs, "packaged Python resolver", [
 ]);
 
 const helperBridgeRs = readText(helperBridgePath);
-requireMarkers(helperBridgeRs, "persistent helper ownership", [
-  "resolve_worker_python_command",
-  "worker_python_unavailable_message",
-  "Command::new(&python.program)",
+requireMarkers(helperBridgeRs, "native helper ownership", [
+  "project_candidate_status(&mut runtime)",
+  "native_owner_healthy()",
 ]);
-forbidMarkers(helperBridgeRs, "legacy helper Python selection", [
-  "worker_python_candidates",
-  "install Python on PATH",
+forbidMarkers(helperBridgeRs, "retired Python inference startup", [
+  "resolve_worker_python_command",
+  "Command::new(&python.program)",
 ]);
 
 const meetingOutputRs = readText(meetingOutputPath);
@@ -225,26 +220,12 @@ forbidMarkers(workerPyproject, "retired WorkerRuntime dependency boundary", [
   "[project.optional-dependencies]",
 ]);
 
-const workerEntrypoint = readText(workerEntrypointPath);
-requireMarkers(workerEntrypoint, "thin worker entrypoint", [
-  "import realtime_local_worker_base as runtime",
-  "runtime.HANDLERS.get(command)",
-]);
-forbidMarkers(workerEntrypoint, "dynamic worker bootstrap", ["exec(", "compile(", 'globals()["__name__"]']);
-
-const workerCommon = readText(workerCommonPath);
-requireMarkers(workerCommon, "worker runtime/user path owner", [
-  'configured_absolute_root("TRANSLATEIT_RUNTIME_ROOT"',
-  'configured_absolute_root("TRANSLATEIT_USER_DATA_ROOT"',
-  "RUNTIME_ASSETS_ROOT = RUNTIME_ROOT",
-  'CACHE_ROOT = USER_DATA_ROOT / "CacheData"',
-  'LOG_ROOT = USER_DATA_ROOT / "LogData"',
-  'GPT_SOVITS_SOURCE_ROOT = RUNTIME_ASSETS_ROOT / "Voice" / "GPTSoVITS" / "Source"',
-]);
-forbidMarkers(workerCommon, "worker repository-coupled packaged paths", [
-  'CACHE_ROOT = SCRIPT_ROOT / "UserData"',
-  'RUNTIME_ASSETS_ROOT = SCRIPT_ROOT / "EngineData"',
-]);
+for (const name of ["realtime_local_worker.py","realtime_local_worker_base.py","worker_runtime_common.py","worker_io_runtime.py","voice_lab_gpt_sovits.py","voice_lab_upstream_stage.py"]) {
+  if (existsSync(join(workerRoot, name))) fail(`Retired Python inference worker exists: ${name}`);
+}
+for (const source of Object.keys(releaseConfig.bundle?.resources ?? {})) {
+  if (source.endsWith(".py")) fail(`Python inference source in native Tauri resources: ${source}`);
+}
 
 const runtimeInventoryRs = readText(runtimeInventoryPath);
 requireMarkers(runtimeInventoryRs, "model inventory path consumers", [
@@ -258,4 +239,4 @@ if (errors.length) {
   for (const error of errors) console.error(`[tauri-package-preflight] ${error}`);
   process.exit(1);
 }
-console.log("[tauri-package-preflight] Tauri/WorkerRuntime source contract PASS: packaged paths resolve through the Tauri resource root, Meeting output uses an explicit guarded facade over the native CPAL runtime, the private Python runtime stays production-only, WorkerRuntime uses an explicit non-exec composition entrypoint pinned to Transformers 4.57.6, and R3 uses one per-machine Setup with a generated external-payload lifecycle hook. Artifact/install/clean-machine proof remains separate.");
+console.log("[tauri-package-preflight] Tauri/WorkerRuntime source contract PASS: packaged paths resolve through the Tauri resource root, Meeting output uses an explicit guarded facade over the native CPAL runtime, no Python inference worker is packaged, and R3 uses one per-machine Setup with a generated external-payload lifecycle hook. Artifact/install/clean-machine proof remains separate.");

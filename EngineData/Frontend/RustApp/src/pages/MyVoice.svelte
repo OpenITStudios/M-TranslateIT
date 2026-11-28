@@ -1131,7 +1131,7 @@
       class={currentWorkspace === "create" ? "min-h-[62px] rounded-[var(--ti-radius-md)] border-b-2 border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 py-2 text-left" : "min-h-[62px] rounded-[var(--ti-radius-md)] border-b-2 border-transparent px-4 py-2 text-left hover:bg-[var(--ti-surface-hover)]"}
       onclick={() => selectWorkspace("create")}>
       <span class="block text-[14px] font-semibold">Create My Voice</span>
-      <span class="mt-1 block text-[12px] text-[var(--ti-text-muted)]">{buildSnapshot?.native_candidate ? "Record · Create · Review" : "Record · Train · Review"}</span>
+      <span class="mt-1 block text-[12px] text-[var(--ti-text-muted)]">Record · Create · Review</span>
     </button>
     <button type="button" aria-current={currentWorkspace === "library" ? "page" : undefined}
       aria-controls="my-voice-library-workspace"
@@ -1209,7 +1209,7 @@
         <h3 id="my-voice-create-title" class="mb-0 text-[19px] font-semibold tracking-[-0.02em]"
           tabindex="-1" bind:this={personalVoiceHeading}>Create My Voice</h3>
         <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">
-          {buildSnapshot?.native_candidate ? "Record guided samples, create your voice, then listen to the review." : "Record guided samples, train your voice, then review it before using it in meetings."}
+          Record guided samples, create your voice, then listen to the review.
         </p>
       </div>
 
@@ -1228,7 +1228,7 @@
       <button type="button" aria-current={activeStage === "create" ? "step" : undefined}
         class={activeStage === "create" ? "inline-flex min-h-10 shrink-0 items-center rounded-[var(--ti-radius-md)] border border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 text-[13px] font-semibold text-[var(--ti-text)]" : "inline-flex min-h-10 shrink-0 items-center rounded-[var(--ti-radius-md)] border border-transparent px-4 text-[13px] font-medium text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)] hover:text-[var(--ti-text)]"}
         disabled={busy || recordingStatusUnknown || buildStatusUnavailable || isRecording || pendingLineId !== null || buildSnapshot?.active === true || buildSnapshot?.preview_active === true || buildSnapshot?.evaluation_ready === true}
-        onclick={() => openCreationStage("create")}>{buildSnapshot?.native_candidate ? "2. Create" : "2. Train"}</button>
+        onclick={() => openCreationStage("create")}>2. Create</button>
       <ChevronRight size={14} class="shrink-0 text-[var(--ti-text-soft)]" aria-hidden="true" />
       <button type="button" aria-current={activeStage === "review" ? "step" : undefined}
         class={activeStage === "review" ? "inline-flex min-h-10 shrink-0 items-center rounded-[var(--ti-radius-md)] border border-[var(--ti-brand)] bg-[var(--ti-surface-raised)] px-4 text-[13px] font-semibold text-[var(--ti-text)]" : "inline-flex min-h-10 shrink-0 items-center rounded-[var(--ti-radius-md)] border border-transparent px-4 text-[13px] font-medium text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-soft)] hover:text-[var(--ti-text)]"}
@@ -1292,7 +1292,7 @@
               {:else if buildSnapshot.can_build && !buildSnapshot.active && !isRecording && pendingLineId === null}
                 <button type="button" class="ti-button ti-button-secondary mt-3"
                   disabled={busy || voiceChangesLocked || recordingStatusUnknown}
-                  onclick={() => openCreationStage("create")}>{buildSnapshot?.native_candidate ? "Continue to Create" : "Continue to Train"}</button>
+                  onclick={() => openCreationStage("create")}>Continue to Create</button>
               {/if}
             {:else}
               <p class="m-0 text-[13px] text-[var(--ti-text-muted)]" role="status">Checking saved recording progress…</p>
@@ -1686,10 +1686,10 @@
             </p>
             <p class="mt-2 text-sm font-medium">{improvementIds.length} recordings chosen · maximum 128 per build</p>
             {#if !trainingComputeAllowed}
-              <p class="mb-0 mt-2 text-xs leading-5 text-[var(--ti-text-muted)]" role="status">{buildSnapshot?.native_candidate ? "Reviewed native runtime and verifier pins are required." : "Before improving, open Create My Voice → Train to verify GPU readiness. CPU-only training is not currently admitted."}</p>
+              <p class="mb-0 mt-2 text-xs leading-5 text-[var(--ti-text-muted)]" role="status">Reviewed native runtime and verifier pins are required.</p>
             {/if}
             <p class="mb-0 mt-1 text-xs text-[var(--ti-text-muted)]">
-              {buildSnapshot?.native_candidate ? "Choose at least two distinct clear recordings between 3 and 10 seconds. GPU admission is checked when creation starts." : "The training check requires at least one minute of speech, a short reference recording and varied sentence categories. You don't need to finish every line."}
+              Choose at least two distinct clear recordings between 3 and 10 seconds. GPU admission is checked when creation starts.
             </p>
             <label class="mt-3 flex items-start gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-3">
               <input type="checkbox" class="mt-0.5 size-4 accent-[var(--ti-accent)]"

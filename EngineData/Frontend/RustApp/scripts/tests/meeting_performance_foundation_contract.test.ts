@@ -15,7 +15,7 @@ const output = source("src-tauri/src/engine/audio/meeting_output_runtime.rs");
 const playback = source("src-tauri/src/commands/meeting_session/playback_runtime.rs");
 const diagnostics = source("src-tauri/src/commands/diagnostic_support.rs");
 const vad = source("src-tauri/src/engine/audio/vad.rs");
-const actor = readFileSync(new URL("../../../../Backend/LocalWorker/WorkerRuntime/voice_lab_gpt_sovits.py", import.meta.url), "utf8");
+const nativeVoice = source("src-tauri/src/commands/helper_bridge/transport/native.rs");
 
 test("only one inference job is admitted; wait timing is measured by Rust scheduler", () => {
   assert.match(scheduler, /active: bool/);
@@ -41,7 +41,7 @@ test("CPAL build timing is isolated from worker processing; no persistent stream
   assert.match(output, /fn stream_start_to_first_audio_ms\(/);
   assert.match(playback, /timing\.metrics\.output_stream_build_ms = route\.stream_build_ms/);
   assert.match(output, /drop\(stream\)/);
-  assert.match(actor, /"streaming_mode": False/);
+  assert.match(nativeVoice, /InferenceOutput::Voice\(/);
 });
 
 test("support bundle contains only numeric derived timing, no audio or transcript", () => {
@@ -102,11 +102,11 @@ test("finalized Meeting PCM enters the existing scheduler and only native infere
   const permit = transport.indexOf("acquire_scoped_helper_task_permit(priority, wait_generation)", inner);
   const defer = transport.indexOf("return incoming_deferred_response", permit);
   const nativeDispatch = transport.indexOf("return native::dispatch(", defer);
-  const metadata = transport.indexOf("inject_request_metadata", nativeDispatch);
+  const metadata = transport.indexOf("return native::control(", nativeDispatch);
   assert.ok(inner >= 0 && permit > inner && defer > permit && nativeDispatch > defer && metadata > nativeDispatch);
   assert.doesNotMatch(transport, /TemporaryAsrWav|write_finalized_.*_wav/);
   assert.match(transport.slice(nativeDispatch, metadata), /"native_inference:platform_unsupported"/);
-  assert.match(transport.slice(nativeDispatch, metadata), /!matches!\(task, "ping" \| "status" \| "voice_actor_preflight" \| "voice_actor_synthesize"\)/);
+  assert.doesNotMatch(transport, /begin_worker_stdin_write|begin_worker_stdout_read/);
   assert.doesNotMatch(transport, /dispatch_if_owned|retain_payload_for_live_retry|recover_live_meeting_helper_transport/);
   const native = source("src-tauri/src/commands/helper_bridge/transport/native.rs");
   assert.match(native, /permit: &HelperTaskPermit/);

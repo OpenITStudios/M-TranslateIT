@@ -22,7 +22,7 @@ test("My Voice retains Current Voice, creation stages and archive tools on separ
   assert.match(page, /id="my-voice-create-title"/);
   assert.match(page, /aria-label="My Voice creation stages"/);
   assert.match(page, />1\. Record<\/button>/);
-  assert.match(page, />2\. Train<\/button>/);
+  assert.match(page, />2\. Create<\/button>/);
   assert.match(page, />3\. Review &amp; Use<\/button>/);
   assert.match(page, /<section id="my-voice-create-workspace"/);
   assert.doesNotMatch(page, /creatorOpen|Hide Steps/);
@@ -127,27 +127,25 @@ test("Voice Library opens saved recordings directly without nested global disclo
 });
 
 
-test("Train readiness is grouped once and the build/review owners are unchanged", () => {
-  assert.match(build, /aria-label="Training readiness"/);
+test("Voice creation readiness is grouped once and the build/review owners are unchanged", () => {
+  assert.match(build, /aria-label="Voice creation readiness"/);
   assert.match(build, /aria-label="Recording readiness"/);
-  assert.match(build, /aria-label="Training hardware"/);
+  assert.match(build, /aria-label="Native voice readiness"/);
   assert.match(build, /build\.can_build \? "Recording requirements met"/);
-  assert.match(build, /onclick=\{\(\) => void checkCompute\(\)\}/);
+  assert.doesNotMatch(build, /checkCompute\(/);
   assert.match(build, /await myVoiceBuildApi\.start\(authorized\)/);
   assert.match(build, /myVoiceBuildApi\.approve\(reviewedLineIds, qualityConfirmed, build\.evaluation_review_id\)/);
   assert.match(build, /!evaluationReviewComplete \|\| !qualityConfirmed/);
   assert.match(build, /Advanced: temporary voice sample/);
 });
 
-test("training hardware internals and nonselectable quick preview are disclosed only on demand", () => {
-  assert.match(build, /<summary[^>]*>Technical device details<\/summary>/);
+test("native readiness and nonselectable quick preview", () => {
   assert.match(build, /<summary[^>]*>Advanced: temporary voice sample<\/summary>/);
   assert.match(build, /This sample cannot be selected as a Meeting voice/);
   assert.match(build, /<QuickVoicePreview/);
   assert.match(build, /onGenerate=\{generateQuickPreview\}/);
   assert.match(build, /onPlay=\{playQuickPreview\}/);
-  assert.match(build, /computeStatus\?\.admission_state === "admitted"/);
-  assert.match(build, /Recheck hardware/);
+  assert.match(build, /build\.native_pins_ready/);
 });
 
 test("orphan Draft recovery is explicitly user initiated and never auto-accepts a recovered WAV", () => {

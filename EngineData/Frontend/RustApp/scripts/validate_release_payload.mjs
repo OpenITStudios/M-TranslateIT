@@ -150,12 +150,6 @@ const hasAnyFile = (root) => {
 };
 
 for (const file of [
-  "realtime_local_worker.py",
-  "realtime_local_worker_base.py",
-  "worker_runtime_common.py",
-  "worker_io_runtime.py",
-  "voice_lab_gpt_sovits.py",
-  "voice_lab_upstream_stage.py",
   "model_manifest.json",
 ]) {
   requireFile(join(workerRoot, file), `WorkerRuntime/${file}`);
@@ -431,4 +425,4 @@ if (errors.length) {
   process.exit(1);
 }
 
-console.log("[release-payload] Required private Python runtime, canonical modular WorkerRuntime, release model inventory, deterministic third-party notice bundle, pruned GPT-SoVITS VoiceLab payload, integrity-bound FFmpeg LGPL executable/license/source record, and standard VB-CABLE provider package are present for Tauri/NSIS staging. This is controlled payload-input proof only, not whole-release legal, driver-install, installed-runtime, or clean-machine proof.");
+console.log("[release-payload] Historical R3 inputs: private Python runtime, canonical modular WorkerRuntime, release model inventory, deterministic third-party notice bundle, pruned GPT-SoVITS VoiceLab payload, integrity-bound FFmpeg LGPL executable/license/source record, and standard VB-CABLE provider package are present for Tauri/NSIS staging. This is controlled payload-input proof only, not whole-release legal, driver-install, installed-runtime, or clean-machine proof.");

@@ -37,7 +37,8 @@ from pipeline_checks import (
     source_admission_passed,
 )
 
-WORKER = ROOT / "EngineData/Backend/LocalWorker/WorkerRuntime/realtime_local_worker.py"
+# Retired product worker is absent. Only injected synthetic fixtures can use this transport.
+WORKER: Path | None = None
 MAX_FRAME = 1_000_000
 
 
@@ -46,7 +47,7 @@ class WorkerTransportError(RuntimeError):
 
 
 def require_full_voice_pipeline() -> None:
-    # Current Python WorkerRuntime exports only voice/control handlers.
+    # The Python inference worker is physically retired.
     # The historical combined ASR/MT/TTS runner cannot produce current
     # native evidence until its selected-voice integration is migrated.
     raise WorkerTransportError("audio_pipeline:legacy_asr_mt_removed_native_voice_integration_held")
@@ -105,8 +106,8 @@ def await_worker_frame(messages: queue.Queue[bytes | None], timeout: float) -> b
 
 class Worker:
     def __init__(self, python: Path, timeout: float):
-        if not python.is_file() or not WORKER.is_file():
-            raise ValueError("canonical pinned WorkerRuntime Python/entrypoint unavailable")
+        if WORKER is None or not python.is_file() or not WORKER.is_file():
+            raise ValueError("retired Python worker unavailable; synthetic fixture only")
         if not 5 <= timeout <= 600:
             raise ValueError("worker request timeout outside 5–600 seconds")
         self.deadline = timeout

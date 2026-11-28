@@ -1,6 +1,9 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# Historical R3 staging cannot build the native-only product yet.
+throw 'Native packaging is held pending exact artifact closure and integrated target acceptance.'
+
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..\..')).Path
 # The release wrapper reserves a unique private stage. This implementation
 # never prepares or deletes the canonical runtime directories until promotion.
@@ -124,9 +127,6 @@ $StagedWorker = Join-Path $Backend 'LocalWorker\WorkerRuntime'
 New-Item -ItemType Directory -Force -Path $StagedWorker | Out-Null
 Get-ChildItem -LiteralPath $Worker -File | Where-Object { $_.Extension -in @('.py', '.json') } |
     Copy-Item -Destination $StagedWorker -Force
-if (-not (Test-Path -LiteralPath (Join-Path $StagedWorker 'voice_lab_gpt_sovits.py') -PathType Leaf)) {
-    throw 'Staged private Python WorkerRuntime source closure missing.'
-}
 & (Join-Path $PythonRoot 'python.exe') --version
 if ($LASTEXITCODE -ne 0) { throw 'Embedded CPython did not start.' }
 @"
@@ -162,7 +162,7 @@ $sitePackages = Join-Path $stagingVenv 'Lib\site-packages'
 if (-not (Test-Path -LiteralPath $sitePackages -PathType Container)) { throw 'Frozen WorkerRuntime site-packages missing.' }
 Copy-Tree $sitePackages $PythonRoot
 $privatePython = Join-Path $PythonRoot 'python.exe'
-& $privatePython -s -c "import torch, torchaudio, transformers, ctranslate2, faster_whisper, sentencepiece, soundfile, numpy, voice_lab_gpt_sovits; print('[release-stage][python] private imports PASS', torch.__version__, transformers.__version__)"
+& $privatePython -s -c "import torch, torchaudio, transformers, ctranslate2, faster_whisper, sentencepiece, soundfile, numpy; print('[release-stage][python] private imports PASS', torch.__version__, transformers.__version__)"
 if ($LASTEXITCODE -ne 0) { throw 'Private Python runtime import smoke failed.' }
 
 Write-Host '[release-stage] Acquire required Hugging Face models from canonical manifest'
@@ -370,11 +370,6 @@ foreach ($exeName in @('VBCABLE_Setup.exe', 'VBCABLE_Setup_x64.exe')) {
 
 Write-Host '[release-stage] Remove transient download metadata from staged runtime'
 Get-ChildItem -LiteralPath $Assets -Directory -Recurse -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq '.cache' } | Sort-Object FullName -Descending | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-
-Write-Host '[release-stage] Historical inference source-asset preflight (legacy release held)'
-$env:SOURCE_ROOT = $VoiceSource
-& $privatePython -s -c "from pathlib import Path; import os; import voice_lab_gpt_sovits as v; a=v.inference_source_assets(Path(os.environ['SOURCE_ROOT'])); print('[release-stage][voice] source assets PASS', sorted(a.keys()))"
-if ($LASTEXITCODE -ne 0) { throw 'VoiceLab staged source asset validation failed.' }
 
 Write-Host '[release-stage] Controlled input sizes'
 foreach ($pair in @(

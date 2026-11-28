@@ -2,13 +2,6 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const python = readFileSync(
-  new URL(
-    "../../../../Backend/LocalWorker/WorkerRuntime/realtime_local_worker_base.py",
-    import.meta.url,
-  ),
-  "utf8",
-);
 const rust = readFileSync(
   new URL("../../src-tauri/src/commands/helper_bridge_runtime.rs", import.meta.url),
   "utf8",
@@ -25,9 +18,7 @@ const readinessKeys = [
   "voice_actor_tts",
 ] as const;
 
-test("Rust owns ASR/MT status while Python reports voice capability", () => {
-  assert.match(python, /"voice_actor_tts"\s*:/);
-  assert.doesNotMatch(python, /"asr"\s*:|"translation_id_en"\s*:|"translation_en_id"\s*:/);
+test("Rust owns all native ASR, MT and voice capability status", () => {
   for (const key of readinessKeys) {
     assert.match(frontend, new RegExp(`readiness\\["${key}"\\]`), `TypeScript missing ${key}`);
   }
@@ -35,13 +26,12 @@ test("Rust owns ASR/MT status while Python reports voice capability", () => {
   for (const key of readinessKeys) {
     assert.match(rust, new RegExp(`"${key}"\\s*:`), `Rust missing ${key}`);
   }
-  assert.match(rust, /fn native_status_payload\(/);
-  assert.match(rust, /worker_nested_bool\(worker, "readiness", "voice_actor_tts"\)/);
+  assert.match(rust, /fn candidate_status_payload\(/);
+  assert.match(rust, /"voice_actor_tts": voice_ready/);
   assert.doesNotMatch(rust, /fn meeting_compute_preflight_admitted\(/);
 });
 
 test("worker preflight stage remains the capability response discriminator", () => {
-  assert.match(python, /"stage": "local_realtime_worker_preflight"/);
   assert.match(frontend, /payload\["stage"\] === "local_realtime_worker_preflight"/);
   assert.match(rust, /stage == "local_realtime_worker_preflight"/);
 });
@@ -60,24 +50,18 @@ test("frontend diagnostic loaded-state fields exist in Rust projected status", (
   }
 });
 
-const common = readFileSync(
-  new URL("../../../../Backend/LocalWorker/WorkerRuntime/worker_runtime_common.py", import.meta.url),
-  "utf8",
-);
 const diagnosticsView = readFileSync(
   new URL("../../src/components/settings/SettingsDiagnostics.svelte", import.meta.url),
   "utf8",
 );
 
 test("GPU diagnostics use existing worker status and do not alter readiness", () => {
-  assert.match(python, /"torch_allocator": common\.torch_allocator_snapshot\(\)/);
   assert.match(frontend, /gpu\["torch_allocator"\]/);
   assert.match(frontend, /payload\["stage"\] === "local_realtime_worker_preflight"/);
   assert.match(frontend, /Number\.isSafeInteger/);
   assert.match(frontend, /allocated > reserved/);
   assert.match(frontend, /peakAllocated < allocated/);
   assert.match(frontend, /free > total/);
-  assert.match(common, /if not cuda\.is_initialized\(\):/);
   assert.match(diagnosticsView, /workerDiagnostics\.torchMemoryDisplay/);
   assert.match(diagnosticsView, /workerDiagnostics\.deviceMemoryDisplay/);
   assert.match(diagnosticsView, /Read-only snapshot from Check Again/);

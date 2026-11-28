@@ -6,22 +6,6 @@ const rust = readFileSync(
   new URL("../../src-tauri/src/commands/helper_bridge_runtime.rs", import.meta.url),
   "utf8",
 );
-const python = readFileSync(
-  new URL(
-    "../../../../Backend/LocalWorker/WorkerRuntime/realtime_local_worker_base.py",
-    import.meta.url,
-  ),
-  "utf8",
-);
-
-function pythonHandlers(): string[] {
-  const match = python.match(/HANDLERS\s*=\s*\{([\s\S]*?)\n\}/);
-  assert.ok(match, "Python HANDLERS table must exist");
-  return [...match[1].matchAll(/"([a-z_][a-z_0-9]*)"\s*:/g)]
-    .map((item) => item[1])
-    .sort();
-}
-
 function rustDeadlineTasks(): string[] {
   const match = rust.match(
     /pub fn worker_response_deadline_ms\(task: &str\)[\s\S]*?match task \{([\s\S]*?)\n\s*_ =>/,
@@ -34,13 +18,13 @@ function rustDeadlineTasks(): string[] {
   return [...values].sort();
 }
 
-test("Rust deadlines cover the disjoint native and voice task sets", () => {
+test("Rust deadlines cover the single native task set", () => {
   const native = ["asr_preload", "transcribe", "translate", "translation_preload"];
   const transport = readFileSync(new URL("../../src-tauri/src/commands/helper_bridge/transport.rs", import.meta.url), "utf8");
-  assert.deepEqual(pythonHandlers(), ["ping", "status", "voice_actor_preflight", "voice_actor_synthesize"]);
-  assert.deepEqual(rustDeadlineTasks(), [...native, ...pythonHandlers()].sort());
+  assert.deepEqual(rustDeadlineTasks(), [...native, "ping", "status", "voice_actor_preflight", "voice_actor_synthesize"].sort());
   assert.match(transport, /return native::dispatch\(/);
-  assert.match(transport, /!matches!\(task, "ping" \| "status" \| "voice_actor_preflight" \| "voice_actor_synthesize"\)/);
+  assert.match(transport, /return native::control\(/);
+  assert.doesNotMatch(transport, /begin_worker_stdin_write|begin_worker_stdout_read/);
 });
 
 test("unknown Rust worker tasks remain bounded by a fallback deadline", () => {
