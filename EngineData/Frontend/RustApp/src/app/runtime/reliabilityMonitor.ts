@@ -1,4 +1,5 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { createMeetingReconcileSchedule } from "./meetingReconcileSchedule";
 import {
   getLongSessionHealthStatus,
   getMeetingReliabilitySnapshot,
@@ -7,7 +8,7 @@ import {
 const LIVE_RELIABILITY_POLL_MS = 8_000;
 const LONG_SESSION_POLL_MS = 30_000;
 const MEETING_RECONCILIATION_POLL_MS = 10_000;
-const MEETING_EVENT_DEBOUNCE_MS = 80;
+const MEETING_EVENT_COALESCE_MS = 80;
 const MEETING_RUNTIME_EVENT = "translateit://meeting-runtime";
 
 export type ReliabilityNotice = {
@@ -131,37 +132,41 @@ function startMeetingReliabilityMonitor(
   };
 }
 
-function startMeetingChangeEvents(
+function startMeetingReconciliationMonitor(
   pollMeeting: () => void | Promise<void>,
 ): () => void {
   let disposed = false;
   let unlisten: UnlistenFn | null = null;
-  let debounceTimer: number | null = null;
   let lastRevision = 0;
+  const schedule = createMeetingReconcileSchedule(
+    pollMeeting,
+    { set: (callback, ms) => window.setTimeout(callback, ms),
+      clear: (timer) => window.clearTimeout(timer) },
+    MEETING_EVENT_COALESCE_MS,
+    MEETING_RECONCILIATION_POLL_MS,
+  );
 
-  const scheduleRefresh = (payload: MeetingRuntimeEvent) => {
-    if (disposed || payload.revision <= lastRevision) return;
-    lastRevision = payload.revision;
-    if (debounceTimer !== null) window.clearTimeout(debounceTimer);
-    debounceTimer = window.setTimeout(() => {
-      debounceTimer = null;
-      if (!disposed) void pollMeeting();
-    }, MEETING_EVENT_DEBOUNCE_MS);
-  };
-
+  // Schedule asynchronously, including the first read, so the shell's effect
+  // does not track reactive reads made by pollMeeting before its first await.
+  schedule.request();
   void listen<MeetingRuntimeEvent>(MEETING_RUNTIME_EVENT, (event) => {
-    scheduleRefresh(event.payload);
+    if (disposed || event.payload.revision <= lastRevision) return;
+    lastRevision = event.payload.revision;
+    schedule.request();
   }).then((stop) => {
     if (disposed) {
       stop();
       return;
     }
     unlisten = stop;
-  }).catch(() => {});
+    // Close the initial-read/listener-registration gap through the same
+    // coalescing window; if IPC is active, retain one follow-up.
+    schedule.request();
+  }).catch(() => { /* The same schedule retains the slow fallback. */ });
 
   return () => {
     disposed = true;
-    if (debounceTimer !== null) window.clearTimeout(debounceTimer);
+    schedule.dispose();
     unlisten?.();
   };
 }
@@ -171,18 +176,12 @@ export function startMeetingRuntimeMonitors(
   onNotice: ReliabilityNoticeCallback,
   reliabilityEnabled: boolean,
 ): () => void {
-  void pollMeeting();
-  const stopMeetingEvents = startMeetingChangeEvents(pollMeeting);
-  const meetingTimer = window.setInterval(
-    () => void pollMeeting(),
-    MEETING_RECONCILIATION_POLL_MS,
-  );
+  const stopMeetingReconciliation = startMeetingReconciliationMonitor(pollMeeting);
   const stopReliability = reliabilityEnabled
     ? startMeetingReliabilityMonitor(onNotice)
     : () => {};
   return () => {
-    window.clearInterval(meetingTimer);
-    stopMeetingEvents();
+    stopMeetingReconciliation();
     stopReliability();
   };
 }

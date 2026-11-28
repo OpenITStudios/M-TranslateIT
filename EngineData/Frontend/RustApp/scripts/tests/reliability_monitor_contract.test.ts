@@ -4,6 +4,7 @@ import test from "node:test";
 
 const monitor = readFileSync(new URL("../../src/app/runtime/reliabilityMonitor.ts", import.meta.url), "utf8");
 const app = readFileSync(new URL("../../src/App.svelte", import.meta.url), "utf8");
+const schedule = readFileSync(new URL("../../src/app/runtime/meetingReconcileSchedule.ts", import.meta.url), "utf8");
 const runtimeEvents = readFileSync(
   new URL("../../src-tauri/src/engine/runtime_events.rs", import.meta.url),
   "utf8",
@@ -39,10 +40,15 @@ test("live reliability uses one aggregated IPC and stays low frequency", () => {
 test("Meeting freshness is event-first with slow reconciliation fallback", () => {
   assert.match(monitor, /MEETING_RUNTIME_EVENT = "translateit:\/\/meeting-runtime"/);
   assert.match(monitor, /listen<MeetingRuntimeEvent>/);
-  assert.match(monitor, /MEETING_EVENT_DEBOUNCE_MS = 80/);
+  assert.match(monitor, /MEETING_EVENT_COALESCE_MS = 80/);
   assert.match(monitor, /MEETING_RECONCILIATION_POLL_MS = 10_000/);
-  assert.match(monitor, /if \(!disposed\) void pollMeeting\(\)/);
-  assert.match(monitor, /\(\) => void pollMeeting\(\)/);
+  assert.match(monitor, /createMeetingReconcileSchedule\(/);
+  assert.match(monitor, /schedule\.request\(\)/);
+  assert.match(monitor, /schedule\.dispose\(\)/);
+  assert.doesNotMatch(monitor, /setInterval\([^;]*MEETING_RECONCILIATION_POLL_MS/);
+  assert.match(schedule, /if \(disposed \|\| pending\) return/);
+  assert.match(schedule, /if \(inFlight\) return/);
+  assert.match(schedule, /arm\(pending \? eventWindowMs : fallbackMs\)/);
   assert.doesNotMatch(monitor, /forceTurns|pollMeeting\((?:true|false)\)/);
   assert.doesNotMatch(monitor, /setInterval\([^)]*1_200/);
 });
