@@ -403,8 +403,83 @@ def run_finalized(fixtures: Path, python: Path | None, expected_sha: str, select
     return report
 
 
-def run(fixtures: Path, python: Path, expected_sha: str,
+NATIVE_RAW_AUDIO_PROOF = "NATIVE_OWNER_RAW_ASR_MT_ONLY_NOT_MEETING_ACCEPTANCE"
+
+
+def run_native_raw_audio(fixtures: Path, expected_sha: str, selection: set[str],
+                         result_path: Path, timeout: float) -> dict:
+    pinned_source(expected_sha)
+    if not 5 <= timeout <= 600:
+        raise ValueError("native request timeout outside 5–600 seconds")
+    if result_path.exists() or result_path.is_symlink():
+        raise ValueError("observation file must be new, never overwrite")
+    manifest = inspect(fixtures)
+    suite, suite_id = specs()
+    if not selection or not selection.issubset({case["id"] for case in suite}):
+        raise ValueError("choose at least one known scenario ID")
+    fixture_rows = {row["id"]: row for row in manifest["fixtures"]}
+    requests, records = [], {}
+    for case in suite:
+        ident = case["id"]
+        fixture = fixture_rows[ident]
+        record = {"scenario_id": ident, "audio_sha256": fixture["sha256"], "stages": {}}
+        records[ident] = record
+        if ident not in selection:
+            record["not_executed"] = "not_selected"
+            continue
+        measure = fixture["metrics"]
+        if measure["rate_hz"] != 16000 or not 4800 <= measure["frames"] <= 960000:
+            record["not_executed"] = "outside_native_asr_pcm_contract"
+            continue
+        requests.append({"case_id": ident,
+            "audio_path": str((fixtures / "samples" / f"{ident}.wav").resolve(strict=True)),
+            "audio_sha256": fixture["sha256"], "frames": measure["frames"],
+            "language": case["language"], "translate": case["kind"] == "speech"})
+    identity = {"local_sha": expected_sha, "context": "LOCAL_CODE_NATIVE_RAW_ASR_MT"}
+    report = {"schema": RESULT_SCHEMA, "scenario_fingerprint": suite_id,
+              "audio_fingerprint": manifest["audio_fingerprint"], "source_identity": identity,
+              "selection": sorted(selection), "results": list(records.values()),
+              "proof": "NATIVE_RAW_AUDIO_NOT_EXECUTED", "execution_complete": False,
+              "transport_incomplete": False, "noise_suppression_enabled": False}
+    if requests:
+        bundle = {"schema": "translateit.native_audio.requests.v1",
+                  "source_sha": expected_sha, "audio_fingerprint": manifest["audio_fingerprint"],
+                  "timeout_ms": round(timeout * 1000), "requests": requests}
+        try:
+            receipt, rows = collect_native_audio_rows(bundle, NATIVE_RAW_AUDIO_PROOF,
+                "audio_fingerprint", "translateit.native_audio.replay.v1")
+            for row in rows:
+                record = records[row["case_id"]]
+                record["stages"]["asr"] = stage_result(row["response"], "asr")
+                if "translation" in row:
+                    record["stages"]["translation"] = stage_result(row["translation"], "translation")
+                record["native_receipt"] = row
+            report.update({k: receipt[k] for k in ("request_sha256", "dll_pins_sha256",
+                                                  "cuda_pci_id", "worker_pid", "worker_terminated")})
+            identity.update(asr_model=NATIVE_ASR_MODEL, translation_model=NATIVE_MT_MODEL, device="cuda")
+            report["proof"] = NATIVE_RAW_AUDIO_PROOF
+            report["execution_complete"] = len(requests) == len(selection)
+        except (OSError, ValueError, WorkerTransportError, subprocess.TimeoutExpired) as error:
+            report.update(transport_error=str(error), transport_incomplete=True,
+                          proof="NATIVE_RAW_AUDIO_REPLAY_INCOMPLETE")
+            for item in requests:
+                records[item["case_id"]]["not_executed"] = "native_receipt_unverified"
+    for ident in selection:
+        if fingerprint(fixtures / "samples" / f"{ident}.wav") != fixture_rows[ident]["sha256"]:
+            raise ValueError("raw fixture changed during replay")
+    pinned_source(expected_sha)
+    publish_report(result_path, report)
+    return report
+
+
+def run(fixtures: Path, python: Path | None, expected_sha: str,
         selection: set[str], result_path: Path, voice: bool, timeout: float) -> dict:
+    if not voice:
+        if python is not None:
+            raise ValueError("native raw audio accepts no --python")
+        return run_native_raw_audio(fixtures, expected_sha, selection, result_path, timeout)
+    if python is None:
+        raise ValueError("legacy selected-voice diagnostic requires --python")
     pinned_source(expected_sha)
     manifest = inspect(fixtures)
     suite, suite_id = specs()
@@ -538,6 +613,72 @@ NATIVE_ASR_PROOF = "NATIVE_OWNER_FINALIZED_ASR_ONLY_NOT_MEETING_ACCEPTANCE"
 NATIVE_ASR_MODEL = "qwen3-asr-1.7b-q8_0"
 
 
+def collect_native_audio_rows(bundle: dict, proof: str, fingerprint_key: str,
+                              receipt_schema: str) -> tuple[dict, list]:
+    """Validate native ASR and optional MT before any result is published."""
+    receipt = native_quality_replay(bundle, test_name="explicit_native_asr_quality_replay",
+                                    receipt_schema=receipt_schema)
+    pci = receipt.get("cuda_pci_id")
+    rows = receipt.get("results")
+    if (receipt.get("proof") != proof
+            or receipt.get("source_sha") != bundle["source_sha"]
+            or receipt.get(fingerprint_key) != bundle[fingerprint_key]
+            or receipt.get("noise_suppression_enabled") is not False
+            or not isinstance(pci, str)
+            or not re.fullmatch(r"(?:[a-f0-9]{4}|[a-f0-9]{8}):[a-f0-9]{2}:[a-f0-9]{2}\.[0-7]", pci)
+            or not re.fullmatch(r"[a-f0-9]{64}", str(receipt.get("dll_pins_sha256", "")))
+            or type(receipt.get("worker_pid")) is not int or receipt["worker_pid"] <= 0
+            or receipt.get("worker_terminated") is not True
+            or receipt.get("execution_error") is not None
+            or not isinstance(rows, list) or len(rows) != len(bundle["requests"])):
+        raise WorkerTransportError("native ASR replay identity, coverage or cleanup invalid")
+    seen = set()
+    for item, row in zip(bundle["requests"], rows, strict=True):
+        ident = item["case_id"]
+        response = row.get("response") if isinstance(row, dict) else None
+        if not isinstance(response, dict):
+            raise WorkerTransportError("native ASR response missing")
+        request_id = response.get("request_id")
+        text, ok = response.get("transcript_text"), response.get("ok")
+        if (row.get("case_id") != ident or row.get("audio_sha256") != item["audio_sha256"]
+                or row.get("frames") != item["frames"]
+                or not isinstance(request_id, str) or not re.fullmatch(r"helper-[1-9][0-9]*", request_id)
+                or request_id in seen or response.get("stage") != "transcribe"
+                or response.get("device") != "cuda" or response.get("cuda_pci_id") != pci
+                or response.get("model_id") != NATIVE_ASR_MODEL or response.get("compute_type") != "q8_0"
+                or response.get("language") != item["language"] or type(ok) is not bool
+                or not isinstance(text, str)
+                or type(response.get("elapsed_ms")) is not int or response["elapsed_ms"] < 0
+                or not ((ok and text.strip() and response.get("blocker") == "")
+                        or (not ok and text == "" and response.get("blocker") == "asr:empty_transcript"))):
+            raise WorkerTransportError("native ASR segment response contract invalid")
+        seen.add(request_id)
+        translation = row.get("translation")
+        if ok and item.get("translate", False):
+            target = "en" if item["language"] == "id" else "id"
+            pair = f"{item['language']}->{target}"
+            mt_id = translation.get("request_id") if isinstance(translation, dict) else None
+            if (not isinstance(translation, dict) or not translation_receipt_complete(translation, pair)
+                    or not isinstance(mt_id, str) or not re.fullmatch(r"helper-[1-9][0-9]*", mt_id)
+                    or mt_id in seen or translation.get("stage") != "translate"
+                    or translation.get("device") != "cuda" or translation.get("cuda_pci_id") != pci
+                    or translation.get("model_id") != NATIVE_MT_MODEL
+                    or translation.get("model_revision") != NATIVE_MT_REVISION
+                    or translation.get("precision") != "q6_k"
+                    or translation.get("source_language") != item["language"]
+                    or translation.get("target_language") != target
+                    or translation.get("translation_contract") != "canonical_bidirectional_id_en"
+                    or translation.get("translation_degraded") is not False
+                    or translation.get("translation_fallback_reason") != ""
+                    or translation.get("hit_token_ceiling") is not False or translation.get("blocker") != ""
+                    or type(translation.get("elapsed_ms")) is not int or translation["elapsed_ms"] < 0):
+                raise WorkerTransportError("native audio translation response contract invalid")
+            seen.add(mt_id)
+        elif "translation" in row:
+            raise WorkerTransportError("unrequested native audio translation")
+    return receipt, rows
+
+
 def collect_native_finalized_asr(report: dict, cases: dict, selection: set[str],
                                  observed: dict, segments_dir: Path, timeout: float) -> dict:
     """Collect every verified segment in canonical order; no fake Meeting or voice."""
@@ -571,46 +712,14 @@ def collect_native_finalized_asr(report: dict, cases: dict, selection: set[str],
               "segment_fingerprint": report["segment_fingerprint"],
               "timeout_ms": round(timeout * 1000), "requests": requests}
     try:
-        receipt = native_quality_replay(bundle, test_name="explicit_native_asr_quality_replay",
-                                        receipt_schema="translateit.native_asr.replay.v1")
-        pci = receipt.get("cuda_pci_id")
-        rows = receipt.get("results")
-        if (receipt.get("proof") != NATIVE_ASR_PROOF
-                or receipt.get("source_sha") != bundle["source_sha"]
-                or receipt.get("segment_fingerprint") != bundle["segment_fingerprint"]
-                or receipt.get("noise_suppression_enabled") is not False
-                or not isinstance(pci, str)
-                or not re.fullmatch(r"(?:[a-f0-9]{4}|[a-f0-9]{8}):[a-f0-9]{2}:[a-f0-9]{2}\.[0-7]", pci)
-                or not re.fullmatch(r"[a-f0-9]{64}", str(receipt.get("dll_pins_sha256", "")))
-                or type(receipt.get("worker_pid")) is not int or receipt["worker_pid"] <= 0
-                or receipt.get("worker_terminated") is not True
-                or receipt.get("execution_error") is not None
-                or not isinstance(rows, list) or len(rows) != len(requests)):
-            raise WorkerTransportError("native ASR replay identity, coverage or cleanup invalid")
-        seen, accepted = set(), []
-        for item, row in zip(requests, rows, strict=True):
-            ident = item["case_id"]
-            response = row.get("response") if isinstance(row, dict) else None
-            if not isinstance(response, dict):
-                raise WorkerTransportError("native ASR response missing")
-            request_id = response.get("request_id")
-            text, ok = response.get("transcript_text"), response.get("ok")
-            if (row.get("case_id") != ident or row.get("audio_sha256") != item["audio_sha256"]
-                    or row.get("frames") != item["frames"]
-                    or not isinstance(request_id, str) or not re.fullmatch(r"helper-[1-9][0-9]*", request_id)
-                    or request_id in seen or response.get("stage") != "transcribe"
-                    or response.get("device") != "cuda" or response.get("cuda_pci_id") != pci
-                    or response.get("model_id") != NATIVE_ASR_MODEL or response.get("compute_type") != "q8_0"
-                    or response.get("language") != item["language"] or type(ok) is not bool
-                    or not isinstance(text, str)
-                    or type(response.get("elapsed_ms")) is not int or response["elapsed_ms"] < 0
-                    or not ((ok and text.strip() and response.get("blocker") == "")
-                            or (not ok and text == "" and response.get("blocker") == "asr:empty_transcript"))):
-                raise WorkerTransportError("native ASR segment response contract invalid")
-            seen.add(request_id)
+        receipt, rows = collect_native_audio_rows(bundle, NATIVE_ASR_PROOF,
+            "segment_fingerprint", "translateit.native_asr.replay.v1")
+        accepted = []
+        for row in rows:
+            ident, response = row["case_id"], row["response"]
             name, segment = segments[ident]
             accepted.append({"scenario_id": name, "round": 1, "segment": segment,
-                "input_sha256": item["audio_sha256"], "asr": stage_result(response, "asr"),
+                "input_sha256": row["audio_sha256"], "asr": stage_result(response, "asr"),
                 "asr_runtime": {k: response[k] for k in ("model_id", "device", "compute_type")},
                 "native_response": response,
                 "outcome": finalized_asr_outcome(response, non_speech=cases[name]["kind"] != "speech")})
@@ -653,7 +762,8 @@ def native_quality_replay(requests: dict, *, test_name: str, receipt_schema: str
                "TRANSLATEIT_NATIVE_QUALITY_REQUESTS": str(request_path),
                "TRANSLATEIT_NATIVE_QUALITY_RESULTS": str(receipt_path),
                "TRANSLATEIT_NATIVE_QUALITY_REQUEST_SHA256": request_hash}
-        timeout = 900 + len(requests["requests"]) * (requests["timeout_ms"] / 1000 + 15)
+        stage_count = sum(1 + bool(item.get("translate")) for item in requests["requests"])
+        timeout = 900 + stage_count * (requests["timeout_ms"] / 1000 + 15)
         result = subprocess.run(
             ["cargo", "test", "--locked", "--offline", test_name,
              "--", "--ignored", "--test-threads=1"],
@@ -866,12 +976,11 @@ def main() -> int:
         return 0 if result["verdict"] == "PASS" else 2
     if args.fixtures is None:
         parser.error("audio execution requires --fixtures")
-    native_finalized = (args.vad_observations is not None and args.segments_dir is not None
-                        and not args.finalized_pipeline and not args.profile)
-    if native_finalized and args.python is not None:
-        parser.error("native finalized ASR accepts no --python")
-    if not native_finalized and args.python is None:
-        parser.error("legacy raw/voice pipeline requires --python")
+    legacy_voice = bool(args.profile or args.finalized_pipeline or args.include_voice)
+    if not legacy_voice and args.python is not None:
+        parser.error("native audio diagnostics accept no --python")
+    if legacy_voice and args.python is None:
+        parser.error("legacy voice diagnostics require --python")
     profile = regression_profile(args.profile) if args.profile else None
     rounds = profile["rounds"] if profile else (args.rounds if args.rounds is not None else 1)
     ids = set(profile["scenario_ids"] if profile else args.ids)
@@ -912,7 +1021,11 @@ def main() -> int:
         result = run(args.fixtures, args.python, args.source_sha,
                      ids, args.output, args.include_voice, args.timeout)
     print(json.dumps(report_summary(result, args.output), ensure_ascii=False, indent=2))
-    return 2 if args.vad_observations is not None and result["verdict"] != "PASS" else 0
+    if args.vad_observations is not None:
+        return 0 if result["verdict"] == "PASS" else 2
+    if not args.include_voice:
+        return 0 if result["execution_complete"] else 2
+    return 0
 
 
 if __name__ == "__main__":

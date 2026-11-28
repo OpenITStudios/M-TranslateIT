@@ -86,6 +86,38 @@ fn close_replay_owner(native: &mut NativeInferenceOwner) -> bool {
     closed
 }
 
+fn replay_translation(
+    native: &mut NativeInferenceOwner, permit: &HelperTaskPermit, pci: &str,
+    source: String, direction: (Language, Language, &'static str), timeout_ms: u64,
+) -> (Value, Option<String>) {
+    let (from, to, pair) = direction;
+    let (source_language, target_language) = if pair == "id->en" { ("id", "en") } else { ("en", "id") };
+    let started = Instant::now();
+    let result = native.owner.begin(InferenceInput::Translation { source, from, to },
+        started + Duration::from_millis(timeout_ms)).and_then(|pending| pending.wait_output());
+    match result {
+        Ok(InferenceOutput::Text(text)) => (json!({
+            "ok":true,"stage":"translate","request_id":permit.request_id(),
+            "device":"cuda","cuda_pci_id":pci,"precision":"q6_k",
+            "model_id":NATIVE_MT_MODEL,"model_revision":NATIVE_MT_REVISION,
+            "translation_contract":"canonical_bidirectional_id_en",
+            "translation_degraded":false,"translation_fallback_reason":"",
+            "source_language":source_language,"target_language":target_language,
+            "direction_pair":pair,"complete":true,"finished_with_eos":true,
+            "hit_token_ceiling":false,"blocker":"","translated_text":text,
+            "elapsed_ms":started.elapsed().as_millis() as u64
+        }), None),
+        failure => {
+            let blocker = match failure {
+                Err(error) => format!("native_quality:{error:?}"),
+                _ => "native_quality:unexpected_output".into(),
+            };
+            (json!({"ok":false,"stage":"translate","request_id":permit.request_id(),
+                "direction_pair":pair,"blocker":blocker}), Some(blocker))
+        }
+    }
+}
+
 #[test]
 #[ignore = "explicit maintainer-authorized Local Windows native quality phase only"]
 fn explicit_native_translation_quality_replay() {
@@ -104,38 +136,14 @@ fn explicit_native_translation_quality_replay() {
     let mut rows = Vec::with_capacity(replay.requests.len());
     let mut error = None;
     for case in replay.requests {
-        let (from, to, pair) = direction(&case).expect("validated direction");
+        let direction = direction(&case).expect("validated direction");
         let permit = match acquire_helper_task_permit(HelperTaskPriority::Text) {
             Ok(value) => value,
             Err(e) => { error = Some(e); break; }
         };
-        let started = Instant::now();
-        let deadline = started + Duration::from_millis(replay.timeout_ms);
-        let result = native.owner.begin(InferenceInput::Translation {
-            source: case.text, from, to,
-        }, deadline).and_then(|pending| pending.wait_output());
-        let response = match result {
-            Ok(InferenceOutput::Text(text)) => json!({
-                "ok":true,"stage":"translate","request_id":permit.request_id(),
-                "device":"cuda","cuda_pci_id":pci,"precision":"q6_k",
-                "model_id":NATIVE_MT_MODEL,"model_revision":NATIVE_MT_REVISION,
-                "translation_contract":"canonical_bidirectional_id_en",
-                "translation_degraded":false,"translation_fallback_reason":"",
-                "source_language":case.source_language,"target_language":case.target_language,
-                "direction_pair":pair,"complete":true,"finished_with_eos":true,
-                "hit_token_ceiling":false,"blocker":"","translated_text":text,
-                "elapsed_ms":started.elapsed().as_millis() as u64
-            }),
-            failure => {
-                let blocker = match failure {
-                    Err(e) => format!("native_quality:{e:?}"),
-                    _ => "native_quality:unexpected_output".into(),
-                };
-                error = Some(blocker.clone());
-                json!({"ok":false,"stage":"translate","request_id":permit.request_id(),
-                    "direction_pair":pair,"blocker":blocker})
-            }
-        };
+        let (response, failure) = replay_translation(&mut native, &permit, &pci, case.text,
+            direction, replay.timeout_ms);
+        error = failure;
         rows.push(json!({"case_id":case.case_id,"response":response}));
         drop(permit);
         if error.is_some() { break; }

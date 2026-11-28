@@ -335,6 +335,75 @@ class AudioPipelineTests(unittest.TestCase):
                     self.assertEqual(len(result["results"]), int(defect is None))
                     self.assertEqual("transport_error" in result, defect is not None)
 
+    def test_native_raw_audio_does_not_translate_non_speech_or_truncate_overflow(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            samples = root / "samples"
+            samples.mkdir()
+            suite = [{"id": name, "kind": kind, "language": "id"}
+                     for name, kind in (("A01", "speech"), ("A14", "noise"), ("A15", "tone"))]
+            fixtures = []
+            for name, frames in (("A01", 4800), ("A14", 4800), ("A15", 976000)):
+                path = samples / f"{name}.wav"
+                path.write_bytes(name.encode())  # mocked manifest admission, not inference
+                fixtures.append({"id": name, "sha256": harness.fingerprint(path),
+                                 "metrics": {"rate_hz": 16000, "frames": frames}})
+            manifest = {"audio_fingerprint": "a" * 64, "fixtures": fixtures}
+            with patch.object(worker_runner, "pinned_source"), patch.object(worker_runner, "inspect", return_value=manifest), patch.object(worker_runner, "specs", return_value=(suite, "b" * 64)), patch.object(worker_runner, "collect_native_audio_rows", side_effect=worker_runner.WorkerTransportError("controlled failure")) as native, patch.object(worker_runner, "Worker") as old:
+                report = worker_runner.run(root, None, "c" * 40, {"A01", "A14", "A15"},
+                                           root / "out.json", False, 5)
+            old.assert_not_called()
+            requests = native.call_args.args[0]["requests"]
+            self.assertEqual([(row["case_id"], row["translate"]) for row in requests],
+                             [("A01", True), ("A14", False)])
+            self.assertFalse(report["execution_complete"])
+            self.assertEqual(report["results"][2]["not_executed"], "outside_native_asr_pcm_contract")
+            self.assertTrue(report["transport_incomplete"])
+
+    def test_native_raw_receipt_requires_matching_translation_and_unique_permit(self):
+        pci = "0000:01:00.0"
+        request = {"case_id": "A01", "audio_sha256": "a" * 64,
+                   "frames": 4800, "language": "id", "translate": True}
+        bundle = {"source_sha": "b" * 40, "audio_fingerprint": "c" * 64,
+                  "requests": [request]}
+        asr = {"ok": True, "stage": "transcribe", "request_id": "helper-1",
+               "device": "cuda", "cuda_pci_id": pci, "model_id": worker_runner.NATIVE_ASR_MODEL,
+               "compute_type": "q8_0", "language": "id", "transcript_text": "Halo",
+               "blocker": "", "elapsed_ms": 1}
+        mt = {"ok": True, "stage": "translate", "request_id": "helper-2",
+              "device": "cuda", "cuda_pci_id": pci, "model_id": worker_runner.NATIVE_MT_MODEL,
+              "model_revision": worker_runner.NATIVE_MT_REVISION, "precision": "q6_k",
+              "source_language": "id", "target_language": "en", "direction_pair": "id->en",
+              "translation_contract": "canonical_bidirectional_id_en", "translation_degraded": False,
+              "translation_fallback_reason": "", "complete": True, "finished_with_eos": True,
+              "hit_token_ceiling": False, "blocker": "", "translated_text": "Hello", "elapsed_ms": 1}
+        receipt = {"proof": worker_runner.NATIVE_RAW_AUDIO_PROOF,
+                   "source_sha": bundle["source_sha"], "audio_fingerprint": bundle["audio_fingerprint"],
+                   "noise_suppression_enabled": False, "cuda_pci_id": pci,
+                   "dll_pins_sha256": "d" * 64, "worker_pid": 123, "worker_terminated": True,
+                   "execution_error": None, "results": [{"case_id": "A01", "audio_sha256": "a" * 64,
+                    "frames": 4800, "response": asr, "translation": mt}]}
+        for defect in (None, "missing", "direction", "duplicate", "unrequested"):
+            candidate, requests = copy.deepcopy(receipt), copy.deepcopy(bundle)
+            row = candidate["results"][0]
+            if defect == "missing":
+                del row["translation"]
+            elif defect == "direction":
+                row["translation"]["direction_pair"] = "en->id"
+            elif defect == "duplicate":
+                row["translation"]["request_id"] = "helper-1"
+            elif defect == "unrequested":
+                requests["requests"][0]["translate"] = False
+            with self.subTest(defect=defect), patch.object(worker_runner, "native_quality_replay", return_value=candidate):
+                if defect is None:
+                    _, rows = worker_runner.collect_native_audio_rows(requests,
+                        worker_runner.NATIVE_RAW_AUDIO_PROOF, "audio_fingerprint", "translateit.native_audio.replay.v1")
+                    self.assertEqual(rows[0]["translation"]["translated_text"], "Hello")
+                else:
+                    with self.assertRaises(worker_runner.WorkerTransportError):
+                        worker_runner.collect_native_audio_rows(requests,
+                            worker_runner.NATIVE_RAW_AUDIO_PROOF, "audio_fingerprint", "translateit.native_audio.replay.v1")
+
     def test_pipeline_cli_returns_failure_for_unverified_acceptance(self):
         args = ['worker_runner', '--fixtures', 'fixture', '--python', 'python', '--source-sha', '2' * 40,
                 '--ids', 'A04', '--output', 'new.json', '--vad-observations', 'vad.json',
