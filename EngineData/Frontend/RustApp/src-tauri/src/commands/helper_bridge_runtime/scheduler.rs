@@ -159,6 +159,7 @@ fn acquire_helper_task_permit_with_wait_deadline(
     priority: HelperTaskPriority,
     wait_deadline: Duration,
 ) -> Result<HelperTaskPermit, String> {
+    let wait_started = Instant::now();
     let (lock, wake) = scheduler();
     let mut state = lock
         .lock()
@@ -174,9 +175,9 @@ fn acquire_helper_task_permit_with_wait_deadline(
     }
 
     scheduler_waiting_increment(&mut state, priority);
-    let wait_started = Instant::now();
-
-    while !scheduler_can_enter(&state, priority) {
+    // Check the deadline before every admission, even if the resource
+    // became free while the waiter was reacquiring the mutex.
+    loop {
         let remaining = wait_deadline.saturating_sub(wait_started.elapsed());
         if remaining.is_zero() {
             scheduler_waiting_decrement(&mut state, priority);
@@ -184,7 +185,10 @@ fn acquire_helper_task_permit_with_wait_deadline(
             return Err(scheduler_wait_deadline_error(priority, wait_deadline));
         }
 
-        let (next_state, wait_result) = match wake.wait_timeout(state, remaining) {
+        if scheduler_can_enter(&state, priority) {
+            break;
+        }
+        let (next_state, _) = match wake.wait_timeout(state, remaining) {
             Ok(value) => value,
             Err(poisoned) => {
                 let (mut poisoned_state, _) = poisoned.into_inner();
@@ -194,12 +198,7 @@ fn acquire_helper_task_permit_with_wait_deadline(
             }
         };
         state = next_state;
-
-        if wait_result.timed_out() && !scheduler_can_enter(&state, priority) {
-            scheduler_waiting_decrement(&mut state, priority);
-            wake.notify_all();
-            return Err(scheduler_wait_deadline_error(priority, wait_deadline));
-        }
+        // A wake or timeout is only a reason to recheck the same budget.
     }
 
     scheduler_waiting_decrement(&mut state, priority);
@@ -304,6 +303,27 @@ mod scheduler_policy_tests {
             HelperTaskPriority::MeetingOutbound.scheduler_admission_limit(),
             HELPER_SCHEDULER_TOTAL_ADMISSION_CAP
         );
+    }
+
+    #[test]
+    fn expired_wait_cannot_claim_an_idle_scheduler() {
+        let _serial = scheduler_test_guard();
+        reset_scheduler();
+        let error = acquire_helper_task_permit_with_wait_deadline(
+            HelperTaskPriority::MeetingOutbound, Duration::ZERO,
+        ).err().expect("expired request must not claim even a free slot");
+        assert_eq!(error, "helper_scheduler:wait_deadline_exceeded:meeting_outbound:0ms");
+        let (lock, _) = scheduler();
+        let state = lock.lock().expect("scheduler state");
+        assert_eq!(scheduler_total_admitted(&state), 0);
+        assert_eq!(state.next_request_sequence, 0);
+        drop(state);
+        let next = acquire_helper_task_permit_with_wait_deadline(
+            HelperTaskPriority::MeetingOutbound, Duration::from_secs(1),
+        ).expect("next valid request can enter");
+        assert_eq!(next.request_id(), "helper-1");
+        drop(next);
+        reset_scheduler();
     }
 
     #[test]

@@ -60,6 +60,19 @@ fn same_probe_inference(response: &HelperBridgeWorkerResponse, generation: u64,
         && response.worker_response_json.get("cuda_pci_id").and_then(Value::as_str) == Some(native_device)
 }
 
+// A successful native bind already opened the complete resident stack.
+// It is preparation evidence, not a claim that ASR or TTS has run.
+fn native_binding_compute_admitted(response: &HelperBridgeWorkerResponse) -> bool {
+    let body = &response.worker_response_json;
+    response.ok && response.task == "voice_actor_preflight"
+        && response.runtime_claim == NATIVE_INFERENCE_CLAIM
+        && body.get("stage").and_then(Value::as_str) == Some("voice_actor_preflight")
+        && body.get("device").and_then(Value::as_str) == Some("cuda")
+        && body.get("model_id").and_then(Value::as_str) == Some("zonos3-mini-q8_0")
+        && body.get("actor_token").and_then(Value::as_str)
+            .is_some_and(|token| !token.is_empty() && token.len() <= 512)
+}
+
 pub(super) fn run_required_outbound_ai_probe(
     meeting_generation: Option<u64>,
 ) -> Result<(u64, String), &'static str> {
@@ -99,40 +112,40 @@ pub(super) fn run_required_outbound_ai_probe(
     let generation_token = helper.generation_token;
 
     let native_candidate = super::native_voice_candidate_enabled();
-    // Open/bind the full resident stack before either ASR or MT preparation.
-    // A failed candidate bind is terminal, never a Python voice fallback.
-    let native_preflight = if native_candidate {
-        let result = super::transport::bind_native_voice(json!({
+    // Binding opens all five native assets atomically. In the candidate
+    // path there is no need for a second scheduled ASR preload receipt.
+    // Legacy still needs its pair preload and later voice preflight.
+    let preparation = if native_candidate {
+        super::transport::bind_native_voice(json!({
             "meeting_start_prepare": meeting_start_prepare,
             "meeting_generation": meeting_generation,
-        }));
-        if !result.ok || result.generation_token != generation_token
-            || result.runtime_claim != NATIVE_INFERENCE_CLAIM {
-            invalidate_required_outbound_ai_readiness();
-            return Err("native selected voice");
-        }
-        Some(result)
-    } else { None };
-
-    let asr = send_worker_task(
-        "asr_preload",
-        json!({
-            "meeting_start_prepare": meeting_start_prepare,
-            "meeting_generation": meeting_generation,
-        }),
-    );
-    let Some(native_device) = asr.worker_response_json.get("cuda_pci_id").and_then(Value::as_str)
+        }))
+    } else {
+        send_worker_task(
+            "asr_preload",
+            json!({
+                "meeting_start_prepare": meeting_start_prepare,
+                "meeting_generation": meeting_generation,
+            }),
+        )
+    };
+    let Some(native_device) = preparation.worker_response_json.get("cuda_pci_id").and_then(Value::as_str)
         .filter(|pci| !pci.is_empty()) else {
         invalidate_required_outbound_ai_readiness();
         return Err("native CUDA identity");
     };
-    if !same_probe_inference(&asr, generation_token, native_device)
-        || !meeting_asr_compute_admitted(&asr)
+    let preparation_valid = if native_candidate {
+        native_binding_compute_admitted(&preparation)
+    } else {
+        meeting_asr_compute_admitted(&preparation)
+    };
+    if !same_probe_inference(&preparation, generation_token, native_device)
+        || !preparation_valid
         || refreshed.worker_response_json.get("cuda_pci_id").and_then(Value::as_str)
             .is_some_and(|observed| observed != native_device)
     {
         invalidate_required_outbound_ai_readiness();
-        return Err("speech recognition");
+        return Err(if native_candidate { "native selected voice" } else { "speech recognition" });
     }
 
     let translation = send_worker_task(
@@ -155,13 +168,14 @@ pub(super) fn run_required_outbound_ai_probe(
         return Err("Indonesian to English translation");
     };
 
-    let actor_preflight = native_preflight.unwrap_or_else(|| send_worker_task(
+    let legacy_preflight = (!native_candidate).then(|| send_worker_task(
         "voice_actor_preflight",
         json!({
             "meeting_start_prepare": meeting_start_prepare,
             "meeting_generation": meeting_generation,
         }),
     ));
+    let actor_preflight = legacy_preflight.as_ref().unwrap_or(&preparation);
     if !actor_preflight.ok || actor_preflight.generation_token != generation_token
         || actor_preflight.task != "voice_actor_preflight"
         || actor_preflight.worker_response_json.get("stage").and_then(Value::as_str) != Some("voice_actor_preflight")
@@ -175,10 +189,6 @@ pub(super) fn run_required_outbound_ai_probe(
     };
 
     let asr_inference = if native_candidate {
-        if !same_probe_inference(&actor_preflight, generation_token, native_device) {
-            invalidate_required_outbound_ai_readiness();
-            return Err("native selected voice");
-        }
         let (voice, samples) = super::transport::synthesize_native_voice(json!({
             "text": translated_fixture,
             "expected_actor_token": actor_token.clone(),
@@ -196,7 +206,7 @@ pub(super) fn run_required_outbound_ai_probe(
             "meeting_generation": meeting_generation,
         }), samples.expect("checked PCM receipt"))
     } else {
-        let Some(output_path) = required_probe_output_path(meeting_generation, &asr.request_id) else {
+        let Some(output_path) = required_probe_output_path(meeting_generation, &preparation.request_id) else {
             invalidate_required_outbound_ai_readiness();
             return Err("voice probe output root");
         };
@@ -229,7 +239,7 @@ pub(super) fn run_required_outbound_ai_probe(
             "transcribe",
             json!({
                 "audio_path": output.0.to_string_lossy(),
-                "probe_request_id": asr.request_id,
+                "probe_request_id": preparation.request_id,
                 "language": "en",
                 "meeting_start_prepare": meeting_start_prepare,
                 "meeting_generation": meeting_generation,
@@ -436,6 +446,28 @@ mod tests {
         ));
         fs::remove_file(&path).expect("remove requested fixture");
         assert!(!super::voice_only_probe_path_matches(&native, &path));
+    }
+
+    #[test]
+    fn native_binding_receipt_requires_exact_model_stage_and_token() {
+        let mut receipt = super::super::HelperBridgeWorkerResponse {
+            ok: true, state: "ready".into(), task: "voice_actor_preflight".into(),
+            request_id: "fixture".into(), scheduler_priority: "meeting_outbound".into(),
+            message: String::new(), generation_token: 7,
+            runtime_claim: super::NATIVE_INFERENCE_CLAIM.into(),
+            worker_response_json: json!({"stage":"voice_actor_preflight","device":"cuda",
+                "model_id":"zonos3-mini-q8_0","actor_token":"bound","cuda_pci_id":"0000:01:00.0"}),
+        };
+        assert!(super::native_binding_compute_admitted(&receipt));
+        for (key, bad) in [("stage", json!("asr_preload")), ("device", json!("cpu")),
+            ("model_id", json!("other")), ("actor_token", json!(""))] {
+            let original = receipt.worker_response_json[key].clone();
+            receipt.worker_response_json[key] = bad;
+            assert!(!super::native_binding_compute_admitted(&receipt));
+            receipt.worker_response_json[key] = original;
+        }
+        receipt.runtime_claim = "helper_process_ready_ping_verified".into();
+        assert!(!super::native_binding_compute_admitted(&receipt));
     }
 
     #[test]
