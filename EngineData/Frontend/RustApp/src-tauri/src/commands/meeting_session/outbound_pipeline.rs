@@ -456,7 +456,7 @@ pub(super) fn process_outbound_pcm(
         utterance_id,
         source_epoch,
         speech_duration_ms,
-        &transcript,
+        transcript,
         timing,
     )
 }
@@ -586,7 +586,7 @@ fn process_outbound_transcript(
     }
     let translated_text = translated_text.unwrap_or_default();
     if !finish_meeting_turn_translation(
-        session_id, event_sequence, Some(generation), utterance_id, "you", Some(&translated_text),
+        session_id, event_sequence, Some(generation), utterance_id, "you", Some(translated_text),
     ) {
         update_outbound_status(
             generation, session_id, "attention_needed", event_sequence, false, false,
@@ -667,7 +667,7 @@ fn process_outbound_transcript(
         (send_helper_worker_task(
             "voice_actor_synthesize",
             json!({
-                "text": translated_text.clone(),
+                "text": translated_text,
                 "source_text": transcript,
                 "source_speech_duration_ms": speech_duration_ms,
                 "output_path": requested_tts_path,

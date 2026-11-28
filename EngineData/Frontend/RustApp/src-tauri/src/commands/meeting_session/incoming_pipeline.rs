@@ -162,7 +162,7 @@ fn process_incoming_pcm_with_direction(
     // is deferred, or the helper becomes unavailable.
     if !commit_meeting_turn(
         session_id, event_sequence, None, utterance_id, "incoming",
-        &source_language, &target_language, &transcript, "", None, None,
+        &source_language, &target_language, transcript, "", None, None,
     ) {
         update_incoming_status(
             session_id, "degraded", true, "meeting_incoming:source_record_failed",
@@ -175,7 +175,7 @@ fn process_incoming_pcm_with_direction(
         session_id,
         event_sequence,
         utterance_id,
-        &transcript,
+        transcript,
         &source_language,
         &target_language,
         !retrying_deferred,
@@ -186,7 +186,7 @@ fn process_incoming_pcm_with_direction(
             event_sequence,
             utterance_id,
             stage: DeferredIncomingStage::NeedsTranslation {
-                transcript: transcript.clone(),
+                transcript: transcript.to_owned(),
                 source_language: source_language.clone(),
                 target_language: target_language.clone(),
             },
@@ -322,7 +322,7 @@ fn translate_and_commit_incoming_transcript(
 
     let translated_text = translated_text.unwrap_or_default();
     let committed = finish_meeting_turn_translation(
-        session_id, event_sequence, None, utterance_id, "incoming", Some(&translated_text),
+        session_id, event_sequence, None, utterance_id, "incoming", Some(translated_text),
     );
     update_incoming_status(
         session_id,

@@ -274,31 +274,38 @@ pub struct MeetingLiveReadRequest {
     known_revision: Option<String>,
 }
 
-fn worker_text(response: &HelperBridgeWorkerResponse, key: &str) -> Option<String> {
-    let value = &response.worker_response_json;
-    value
-        .get(key)
+// The parsed receipt owns its strings. Borrow validated text while the
+// receipt is alive; allocate only when a downstream owner needs to retain it.
+fn worker_text_ref<'a>(response: &'a HelperBridgeWorkerResponse, key: &str) -> Option<&'a str> {
+    response.worker_response_json.get(key)
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|text| !text.is_empty())
-        .map(str::to_string)
+}
+
+fn worker_text(response: &HelperBridgeWorkerResponse, key: &str) -> Option<String> {
+    worker_text_ref(response, key).map(str::to_owned)
 }
 
 // Meeting uses finalized, direction-bound translations only. Recheck the
-// Python worker's successful completion and exact direction at this final Rust
+// native worker's successful completion and exact direction at this final Rust
 // promotion boundary before committing captions or sending text to TTS. A
 // response that also claims a generation ceiling or a failure blocker is not
 // admitted as successful output.
-fn validated_meeting_translation(
-    response: &HelperBridgeWorkerResponse,
+fn validated_meeting_translation<'a>(
+    response: &'a HelperBridgeWorkerResponse,
     source_language: &str,
     target_language: &str,
-) -> Option<String> {
+) -> Option<&'a str> {
     if !response.ok || response.task != "translate" {
         return None;
     }
     let value = &response.worker_response_json;
-    let expected_pair = format!("{source_language}->{target_language}");
+    let expected_pair = match (source_language, target_language) {
+        ("id", "en") => "id->en",
+        ("en", "id") => "en->id",
+        _ => return None,
+    };
     if !super::helper_bridge::meeting_translation_compute_admitted(response)
         || value.get("ok").and_then(Value::as_bool) != Some(true)
         || value.get("stage").and_then(Value::as_str) != Some("translate")
@@ -310,21 +317,17 @@ fn validated_meeting_translation(
         || value.get("blocker").and_then(Value::as_str) != Some("")
         || value.get("source_language").and_then(Value::as_str) != Some(source_language)
         || value.get("target_language").and_then(Value::as_str) != Some(target_language)
-        || value.get("direction_pair").and_then(Value::as_str) != Some(expected_pair.as_str())
+        || value.get("direction_pair").and_then(Value::as_str) != Some(expected_pair)
     {
         return None;
     }
-    value.get("translated_text")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(str::to_string)
+    worker_text_ref(response, "translated_text")
 }
 
-fn validated_meeting_asr_transcript(
-    response: &HelperBridgeWorkerResponse,
+fn validated_meeting_asr_transcript<'a>(
+    response: &'a HelperBridgeWorkerResponse,
     expected_language: &str,
-) -> Option<String> {
+) -> Option<&'a str> {
     if !response.ok || response.task != "transcribe" {
         return None;
     }
@@ -337,7 +340,7 @@ fn validated_meeting_asr_transcript(
     {
         return None;
     }
-    worker_text(response, "transcript_text")
+    worker_text_ref(response, "transcript_text")
 }
 
 // The selected actor must match the exact Start-bound token. Path ownership
@@ -838,8 +841,11 @@ mod translation_delivery_contract_tests {
         outgoing.task = "transcribe".into();
         assert_eq!(
             validated_meeting_asr_transcript(&outgoing, "id"),
-            Some("Selamat pagi.".into()),
+            Some("Selamat pagi."),
         );
+        let original = outgoing.worker_response_json["transcript_text"].as_str().unwrap();
+        let admitted = validated_meeting_asr_transcript(&outgoing, "id").unwrap();
+        assert_eq!(admitted.as_ptr(), original.trim().as_ptr(), "borrow the receipt allocation");
         assert!(validated_meeting_asr_transcript(&outgoing, "en").is_none());
         for (key, replacement) in [
             ("ok", json!(false)),
@@ -865,7 +871,7 @@ mod translation_delivery_contract_tests {
         outgoing.worker_response_json = incoming;
         assert_eq!(
             validated_meeting_asr_transcript(&outgoing, "en"),
-            Some("Good morning.".into()),
+            Some("Good morning."),
         );
         outgoing.task = "translate".into();
         assert!(validated_meeting_asr_transcript(&outgoing, "en").is_none());
@@ -933,8 +939,13 @@ mod translation_delivery_contract_tests {
         });
         assert_eq!(
             validated_meeting_translation(&response(valid.clone()), "id", "en"),
-            Some("The meeting starts now.".into())
+            Some("The meeting starts now.")
         );
+        let owned_receipt = response(valid.clone());
+        let original = owned_receipt.worker_response_json["translated_text"].as_str().unwrap();
+        let admitted = validated_meeting_translation(&owned_receipt, "id", "en").unwrap();
+        assert_eq!(admitted.as_ptr(), original.trim().as_ptr(), "borrow the receipt allocation");
+        assert!(validated_meeting_translation(&owned_receipt, "id", "id").is_none());
         for (key, replacement) in [
             ("ok", json!(false)),
             ("stage", json!("asr")),
@@ -973,7 +984,7 @@ mod translation_delivery_contract_tests {
         incoming["translated_text"] = json!("Rapat dimulai sekarang.");
         assert_eq!(
             validated_meeting_translation(&response(incoming.clone()), "en", "id"),
-            Some("Rapat dimulai sekarang.".into())
+            Some("Rapat dimulai sekarang.")
         );
         incoming["direction_pair"] = json!("id->en");
         assert!(validated_meeting_translation(&response(incoming), "en", "id").is_none());

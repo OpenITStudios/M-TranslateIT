@@ -12,11 +12,11 @@ pub(super) const MAX_DEFERRED_INCOMING: usize = 4;
 const MAX_DEFERRED_INCOMING_AGE_MS: u64 = 20_000;
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum IncomingAsrDisposition {
+pub(super) enum IncomingAsrDisposition<'a> {
     Deferred,
     EmptyTranscript,
     Failed(String),
-    Transcript(String),
+    Transcript(&'a str),
 }
 
 pub(super) enum DeferredIncomingStage {
@@ -51,10 +51,10 @@ fn deferred_incoming_queue() -> &'static Mutex<VecDeque<DeferredIncomingJob>> {
     DEFERRED_INCOMING_QUEUE.get_or_init(|| Mutex::new(VecDeque::new()))
 }
 
-pub(super) fn classify_incoming_asr_response(
-    asr: &HelperBridgeWorkerResponse,
+pub(super) fn classify_incoming_asr_response<'a>(
+    asr: &'a HelperBridgeWorkerResponse,
     expected_language: &str,
-) -> IncomingAsrDisposition {
+) -> IncomingAsrDisposition<'a> {
     if incoming_deferred_for_required_outbound(asr) {
         return IncomingAsrDisposition::Deferred;
     }
@@ -405,7 +405,7 @@ mod tests {
         };
         assert_eq!(
             classify_incoming_asr_response(&response, "en"),
-            IncomingAsrDisposition::Transcript("The meeting is open.".into()),
+            IncomingAsrDisposition::Transcript("The meeting is open."),
         );
         assert_eq!(
             classify_incoming_asr_response(&response, "id"),
