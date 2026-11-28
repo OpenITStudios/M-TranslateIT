@@ -1,15 +1,13 @@
-use rubato::audioadapter_buffers::direct::SequentialSlice;
-use rubato::{Fft, FixedSync, Resampler, WindowFunction};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use super::evidence::AudioEvidenceReport;
+use super::resample::MonoFft;
 
 pub const GUIDED_TAKE_SAMPLE_RATE_HZ: u32 = 32_000;
 pub const GUIDED_TAKE_CHANNELS: u16 = 1;
 const MAX_GUIDED_CAPTURE_MS: u64 = 60_000;
-const RESAMPLE_CHUNK_FRAMES: usize = 1024;
 const ACTIVE_SAMPLE_THRESHOLD: f32 = 128.0 / 32_768.0;
 const MIN_ACTIVE_RMS: f32 = 256.0 / 32_768.0;
 const MAX_DC_OFFSET: f32 = 2_048.0 / 32_768.0;
@@ -408,32 +406,9 @@ pub(crate) fn resample_mono_fft(samples: &[f32], source_rate: u32, target_rate: 
         return Ok(samples.iter().copied().map(safe_sample).collect());
     }
 
-    // Preserve the previous fixed-in/out FFT size and antialiasing window.
-    let mut resampler = Fft::<f32>::new_custom(
-        source_rate as usize,
-        target_rate as usize,
-        RESAMPLE_CHUNK_FRAMES,
-        1,
-        1,
-        WindowFunction::BlackmanHarris2,
-        FixedSync::Both,
-    )
-    .map_err(|error| format!("voice_lab:resampler_create_failed:{error}"))?;
-    let expected_frames = (samples.len() as u128 * u128::from(target_rate)
-        / u128::from(source_rate)) as usize;
-    let input = SequentialSlice::new(samples, 1, samples.len())
-        .map_err(|error| format!("voice_lab:resample_failed:{error}"))?;
-    // process_all flushes partial/tail frames and trims the startup delay once.
-    let mut output = resampler
-        .process_all(&input, samples.len(), None)
-        .map_err(|error| format!("voice_lab:resample_failed:{error}"))?
-        .take_data();
-    if expected_frames == 0 || output.len() < expected_frames {
-        return Err("voice_lab:resample_output_incomplete".to_string());
-    }
-    output.truncate(expected_frames);
-    output.iter_mut().for_each(|sample| *sample = safe_sample(*sample));
-    Ok(output)
+    MonoFft::new(source_rate, target_rate)
+        .and_then(|mut resampler| resampler.process(samples))
+        .map_err(|error| format!("voice_lab:{error}"))
 }
 
 fn safe_sample(value: f32) -> f32 {

@@ -4,6 +4,7 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::evidence::{finalized_speech_rejected, AudioEvidenceReport};
+use super::resample::MonoFft;
 use super::vad::{runtime_vad_profile, RuntimeVadProfile, VadGateResult};
 #[cfg(test)]
 use super::vad::evaluate_vad_gate;
@@ -122,12 +123,12 @@ pub(crate) fn finalized_asr_frame_rejection(utterance: &FinalizedMeetingUtteranc
     None
 }
 
-#[derive(Debug)]
 struct FinalizedProducerState {
     session_id: String,
     generation: Option<u64>,
     lane: &'static str,
     sample_rate_hz: u32,
+    resampler: Option<MonoFft>,
     capture_epoch: u64,
     input_sample_cursor: u64,
     current_input_start: Option<u64>,
@@ -323,7 +324,7 @@ pub fn reset_finalized_outbound_utterance_producer(
         Some(generation),
         LANE_YOU,
         sample_rate_hz,
-    );
+    ).expect("fixture producer");
 }
 
 pub fn clear_finalized_outbound_utterance_producer() -> bool {
@@ -349,7 +350,7 @@ pub fn reset_finalized_incoming_utterance_producer(session_id: &str, sample_rate
         None,
         LANE_INCOMING,
         sample_rate_hz,
-    );
+    ).expect("fixture producer");
 }
 
 pub fn clear_finalized_incoming_utterance_producer() -> bool {
@@ -460,12 +461,13 @@ fn reset_producer(
     generation: Option<u64>,
     lane: &'static str,
     sample_rate_hz: u32,
-) {
+) -> Result<(), String> {
     let session_id = session_id.trim();
     if sample_rate_hz == 0 || session_id.is_empty() {
         clear_producer(sync);
-        return;
+        return Err("asr:invalid_producer_input".to_string());
     }
+    let resampler = finalized_resampler(sample_rate_hz)?;
 
     let profile = runtime_vad_profile();
     let pre_roll_capacity = samples_for_duration(sample_rate_hz, profile.pre_roll_audio_ms);
@@ -478,12 +480,13 @@ fn reset_producer(
     sync.callback_lock_observations.store(0, Ordering::Relaxed);
     sync.transport_loss.store(0, Ordering::Release);
     sync.callback_lock_wait_max_ns.store(0, Ordering::Relaxed);
-    if let Ok(mut guard) = sync.state.lock() {
-        *guard = Some(FinalizedProducerState {
+    let mut guard = sync.state.lock().map_err(|_| "silero:producer_poisoned".to_string())?;
+    *guard = Some(FinalizedProducerState {
             session_id: session_id.to_string(),
             generation,
             lane,
             sample_rate_hz,
+            resampler,
             capture_epoch: 1,
             input_sample_cursor: 0,
             current_input_start: None,
@@ -501,8 +504,8 @@ fn reset_producer(
             next_utterance_id: 1,
             pending: VecDeque::new(),
         });
-        sync.ready.notify_all();
-    }
+    sync.ready.notify_all();
+    Ok(())
 }
 
 fn clear_producer(sync: &FinalizedProducerSync) -> bool {
@@ -556,7 +559,7 @@ fn start_silero(sync: &'static FinalizedProducerSync, session: &str,
         .map_err(str::to_string)?;
     if !clear_producer(sync) { return Err("silero:cleanup_pending".to_string()); }
     let mut ingress = sync.ingress.write().map_err(|_| "silero:ingress_poisoned")?;
-    reset_producer(sync, session, generation, lane, rate);
+    reset_producer(sync, session, generation, lane, rate)?;
     match SpeechIngress::start(sync, session, generation, lane, rate) {
         Ok(cpu) => { *ingress = Some(cpu); Ok(()) }
         Err(error) => {
@@ -806,6 +809,7 @@ fn observe_energy_fixture(sync: &FinalizedProducerSync, samples: &[f32], sample_
     };
     let _ = apply_capture_discontinuity(state);
     if state.sample_rate_hz != sample_rate_hz {
+        state.resampler = finalized_resampler(sample_rate_hz).expect("fixture resampler");
         state.sample_rate_hz = sample_rate_hz;
         state.capture_epoch = state.capture_epoch.saturating_add(1);
         state.input_sample_cursor = 0;
@@ -827,7 +831,7 @@ fn observe_energy_fixture(sync: &FinalizedProducerSync, samples: &[f32], sample_
     // Vec for every callback chunk.
     let evidence = AudioEvidenceReport::from_samples(samples);
     let gate = evaluate_vad_gate(evidence.clone(), &state.profile.gate);
-    let queued = ingest_observation(state, samples, &evidence, &gate);
+    let queued = ingest_observation(state, samples, &evidence, &gate).expect("fixture finalization");
     // Handle an error callback racing with the same VAD observation. Never
     // publish an uncertain just-finalized phrase as continuous speech.
     if apply_capture_discontinuity(state) {
@@ -942,7 +946,7 @@ fn ingest_observation(
     samples: &[f32],
     evidence: &AudioEvidenceReport,
     gate: &VadGateResult,
-) -> bool {
+) -> Result<bool, String> {
     let speech_like = gate.accepted;
     // A failed quality gate is not itself an end-of-speech observation.
     let silence_like = gate.reason == "silero_silence" || (!speech_like
@@ -966,7 +970,7 @@ fn ingest_observation(
         } else {
             append_pre_roll(state, samples);
         }
-        return false;
+        return Ok(false);
     }
 
     if !state.overflowed {
@@ -998,14 +1002,14 @@ fn ingest_observation(
     if speech_like {
         state.speech_samples = state.speech_samples.saturating_add(samples.len());
         state.trailing_silence_samples = 0;
-        return false;
+        return Ok(false);
     }
 
     // Preserve quiet/uncertain speech and clipping for the final whole-utterance
     // quality gate. Neither can start an utterance or count as accepted speech.
     if !silence_like {
         state.trailing_silence_samples = 0;
-        return false;
+        return Ok(false);
     }
 
     state.trailing_silence_samples = state.trailing_silence_samples.saturating_add(samples.len());
@@ -1014,7 +1018,7 @@ fn ingest_observation(
     let required_silence_ms = adaptive_end_silence_ms(&state.profile, evidence);
 
     if silence_duration_ms < required_silence_ms {
-        return false;
+        return Ok(false);
     }
 
     if speech_duration_ms < state.profile.minimum_speech_duration_ms || state.overflowed {
@@ -1022,20 +1026,20 @@ fn ingest_observation(
             OVERFLOW_DROPPED_UTTERANCES.fetch_add(1, Ordering::Relaxed);
         }
         reset_current_utterance(state);
-        return false;
+        return Ok(false);
     }
 
     finalize_current_utterance(state)
 }
 
-fn finalize_current_utterance(state: &mut FinalizedProducerState) -> bool {
+fn finalize_current_utterance(state: &mut FinalizedProducerState) -> Result<bool, String> {
     if state
         .generation
         .map(|generation| !runtime_generation_is_authoritative(generation))
         .unwrap_or(false)
     {
         reset_current_utterance(state);
-        return false;
+        return Ok(false);
     }
 
     let speech_end = state.current_samples.len().saturating_sub(
@@ -1045,7 +1049,7 @@ fn finalize_current_utterance(state: &mut FinalizedProducerState) -> bool {
     );
     if speech_end == 0 {
         reset_current_utterance(state);
-        return false;
+        return Ok(false);
     }
     let speech_duration_ms = duration_ms(speech_end, state.sample_rate_hz);
     let max_source_samples =
@@ -1055,7 +1059,7 @@ fn finalize_current_utterance(state: &mut FinalizedProducerState) -> bool {
         // to ASR or count it as successfully translated.
         OVERFLOW_DROPPED_UTTERANCES.fetch_add(1, Ordering::Relaxed);
         reset_current_utterance(state);
-        return false;
+        return Ok(false);
     }
 
     // PR-052 begins at detected finalized-utterance end. Capture that point before
@@ -1071,7 +1075,7 @@ fn finalize_current_utterance(state: &mut FinalizedProducerState) -> bool {
 
     if finalized_speech_rejected(&state.current_samples[..speech_end], state.profile.gate.max_clipping_ratio) {
         reset_current_utterance(state);
-        return false;
+        return Ok(false);
     }
 
     let captured_samples = state.current_samples.len();
@@ -1089,16 +1093,19 @@ fn finalize_current_utterance(state: &mut FinalizedProducerState) -> bool {
     let target_samples = if state.sample_rate_hz == TARGET_SAMPLE_RATE_HZ {
         source_samples
     } else {
-        resample_linear(&source_samples, state.sample_rate_hz, TARGET_SAMPLE_RATE_HZ)
+        let resampler = state.resampler.as_mut()
+            .ok_or_else(|| "asr:finalized_resampler_missing".to_string())?;
+        resampler.process(&source_samples)
+            .map_err(|error| format!("asr:finalized_{error}"))?
     };
     if target_samples.is_empty() {
         reset_current_utterance(state);
-        return false;
+        return Ok(false);
     }
 
     let Some(sequence) = allocate_meeting_sequence(&state.session_id) else {
         reset_current_utterance(state);
-        return false;
+        return Ok(false);
     };
     let utterance_id = state.next_utterance_id;
     state.next_utterance_id = state.next_utterance_id.saturating_add(1);
@@ -1140,7 +1147,7 @@ fn finalize_current_utterance(state: &mut FinalizedProducerState) -> bool {
     });
 
     reset_current_utterance(state);
-    true
+    Ok(true)
 }
 
 fn adaptive_end_silence_ms(profile: &RuntimeVadProfile, evidence: &AudioEvidenceReport) -> u32 {
@@ -1233,32 +1240,13 @@ fn downmix_f32(samples: &[f32], source_channels: u16) -> Vec<f32> {
         .collect()
 }
 
-fn resample_linear(samples: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32> {
-    if samples.is_empty() || source_rate == 0 || target_rate == 0 {
-        return Vec::new();
+fn finalized_resampler(rate: u32) -> Result<Option<MonoFft>, String> {
+    if rate == TARGET_SAMPLE_RATE_HZ {
+        return Ok(None);
     }
-    if source_rate == target_rate {
-        return samples.to_vec();
-    }
-
-    let target_len =
-        ((samples.len() as u64 * target_rate as u64) / source_rate as u64).max(1) as usize;
-    if samples.len() == 1 {
-        return vec![samples[0]; target_len];
-    }
-
-    let ratio = source_rate as f64 / target_rate as f64;
-    (0..target_len)
-        .map(|index| {
-            let source_position = index as f64 * ratio;
-            let lower = source_position.floor() as usize;
-            let upper = (lower + 1).min(samples.len() - 1);
-            let fraction = (source_position - lower as f64) as f32;
-            let lower_sample = samples[lower];
-            let upper_sample = samples[upper];
-            (lower_sample + (upper_sample - lower_sample) * fraction).clamp(-1.0, 1.0)
-        })
-        .collect()
+    MonoFft::new(rate, TARGET_SAMPLE_RATE_HZ)
+        .map(Some)
+        .map_err(|error| format!("asr:finalized_{error}"))
 }
 
 fn samples_for_duration(sample_rate_hz: u32, duration_ms: u32) -> usize {

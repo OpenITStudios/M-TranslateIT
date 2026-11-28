@@ -27,7 +27,7 @@ fn ingress_rejection_is_separate_from_handoff_loss_and_exports_only_counts() {
     assert_eq!(counts, serde_json::json!({
         "lock_busy": 0, "buffer_full": 0, "chunk_too_large": 0, "poisoned": 0,
     }));
-    reset_producer(&sync, "new-diagnostic-session", None, LANE_INCOMING, 16_000);
+    reset_producer(&sync, "new-diagnostic-session", None, LANE_INCOMING, 16_000).unwrap();
     assert_eq!(pcm_drop_breakdown(&sync).ingress_rejected_callbacks, 0);
 }
 
@@ -44,7 +44,7 @@ fn orphan_owner_read_is_exact_and_fails_closed_on_contended_ingress() {
         callback_lock_wait_max_ns: AtomicU64::new(0),
     };
     assert_eq!(producer_owner_identity(&sync, LANE_YOU), Ok(None));
-    reset_producer(&sync, "meeting-owner-a", Some(41), LANE_YOU, 16_000);
+    reset_producer(&sync, "meeting-owner-a", Some(41), LANE_YOU, 16_000).unwrap();
     assert_eq!(
         producer_owner_identity(&sync, LANE_YOU),
         Ok(Some(("meeting-owner-a".to_string(), Some(41)))),
@@ -91,7 +91,7 @@ fn silero_start_argument_gate_preserves_existing_cpu_owner() {
         callback_lock_observations: AtomicU64::new(0),
         callback_lock_wait_max_ns: AtomicU64::new(0),
     });
-    reset_producer(sync, "active-meeting", None, LANE_INCOMING, 16_000);
+    reset_producer(sync, "active-meeting", None, LANE_INCOMING, 16_000).unwrap();
     for (session, generation, rate) in [
         ("", None, 16_000),
         (" \t ", None, 16_000),
@@ -211,6 +211,7 @@ fn preroll_bound_resample_and_safe_retention_are_deterministic() {
         generation: None,
         lane: LANE_INCOMING,
         sample_rate_hz: 16_000,
+        resampler: None,
         capture_epoch: 1,
         input_sample_cursor: 0,
         current_input_start: None,
@@ -256,7 +257,9 @@ fn preroll_bound_resample_and_safe_retention_are_deterministic() {
     append_pre_roll(&mut state, &[0.2, 0.3]);
     assert!(state.pre_roll.is_empty());
 
-    let resampled = resample_linear(&[0.0, 0.25, -0.25, 0.0], 8_000, 16_000);
+    assert!(finalized_resampler(16_000).unwrap().is_none());
+    let resampled = finalized_resampler(8_000).unwrap().unwrap()
+        .process(&[0.0, 0.25, -0.25, 0.0]).unwrap();
     assert_eq!(resampled.len(), 8);
     assert!(resampled.iter().all(|sample| (-1.0..=1.0).contains(sample)));
     assert_eq!(safe_sample(f32::NAN), 0.0);
@@ -291,6 +294,7 @@ fn clipped_burst_during_active_speech_does_not_become_a_silence_boundary() {
         generation: None,
         lane: LANE_INCOMING,
         sample_rate_hz: 16_000,
+        resampler: None,
         capture_epoch: 1,
         input_sample_cursor: 0,
         current_input_start: None,
@@ -319,7 +323,7 @@ fn clipped_burst_during_active_speech_does_not_become_a_silence_boundary() {
         &clear_speech,
         &clear_evidence,
         &clear_gate,
-    ));
+    ).unwrap());
     assert!(state.in_utterance);
 
     let clipped_evidence = AudioEvidenceReport::from_samples(&clipped_burst);
@@ -332,7 +336,7 @@ fn clipped_burst_during_active_speech_does_not_become_a_silence_boundary() {
         &clipped_burst,
         &clipped_evidence,
         &clipped_gate,
-    ));
+    ).unwrap());
     assert!(state.in_utterance);
     assert_eq!(state.trailing_silence_samples, 0);
     assert_eq!(state.speech_samples, clear_speech.len());
@@ -342,7 +346,7 @@ fn clipped_burst_during_active_speech_does_not_become_a_silence_boundary() {
         &clear_speech,
         &clear_evidence,
         &clear_gate,
-    ));
+    ).unwrap());
     assert_eq!(state.speech_samples, clear_speech.len() * 2);
     assert_eq!(
         state.current_samples.len(),
@@ -393,6 +397,7 @@ fn incoming_wait_distinguishes_deferred_release_expiry_audio_and_stop() {
             generation: None,
             lane: LANE_INCOMING,
             sample_rate_hz: 16_000,
+            resampler: None,
             capture_epoch: 1,
             input_sample_cursor: 0,
             current_input_start: None,
@@ -508,6 +513,7 @@ fn scoped_producer_stop_rejects_stale_generation_or_session_atomically() {
             generation: Some(42),
             lane: LANE_YOU,
             sample_rate_hz: 16_000,
+            resampler: None,
             capture_epoch: 1,
             input_sample_cursor: 0,
             current_input_start: None,
@@ -533,7 +539,7 @@ fn scoped_producer_stop_rejects_stale_generation_or_session_atomically() {
     assert!(sync.state.lock().unwrap().is_none());
     assert!(clear_producer_if(&sync, |_, generation, _| generation == Some(42)));
 
-    reset_producer(&sync, "new-incoming", None, LANE_INCOMING, 16_000);
+    reset_producer(&sync, "new-incoming", None, LANE_INCOMING, 16_000).unwrap();
     assert!(clear_producer_if(&sync, |session, _, _| session == "old-incoming"));
     assert_eq!(
         sync.state.lock().unwrap().as_ref().unwrap().session_id,

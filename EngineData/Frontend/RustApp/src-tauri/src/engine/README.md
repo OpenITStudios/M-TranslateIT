@@ -4,7 +4,7 @@ This folder contains the Rust-side runtime logic that is still reachable from th
 
 ## Current owners
 
-- `audio/`: physical microphone capture, Meeting Sound capture, finalized speech/VAD, and temporary finalized WAV handoff.
+- `audio/`: physical microphone capture, Meeting Sound capture, finalized speech/VAD and owned finalized PCM handoff. `audio/resample.rs` owns whole-clip mono FFT conversion shared with My Voice; one fixed-rate instance per non-16-kHz finalized Meeting producer, no extra worker. Rubato 5.0.1 `process_all` resets each clip and trims startup delay. VAD resampling and capture provenance remain unchanged; 16 kHz moves directly. Failure enters the existing speech ingress fault/cleanup path, never linear fallback. Native WER/CER and latency acceptance remain held.
 - `capture_lifecycle.rs`: bounded Mic Test Start/Stop ownership only.
 - `runtime_state.rs`: one application Meeting/capture session and generation authority.
 - `runtime_settings.rs` + `settings.rs`: persisted runtime settings.

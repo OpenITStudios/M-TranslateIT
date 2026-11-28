@@ -123,7 +123,7 @@ impl SpeechIngress {
                                 observations.push(serde_json::json!({"input_end_sample": state.input_sample_cursor,
                                     "probability": probability, "gate": gate}));
                             }
-                            if ingest_observation(state, &native, &gate.evidence, &gate) { sync.ready.notify_one(); }
+                            if ingest_observation(state, &native, &gate.evidence, &gate)? { sync.ready.notify_one(); }
                         }
                         #[cfg(test)]
                         worker_processed.fetch_add(pcm.len() as u64, Ordering::Release);
