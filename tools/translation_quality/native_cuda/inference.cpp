@@ -33,6 +33,7 @@ constexpr char k_mt_user[] = u8"<｜hy_User｜>";
 constexpr char k_mt_assistant[] = u8"<｜hy_Assistant｜>";
 constexpr char k_mt_eos[] = u8"<｜hy_place▁holder▁no▁2｜>";
 constexpr size_t k_max_output_bytes = 16000;
+constexpr int32_t k_max_token_piece_bytes = 256;
 constexpr size_t k_min_samples = 4800;
 constexpr size_t k_max_samples = 960000;
 // Bounded, complete candidate utterances only; no partial playback.
@@ -393,6 +394,44 @@ static_assert(greedy_token(k_greedy_negative_fixture, 1) == 0);
 static_assert(greedy_token(nullptr, 3) == LLAMA_TOKEN_NULL);
 static_assert(greedy_token(k_greedy_negative_fixture, 0) == LLAMA_TOKEN_NULL);
 
+// All forbidden MT markers begin with '<'. Ordinary speech needs one
+// search, not a separate full-text scan for each marker.
+constexpr bool contains_mt_marker(std::string_view text) {
+    constexpr std::string_view markers[] = {
+        u8"<｜hy_", "<think>", "</think>", "<answer>", "</answer>", "<tool_", "</tool_"
+    };
+    for (size_t pos = text.find('<'); pos != std::string_view::npos; pos = text.find('<', pos + 1)) {
+        for (const auto marker : markers) {
+            if (text.substr(pos, marker.size()) == marker) return true;
+        }
+    }
+    return false;
+}
+
+static_assert(!contains_mt_marker("A < B; <thinking> is not a reserved marker."));
+static_assert(contains_mt_marker(u8"prefix <｜hy_User｜>"));
+static_assert(contains_mt_marker("prefix <<think>"));
+static_assert(contains_mt_marker("</think>"));
+static_assert(contains_mt_marker("<answer>"));
+static_assert(contains_mt_marker("</answer>"));
+static_assert(contains_mt_marker("<tool_call"));
+static_assert(contains_mt_marker("</tool_call"));
+
+// Pinned llama_token_to_piece returns -required_size without copying when
+// capacity is insufficient. Preserve the original per-piece rejection
+// before the complete-output limit, including the final byte boundary.
+constexpr int32_t piece_status(int32_t len, size_t remaining) {
+    if (len == 0 || len > k_max_token_piece_bytes || len < -k_max_token_piece_bytes)
+        return TI_INCOMPLETE;
+    if (len < 0) return static_cast<size_t>(-len) > remaining ? TI_OUTPUT_LIMIT : TI_INCOMPLETE;
+    return static_cast<size_t>(len) > remaining ? TI_OUTPUT_LIMIT : TI_OK;
+}
+static_assert(piece_status(256, 256) == TI_OK);
+static_assert(piece_status(-256, 255) == TI_OUTPUT_LIMIT);
+static_assert(piece_status(-257, 255) == TI_INCOMPLETE);
+static_assert(piece_status(0, 256) == TI_INCOMPLETE);
+static_assert(piece_status(-1, 0) == TI_OUTPUT_LIMIT);
+
 int32_t generate(decoder & d, llama_pos next_pos, uint32_t max_tokens,
                  llama_token required_eos, std::string_view echo,
                  const request_control & control, char * output, size_t * out_len) {
@@ -414,32 +453,24 @@ int32_t generate(decoder & d, llama_pos next_pos, uint32_t max_tokens,
             if (required_eos != LLAMA_TOKEN_NULL && token != required_eos)
                 return TI_INCOMPLETE;
             const std::string_view transcript(output, used);
-            if (transcript.empty() ||
-                transcript.find_first_not_of(" \r\n\t") == std::string_view::npos) return TI_EMPTY;
+            const size_t first = transcript.find_first_not_of(" \r\n\t");
+            if (first == std::string_view::npos) return TI_EMPTY;
             if (transcript.find('\0') != std::string_view::npos ||
                 transcript.find("<asr_text>") != std::string_view::npos ||
                 transcript.find("<|im_start|>") != std::string_view::npos ||
                 transcript.find("<|im_end|>") != std::string_view::npos)
                 return TI_INCOMPLETE;
             if (!echo.empty() &&
-                (transcript.find(u8"<｜hy_") != std::string_view::npos ||
-                 transcript.find("<think>") != std::string_view::npos ||
-                 transcript.find("</think>") != std::string_view::npos ||
-                 transcript.find("<answer>") != std::string_view::npos ||
-                 transcript.find("</answer>") != std::string_view::npos ||
-                 transcript.find("<tool_") != std::string_view::npos ||
-                 transcript.find("</tool_") != std::string_view::npos ||
-                 transcript.substr(transcript.find_first_not_of(" \r\n\t")).rfind(echo, 0) == 0))
+                (contains_mt_marker(transcript) || transcript.substr(first).rfind(echo, 0) == 0))
                 return TI_INCOMPLETE;
             *out_len = used;
             return TI_OK;
         }
         if (llama_vocab_is_control(vocab, token)) return TI_INCOMPLETE;
-        char piece[256];
-        const int len = llama_token_to_piece(vocab, token, piece, sizeof(piece), 0, true);
-        if (len <= 0 || len > static_cast<int>(sizeof(piece))) return TI_INCOMPLETE;
-        if (used + static_cast<size_t>(len) > k_max_output_bytes) return TI_OUTPUT_LIMIT;
-        std::memcpy(output + used, piece, static_cast<size_t>(len));
+        const size_t remaining = k_max_output_bytes - used;
+        const auto capacity = static_cast<int32_t>(std::min<size_t>(remaining, k_max_token_piece_bytes));
+        const int32_t len = llama_token_to_piece(vocab, token, output + used, capacity, 0, true);
+        if (const auto status = piece_status(len, remaining); status != TI_OK) return status;
         used += static_cast<size_t>(len);
         // Last token without an EOG is incomplete; avoid decoding it just to
         // discard the result.
@@ -579,14 +610,7 @@ namespace {
 bool mt_source_admitted(std::string_view source) {
     return !source.empty() && source.size() <= k_max_input_bytes &&
         source.find_first_not_of(" \r\n\t") != std::string_view::npos &&
-        source.find('\0') == std::string_view::npos &&
-        source.find(u8"<｜hy_") == std::string_view::npos &&
-        source.find("<think>") == std::string_view::npos &&
-        source.find("</think>") == std::string_view::npos &&
-        source.find("<answer>") == std::string_view::npos &&
-        source.find("</answer>") == std::string_view::npos &&
-        source.find("<tool_") == std::string_view::npos &&
-        source.find("</tool_") == std::string_view::npos;
+        source.find('\0') == std::string_view::npos && !contains_mt_marker(source);
 }
 
 int32_t translate(ti_mt & mt, std::string_view source, const char * target,

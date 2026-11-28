@@ -106,7 +106,8 @@ fn native_path(path: &Path) -> Result<CString, Error> {
 /// preparation and by the ABI caller before native execution.
 pub fn translation_source_admitted(source: &str) -> bool {
     !source.trim().is_empty() && !source.contains('\0') &&
-        source.chars().take(MAX_TRANSLATION_INPUT_CHARS + 1).count() <= MAX_TRANSLATION_INPUT_CHARS
+        (source.len() <= MAX_TRANSLATION_INPUT_CHARS ||
+            source.chars().take(MAX_TRANSLATION_INPUT_CHARS + 1).count() <= MAX_TRANSLATION_INPUT_CHARS)
 }
 
 impl Runtime {
@@ -312,7 +313,7 @@ fn checked_output(status: i32, len: usize, output: &[u8], max_chars: usize)
     let text = std::str::from_utf8(&output[..len]).map_err(|_| Error::InvalidReceipt)?;
     let text = text.trim();
     if text.is_empty() || text.contains('\0') ||
-        (max_chars != usize::MAX && text.chars().take(max_chars + 1).count() > max_chars) {
+        (text.len() > max_chars && text.chars().take(max_chars + 1).count() > max_chars) {
         return Err(Error::InvalidReceipt);
     }
     Ok(text)
@@ -494,6 +495,21 @@ mod tests {
         assert_eq!(validate_voice_pcm(&delayed_signal), Ok(()));
         delayed_signal.push(0.0);
         assert_eq!(validate_voice_pcm(&delayed_signal), Err(Error::InvalidReceipt));
+    }
+
+    #[test]
+    fn translation_character_limits_keep_unicode_and_ascii_boundaries() {
+        for unit in ["a", "é", "界", "🦀"] {
+            let exact = unit.repeat(MAX_TRANSLATION_INPUT_CHARS);
+            assert!(translation_source_admitted(&exact));
+            assert!(!translation_source_admitted(&(exact + unit)));
+            let output = unit.repeat(MAX_TRANSLATION_OUTPUT_CHARS);
+            assert_eq!(checked_output(0, output.len(), output.as_bytes(), MAX_TRANSLATION_OUTPUT_CHARS), Ok(output.as_str()));
+            let overflow = output + unit;
+            assert_eq!(checked_output(0, overflow.len(), overflow.as_bytes(), MAX_TRANSLATION_OUTPUT_CHARS), Err(Error::InvalidReceipt));
+        }
+        assert!(!translation_source_admitted(" \t\n"));
+        assert!(!translation_source_admitted("valid\0invalid"));
     }
 
     #[test]
