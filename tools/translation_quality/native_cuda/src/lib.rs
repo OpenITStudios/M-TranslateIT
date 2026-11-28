@@ -354,6 +354,23 @@ mod tests {
         let expired = RequestControl { cancelled: &cancelled, deadline: Instant::now() };
         assert_eq!(pair.translate("Halo", Language::Indonesian, Language::English, &expired, &mut output),
                    Err(Error::DeadlineExceeded));
+        // Establish both direction baselines and exercise a different source
+        // with leading whitespace on the same direction. This is isolation,
+        // not a linguistic grade or a claim of identical internal token IDs.
+        let active = || RequestControl { cancelled: &cancelled,
+            deadline: Instant::now() + std::time::Duration::from_secs(30) };
+        let source_id = "Jangan kirim 17 file.";
+        let source_en = "Do not approve 42 invoices.";
+        let baseline_en = pair.translate(source_id, Language::Indonesian, Language::English,
+            &active(), &mut output).expect("first ID to EN").to_owned();
+        let baseline_id = pair.translate(source_en, Language::English, Language::Indonesian,
+            &active(), &mut output).expect("first EN to ID").to_owned();
+        assert!(!pair.translate("  Jadwalnya Jumat, bukan Senin.", Language::Indonesian,
+            Language::English, &active(), &mut output).expect("different source").is_empty());
+        assert_eq!(pair.translate(source_id, Language::Indonesian, Language::English,
+            &active(), &mut output).expect("ID to EN after different source"), baseline_en.as_str());
+        assert_eq!(pair.translate("<think>", Language::Indonesian, Language::English,
+            &active(), &mut output), Err(Error::Native(1)));
         // Stop during MT generation or prefill, not merely before dispatch.
         // The third callback is inside native inference; reject any partial receipt.
         unsafe extern "C" fn stop_during(data: *const c_void) -> i32 {
@@ -370,18 +387,25 @@ mod tests {
         };
         assert_eq!((status, len), (CANCELLED, 0));
         assert!(calls.load(Ordering::Relaxed) >= 3);
-        let active = RequestControl { cancelled: &cancelled,
-            deadline: Instant::now() + std::time::Duration::from_secs(30) };
-        assert!(!pair.translate("Halo", Language::Indonesian, Language::English,
-                               &active, &mut output).expect("reuse after cooperative stop").is_empty());
+        assert_eq!(pair.translate(source_id, Language::Indonesian, Language::English,
+            &active(), &mut output).expect("reuse after cooperative stop"), baseline_en.as_str());
+        assert_eq!(pair.translate(source_en, Language::English, Language::Indonesian,
+            &active(), &mut output).expect("reverse direction after cooperative stop"), baseline_id.as_str());
         assert!(matches!(unsafe { Runtime::open(&dll, &pins, &asr, &projector, &mt, Some(&pci)) }, Err(Error::Native(15))));
         drop(pair);
         let mut reopened = unsafe { RuntimeOwner::open(&dll, &pins, &asr, &projector, &mt, None) }.expect("open on owner thread");
         assert_eq!(reopened.device_id(), pci.as_str(), "single visible CUDA identity");
-        let pending = reopened.begin(InferenceInput::Translation {
-            source: "Halo".into(), from: Language::Indonesian, to: Language::English,
-        }, Instant::now() + std::time::Duration::from_secs(30)).expect("admitted native request");
-        assert!(!pending.wait().expect("owned native translation").is_empty());
+        // Reverse the order after reopening to compare each direction with
+        // a fresh-owner result, not just repeat a possibly contaminated state.
+        for (source, from, to, expected) in [
+            (source_en, Language::English, Language::Indonesian, baseline_id.as_str()),
+            (source_id, Language::Indonesian, Language::English, baseline_en.as_str()),
+        ] {
+            let pending = reopened.begin(InferenceInput::Translation {
+                source: source.into(), from, to,
+            }, Instant::now() + std::time::Duration::from_secs(30)).expect("admitted native request");
+            assert_eq!(pending.wait().expect("owned native translation").as_str(), expected);
+        }
         // Drop joins the idle owner. Production Stop instead retains any
         // incomplete try_close result and does not block the UI.
         drop(reopened);
