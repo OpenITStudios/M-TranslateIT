@@ -16,7 +16,6 @@ const nativePreview = readFileSync(new URL("../../src-tauri/src/commands/voice_l
 const nativeRuntime = readFileSync(new URL("../../src-tauri/src/commands/my_voice_runtime.rs", import.meta.url), "utf8");
 const nativeReference = readFileSync(new URL("../../src-tauri/src/commands/my_voice_reference.rs", import.meta.url), "utf8");
 const retiredPreview = new URL("../../../../Backend/LocalWorker/WorkerRuntime/voice_lab_quick_preview.py", import.meta.url);
-const buildChild = readFileSync(new URL("../../../../Backend/LocalWorker/WorkerRuntime/voice_lab_build.py", import.meta.url), "utf8");
 const actor = readFileSync(new URL("../../src-tauri/src/commands/voice_lab_build.rs", import.meta.url), "utf8");
 const mutations = readFileSync(new URL("../../src-tauri/src/commands/application_runtime/mutations.rs", import.meta.url), "utf8");
 const recordingUi = readFileSync(new URL("../../src/pages/MyVoice.svelte", import.meta.url), "utf8");
@@ -186,8 +185,7 @@ test("retired Python Quick Preview has no packaged consumer", () => {
   assert.equal(releaseConfig.bundle.resources[from], undefined);
   assert.ok(!releaseContract.includes(name));
   assert.ok(!releasePayload.includes(name));
-  // Remaining legacy training assets are not yet physically retired.
-  assert.match(buildChild, /from voice_lab_gpt_sovits_build import build_candidate/);
+  assert.equal(existsSync(new URL("../../../../Backend/LocalWorker/WorkerRuntime/voice_lab_build.py", import.meta.url)), false);
 });
 
 test("native approval requires audible review and affirmative human quality confirmation", () => {

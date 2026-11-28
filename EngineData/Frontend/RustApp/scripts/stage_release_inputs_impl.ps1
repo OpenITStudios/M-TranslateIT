@@ -371,9 +371,9 @@ foreach ($exeName in @('VBCABLE_Setup.exe', 'VBCABLE_Setup_x64.exe')) {
 Write-Host '[release-stage] Remove transient download metadata from staged runtime'
 Get-ChildItem -LiteralPath $Assets -Directory -Recurse -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq '.cache' } | Sort-Object FullName -Descending | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
-Write-Host '[release-stage] Static VoiceLab source-asset preflight through private Python'
+Write-Host '[release-stage] Historical inference source-asset preflight (legacy release held)'
 $env:SOURCE_ROOT = $VoiceSource
-& $privatePython -s -c "from pathlib import Path; import os; import voice_lab_gpt_sovits_build as v; a=v.source_assets(Path(os.environ['SOURCE_ROOT'])); print('[release-stage][voice] source assets PASS', sorted(a.keys()))"
+& $privatePython -s -c "from pathlib import Path; import os; import voice_lab_gpt_sovits as v; a=v.inference_source_assets(Path(os.environ['SOURCE_ROOT'])); print('[release-stage][voice] source assets PASS', sorted(a.keys()))"
 if ($LASTEXITCODE -ne 0) { throw 'VoiceLab staged source asset validation failed.' }
 
 Write-Host '[release-stage] Controlled input sizes'

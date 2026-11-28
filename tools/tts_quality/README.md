@@ -30,6 +30,8 @@ Maintainer direction supersedes the temporary dual-build switch: Windows Local i
 
 The Rust My Voice owner no longer contains the legacy trainer launch, GPU Python probe, child lifecycle or checkpoint review parser. Native creation uses the existing generation and completion receipt; legacy storage recovery is protective, not an inference fallback. Remaining Python files and release declarations still require physical consumer cleanup.
 
+The retired Python training modules, resume probes and legacy preview helpers are removed from the active tree and package declarations. Historical baseline code remains accessible in Git history. The independent offline ONNX export is retained for verifier parity; no runtime Python trainer is required.
+
 ## Independent native verifier — exact legacy metric
 
 The old GPT-SoVITS build calls `SV.compute_embedding3`, using ERes2NetV2 **baseWidth=24, scale=4, expansion=4** with the pinned `pretrained_eres2netv2w24s4ep4.ckpt` SHA-256 `4f5a0bf73c61eb41b174e1bb54e7ee3c83233892be8e0af1f187024e8e581a35`. Its `forward3` output is 20,480 values, not the conventional 192-dimensional embedding. Source: [pinned SV](https://github.com/RVC-Boss/GPT-SoVITS/blob/d523079fc05d9a8028d6085bffe4a2757c32abb6/GPT_SoVITS/sv.py), [forward3](https://github.com/RVC-Boss/GPT-SoVITS/blob/d523079fc05d9a8028d6085bffe4a2757c32abb6/GPT_SoVITS/eres2net/ERes2NetV2.py), and [fbank](https://github.com/RVC-Boss/GPT-SoVITS/blob/d523079fc05d9a8028d6085bffe4a2757c32abb6/GPT_SoVITS/eres2net/kaldi.py). The [public sherpa export](https://github.com/k2-fsa/sherpa-onnx/blob/7a9243056d334c73b6d1f8890cf257ba94f0f328/scripts/3dspeaker/export-onnx.py) exports standard forward and applies global-mean normalization; it is not a metric-equivalent substitution.
