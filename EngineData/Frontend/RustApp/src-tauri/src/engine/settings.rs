@@ -9,10 +9,13 @@ const MAX_SETTING_TEXT_CHARS: usize = 160;
 const MAX_SETTINGS_FILE_BYTES: usize = 64 * 1024;
 
 // One Settings IO authority for save/recovery and translated Meeting admission.
-static SETTINGS_IO_GATE: OnceLock<Mutex<()>> = OnceLock::new();
+// Memoize parsing only, never file authority. A fresh successful bounded read
+// and exact byte equality are required on every primary-file admission.
+type SettingsAdmissionMemo = Option<(Vec<u8>, MeetingEngineAdmission)>;
+static SETTINGS_IO_GATE: OnceLock<Mutex<SettingsAdmissionMemo>> = OnceLock::new();
 
-fn settings_io_gate() -> &'static Mutex<()> {
-    SETTINGS_IO_GATE.get_or_init(|| Mutex::new(()))
+fn settings_io_gate() -> &'static Mutex<SettingsAdmissionMemo> {
+    SETTINGS_IO_GATE.get_or_init(|| Mutex::new(None))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,10 +141,10 @@ impl RuntimeSettings {
     /// No new-install Local permission is granted if a saved file, backup, or
     /// unfinished atomic temporary write exists but cannot be verified.
     pub fn meeting_engine_admission(path: &Path) -> MeetingEngineAdmission {
-        let Ok(_guard) = settings_io_gate().lock() else {
+        let Ok(mut guard) = settings_io_gate().lock() else {
             return MeetingEngineAdmission::Unverified;
         };
-        meeting_engine_admission_locked(path)
+        meeting_engine_admission_locked(path, &mut guard)
     }
 
     /// Explicit recovery holds the *same* Settings IO lock across admission,
@@ -159,10 +162,10 @@ impl RuntimeSettings {
                 return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid_engine_choice"));
             }
         };
-        let _guard = settings_io_gate().lock().map_err(|_| {
+        let mut guard = settings_io_gate().lock().map_err(|_| {
             io::Error::new(io::ErrorKind::Other, "settings_io_lock_unavailable")
         })?;
-        if meeting_engine_admission_locked(path) != MeetingEngineAdmission::Unverified {
+        if meeting_engine_admission_locked(path, &mut guard) != MeetingEngineAdmission::Unverified {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists, "engine_preference_changed_before_recovery"
             ));
@@ -216,10 +219,22 @@ impl RuntimeSettings {
     }
 }
 
-fn meeting_engine_admission_locked(path: &Path) -> MeetingEngineAdmission {
-    if let Some(settings) = read_settings_file(path) {
-        return persisted_engine(&settings);
+fn meeting_engine_admission_locked(path: &Path, memo: &mut SettingsAdmissionMemo) -> MeetingEngineAdmission {
+    if let Some(bytes) = read_settings_bytes(path) {
+        if let Some((verified, admission)) = memo.as_ref() {
+            if verified == &bytes {
+                return *admission;
+            }
+        }
+        if let Some(settings) = serde_json::from_slice(&bytes).ok().and_then(strict_settings_from_value) {
+            let admission = persisted_engine(&settings);
+            *memo = Some((bytes, admission));
+            return admission;
+        }
     }
+    // Unreadable/invalid primary never reuses a previous grant. Backup and
+    // clean-install decisions are freshly observed, including temporary files.
+    *memo = None;
     let backup = path.with_extension("json.bak");
     if let Some(settings) = read_settings_file(&backup) {
         return persisted_engine(&settings);
@@ -252,7 +267,7 @@ fn save_settings_locked(settings: &RuntimeSettings, path: &Path) -> io::Result<(
     write_atomic(path, &body)
 }
 
-fn read_settings_value(path: &Path) -> Option<serde_json::Value> {
+fn read_settings_bytes(path: &Path) -> Option<Vec<u8>> {
     let file = fs::File::open(path).ok()?;
     if !file.metadata().ok()?.is_file() {
         return None;
@@ -264,7 +279,11 @@ fn read_settings_value(path: &Path) -> Option<serde_json::Value> {
     if bytes.len() > MAX_SETTINGS_FILE_BYTES {
         return None;
     }
-    serde_json::from_slice(&bytes).ok()
+    Some(bytes)
+}
+
+fn read_settings_value(path: &Path) -> Option<serde_json::Value> {
+    serde_json::from_slice(&read_settings_bytes(path)?).ok()
 }
 
 fn recoverable_settings_with_engine(path: &Path, engine: &str) -> Option<RuntimeSettings> {
@@ -282,7 +301,10 @@ fn recoverable_settings_with_engine(path: &Path, engine: &str) -> Option<Runtime
 }
 
 fn read_settings_file(path: &Path) -> Option<RuntimeSettings> {
-    let value = read_settings_value(path)?;
+    strict_settings_from_value(read_settings_value(path)?)
+}
+
+fn strict_settings_from_value(value: serde_json::Value) -> Option<RuntimeSettings> {
     let object = value.as_object()?;
     let version = object.get("schema_version").and_then(serde_json::Value::as_u64);
     let legacy_without_engine = object.get("schema_version").is_none()
@@ -533,6 +555,54 @@ mod tests {
         fs::write(&path, "x".repeat(super::MAX_SETTINGS_FILE_BYTES + 1)).unwrap();
         assert_eq!(RuntimeSettings::meeting_engine_admission(&path), MeetingEngineAdmission::Unverified);
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn admission_memo_requires_fresh_exact_bytes_and_never_caches_fallback() {
+        use super::meeting_engine_admission_locked;
+        let path = std::env::temp_dir().join(format!(
+            "translateit_admission_memo_{}.json", std::process::id()
+        ));
+        let backup = path.with_extension("json.bak");
+        let temporary = path.with_extension("json.tmp");
+        for file in [&path, &backup, &temporary] {
+            let _ = fs::remove_file(file);
+        }
+        let mut memo = None;
+        let local = br#"{"schema_version":14,"translation_engine":"local","audio":{"noise_suppression":"off"}}"#;
+        let codex = br#"{"schema_version":14,"translation_engine":"codex","audio":{"noise_suppression":"off"}}"#;
+        assert_eq!(local.len(), codex.len());
+        fs::write(&path, local).unwrap();
+        assert_eq!(meeting_engine_admission_locked(&path, &mut memo), MeetingEngineAdmission::Local);
+        assert_eq!(memo.as_ref().unwrap().0.as_slice(), local);
+        assert_eq!(meeting_engine_admission_locked(&path, &mut memo), MeetingEngineAdmission::Local);
+        // Same-size external replacement must not reuse a prior Local grant.
+        fs::write(&path, codex).unwrap();
+        assert_eq!(meeting_engine_admission_locked(&path, &mut memo), MeetingEngineAdmission::Codex);
+        fs::write(&path, local).unwrap();
+        assert_eq!(meeting_engine_admission_locked(&path, &mut memo), MeetingEngineAdmission::Local);
+        // Invalid non-engine fields must still fail the full typed contract.
+        fs::write(&path, br#"{"schema_version":14,"translation_engine":"local","audio":42}"#).unwrap();
+        assert_eq!(meeting_engine_admission_locked(&path, &mut memo), MeetingEngineAdmission::Unverified);
+        assert!(memo.is_none());
+        fs::write(&backup, codex).unwrap();
+        assert_eq!(meeting_engine_admission_locked(&path, &mut memo), MeetingEngineAdmission::Codex);
+        assert!(memo.is_none());
+        fs::write(&backup, local).unwrap();
+        assert_eq!(meeting_engine_admission_locked(&path, &mut memo), MeetingEngineAdmission::Local);
+        assert!(memo.is_none());
+        fs::remove_file(&backup).unwrap();
+        fs::write(&path, local).unwrap();
+        assert_eq!(meeting_engine_admission_locked(&path, &mut memo), MeetingEngineAdmission::Local);
+        fs::write(&path, vec![b'x'; super::MAX_SETTINGS_FILE_BYTES + 1]).unwrap();
+        assert_eq!(meeting_engine_admission_locked(&path, &mut memo), MeetingEngineAdmission::Unverified);
+        assert!(memo.is_none());
+        fs::remove_file(&path).unwrap();
+        fs::write(&temporary, b"unfinished").unwrap();
+        assert_eq!(meeting_engine_admission_locked(&path, &mut memo), MeetingEngineAdmission::Unverified);
+        fs::remove_file(&temporary).unwrap();
+        assert_eq!(meeting_engine_admission_locked(&path, &mut memo), MeetingEngineAdmission::Local);
+        assert!(memo.is_none());
     }
 
     #[test]

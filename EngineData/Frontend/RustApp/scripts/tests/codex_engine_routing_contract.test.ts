@@ -363,8 +363,8 @@ test("P17 recovery preserves validated non-engine settings under the same IO loc
     settings.indexOf("pub fn recover_unverified_engine("),
     settings.indexOf("pub fn save_pretty(", settings.indexOf("pub fn recover_unverified_engine(")),
   );
-  assert.match(recover, /let _guard = settings_io_gate\(\)\.lock\(\)/);
-  const verify = recover.indexOf("meeting_engine_admission_locked(path) != MeetingEngineAdmission::Unverified");
+  assert.match(recover, /let mut guard = settings_io_gate\(\)\.lock\(\)/);
+  const verify = recover.indexOf("meeting_engine_admission_locked(path, &mut guard) != MeetingEngineAdmission::Unverified");
   const salvage = recover.indexOf("recoverable_settings_with_engine(path, engine)");
   const saved = recover.indexOf("save_settings_locked(&settings, path)?");
   const verified = recover.indexOf("read_settings_file(path).map(|settings| persisted_engine(&settings))");
@@ -465,4 +465,16 @@ test("P18 atomic backup policy refuses a parseable but invalid-engine primary", 
   assert.match(settings, /if path.exists\(\) && replace_previous_settings_backup\(path, &backup_path\)/);
   assert.match(settings, /fn atomic_settings_backup_keeps_parseable_recovery_on_invalid_primary/);
   assert.match(settings, /"translation_engine":"apikey"/);
+});
+
+test("route admission memo reuses parsing only after a fresh exact primary read", () => {
+  const owner = settings.slice(settings.indexOf("fn meeting_engine_admission_locked("), settings.indexOf("fn missing_settings_admission("));
+  const fresh = owner.indexOf("read_settings_bytes(path)");
+  const equal = owner.indexOf("if verified == &bytes");
+  const grant = owner.indexOf("return *admission;");
+  const parse = owner.indexOf("and_then(strict_settings_from_value)");
+  const clear = owner.indexOf("*memo = None;");
+  const fallback = owner.indexOf("read_settings_file(&backup)");
+  assert.ok(fresh >= 0 && equal > fresh && grant > equal && parse > grant && clear > parse && fallback > clear);
+  assert.match(settings, /fn admission_memo_requires_fresh_exact_bytes_and_never_caches_fallback/);
 });
