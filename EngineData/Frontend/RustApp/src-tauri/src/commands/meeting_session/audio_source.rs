@@ -176,7 +176,7 @@ pub(super) fn set_source(requested: &str) -> MeetingAudioSourceActionResult {
             // Original Microphone remains authoritative: a selected Codex
             // route must not secretly warm the Local ASR/MiLMMT path.
             return response(false, Some(generation),
-                "Codex Voice translation is not yet verified. Original Microphone stays active. Select Local in Settings after Stop.");
+                "Your saved Codex Voice preference is retired. Original Microphone stays active. Select Local in Settings after Stop.");
         }
         let mut helper = get_helper_bridge_status();
         if matches!(helper.state.as_str(), "stopped" | "not_started") {

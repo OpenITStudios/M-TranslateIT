@@ -102,7 +102,7 @@ fn build_preflight_from_observations(
             summary: if settings_unverified {
                 "Saved translation engine settings are unreadable or inconsistent. Start Translation is disabled until Settings are explicitly saved again.".to_string()
             } else {
-                "Codex Voice is selected but audio-to-translated-text access and included-usage entitlement are not verified. Start Translation is disabled. Select Local to use the existing offline engine.".to_string()
+                "Your saved Codex Voice preference is retired. Start Translation is disabled until you explicitly select Local in Settings.".to_string()
             },
             runtime_claim: if settings_unverified {
                 "translation_engine_settings_unverified_not_windows_runtime_proof".to_string()

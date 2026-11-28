@@ -92,6 +92,7 @@ fn engine_preference_changed(current: &RuntimeSettings, candidate: &RuntimeSetti
 // Only a literal user-selected engine is acceptable for explicit repair.
 // Normal full-settings saves must never turn an uncertain disk state into
 // an implicitly authorized Local translator.
+// Parse the previous persisted choice for compare-and-set recovery only.
 fn explicit_engine_choice(engine: &str) -> Option<MeetingEngineAdmission> {
     match engine {
         "local" => Some(MeetingEngineAdmission::Local),
@@ -169,7 +170,7 @@ pub fn save_runtime_settings(
         // narrow explicit engine confirmation command may repair that state.
         CommandResult::blocked(
             LifecycleState::Error,
-            "Saved translation engine settings could not be verified. Confirm Local or Codex explicitly before saving other Settings.".to_string(),
+            "Saved translation engine settings could not be verified. Confirm Local explicitly before saving other Settings.".to_string(),
         )
     } else if current != expected {
         // A full Settings candidate must be based on the exact latest saved
@@ -234,12 +235,13 @@ pub fn confirm_unverified_translation_engine(engine: String) -> CommandResult {
 }
 
 fn confirm_unverified_translation_engine_inner(engine: &str) -> CommandResult {
-    let Some(expected) = explicit_engine_choice(engine) else {
+    if engine != "local" {
         return CommandResult::blocked(
             LifecycleState::Error,
-            "Choose exactly Local or Codex. No engine settings were changed.",
+            "Only Local translation is available. No engine settings were changed.",
         );
-    };
+    }
+    let expected = MeetingEngineAdmission::Local;
     let _meeting_transition = match super::meeting_session::try_settings_mutation_guard() {
         Ok(guard) => guard,
         Err(_) => {
@@ -286,11 +288,7 @@ fn confirm_unverified_translation_engine_inner(engine: &str) -> CommandResult {
     }
     CommandResult::ok(
         LifecycleState::Idle,
-        if expected == MeetingEngineAdmission::Local {
-            "Local engine explicitly confirmed. Review microphone and other preferences before starting a Meeting."
-        } else {
-            "Codex preference confirmed. Review other settings; Codex Voice translation remains unavailable."
-        },
+        "Local engine explicitly confirmed. Review microphone and other preferences before starting a Meeting.",
     )
 }
 
@@ -310,13 +308,17 @@ pub fn select_translation_engine(
 }
 
 fn select_translation_engine_inner(engine: &str, expected_current_engine: &str) -> CommandResult {
-    let (Some(chosen), Some(expected)) = (
-        explicit_engine_choice(engine),
-        explicit_engine_choice(expected_current_engine),
-    ) else {
+    if engine != "local" {
         return CommandResult::blocked(
             LifecycleState::Error,
-            "Choose a supported Local or Codex engine. No Settings were changed.",
+            "Only Local translation is available. No Settings were changed.",
+        );
+    }
+    let chosen = MeetingEngineAdmission::Local;
+    let Some(expected) = explicit_engine_choice(expected_current_engine) else {
+        return CommandResult::blocked(
+            LifecycleState::Error,
+            "The previous engine choice is unknown. Refresh Settings before trying again.",
         );
     };
     if chosen == expected {
@@ -367,11 +369,7 @@ fn select_translation_engine_inner(engine: &str, expected_current_engine: &str) 
     }
     CommandResult::ok(
         LifecycleState::Idle,
-        if chosen == MeetingEngineAdmission::Local {
-            "Local translation engine selected."
-        } else {
-            "Codex selected. Meeting translation remains unavailable until Voice access is verified."
-        },
+        "Local translation engine selected.",
     )
 }
 
@@ -534,7 +532,15 @@ mod tests {
     use crate::engine::settings::RuntimeSettings;
 
     #[test]
-    fn explicit_engine_recovery_accepts_only_literal_local_or_codex() {
+    fn retired_engine_cannot_be_selected_or_confirmed() {
+        for choice in ["codex", "unknown", "LOCAL"] {
+            assert!(!super::select_translation_engine_inner(choice, "local").ok);
+            assert!(!super::confirm_unverified_translation_engine_inner(choice).ok);
+        }
+    }
+
+    #[test]
+    fn persisted_engine_identity_accepts_only_literal_local_or_codex() {
         assert_eq!(explicit_engine_choice("local"), Some(MeetingEngineAdmission::Local));
         assert_eq!(explicit_engine_choice("codex"), Some(MeetingEngineAdmission::Codex));
         for invalid in ["", "LOCAL", " CoDeX ", "apikey", "unknown", "local\\n"] {

@@ -24,7 +24,6 @@ const committed = rustSource("commands/meeting_session/committed_turns.rs");
 const playback = rustSource("commands/meeting_session/playback_runtime.rs");
 const lifecycle = rustSource("commands/meeting_session/lifecycle.rs");
 const switching = rustSource("commands/meeting_session/audio_source.rs");
-const gateway = rustSource("commands/codex_gateway.rs");
 const types = uiSource("app/shared/types.ts");
 const state = uiSource("app/shared/state.ts");
 const selector = uiSource("components/settings/MeetingTranslationEngine.svelte");
@@ -85,8 +84,7 @@ test("all Start and Original-to-TranslateIT paths reject unverified Codex before
   const helperStatus = source.indexOf("let mut helper = get_helper_bridge_status();");
   assert.ok(switchGuard >= 0 && helperStatus > switchGuard, "source switch must block before loading MiLMMT");
   assert.match(source, /Original Microphone stays active/);
-  assert.match(gateway, /realtime_audio_verified: false/);
-  assert.match(gateway, /meeting_route_enabled: false/);
+  assert.doesNotMatch(tauriRegistry, /codex_gateway::/);
 });
 
 test("P11 uses one Meeting-local engine admission gate, never a Codex diagnostic flag", () => {
@@ -162,15 +160,21 @@ test("startup does not warm the local AI worker for a selected Codex engine", ()
   assert.match(readiness, /Select Local in Settings to start offline translation/);
 });
 
-test("Settings makes Codex explicitly opt-in, unavailable and non-networked", () => {
+test("Settings offers only explicit Local recovery for retired Codex or unverified preferences", () => {
   assert.match(page, /<MeetingTranslationEngine/);
-  assert.match(selector, /<option value="local">/);
-  assert.match(selector, /<option value="codex">/);
-  assert.match(selector, /Translation is not yet verified|Meeting translation remains blocked|not yet available/);
+  assert.doesNotMatch(selector, /<select|<option/);
+  assert.match(selector, /needsReconfirmation \|\| settings\.translation_engine === "codex"/);
+  assert.match(selector, /Switch to Local/);
   assert.match(selector, /runtimeApi\.selectTranslationEngine\(engine, settings\.translation_engine\)/);
   assert.match(selector, /runtimeApi\.loadSettings\(\)/);
-  assert.match(selector, /does not send microphone audio/);
   assert.match(selector, /disabled=\{locked \|\| saving\}/);
+  assert.match(persistence, /fn retired_engine_cannot_be_selected_or_confirmed/);
+  for (const owner of ["confirm_unverified_translation_engine_inner", "select_translation_engine_inner"]) {
+    const body = persistence.slice(persistence.indexOf("fn " + owner + "("));
+    const reject = body.indexOf('if engine != "local"');
+    const lock = body.indexOf("try_settings_mutation_guard()");
+    assert.ok(reject >= 0 && lock > reject);
+  }
 });
 
 test("P12 checks the persisted engine before direct native Meeting route preparation", () => {
@@ -306,15 +310,15 @@ test("P15 prevents First Setup from persisting tolerant Local defaults before en
     firstSetup.indexOf("async function persistSetupFact("),
     firstSetup.indexOf("async function advance("),
   );
-  const guard = persist.indexOf("if (snapshot === null || engineSettingsUnverified)");
+  const guard = persist.indexOf("if (snapshot === null || engineRecoveryRequired)");
   const expected = persist.indexOf("const expected = cloneSettings(settings)");
   const write = persist.indexOf("await runtimeApi.saveSettings(candidate, expected)");
   assert.ok(guard >= 0 && expected > guard && write > expected,
     "ordinary Continue/Defer must not silently overwrite an unverified persisted engine");
 
   assert.match(firstSetup, /snapshot\?\.meetingSession\?\.preflight\?\.blockers\?\.includes\("meeting_session:settings_unverified"\)/);
-  assert.match(firstSetup, /\{:else if engineSettingsUnverified\}[\s\S]*<MeetingTranslationEngine/);
-  assert.match(firstSetup, /needsReconfirmation=\{true\}/);
+  assert.match(firstSetup, /\{:else if engineRecoveryRequired\}[\s\S]*<MeetingTranslationEngine/);
+  assert.match(firstSetup, /needsReconfirmation=\{engineSettingsUnverified\}/);
   assert.match(firstSetup, /onSettingsChange=\{confirmEngineSelection\}/);
   assert.match(firstSetup, /async function confirmEngineSelection\([\s\S]*await refreshSnapshot\(\)/);
   assert.match(firstSetup, /Check setup status/);
@@ -332,7 +336,7 @@ test("P16 generic Settings saves cannot silently recover an Unverified engine", 
   const persist = save.indexOf("persist_runtime_settings(candidate)");
   assert.ok(admission >= 0 && stop > admission && persist > stop,
     "ordinary full-settings save must reject unknown engine admission before the writer");
-  assert.match(save, /Confirm Local or Codex explicitly before saving other Settings/);
+  assert.match(save, /Confirm Local explicitly before saving other Settings/);
   assert.doesNotMatch(save, /confirm_unverified_translation_engine_inner/);
 });
 
@@ -344,7 +348,7 @@ test("P16 explicit engine confirmation is narrow, native and reuses one Settings
   assert.match(persistence, /fn explicit_engine_choice\(engine: &str\)/);
   assert.match(persistence, /"local" => Some\(MeetingEngineAdmission::Local\)/);
   assert.match(persistence, /"codex" => Some\(MeetingEngineAdmission::Codex\)/);
-  assert.match(persistence, /fn explicit_engine_recovery_accepts_only_literal_local_or_codex/);
+  assert.match(persistence, /fn persisted_engine_identity_accepts_only_literal_local_or_codex/);
   assert.match(native, /super::meeting_session::try_settings_mutation_guard\(\)/);
   assert.match(native, /if runtime_session_owns_audio_resources\(\)/);
   const verifyBeforeSave = native.indexOf("engine::meeting_engine_admission() != MeetingEngineAdmission::Unverified");
@@ -361,7 +365,7 @@ test("P16 explicit engine confirmation is narrow, native and reuses one Settings
 });
 
 test("P16 Settings and First Setup share explicit native recovery without broad settings payload", () => {
-  assert.match(runtimeBridge, /async confirmUnverifiedTranslationEngine\(engine: "local" \| "codex"\)/);
+  assert.match(runtimeBridge, /async confirmUnverifiedTranslationEngine\(engine: "local"\)/);
   assert.match(runtimeBridge, /"confirm_unverified_translation_engine",\s*\{ engine \}/);
   const choose = selector.slice(
     selector.indexOf("async function chooseEngine("),
@@ -370,7 +374,7 @@ test("P16 Settings and First Setup share explicit native recovery without broad 
   assert.match(choose, /const saved = needsReconfirmation\s*\? await runtimeApi.confirmUnverifiedTranslationEngine\(engine\)/);
   assert.match(choose, /: await runtimeApi.selectTranslationEngine\(engine, settings\.translation_engine\)/);
   assert.match(choose, /const confirmed = await runtimeApi.loadSettings\(\)/);
-  assert.match(firstSetup, /<MeetingTranslationEngine[\s\S]*needsReconfirmation=\{true\}/);
+  assert.match(firstSetup, /<MeetingTranslationEngine[\s\S]*needsReconfirmation=\{engineSettingsUnverified\}/);
   assert.match(page, /<MeetingTranslationEngine[\s\S]*needsReconfirmation=\{snapshot.meetingSession/);
   assert.doesNotMatch(runtimeBridge.slice(runtimeBridge.indexOf("async confirmUnverifiedTranslationEngine")), /\{ settings, engine \}/);
 });

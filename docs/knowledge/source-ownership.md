@@ -97,7 +97,7 @@ Domain algorithms remain in their domain modules; ApplicationRuntime coordinates
 |---|---|
 | Meeting public status facade | `commands/meeting_session.rs` |
 | Start/Stop lifecycle transactions | `commands/meeting_session/lifecycle.rs` + `engine/runtime_state.rs` |
-| Local/Codex translated route admission (not Voice entitlement) | `commands/meeting_session.rs` owns the canonical Local route decision; preflight, outbound consumer, committed turns and playback enforce it. `commands/codex_gateway.rs` owns account diagnostics only |
+| Local translated route admission and retired preference compatibility | `commands/meeting_session.rs` owns strict Local admission; legacy Codex or unverified settings do not authorize Local AI |
 | Meeting preflight/status | `meeting_session/preflight.rs` + `session_state.rs` |
 | Outbound/incoming pipelines | `meeting_session/outbound_pipeline.rs`, `incoming_pipeline.rs`, `incoming_deferred.rs` |
 | Meeting consumer ownership | `meeting_session/consumer_runtime.rs` |
@@ -113,7 +113,7 @@ Domain algorithms remain in their domain modules; ApplicationRuntime coordinates
 | Candidate normal-user IPC and paced delivery | `engine/audio/native_capture_pipe.rs` (SCM-backed IPC) and `native_capture_pacing.rs` (existing Meeting worker helper); no new output owner |
 | Candidate privileged Windows broker transport | `src-tauri/windows/virtual-audio/Broker/` (`broker_identity`, `broker_io`, `broker_driver`, `broker_service`); not registered as a Windows service in this source state |
 | Candidate native capture-only kernel and privileged control device | `src-tauri/windows/virtual-audio/Source/Main/capture_pcm.{h,cpp}`, `capture_control_protocol.h`, `capture_control_device.{h,cpp}` |
-| Device and Local/Codex engine preference persistence and in-session locks | `commands/settings.rs` + `engine/settings.rs`; `components/settings/MeetingTranslationEngine.svelte` presents the persisted choice |
+| Device persistence, Local engine recovery and in-session locks | `commands/settings.rs` + `engine/settings.rs`; `components/settings/MeetingTranslationEngine.svelte` exposes explicit recovery only |
 
 ## Local AI / voice
 
@@ -121,8 +121,6 @@ Domain algorithms remain in their domain modules; ApplicationRuntime coordinates
 |---|---|
 | Native runtime lifecycle, task admission and readiness | `commands/helper_bridge.rs`, `helper_bridge_runtime.rs`, `helper_bridge_runtime/scheduler.rs`, `helper_bridge/functional_readiness.rs` |
 | Native request transport and scoped dispatch | `commands/helper_bridge/transport.rs`, `helper_bridge/transport/native.rs`, `helper_bridge/request_policy.rs` |
-| Experimental Codex App Server account/usage probe and process lifecycle (not Meeting-capable) | Rust `commands/codex_gateway.rs`, `commands/codex_gateway/protocol.rs`, `transport.rs` (sealed source-only P25 offer/ACK/started/SDP exchange); `compatibility.rs` owns the source-derived Windows CLI version, initialize and account gateway-provider read-only gate; `realtime.rs` owns offline typed voice observations and PCM frame admission; `correlation.rs` owns one-flight unverified source/assistant evidence; `realtime_rpc.rs` owns offline typed V3 WebRTC RPC envelopes, in-flight ACK accounting and Stop handshake; `text.rs` owns source-only text request/final-result evidence, not production inference |
-| WebView2 Codex WebRTC SDP/ICE signalling peer (test fixture only) | `EngineData/Frontend/RustApp/scripts/tests/fixtures/codexRealtimePeer.ts`; no production WebView peer, browser microphone, media playback or Meeting output authority |
 | Canonical native ASR, MT and selected voice synthesis | `tools/translation_quality/native_cuda/` + `commands/helper_bridge/transport/native.rs` |
 | Model inventory/staging | `model_manifest.json` + `prepare_model_assets*.py` |
 | My Voice recording/review | Rust `commands/voice_lab_recording.rs` |

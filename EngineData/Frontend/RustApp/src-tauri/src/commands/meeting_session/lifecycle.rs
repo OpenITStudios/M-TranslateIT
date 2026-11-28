@@ -464,7 +464,7 @@ fn start_meeting_impl(original_requested: bool) -> MeetingSessionActionResult {
             if settings_unverified {
                 "Saved translation settings are unreadable or inconsistent. No Local AI was started. Reconfirm your translation engine in Settings.".to_string()
             } else {
-                "Codex Voice is selected but not yet verified. No audio or AI runtime was started. Choose Local to use the offline engine.".to_string()
+                "Your saved Codex Voice preference is retired. No audio or AI runtime was started. Choose Local to use the offline engine.".to_string()
             },
         );
     }

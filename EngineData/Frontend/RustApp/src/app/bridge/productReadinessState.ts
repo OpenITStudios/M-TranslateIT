@@ -129,7 +129,7 @@ export function mapProductReadiness(input: {
       : settingsUnverified
         ? "Saved translation settings could not be verified. Reconfirm the engine in Settings before starting."
       : codexVoiceBlocked
-        ? "Codex Voice is selected but not yet verified for translation. Select Local in Settings to start offline translation."
+        ? "Your saved Codex Voice preference is retired. Select Local in Settings to start offline translation."
       : helperChecking
         ? "Checking the local AI worker. Its current readiness must be confirmed before starting Translation."
       : voiceGate.nextAction

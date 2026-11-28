@@ -19,7 +19,7 @@
   let saving = $state(false);
   let savingMessage = $state("");
 
-  async function chooseEngine(engine: "local" | "codex"): Promise<void> {
+  async function chooseEngine(engine: "local"): Promise<void> {
     // A corrupt persisted settings file is presented through tolerant UI
     // defaults, but only an explicit re-save can restore native admission.
     if (saving || locked || (settings.translation_engine === engine && !needsReconfirmation)) return;
@@ -48,9 +48,7 @@
         return;
       }
       await onSettingsChange(confirmed);
-      savingMessage = engine === "local"
-        ? "Local translation selected."
-        : "Codex selected. Meeting translation remains blocked until Codex Voice is verified.";
+      savingMessage = "Local translation selected.";
       onNotice(savingMessage);
     } catch {
       savingMessage = nativeSaved
@@ -63,52 +61,23 @@
   }
 </script>
 
-<div class="flex flex-wrap items-start justify-between gap-5 border-t border-[var(--ti-border)] px-5 py-4">
-  <div class="min-w-0 flex-1">
-    <span class="ti-field-label">Translation engine</span>
-    <strong class="mt-1.5 block text-[13px] font-semibold leading-5">
-      {needsReconfirmation ? "Engine settings · verification required"
-        : settings.translation_engine === "codex" ? "Codex Voice · not yet available" : "Local · offline"}
-    </strong>
-    <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">
-      Local runs on this computer after setup. Codex Voice is experimental and cannot start Meeting translation yet.
-    </p>
-    <details class="mt-2 text-[12.5px] leading-5 text-[var(--ti-text-muted)]">
-      <summary class="cursor-pointer font-medium">About translation engines</summary>
-      <p class="mb-0 mt-2">
-        Local uses Whisper, MiLMMT and the selected GPT-SoVITS voice.
-        Codex Voice is an optional future route and cannot start translation until its audio access,
-        included-usage terms and translated-text output are verified.
-        Selecting Codex does not send microphone audio or enable cloud inference.
+{#if needsReconfirmation || settings.translation_engine === "codex"}
+  <div class="flex flex-wrap items-start justify-between gap-5 border-t border-[var(--ti-border)] px-5 py-4">
+    <div class="min-w-0 flex-1">
+      <span class="ti-field-label">Translation engine recovery</span>
+      <strong class="mt-1.5 block text-[13px] font-semibold leading-5">Local · offline</strong>
+      <p class="mb-0 mt-2 text-[13px] leading-5 text-[var(--ti-text-muted)]" role="alert">
+        {needsReconfirmation
+          ? "Saved engine settings could not be verified. Confirm Local before starting Meeting translation. Preferences that could not be recovered from a damaged file may reset to defaults."
+          : "Your saved Codex Voice preference is retired. Switch to Local to use offline translation. Original Microphone remains available."}
       </p>
-    </details>
-    {#if needsReconfirmation}
-      <p class="mb-0 mt-2 text-[12px] leading-5 text-[var(--ti-text-muted)]" role="alert">
-        Saved engine settings could not be verified. Confirm the intended
-        engine before starting Meeting translation. Preferences that could
-        not be recovered from a damaged file may reset to defaults.
-      </p>
-      {#if settings.translation_engine === "local"}
-        <button type="button" class="ti-button ti-button-secondary mt-3"
-          disabled={locked || saving} onclick={() => void chooseEngine("local")}>
-          Reconfirm Local engine
-        </button>
+      <button type="button" class="ti-button ti-button-secondary mt-3"
+        disabled={locked || saving} onclick={() => void chooseEngine("local")}>
+        {needsReconfirmation ? "Reconfirm Local engine" : "Switch to Local"}
+      </button>
+      {#if savingMessage}
+        <p class="mb-0 mt-2 text-[11.5px] leading-5 text-[var(--ti-text-muted)]" role="status">{savingMessage}</p>
       {/if}
-    {/if}
-    {#if savingMessage}
-      <p class="mb-0 mt-2 text-[11.5px] leading-5 text-[var(--ti-text-muted)]" role="status">
-        {savingMessage}
-      </p>
-    {/if}
+    </div>
   </div>
-  <select
-    class="ti-field w-full shrink-0 px-3 sm:w-[228px]"
-    aria-label="Translation engine"
-    disabled={locked || saving}
-    value={settings.translation_engine === "codex" ? "codex" : "local"}
-    onchange={(event) => void chooseEngine((event.currentTarget as HTMLSelectElement).value as "local" | "codex")}
-  >
-    <option value="local">Local · available</option>
-    <option value="codex">Codex Voice · experimental</option>
-  </select>
-</div>
+{/if}

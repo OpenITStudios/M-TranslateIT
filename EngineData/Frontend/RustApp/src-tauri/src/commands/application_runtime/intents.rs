@@ -24,7 +24,7 @@ fn require_local_outbound_setup() -> Result<(), IntentOutcome> {
             if settings_unverified {
                 "Saved translation settings are unreadable or inconsistent. No Local AI setup was started. Reconfirm the engine in Settings."
             } else {
-                "Codex Voice is selected but not verified. Local Meeting AI setup was not started. Select Local in Settings for offline translation."
+                "Your saved Codex Voice preference is retired. Local Meeting AI setup was not started. Select Local in Settings for offline translation."
             }.to_string(),
         ))
     }

@@ -60,7 +60,7 @@ Alternate Meeting source: **Original Microphone** passes the selected physical m
 - Session Listening is the normal Meeting translation capture mode; Original Microphone passthrough and source switching share the same session. Push to Talk and Pause/Resume are outside current scope.
 - Two built-in English reference voices require no personal voice training; native runtime readiness is verified before Meeting.
 - My Voice is an optional native reference-based voice created from authorized recordings, reviewed and explicitly selected for Meeting. Legacy personal model training is retired; existing recordings and saved history are preserved.
-- No silent cloud fallback or parallel normal AI engine.
+- No silent cloud fallback or parallel normal AI engine. Direct Codex Voice Gateway is retired; an old saved Codex preference requires explicit Local recovery. The separate planned Dictate Text/MCP handoff does not authorize direct cloud audio or a second inference engine.
 - App updates use a signed one-shot startup check: no updater daemon, polling timer, tray service, or forced restart. Release signing and GitHub Release publication remain explicit release operations.
 
 ## Current architecture

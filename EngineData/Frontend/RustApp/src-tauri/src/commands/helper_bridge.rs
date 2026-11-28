@@ -239,20 +239,6 @@ pub fn prepare_required_outbound_ai_runtime(meeting_generation: u64) -> Result<(
     Ok(())
 }
 
-/// Future Codex TTS-only admission check. It never proves or activates
-/// cloud Voice and never overwrites the existing Local full-pipeline proof.
-pub(crate) fn prepare_codex_voice_only_runtime(
-    meeting_generation: u64,
-) -> Result<(u64, String), &'static str> {
-    if crate::engine::meeting_engine_admission()
-        != crate::engine::settings::MeetingEngineAdmission::Codex
-    {
-        return Err("codex_voice:engine_not_selected");
-    }
-    let _ = meeting_generation;
-    Err("codex_voice:native_voice_integration_pending")
-}
-
 // The canonical helper mutex owns native lifecycle and inference.
 // Read-only status cannot wait for that owner. A busy lock is UNKNOWN, never
 // Ready, Stopped, a guessed generation, or a reason to restart the worker.

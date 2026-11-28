@@ -324,7 +324,7 @@
         <details class="group mx-5 mb-5 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)]" open={settings.translation_engine === "codex" || snapshot.meetingSession?.preflight?.blockers?.includes("meeting_session:settings_unverified") === true}>
           <summary class="flex min-h-12 cursor-pointer items-center gap-2 px-5 py-3 text-[13px] font-semibold text-[var(--ti-text-muted)] hover:bg-[var(--ti-surface-hover)]">
             <span aria-hidden="true" class="inline-block text-[11px] transition-transform group-open:rotate-90">▸</span> Advanced audio options
-            <span class="ml-auto text-[12px] font-normal">Engine &amp; noise</span>
+            <span class="ml-auto text-[12px] font-normal">Noise suppression &amp; recovery</span>
           </summary>
           <div class="border-t border-[var(--ti-border)]">
             <MeetingTranslationEngine

@@ -9,7 +9,6 @@
   import { sanitizeDiagnosticText } from "../../app/shared/diagnosticPrivacy";
   import MeetingPerformanceDiagnostics from "./MeetingPerformanceDiagnostics.svelte";
   import RuntimeReliabilityDiagnostics from "./RuntimeReliabilityDiagnostics.svelte";
-  import CodexGatewayDiagnostics from "./CodexGatewayDiagnostics.svelte";
 
   let {
     snapshot,
@@ -153,15 +152,6 @@
 
   </details>
 
-  <details class="min-w-0">
-    <summary class="min-h-11 cursor-pointer rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-4 py-3 text-[14px] font-semibold hover:bg-[var(--ti-surface-hover)]">
-      Codex Gateway details
-      <span class="mt-1 block text-[13px] font-normal leading-5 text-[var(--ti-text-muted)]">Account connection and technical gateway checks</span>
-    </summary>
-    <div class="mt-3">
-      <CodexGatewayDiagnostics />
-    </div>
-  </details>
   <details class="min-w-0">
     <summary class="min-h-11 cursor-pointer rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-4 py-3 text-[14px] font-semibold hover:bg-[var(--ti-surface-hover)]">
       Meeting performance details

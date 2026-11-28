@@ -55,6 +55,7 @@
   const engineSettingsUnverified = $derived(
     snapshot?.meetingSession?.preflight?.blockers?.includes("meeting_session:settings_unverified") === true,
   );
+  const engineRecoveryRequired = $derived(engineSettingsUnverified || snapshot?.settings.translation_engine === "codex");
   const routeCheck = $derived(setupReadState === "unavailable" ? "unavailable" : classifyVirtualMicRoute(routeStatus));
   // An unsaved device choice is not the verified microphone in the runtime snapshot.
   const microphoneSelectionPending = $derived(
@@ -159,7 +160,8 @@
     // engine. Refresh native truth before leaving the recovery-only UI.
     await refreshSnapshot();
     if (setupReadState !== "verified" || !snapshot?.meetingSession?.preflight
-        || snapshot.meetingSession.preflight.blockers.includes("meeting_session:settings_unverified")) {
+        || snapshot.meetingSession.preflight.blockers.includes("meeting_session:settings_unverified")
+        || snapshot.settings.translation_engine !== "local") {
       message = "Engine confirmation was saved, but setup status could not be verified. Check setup status.";
       return;
     }
@@ -182,7 +184,7 @@
   }
 
   async function persistSetupFact(state: SetupState, nextCheckpoint: SetupStep): Promise<boolean> {
-    if (snapshot === null || engineSettingsUnverified) {
+    if (snapshot === null || engineRecoveryRequired) {
       message = "Saved engine settings must be verified before setup can be saved. Confirm the translation engine first.";
       return false;
     }
@@ -333,7 +335,7 @@
     try {
       await refreshSnapshot();
       if (setupReadState !== "verified") return;
-      if (engineSettingsUnverified) {
+      if (engineRecoveryRequired) {
         message = "Saved engine settings need confirmation before setup can continue.";
         return;
       }
@@ -445,7 +447,7 @@
         <strong class="block text-sm font-semibold">TranslateIT</strong>
         <span class="mt-0.5 block text-xs text-[var(--ti-text-muted)]">{step === 1 ? "Get started" : "Meeting setup"}</span>
       </div>
-      {#if snapshot !== null && !engineSettingsUnverified}
+      {#if snapshot !== null && !engineRecoveryRequired}
         <div class="ml-auto min-w-44" role="progressbar" aria-label="Setup step" aria-valuemin="1" aria-valuemax="4" aria-valuenow={step}>
           <div class="text-[12px] font-semibold text-[var(--ti-text-muted)]">Step {step} of 4</div>
           <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--ti-border)]">
@@ -467,18 +469,19 @@
           disabled={busy || checkingSetup} onclick={() => void initialize()}>
           {checkingSetup ? "Checking..." : "Check setup status"}
         </button>
-      {:else if engineSettingsUnverified}
+      {:else if engineRecoveryRequired}
         <div>
           <span class="ti-kicker">Settings recovery</span>
           <h1 class="ti-page-title">Confirm the Meeting translation engine</h1>
           <p class="ti-page-copy">
-            The saved engine settings could not be verified. Setup will not overwrite
-            them with a default choice. Confirm an engine explicitly before continuing.
+            {engineSettingsUnverified
+              ? "The saved engine settings could not be verified. Setup will not overwrite them with a default choice. Confirm Local before continuing."
+              : "The saved Codex Voice preference is retired. Switch to Local explicitly before continuing."}
           </p>
         </div>
         <MeetingTranslationEngine
           {settings}
-          needsReconfirmation={true}
+          needsReconfirmation={engineSettingsUnverified}
           locked={busy}
           onSettingsChange={confirmEngineSelection}
           onNotice={(notice) => { message = notice; }}

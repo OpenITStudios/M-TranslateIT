@@ -622,7 +622,7 @@ export const runtimeApi = {
   },
 
   async selectTranslationEngine(
-    engine: "local" | "codex",
+    engine: "local",
     expectedCurrentEngine: "local" | "codex",
   ): Promise<CommandResult> {
     return invokeOr<CommandResult>(
@@ -632,7 +632,7 @@ export const runtimeApi = {
     );
   },
 
-  async confirmUnverifiedTranslationEngine(engine: "local" | "codex"): Promise<CommandResult> {
+  async confirmUnverifiedTranslationEngine(engine: "local"): Promise<CommandResult> {
     return invokeOr<CommandResult>(
       "confirm_unverified_translation_engine",
       { engine },

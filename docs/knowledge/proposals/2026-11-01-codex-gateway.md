@@ -9,6 +9,8 @@ lifecycle: ACTIVE
 
 # Codex Gateway — Optional Meeting Route (Architecture and Admission)
 
+**Retired from active product:** direct Voice Gateway/account diagnostics and offline gateway adapters are removed from the active tree. This document records historical research at [da15722](https://github.com/OpenITStudios/M-TranslateIT/tree/da1572278ca7f023c25f7adbc6b2739ad851c80a), not a current implementation plan. The independent, approved PR-072B Dictate Text/MCP handoff remains planned and Local-only after text ingress.
+
 **Decision:** 2026-11-01. **Source baseline:** TranslateIT Local at
 `3bfc04460cbe246fb382230ae223580722cc0f6e`.
 **Evidence:** STATIC_SOURCE only; no Codex login, API inference, audio, Windows build,
