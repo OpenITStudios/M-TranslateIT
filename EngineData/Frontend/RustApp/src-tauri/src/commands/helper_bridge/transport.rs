@@ -201,7 +201,7 @@ impl<'a> MeetingInput<'a> {
 // PCM stays in Rust ownership, never in the public worker JSON.
 enum NativeVoiceIo<'a> {
     Bind,
-    Synthesize(&'a mut Option<Vec<f32>>),
+    Synthesize { text: &'a str, actor_token: &'a str, samples: &'a mut Option<Vec<f32>> },
     ProbeSpeech(Vec<f32>),
 }
 
@@ -305,10 +305,10 @@ pub(super) fn bind_native_voice(payload: Value) -> HelperBridgeWorkerResponse {
     send_worker_task_with_input("voice_actor_preflight", payload, None, Some(NativeVoiceIo::Bind))
 }
 
-pub(super) fn synthesize_native_voice(payload: Value) -> (HelperBridgeWorkerResponse, Option<Vec<f32>>) {
+pub(super) fn synthesize_native_voice(payload: Value, text: &str, actor_token: &str) -> (HelperBridgeWorkerResponse, Option<Vec<f32>>) {
     let mut samples = None;
     let response = send_worker_task_with_input("voice_actor_synthesize", payload, None,
-        Some(NativeVoiceIo::Synthesize(&mut samples)));
+        Some(NativeVoiceIo::Synthesize { text, actor_token, samples: &mut samples }));
     if !response.ok { samples = None; }
     (response, samples)
 }

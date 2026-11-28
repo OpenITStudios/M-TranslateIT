@@ -20,3 +20,18 @@ test("native requests retain scheduler identity, exact Meeting scope and a bound
   }
   assert.doesNotMatch(startup + transport, /Command::new|resolve_worker_python_command|begin_worker_stdin_write|begin_worker_stdout_read/);
 });
+
+test("native synthesis borrows text and actor authority through admission and returns owned PCM", () => {
+  assert.match(transport, /Synthesize \{ text: &\x27a str, actor_token: &\x27a str, samples: &\x27a mut Option<Vec<f32>> \}/);
+  assert.match(native, /is_voice && \(payload\.get\("text"\)\.is_some\(\) \|\| payload\.get\("expected_actor_token"\)\.is_some\(\)\)/);
+  assert.match(native, /actor_token\.expect\("checked token"\), preparing, \(\*text\)\.to_owned\(\), deadline/);
+  assert.match(native, /token\.is_empty\(\) \|\| token\.len\(\) > 512/);
+  assert.match(native, /\*\*slot = Some\(samples\)/);
+  for (const caller of [read("meeting_session/outbound_pipeline.rs"), read("helper_bridge/functional_probe.rs")]) {
+    const call = caller.slice(caller.indexOf("synthesize_native_voice(json!({"));
+    assert.ok(call.startsWith("synthesize_native_voice(json!({"));
+    const metadata = call.slice(0, call.indexOf("}),"));
+    assert.doesNotMatch(metadata, /"text":|"expected_actor_token":/);
+    assert.match(call, /\}\), &?translated_(?:text|fixture), &actor_token\)/);
+  }
+});

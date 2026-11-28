@@ -473,14 +473,12 @@ fn process_outbound_transcript(
     }
     let tts_started_at = Instant::now();
     let (tts, native_pcm) = synthesize_native_voice(json!({
-        "text": translated_text,
-        "expected_actor_token": actor_token,
         "meeting_session_id": session_id,
         "meeting_lane": "you",
         "meeting_generation": generation,
         "meeting_sequence": event_sequence,
         "utterance_id": utterance_id,
-    }));
+    }), translated_text, &actor_token);
     timing.metrics.tts_ms = Some(elapsed_millis(tts_started_at, Instant::now()));
     timing.metrics.tts_scheduler_wait_ms = super::worker_scheduler_wait_ms(&tts);
     timing.metrics.tts_worker_attempt_timing = super::worker_attempt_timing(&tts);

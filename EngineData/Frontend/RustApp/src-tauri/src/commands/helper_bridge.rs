@@ -146,8 +146,8 @@ pub(crate) fn native_voice_candidate_enabled() -> bool {
     cfg!(windows)
 }
 
-pub(crate) fn synthesize_native_voice(payload: Value) -> (HelperBridgeWorkerResponse, Option<Vec<f32>>) {
-    transport::synthesize_native_voice(payload)
+pub(crate) fn synthesize_native_voice(payload: Value, text: &str, actor_token: &str) -> (HelperBridgeWorkerResponse, Option<Vec<f32>>) {
+    transport::synthesize_native_voice(payload, text, actor_token)
 }
 
 pub(crate) fn native_voice_pcm_receipt_matches(response: &HelperBridgeWorkerResponse,

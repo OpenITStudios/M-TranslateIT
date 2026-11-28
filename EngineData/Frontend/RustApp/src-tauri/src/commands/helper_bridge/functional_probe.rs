@@ -125,11 +125,9 @@ pub(super) fn run_required_outbound_ai_probe(
     };
 
     let (voice, samples) = super::transport::synthesize_native_voice(json!({
-        "text": translated_fixture,
-        "expected_actor_token": actor_token.clone(),
         "meeting_start_prepare": meeting_start_prepare,
         "meeting_generation": meeting_generation,
-    }));
+    }), &translated_fixture, &actor_token);
     if !same_probe_inference(&voice, generation_token, native_device)
         || !super::native_voice_pcm_receipt_matches(&voice, &actor_token, samples.as_deref()) {
         invalidate_required_outbound_ai_readiness();

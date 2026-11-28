@@ -221,14 +221,17 @@ pub(super) fn dispatch(
         return fail("translation:typed_request_invalid", "Native Meeting translation content must not enter JSON.");
     }
     let is_bind = matches!(voice.as_ref(), Some(NativeVoiceIo::Bind));
-    let is_voice = matches!(voice.as_ref(), Some(NativeVoiceIo::Synthesize(_)));
+    let is_voice = matches!(voice.as_ref(), Some(NativeVoiceIo::Synthesize { .. }));
     let is_probe_speech = matches!(voice.as_ref(), Some(NativeVoiceIo::ProbeSpeech(_)));
     if voice.is_some() && (pcm.is_some()
         || !matches!((task, voice.as_ref()),
             ("voice_actor_preflight", Some(NativeVoiceIo::Bind))
-            | ("voice_actor_synthesize", Some(NativeVoiceIo::Synthesize(_)))
+            | ("voice_actor_synthesize", Some(NativeVoiceIo::Synthesize { .. }))
             | ("transcribe", Some(NativeVoiceIo::ProbeSpeech(_))))) {
         return fail("native_voice:typed_request_invalid", "Native voice requires typed input.");
+    }
+    if is_voice && (payload.get("text").is_some() || payload.get("expected_actor_token").is_some()) {
+        return fail("native_voice:typed_request_invalid", "Native synthesis metadata must not duplicate typed text or actor authority.");
     }
     let Some(deadline) = u64::try_from(deadline_ms).ok()
         .and_then(|ms| admitted_at.checked_add(Duration::from_millis(ms))) else {
@@ -369,11 +372,11 @@ pub(super) fn dispatch(
     let mut actor_token = None;
     let (input, from, to) = if is_bind || is_voice {
         if is_voice {
-            let Some(token) = payload.get("expected_actor_token").and_then(Value::as_str)
-                .filter(|token| !token.is_empty() && token.len() <= 512).map(str::to_owned) else {
+            let Some(NativeVoiceIo::Synthesize { actor_token: token, .. }) = voice.as_ref() else { unreachable!("checked synthesis input") };
+            if token.is_empty() || token.len() > 512 {
                 return fail("native_voice:actor_authority_missing", "Selected native voice authority is required.");
-            };
-            actor_token = Some(token);
+            }
+            actor_token = Some(*token);
         }
         (None, Language::English, None)
     } else if task == "transcribe" {
@@ -445,11 +448,10 @@ pub(super) fn dispatch(
             owner.begin_selected_voice(request_scope.generation, request_scope.session_id.as_deref(),
                 reference, deadline).map(|(id, pending)| { bound_id = Some(id); pending })
         } else if is_voice {
-            let Some(Value::String(text)) = payload.as_object_mut().and_then(|object| object.remove("text")) else {
-                return fail("voice_actor:empty_text", "Current English synthesis text is required.");
-            };
+            let Some(NativeVoiceIo::Synthesize { text, .. }) = voice.as_ref() else { unreachable!("checked synthesis input") };
+            // Only admitted native work owns a text allocation; the scheduler borrows it.
             owner.begin_bound_voice(request_scope.generation, request_scope.session_id.as_deref(),
-                actor_token.as_deref().expect("checked token"), preparing, text, deadline)
+                actor_token.expect("checked token"), preparing, (*text).to_owned(), deadline)
         } else {
             owner.owner.begin(input.expect("checked text or speech input"), deadline)
         }
@@ -517,7 +519,7 @@ pub(super) fn dispatch(
                 "note": "Selected native voice reference bound; synthesis proof remains separate."})
         }
         Ok(InferenceOutput::Voice(samples)) if is_voice => {
-            let Some(NativeVoiceIo::Synthesize(slot)) = voice.as_mut() else { unreachable!("checked output slot") };
+            let Some(NativeVoiceIo::Synthesize { samples: slot, .. }) = voice.as_mut() else { unreachable!("checked output slot") };
             let sample_count = samples.len();
             **slot = Some(samples);
             json!({"ok": true, "stage": task, "blocker": "", "device": "cuda",
