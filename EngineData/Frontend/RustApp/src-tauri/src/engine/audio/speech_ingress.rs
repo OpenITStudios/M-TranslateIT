@@ -5,6 +5,10 @@ use crate::engine::audio::silero::{Silero, SpeechWindows};
 use std::sync::atomic::AtomicBool;
 use std::thread::{self, JoinHandle};
 
+// PCM callbacks wake the worker; retain a short fallback for capture-error
+// epochs and ingress-lock losses published outside the PCM queue.
+const IDLE_RECHECK: Duration = Duration::from_millis(10);
+
 pub(super) struct SpeechIngress {
     pub session: String,
     pub generation: Option<u64>,
@@ -75,7 +79,7 @@ impl SpeechIngress {
                             for_worker.invalidate(); observed_transport_loss = external_loss;
                         }
                         match for_worker.drain_into(&mut pcm, rate as usize / 5, &mut loss_epoch) {
-                            PcmDrain::Empty => { thread::park_timeout(Duration::from_millis(2)); continue; }
+                            PcmDrain::Empty => { thread::park_timeout(IDLE_RECHECK); continue; }
                             PcmDrain::Stopped => return Ok(()),
                             PcmDrain::Poisoned => return Err("silero:pcm_poisoned".to_string()),
                             PcmDrain::Discontinuity => {
@@ -142,17 +146,26 @@ impl SpeechIngress {
             #[cfg(test)] observations })
     }
 
+    fn wake_cpu(&self) {
+        if let Some(handle) = self.thread.as_ref() { handle.thread().unpark(); }
+    }
+
     pub fn push(&self, pcm: &[f32], rate: u32) {
         if rate != self.rate {
             // A CPAL callback cannot wait behind a concurrent fault/status reader.
             // Stop the queue; the CPU owner will publish the terminal fault state.
             self.rate_mismatch.store(true, Ordering::Release);
-            self.queue.request_stop(); return;
+            self.queue.request_stop();
+            self.wake_cpu();
+            return;
         }
         if let crate::engine::audio::pcm_handoff::PcmPush::Accepted(_n) = self.queue.try_push(pcm) {
             #[cfg(test)]
             self.submitted.fetch_add(_n as u64, Ordering::Release);
         }
+        // Wake after admission returns (the ring lock has been released).
+        // Dropped nonempty callbacks also publish a discontinuity to observe.
+        if !pcm.is_empty() { self.wake_cpu(); }
     }
 
     #[cfg(test)]
@@ -162,6 +175,7 @@ impl SpeechIngress {
     pub fn push_offline(&self, pcm: &[f32]) {
         assert_eq!(self.queue.push_offline(pcm), crate::engine::audio::pcm_handoff::PcmPush::Accepted(pcm.len()));
         self.submitted.fetch_add(pcm.len() as u64, Ordering::Release);
+        if !pcm.is_empty() { self.wake_cpu(); }
     }
 
     pub fn fault(&self) -> Option<String> {
@@ -266,6 +280,56 @@ pub(super) fn verify_status_contention_fixture(pcm: &[f32]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn callback_wakes_cpu_for_samples_loss_and_rate_fault() {
+        use crate::engine::audio::pcm_handoff::{PcmDropReason, PcmPush};
+
+        for (pcm, rate, expected) in [
+            (vec![0.25], 16_000, PcmDrain::Samples(1)),
+            (vec![0.25; 5], 16_000, PcmDrain::Discontinuity),
+            (vec![0.25], 48_000, PcmDrain::Stopped),
+        ] {
+            let queue = Arc::new(PcmHandoff::new("wake-speech", PcmLane::Incoming, 1, 4).unwrap());
+            let worker_queue = Arc::clone(&queue);
+            let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+            let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
+            let handle = thread::spawn(move || {
+                let mut output = Vec::new();
+                let mut epoch = 0;
+                assert_eq!(worker_queue.drain_into(&mut output, 4, &mut epoch), PcmDrain::Empty);
+                ready_tx.send(()).unwrap();
+                // No queue lock between the ready signal and first park:
+                // this exercises a notification before or during the wait.
+                // A spurious wake must still recheck the queue.
+                let deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    thread::park_timeout(deadline.saturating_duration_since(Instant::now()));
+                    let result = worker_queue.drain_into(&mut output, 4, &mut epoch);
+                    if result != PcmDrain::Empty || Instant::now() >= deadline {
+                        done_tx.send(result).unwrap();
+                        return;
+                    }
+                }
+            });
+            let mut cpu = SpeechIngress {
+                session: "wake-speech".to_string(), generation: None, lane: LANE_INCOMING,
+                rate: 16_000, queue: Arc::clone(&queue), thread: Some(handle), join_failed: false,
+                fault: Arc::new(Mutex::new(None)), rate_mismatch: Arc::new(AtomicBool::new(false)),
+                submitted: AtomicU64::new(0),
+                processed: Arc::new(AtomicU64::new(0)), observations: Arc::new(Mutex::new(Vec::new())),
+            };
+            ready_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            cpu.push(&pcm, rate);
+            let received = done_rx.recv_timeout(Duration::from_secs(1));
+            // Always revoke/wake/join, including on timeout.
+            assert!(cpu.stop());
+            assert_eq!(received.unwrap(), expected);
+            if rate != 16_000 {
+                assert_eq!(queue.try_push(&[0.25]), PcmPush::Dropped(PcmDropReason::Stopped));
+            }
+        }
+    }
 
     #[test]
     fn stop_timeout_keeps_the_cpu_lease_until_a_confirmed_join() {
