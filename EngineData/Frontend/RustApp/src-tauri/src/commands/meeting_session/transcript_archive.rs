@@ -340,12 +340,29 @@ pub(super) fn queue_turn(turn: MeetingCommittedTurn) {
     }
 }
 
-pub(super) fn active_write_errors(session_id: &str) -> Result<u64, String> {
+fn writer_error_count(
+    store: &Mutex<Option<ArchiveWriter>>,
+    session_id: &str,
+    nonblocking: bool,
+) -> Result<u64, String> {
     // An unavailable writer lock is unknown storage health, not zero errors.
-    let guard = writer_store().lock()
-        .map_err(|_| "Cannot verify saved transcript writer errors.".to_string())?;
+    let guard = if nonblocking {
+        store.try_lock().map_err(|_| ())
+    } else {
+        store.lock().map_err(|_| ())
+    }.map_err(|_| "Cannot verify saved transcript writer errors.".to_string())?;
     Ok(guard.as_ref().filter(|w| w.session_id == session_id)
         .map(|w| w.errors.load(Ordering::Acquire)).unwrap_or(0))
+}
+
+// Explicit saved-session operations retain their existing lock semantics.
+pub(super) fn active_write_errors(session_id: &str) -> Result<u64, String> {
+    writer_error_count(writer_store(), session_id, false)
+}
+
+// Live reconciliation must not wait behind the Stop writer's Finish receipt.
+pub(super) fn observe_active_write_errors(session_id: &str) -> Result<u64, String> {
+    writer_error_count(writer_store(), session_id, true)
 }
 
 pub(super) fn ensure_saved_session_writer_finished(session_id: &str) -> Result<(), String> {
@@ -718,6 +735,31 @@ mod tests {
     use super::{turn_name, valid_id, reserve_queued_bytes, admitted_preview_bytes, finished_receipt_count,
         stored_turn_paths, scan_stored_turns, write_finished_receipt, MAX_QUEUED_ESTIMATED_BYTES};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    #[test]
+    fn live_writer_observation_never_waits_or_invents_zero_during_contention() {
+        use super::{writer_error_count, ArchiveWriter, Record};
+        use std::sync::{mpsc, Arc, Mutex};
+        use std::sync::atomic::AtomicU64;
+
+        let (sender, _receiver) = mpsc::sync_channel::<Record>(1);
+        let store = Mutex::new(Some(ArchiveWriter {
+            session_id: "meeting_fixture".into(),
+            sender,
+            thread: None,
+            errors: Arc::new(AtomicU64::new(3)),
+            queued_bytes: Arc::new(AtomicUsize::new(0)),
+            finish_reply: None,
+            finish_acknowledged: false,
+        }));
+        let held = store.lock().unwrap();
+        assert!(writer_error_count(&store, "meeting_fixture", true).is_err());
+        assert!(writer_error_count(&store, "foreign", true).is_err());
+        drop(held);
+        assert_eq!(writer_error_count(&store, "meeting_fixture", true).unwrap(), 3);
+        assert_eq!(writer_error_count(&store, "meeting_fixture", false).unwrap(), 3);
+        assert_eq!(writer_error_count(&store, "foreign", true).unwrap(), 0);
+    }
+
     #[test]
     fn saved_session_paths_accept_only_generated_meeting_identity() {
         assert!(valid_id("meeting_1760600000000_23"));

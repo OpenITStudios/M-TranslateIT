@@ -167,13 +167,17 @@ test("saved transcript Delete cannot bypass an unknown or active archive writer"
 
 test("saved listing and preview fail closed when writer health cannot be read", () => {
   const errorProbe = archive.slice(
-    archive.indexOf("pub(super) fn active_write_errors("),
+    archive.indexOf("fn writer_error_count("),
     archive.indexOf("pub(super) fn ensure_saved_session_writer_finished("),
   );
   assert.match(errorProbe, /-> Result<u64, String>/);
-  assert.match(errorProbe, /let guard = writer_store\(\)\.lock\(\)/);
-  assert.match(errorProbe, /\.map_err\(\|_\|/);
+  assert.match(errorProbe, /store\.lock\(\)\.map_err\(/);
+  assert.match(errorProbe, /store\.try_lock\(\)\.map_err\(/);
+  assert.match(errorProbe, /writer_error_count\(writer_store\(\), session_id, false\)/);
+  assert.match(errorProbe, /writer_error_count\(writer_store\(\), session_id, true\)/);
   assert.doesNotMatch(errorProbe, /\.lock\(\)\.ok\(\)/);
+  assert.match(memory, /store\.read_live\(known_revision, transcript_archive::observe_active_write_errors\(&store\.session_id\)\)/);
+  assert.match(archive, /fn live_writer_observation_never_waits_or_invents_zero_during_contention\(/);
   const listing = archive.slice(
     archive.indexOf("pub fn list_saved_sessions()"),
     archive.indexOf("pub(super) struct SavedExportInventory"),

@@ -920,7 +920,7 @@ pub(super) fn current_committed_turn_snapshot(
         ));
     }
 
-    store.read_live(known_revision, transcript_archive::active_write_errors(&store.session_id))
+    store.read_live(known_revision, transcript_archive::observe_active_write_errors(&store.session_id))
 }
 
 #[cfg(test)]
