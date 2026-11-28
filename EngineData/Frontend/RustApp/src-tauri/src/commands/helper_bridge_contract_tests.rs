@@ -55,7 +55,11 @@ fn bridge_priority_and_stale_guards_follow_production_payload_contract() {
     reset_bridge_runtime();
     let diagnostic = send_helper_worker_task("status", json!({}));
     assert_eq!(diagnostic.scheduler_priority, "diagnostic");
-    assert_eq!(response_blocker(&diagnostic), "helper_bridge:not_running");
+    assert_eq!(response_blocker(&diagnostic), if super::helper_bridge::native_voice_candidate_enabled() {
+        "native_inference:lifecycle_not_ready"
+    } else {
+        "helper_bridge:not_running"
+    });
 
     reset_bridge_runtime();
     let incomplete_incoming = send_helper_worker_task(
@@ -78,7 +82,11 @@ fn bridge_priority_and_stale_guards_follow_production_payload_contract() {
         }),
     );
     assert_eq!(start_prepare.scheduler_priority, "meeting_outbound");
-    assert_eq!(response_blocker(&start_prepare), "helper_bridge:not_running");
+    assert_eq!(response_blocker(&start_prepare), if super::helper_bridge::native_voice_candidate_enabled() {
+        "native_inference:scope_revoked"
+    } else {
+        "helper_bridge:not_running"
+    });
 
     let meeting = begin_application_meeting_session();
     assert!(meeting.blocker.is_empty());

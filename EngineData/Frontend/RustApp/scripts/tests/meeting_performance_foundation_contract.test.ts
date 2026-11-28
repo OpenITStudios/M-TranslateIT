@@ -113,7 +113,7 @@ test("finalized Meeting PCM enters the existing scheduler and only native infere
   assert.doesNotMatch(native, /acquire_helper_task_permit\(|\.samples\.clone\(|write_finalized_.*_wav/);
   assert.match(native, /pcm\.utterance\.borrow_mut\(\)\.take\(\)/);
   assert.match(native, /condition_asr_pcm\(&mut samples, pcm\.noise_suppression_enabled\)/);
-  assert.match(native, /drop\(host\);[\s\S]*?let result = pending\.wait\(\);/);
+  assert.match(native, /drop\(host\);[\s\S]*?let result = pending\.wait_output\(\);/);
   assert.match(native, /host\.generation_token != bridge_generation/);
   assert.match(outbound, /asr_wall_ms\.saturating_sub\(timing\.metrics\.audio_prepare_ms\)/);
 });

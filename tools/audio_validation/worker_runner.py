@@ -45,6 +45,13 @@ class WorkerTransportError(RuntimeError):
     pass
 
 
+def require_full_voice_pipeline() -> None:
+    # Current Python WorkerRuntime exports only voice/control handlers.
+    # The historical combined ASR/MT/TTS runner cannot produce current
+    # native evidence until its selected-voice integration is migrated.
+    raise WorkerTransportError("audio_pipeline:legacy_asr_mt_removed_native_voice_integration_held")
+
+
 def pinned_source(expected: str) -> None:
     if not re.fullmatch(r"[a-f0-9]{40}", expected):
         raise ValueError("external exact 40-character Local SHA required")
@@ -194,6 +201,8 @@ def run_finalized(fixtures: Path, python: Path | None, expected_sha: str, select
                   vad_source_sha: str | None = None, profile: str | None = None,
                   source_checks: dict | None = None, artifacts_dir: Path | None = None) -> dict:
     """Diagnostic ASR on actual exported Rust segments, not app acceptance."""
+    if pipeline:
+        require_full_voice_pipeline()
     from vad_runner import CLAIM, verify_segments
 
     pinned_source(expected_sha)
@@ -478,6 +487,7 @@ def run(fixtures: Path, python: Path | None, expected_sha: str,
         if python is not None:
             raise ValueError("native raw audio accepts no --python")
         return run_native_raw_audio(fixtures, expected_sha, selection, result_path, timeout)
+    require_full_voice_pipeline()
     if python is None:
         raise ValueError("legacy selected-voice diagnostic requires --python")
     pinned_source(expected_sha)
@@ -922,10 +932,12 @@ def report_summary(report: dict, output: Path) -> dict:
             "execution_error": report.get("execution_error") or report.get("transport_error") or report.get("source_admission_error")}
 
 
-def admission_failure(profile: dict, source_sha: str, source_checks: dict, stage: str, error: str) -> dict:
+def admission_failure(profile: dict, source_sha: str, source_checks: dict | None, stage: str, error: str) -> dict:
     checks = [{"scenario_id": name, "round": iteration, "status": "UNVERIFIED", "first_wrong_stage": stage,
-               "expected": "source validators and current canonical VAD complete before worker inference",
-               "actual": error, "evidence": ["#/source_checks"]}
+               "expected": ("current ASR/MT and selected voice execution route"
+                            if stage == "pipeline_capability" else
+                            "source validators and current canonical VAD complete before worker inference"),
+               "actual": error, "evidence": ["#/source_admission_error"] if stage == "pipeline_capability" else ["#/source_checks"]}
               for iteration in range(1, profile["rounds"] + 1) for name in profile["scenario_ids"]]
     return {"schema": "translateit.finalized_pipeline.v2", "execution_profile": profile,
             "source_identity": {"local_sha": source_sha}, "source_checks": source_checks,
@@ -979,11 +991,25 @@ def main() -> int:
     legacy_voice = bool(args.profile or args.finalized_pipeline or args.include_voice)
     if not legacy_voice and args.python is not None:
         parser.error("native audio diagnostics accept no --python")
-    if legacy_voice and args.python is None:
-        parser.error("legacy voice diagnostics require --python")
     profile = regression_profile(args.profile) if args.profile else None
     rounds = profile["rounds"] if profile else (args.rounds if args.rounds is not None else 1)
     ids = set(profile["scenario_ids"] if profile else args.ids)
+    if legacy_voice:
+        try:
+            require_full_voice_pipeline()
+        except WorkerTransportError as error:
+            # Keep the named profile's explicit blocked evidence and coverage,
+            # but do not start source validators, VAD or the obsolete worker.
+            if profile:
+                pinned_source(args.source_sha)
+                result = admission_failure(profile, args.source_sha, None,
+                                           "pipeline_capability", str(error))
+                publish_report(args.output, result)
+                print(json.dumps(report_summary(result, args.output), ensure_ascii=False, indent=2))
+                return 2
+            parser.error(str(error))
+        if args.python is None:
+            parser.error("legacy voice diagnostics require --python")
     if profile:
         if any((args.vad_observations, args.segments_dir, args.include_voice, args.vad_source_sha)):
             parser.error("core/endurance run fresh VAD themselves; retained inputs require custom --ids")

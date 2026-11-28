@@ -58,13 +58,39 @@ class AudioPipelineTests(unittest.TestCase):
         bad['checks'][1]['exit_code'] = 2
         self.assertFalse(source_admission_passed(bad, '2' * 40))
 
+    def test_legacy_full_voice_route_blocks_before_models_or_vad(self):
+        for profile, rounds in (("core", 2), ("endurance", 20)):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as tmp:
+                output = Path(tmp) / "blocked.json"
+                args = ["worker_runner", "--profile", profile, "--fixtures", "fixture",
+                        "--source-sha", "2" * 40, "--output", str(output)]
+                with patch.object(sys, "argv", args), patch.object(worker_runner, "pinned_source"), patch.object(worker_runner, "run_source_checks") as source, patch.object(vad_runner, "run") as vad, patch.object(worker_runner, "Worker") as old:
+                    self.assertEqual(worker_runner.main(), 2)
+                    source.assert_not_called()
+                    vad.assert_not_called()
+                    old.assert_not_called()
+                report = json.loads(output.read_text(encoding="utf-8"))
+                self.assertEqual(report["counts"]["UNVERIFIED"], 13 * rounds)
+                self.assertEqual(report["verdict"], "FAIL")
+                self.assertTrue(all(c["first_wrong_stage"] == "pipeline_capability" for c in report["checks"]))
+        with patch.object(worker_runner, "Worker") as old:
+            with self.assertRaisesRegex(worker_runner.WorkerTransportError, "legacy_asr_mt_removed"):
+                worker_runner.run(Path("fixture"), Path("python"), "2" * 40, {"A01"},
+                                  Path("new.json"), True, 5)
+            with self.assertRaisesRegex(worker_runner.WorkerTransportError, "legacy_asr_mt_removed"):
+                worker_runner.run_finalized(Path("fixture"), Path("python"), "2" * 40, {"A01"},
+                    Path("new.json"), 5, Path("vad.json"), Path("segments"), pipeline=True)
+            old.assert_not_called()
+
+    # Historical dispatch/receipt simulations remain independently testable;
+    # the real CLI and direct legacy execution are blocked above.
     def test_core_cli_admission_prevents_model_execution(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / 'blocked.json'
             args = ['worker_runner', '--profile', 'core', '--fixtures', 'fixtures', '--python', 'python',
                     '--source-sha', '2' * 40,
                     '--output', str(output)]
-            with patch.object(sys, 'argv', args), patch.object(worker_runner, 'run_source_checks', return_value={
+            with patch.object(sys, 'argv', args), patch.object(worker_runner, 'require_full_voice_pipeline'), patch.object(worker_runner, 'run_source_checks', return_value={
                 'verdict': 'FAIL', 'checks': [{'name': 'audio_contracts', 'status': 'FAIL'}]
             }), patch.object(worker_runner, 'run_finalized') as model, patch.object(vad_runner, 'run') as vad:
                 self.assertEqual(worker_runner.main(), 2)
@@ -83,7 +109,7 @@ class AudioPipelineTests(unittest.TestCase):
                 output = Path(tmp) / 'new.json'
                 args = ['worker_runner', '--profile', profile, '--fixtures', 'fixtures', '--python', 'python',
                         '--source-sha', '2' * 40, '--output', str(output)]
-                with patch.object(sys, 'argv', args), patch.object(worker_runner, 'run_source_checks', return_value=source), patch.object(
+                with patch.object(sys, 'argv', args), patch.object(worker_runner, 'require_full_voice_pipeline'), patch.object(worker_runner, 'run_source_checks', return_value=source), patch.object(
                     vad_runner, 'run'
                 ) as vad, patch.object(worker_runner, 'run_finalized', return_value={
                     'proof': 'SIMULATED_DISPATCH_ONLY', 'verdict': 'PASS', 'checks': [], 'counts': {}}
@@ -106,7 +132,7 @@ class AudioPipelineTests(unittest.TestCase):
             output = Path(tmp) / 'new.json'
             args = ['worker_runner', '--profile', 'core', '--fixtures', 'fixtures', '--python', 'python',
                     '--source-sha', '2' * 40, '--output', str(output)]
-            with patch.object(sys, 'argv', args), patch.object(worker_runner, 'run_source_checks', return_value=source), patch.object(
+            with patch.object(sys, 'argv', args), patch.object(worker_runner, 'require_full_voice_pipeline'), patch.object(worker_runner, 'run_source_checks', return_value=source), patch.object(
                 vad_runner, 'run', side_effect=ValueError('controlled VAD execution failure')
             ), patch.object(worker_runner, 'run_finalized') as model:
                 self.assertEqual(worker_runner.main(), 2)
@@ -209,7 +235,7 @@ class AudioPipelineTests(unittest.TestCase):
                             response.update(actor_token='selected-actor', output_path=str(path))
                         return response
 
-                with patch.object(worker_runner, 'pinned_source'), patch.object(worker_runner, 'inspect', return_value=manifest), patch.object(worker_runner, 'Worker', FakeWorker):
+                with patch.object(worker_runner, 'require_full_voice_pipeline'), patch.object(worker_runner, 'pinned_source'), patch.object(worker_runner, 'inspect', return_value=manifest), patch.object(worker_runner, 'Worker', FakeWorker):
                     with self.assertRaises(ValueError):
                         worker_runner.run_finalized(root, root, '2' * 40, selection,
                             root / 'rejected.json', 120, vad, segments, pipeline=True)
@@ -409,7 +435,7 @@ class AudioPipelineTests(unittest.TestCase):
                 '--ids', 'A04', '--output', 'new.json', '--vad-observations', 'vad.json',
                 '--segments-dir', 'segments', '--finalized-pipeline']
         for verdict in ('FAIL', 'UNVERIFIED'):
-            with self.subTest(verdict=verdict), patch.object(sys, 'argv', args), patch.object(
+            with self.subTest(verdict=verdict), patch.object(sys, 'argv', args), patch.object(worker_runner, 'require_full_voice_pipeline'), patch.object(
                 worker_runner, 'run_finalized', return_value={'results': [], 'proof': 'SIMULATED_CLI_CONTRACT', 'verdict': verdict}
             ):
                 self.assertEqual(worker_runner.main(), 2)
