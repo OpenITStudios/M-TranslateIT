@@ -429,6 +429,9 @@ int32_t infer(ti_asr & asr, const float * pcm, size_t count, const char * langua
     const mtmd_input_text text{prompt.data(), prompt.size(), false, true};
     if (mtmd_tokenize(projector, chunks.get(), &text, bitmaps, 1) != 0 ||
         mtmd_input_chunks_size(chunks.get()) == 0) return TI_INFERENCE;
+    // Pinned mtmd tokenization owns the preprocessed audio (including any
+    // deferred samples); the copied input bitmap is not needed by decoding.
+    bitmap.reset();
 
     if (const auto stop = control.check(); stop != TI_OK) return stop;
     const auto n_pos = mtmd_helper_get_n_pos(chunks.get());
