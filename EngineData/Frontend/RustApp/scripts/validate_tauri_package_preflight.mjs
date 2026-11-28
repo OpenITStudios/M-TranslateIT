@@ -159,7 +159,7 @@ requireMarkers(pathsOwnerRs, "canonical path owner", [
 
 const helperBridgeRs = readText(helperBridgePath);
 requireMarkers(helperBridgeRs, "native helper ownership", [
-  "project_candidate_status(&mut runtime)",
+  "project_candidate_status(&mut runtime, false)",
   "native_owner_healthy()",
 ]);
 forbidMarkers(helperBridgeRs, "retired Python inference startup", [

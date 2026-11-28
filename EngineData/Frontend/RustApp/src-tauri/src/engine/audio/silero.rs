@@ -25,24 +25,27 @@ fn verified(path: &Path, expected: &str, expected_size: u64) -> Result<Vec<u8>, 
     Ok(bytes)
 }
 
-fn packages() -> Result<PathBuf, String> {
+// One native asset layout for both verified repository and packaged roots.
+// A missing asset must block admission, not fall back to a Python environment.
+fn native_ort_root(paths: &ProjectPaths) -> Result<PathBuf, String> {
     if !cfg!(windows) { return Err("silero:unsupported_platform".to_string()); }
-    let paths = ProjectPaths::discover();
-    if paths.packaged_context_initialized {
-        // The private embeddable runtime vendors packages at its root (_pth '.').
-        Ok(PathBuf::from(paths.python_runtime_dir))
-    } else if paths.is_repository_development() {
-        Ok(PathBuf::from(paths.worker_runtime_dir).join(".venv/Lib/site-packages"))
-    } else { Err("silero:unverified_runtime_root".to_string()) }
+    if !paths.packaged_context_initialized && !paths.development_root_verified {
+        return Err("silero:unverified_runtime_root".to_string());
+    }
+    Ok(PathBuf::from(&paths.runtime_root).join("EngineData/Backend/RuntimeAssets/NativeOrt"))
 }
 
 // Shared with the held-out My Voice verifier. No second ORT environment,
-// process, or automatic provider choice. Current verified DLL path is
-// transitional; move it with VAD during the native payload cutover.
+// process, automatic provider choice or Python package lookup.
 pub(crate) fn verified_ort_environment() -> Result<ort::environment::Environment, String> {
+    let root = native_ort_root(&ProjectPaths::discover())?;
+    verified_ort_environment_at(&root)
+}
+
+fn verified_ort_environment_at(root: &Path) -> Result<ort::environment::Environment, String> {
     let mut slot = ENVIRONMENT.lock().map_err(|_| "silero:environment_poisoned")?;
     if let Some(env) = slot.as_ref() { return Ok(env.clone()); }
-    let dll = packages()?.join("onnxruntime/capi/onnxruntime.dll");
+    let dll = root.join("onnxruntime.dll");
     verified(&dll, DLL_SHA256, 19_288_928)?;
     let env = ort::init_from(&dll).map_err(|_| "silero:runtime_load_failed".to_string())?
         .with_name("translateit-speech-presence").with_telemetry(false)
@@ -60,9 +63,9 @@ pub struct Silero {
 
 impl Silero {
     pub fn load() -> Result<Self, String> {
-        let packages = packages()?;
-        let model = verified(&packages.join("faster_whisper/assets/silero_vad_v6.onnx"), MODEL_SHA256, 1_245_151)?;
-        let env = verified_ort_environment()?;
+        let root = native_ort_root(&ProjectPaths::discover())?;
+        let model = verified(&root.join("silero_vad_v6.onnx"), MODEL_SHA256, 1_245_151)?;
+        let env = verified_ort_environment_at(&root)?;
         let session = Session::builder(&env).and_then(|b| Ok(b.with_intra_threads(1)?))
             .and_then(|b| Ok(b.with_inter_threads(1)?))
             .and_then(|mut b| b.commit_from_memory(&model))
@@ -225,6 +228,22 @@ mod tests {
             assert!(windows.next_into(&mut native).is_none());
             assert!(native.is_empty());
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_ort_path_uses_verified_runtime_root_only() {
+        let mut paths = ProjectPaths::discover();
+        paths.runtime_root = "C:/TranslateIT".into();
+        paths.packaged_context_initialized = false;
+        paths.development_root_verified = false;
+        assert!(native_ort_root(&paths).is_err());
+        paths.development_root_verified = true;
+        let expected = PathBuf::from("C:/TranslateIT").join("EngineData/Backend/RuntimeAssets/NativeOrt");
+        assert_eq!(native_ort_root(&paths).unwrap(), expected);
+        paths.development_root_verified = false;
+        paths.packaged_context_initialized = true;
+        assert_eq!(native_ort_root(&paths).unwrap(), expected);
     }
 
     #[test]

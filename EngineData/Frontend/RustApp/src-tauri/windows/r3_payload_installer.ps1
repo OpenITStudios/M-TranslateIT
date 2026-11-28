@@ -307,6 +307,9 @@ function Install-Payload([string]$Tar){
 }
 
 try{
+    # Historical R3 schema v2 describes a Python payload. It cannot establish
+    # the native ORT/TTS/verifier closure or authorize an app-only update.
+    Fail 44 'Native packaging is held: legacy installer and app-only update are disabled.'
     if($Mode-eq'VerifyInstalled'){Verify-InstalledRuntime $InstallRoot}
     $script:PayloadPath=[IO.Path]::GetFullPath($PayloadPath)
     NeedFile $script:PayloadPath 42 'External payload'

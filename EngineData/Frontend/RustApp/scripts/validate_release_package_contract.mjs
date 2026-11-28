@@ -37,6 +37,8 @@ const paths = {
   licenseStager: join(scriptDir, "stage_release_license_material.py"),
   hook: join(tauriRoot, "windows", "r3_payload_hooks.template.nsh"),
   helper: join(tauriRoot, "windows", "r3_payload_installer.ps1"),
+  silero: join(tauriRoot, "src", "engine", "audio", "silero.rs"),
+  speaker: join(tauriRoot, "src", "commands", "voice_lab_build", "native_speaker.rs"),
 };
 for (const path of Object.values(paths)) requireFile(path);
 if (errors.length) {
@@ -54,6 +56,8 @@ const optimizer = readText(paths.optimizer);
 const licenseStager = readText(paths.licenseStager);
 const hook = readText(paths.hook);
 const helper = readText(paths.helper);
+const silero = readText(paths.silero);
+const speaker = readText(paths.speaker);
 
 const canonicalPayloadRoots = [
   "EngineData/Backend/LocalWorker/PythonRuntime",
@@ -109,6 +113,8 @@ for (const largeSource of [
   "../../../Backend/RuntimeAssets/ASR/ModelData/",
   "../../../Backend/RuntimeAssets/Translation/ModelData/",
   "../../../Backend/RuntimeAssets/Voice/GPTSoVITS/",
+  "../../../Backend/RuntimeAssets/Voice/ModelData/",
+  "../../../Backend/RuntimeAssets/NativeOrt/",
   "../../../Backend/RuntimeAssets/AudioProvider/VBCABLE/Package/",
 ]) {
   if (resources && Object.prototype.hasOwnProperty.call(resources, largeSource)) fail(`Large payload re-embedded in Tauri resources: ${largeSource}`);
@@ -207,6 +213,23 @@ for (const [body, label, sideEffect] of [
   const hold = body.indexOf('raise ' + (label === "legacy payload builder" ? 'RuntimeError(' : 'SystemExit(') + '"Native packaging is held:');
   if (hold < 0 || body.indexOf(sideEffect) <= hold) fail(`${label} must remain held before side effects.`);
 }
+
+// The old builder/installer closure above is retained only for historical
+// source review. Native runtime paths are not a compatibility grant.
+requireMarkers(silero, "native ORT and VAD", [
+  'join("EngineData/Backend/RuntimeAssets/NativeOrt")',
+  'root.join("onnxruntime.dll")',
+  'root.join("silero_vad_v6.onnx")',
+  'verified(&dll, DLL_SHA256, 19_288_928)',
+  'MODEL_SHA256, 1_245_151',
+  "fn native_ort_path_uses_verified_runtime_root_only",
+]);
+forbidMarkers(silero, "native ORT path fallback", ["python_runtime_dir", "site-packages", "faster_whisper/assets"]);
+requireMarkers(speaker, "shared native ORT verifier", ["verified_ort_environment()?", 'ModelData/SpeakerVerifier/eres2netv2-forward3-f32.onnx']);
+const installerEntry = helper.slice(helper.lastIndexOf("\ntry{"));
+const installerHold = installerEntry.indexOf("Native packaging is held:");
+const installerVerify = installerEntry.indexOf("Verify-InstalledRuntime $InstallRoot");
+if (installerHold < 0 || installerVerify <= installerHold) fail("Legacy installer/update entry must be held before any runtime verification or mutation.");
 
 const scripts = packageJson.scripts ?? {};
 if (!String(scripts["preflight:tauri-package"] ?? "").includes("validate_release_package_contract.mjs")) fail("Tauri package preflight must include the R3 release contract.");

@@ -1,28 +1,5 @@
 # ASR Runtime Assets
 
-## Purpose
+Native Qwen3-ASR uses the pinned Q8_0 model and audio projector in `ASR/ModelData/qwen3-asr-1.7b/`. The existing model manifest owns exact filenames, revisions and hashes. Rust owns inference; no Faster Whisper fallback is admitted.
 
-This folder is the local asset slot for speech-to-text models used by TranslateIT.
-
-## Expected local-only files
-
-```text
-ASR/
-  README.md
-  ModelData/
-    faster-whisper-large-v3-turbo/
-      model.bin
-      ...
-```
-
-## Active orchestration route
-
-```text
-EngineData/Backend/LocalWorker/WorkerRuntime/realtime_local_worker.py
-```
-
-## Rules
-
-- Do not add ASR source modules here.
-- Do not add microphone capture, VAD, or transcript session code here.
-- Keep model binaries out of Git.
+Speech presence is separate: the pinned Silero VAD and CPU ONNX Runtime resolve from `RuntimeAssets/NativeOrt/`. Native packaging and physical staging remain held. Keep model binaries out of Git.

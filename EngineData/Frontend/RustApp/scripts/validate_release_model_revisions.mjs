@@ -85,6 +85,10 @@ if (verifier?.required !== true || verifier.stage !== "voice_actor_speaker_verif
 // No reviewed export pin exists yet. Do not allow the old release gate to
 // report success based on arbitrary ONNX bytes.
 if (verifier.pin_status === "pending_reviewed_export") fail("speaker_verifier_export_pin_pending");
+// Removing or renaming a pending marker is not reviewed export evidence.
+// The offline file identity, build-time pin parity and release transaction
+// still need a coherent owner before this historical validator can admit them.
+fail("native_package_closure_not_reviewed");
 
 const prefix = "EngineData/Backend/";
 for (const model of manifest.models ?? []) {

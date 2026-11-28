@@ -95,6 +95,8 @@ env/
 /EngineData/Backend/RuntimeAssets/ASR/ModelData/**
 /EngineData/Backend/RuntimeAssets/Translation/ModelData/**
 /EngineData/Backend/RuntimeAssets/NativeCuda/**
+/EngineData/Backend/RuntimeAssets/NativeOrt/**
+/EngineData/Backend/RuntimeAssets/Voice/ModelData/**
 /EngineData/Backend/RuntimeAssets/ThirdPartyNotices/THIRD_PARTY_NOTICES.txt
 /EngineData/Backend/RuntimeAssets/Voice/GPTSoVITS/**
 /EngineData/Backend/RuntimeAssets/AudioProvider/VBCABLE/Package/**

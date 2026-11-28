@@ -43,15 +43,9 @@ The automatic updater is intentionally app-only for the current release shape.
 
 When Tauri launches the NSIS installer with `/UPDATE`, Setup verifies the already-installed external runtime and preserves it instead of requiring `TranslateIT-Payload.7z` beside the temporary updater installer.
 
-The app-only update is allowed only when the installed runtime still matches the current required:
+The previous R3 v2 contract verified Python/Torch/Transformers/Tokenizers and legacy voice runtime identities. It is not compatible with the native-only product target. Current source holds the historical installer and app-only update helper before verification or mutation.
 
-- payload schema;
-- Python/Torch/Transformers/Tokenizers identities;
-- ASR revision;
-- MiLMMT revision;
-- GPT-SoVITS revision;
-- required built-in voices;
-- VB-CABLE provider presence.
+Before enabling a native app-only update, the new signed Setup contract must verify the exact installed native payload schema, CUDA and ORT DLL closure, pinned ASR/MT/TTS models, Silero VAD, independent speaker-verifier export, built-in voice references and VB-CABLE provider. The reviewed verifier pin, native package closure and integrated target acceptance remain pending. Do not reuse the legacy installed receipt as proof.
 
 If those requirements change, the automatic installer fails closed before replacing the app. That release requires the full colocated:
 

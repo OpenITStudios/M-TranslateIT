@@ -1,76 +1,43 @@
 # RuntimeAssets
 
-`RuntimeAssets` is TranslateIT's controlled local release/runtime asset boundary. Application orchestration remains in Tauri/Rust and LocalWorker owners; this tree contains models, voice references/runtime assets, audio-provider payload and generated notices only.
+Controlled local native runtime and release inputs. Application orchestration stays in Rust. This layout describes the source target; physical staging, reviewed native package closure and release remain HELD.
 
-## Current layout
+## Native layout
 
 ```text
 RuntimeAssets/
-├─ ASR/ModelData/
-│  ├─ faster-whisper-large-v3-turbo/       # required My Voice evaluation ASR
-│  └─ qwen3-asr-1.7b/                       # canonical native ASR
-├─ Translation/ModelData/
-│  └─ hy-mt2-1.8b/                          # canonical native ID ↔ EN
+├─ ASR/ModelData/qwen3-asr-1.7b/
+├─ Translation/ModelData/hy-mt2-1.8b/
 ├─ NativeCuda/
-│  ├─ bin/                                 # exact reviewed private DLL closure
-│  └─ THIRD_PARTY_NOTICES.txt               # reviewed license/build provenance
+│  ├─ bin/                         # reviewed private DLL closure
+│  └─ THIRD_PARTY_NOTICES.txt
+├─ NativeOrt/
+│  ├─ onnxruntime.dll              # existing pinned CPU ORT
+│  ├─ silero_vad_v6.onnx           # existing pinned speech-presence model
+│  └─ THIRD_PARTY_NOTICES.txt      # reviewed ORT/VAD provenance required
 ├─ Voice/
-│  ├─ BuiltInVoices/
-│  │  ├─ MaleVoice/reference.wav
-│  │  ├─ FemaleVoice/reference.wav
-│  │  └─ SOURCES.json                      # exact source/license/hash authority
-│  └─ GPTSoVITS/Source/                    # pinned V2ProPlus runtime/build assets
-├─ AudioProvider/VBCABLE/
-│  ├─ NOTICE.txt
-│  └─ Package/                              # reviewed vendor package; release-side only
+│  ├─ BuiltInVoices/               # tracked references and attribution
+│  └─ ModelData/
+│     ├─ zonos3-mini/
+│     └─ SpeakerVerifier/eres2netv2-forward3-f32.onnx
+├─ AudioProvider/VBCABLE/Package/
 └─ ThirdPartyNotices/THIRD_PARTY_NOTICES.txt
 ```
 
-The machine-readable model inventory is `EngineData/Backend/LocalWorker/WorkerRuntime/model_manifest.json`. Required Hugging Face snapshots use immutable revisions and `.translateit_model_revision` markers.
+The existing `LocalWorker/WorkerRuntime/model_manifest.json` owns model inventory and downloadable GGUF identity. The native loader owns build-supplied DLL pins. The independent speaker-verifier ONNX export and its exact build pins are pending; the checkpoint hash is not an ONNX hash.
 
-## Native inference inputs
+## Native ORT/VAD cutover
 
-The existing release staging entrypoint accepts reviewed native artifacts under
-`TRANSLATEIT_NATIVE_ARTIFACT_ROOT` (bin and notice bundle) and exact build-supplied
-`TRANSLATEIT_NATIVE_DLL_PINS`. The same pin string is bound to Rust and the
-offline Setup payload contract; app-only update verifies the existing DLL
-closure against Setup. Qwen3-ASR and Hy-MT2 exact publisher revisions and GGUF
-hashes are in the model manifest. Source dispatch is native-only; staging does not prove execution.
-Faster Whisper evaluation and Silero assets retain independent voice/audio
-consumers. MiLMMT and the Meeting ASR backup are no longer package inputs.
+The same controlled `NativeOrt` root is used for verified repository development and installed runtime. The VAD and independent speaker scorer share one ORT environment. No application runtime lookup in PythonRuntime, developer site-packages, PATH or Faster Whisper remains in this owner.
 
-## Built-in Meeting voices
+For the later authorized local integration/staging phase, reuse only the exact bytes of the already pinned `onnxruntime/capi/onnxruntime.dll` and `faster_whisper/assets/silero_vad_v6.onnx` from the previously reviewed input, placed under `NativeOrt` with the filenames above. Their required sizes and SHA-256 are compiled in `src-tauri/src/engine/audio/silero.rs` (19,288,928 and 1,245,151 bytes respectively). Native admission still verifies these pins. Do not copy an arbitrary installed version, add a fallback or remove the old development environment automatically. Missing native assets block VAD. This source change does not stage any bytes, establish the ORT DLL dependency closure, or prove native execution.
 
-`Voice/BuiltInVoices/SOURCES.json` owns exact reference provenance for the two day-one Meeting voices. Both references come from LibriSpeech dev-clean / OpenSLR SLR12 and are recorded as **CC-BY-4.0**, with speaker ID, utterance, source URL and WAV SHA-256. They are not public-domain assets.
+## Release and updater boundary
 
-The Rust voice owner turns a selected built-in reference plus reviewed shared GPT-SoVITS pretrained weights into the same selected-Meeting-voice runtime contract used by the worker. My Voice remains the optional trained upgrade.
+The historical R3 v2 builder, staging, Python optimizer, license staging and installer/update helper are held. The intended native package excludes production Python/Torch/Transformers/Faster Whisper/GPT-SoVITS runtime; offline export tools and retained historical data are separate. A future native package schema must bind the exact DLL, model, verifier, reference and notice closure, and reject a historical installed payload for an incompatible app-only update. Preserve transactional replacement, rollback, user data and shared VB-CABLE driver. No release permission or local proof is implied here.
 
-The canonical third-party notice generator reads `SOURCES.json` and includes this attribution in the staged release notice bundle.
+## Provenance
 
-## R3 packaging boundary
+Built-in Male/Female references remain CC-BY-4.0 LibriSpeech/OpenSLR SLR12 material; exact reference provenance is in `Voice/BuiltInVoices/SOURCES.json`. Native CUDA, ORT, Silero, GGUF models, independent speaker export and audio-provider redistribution require their reviewed license/provenance closure. VB-CABLE notice presence alone is not redistribution permission.
 
-Large runtime bytes are ignored by Git and staged as controlled release inputs. They are packaged into `TranslateIT-Payload.7z`; they are **not** embedded in the Tauri resource map. `tauri.release.conf.json` carries only the small WorkerRuntime/control/notices closure used by `TranslateIT-Setup.exe`.
-
-Release staging/validation is owned by `EngineData/Frontend/RustApp/scripts/`. Payload construction binds the external payload to app/schema identity and exact SHA-256. Installer source owns transactional runtime replacement, VB-CABLE vendor invocation/restart signaling and uninstall cleanup of TranslateIT-owned external runtime. User data and the system VB-CABLE driver are preserved by uninstall policy.
-
-Presence in this tree is not runtime acceptance. It does not prove CUDA/model execution, translation quality, voice quality, Windows driver behavior, virtual-audio delivery or clean-machine installation.
-
-## Provenance / notice boundary
-
-| Input | Pinned source | Declared boundary |
-|---|---|---|
-| Faster Whisper large-v3-turbo | `dropbox-dash/faster-whisper-large-v3-turbo` @ `0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf` | MIT |
-| GPT-SoVITS source | `RVC-Boss/GPT-SoVITS` @ `d523079fc05d9a8028d6085bffe4a2757c32abb6` | MIT source; nested assets retain separate obligations |
-| Built-in Male/Female references | LibriSpeech dev-clean / OpenSLR SLR12; exact utterance/hash in `SOURCES.json` | CC-BY-4.0 |
-| Standard VB-CABLE | reviewed official VB-Audio package | donationware / conditional distribution; preserve `NOTICE.txt` |
-
-Exact Python/material hashes and exceptional license sources remain machine-owned by release staging/validation and generated notices rather than duplicated across governance docs.
-
-## Rules
-
-- Keep one canonical translator; do not restore M2M100/Marian as production fallback/router.
-- Keep large model, GPT-SoVITS, FFmpeg, NLTK, VB-CABLE package and other runtime bytes out of Git.
-- Built-in reference files intentionally tracked as small controlled assets must retain exact provenance/hash/license metadata.
-- Do not put application orchestration under RuntimeAssets.
-- Do not re-embed the large R3 payload into Tauri resources or add first-use core-model downloads.
-- Preserve package-specific notices/provenance; presence is not legal clearance or runtime proof.
+Large runtime bytes and generated notices are local-only. Do not commit them or embed them in Setup resources. No first-use core-model downloads or production Python fallback.
