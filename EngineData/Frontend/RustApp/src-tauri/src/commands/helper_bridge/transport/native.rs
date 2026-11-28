@@ -38,7 +38,8 @@ fn language_code(value: Language) -> &'static str {
 
 // The owner already returned an owned String from reusable native scratch.
 // Move it into the existing receipt without serializing or cloning the text.
-fn native_text_receipt(task: &str, pci: &str, from: Language, to: Option<Language>, text: String) -> Value {
+fn native_text_receipt(task: &str, pci: &str, from: Language, to: Option<Language>, text: String,
+                       translation_elapsed_ms: Option<u64>) -> Value {
     let mut body = json!({
         "ok": true, "stage": task, "blocker": "", "device": "cuda",
         "cuda_pci_id": pci, "note": "Native CUDA inference returned a complete result.",
@@ -57,6 +58,11 @@ fn native_text_receipt(task: &str, pci: &str, from: Language, to: Option<Languag
         body["finished_with_eos"] = json!(true);
         body["hit_token_ceiling"] = json!(false);
         body["translated_text"] = Value::String(text);
+        if let Some(elapsed_ms) = translation_elapsed_ms {
+            // Same owner handoff-to-reply interval as the native quality replay,
+            // not GPU kernel time or a tokenization/decode breakdown.
+            body["elapsed_ms"] = json!(elapsed_ms);
+        }
     } else {
         body["model_id"] = json!(NATIVE_ASR_MODEL);
         body["compute_type"] = json!("q8_0");
@@ -538,6 +544,7 @@ pub(super) fn dispatch(
         return expired_deferred_response(task, request_id, priority);
     }
     let bridge_generation = host.generation_token;
+    let translation_started = (task == "translate").then(Instant::now);
     let pending_result = {
         let owner = host.native_inference.as_mut().expect("checked owner");
         if let Some(reference) = reference {
@@ -576,6 +583,7 @@ pub(super) fn dispatch(
     // The original permit outlives the native reply. Do not wait under the
     // lifecycle lock; Stop can signal and retain the exact active owner.
     let result = pending.wait_output();
+    let translation_elapsed_ms = translation_started.map(observed_elapsed_ms);
     let Ok(mut host) = runtime().lock() else {
         return fail("helper_bridge:lock_poisoned_after_native_response", "Native inference result ownership could not be verified.");
     };
@@ -627,7 +635,7 @@ pub(super) fn dispatch(
         Ok(InferenceOutput::Text(text)) if !is_voice && !is_bind => {
             native_text_receipt(task,
                 host.native_inference.as_ref().expect("checked owner").owner.device_id(),
-                from, to, text)
+                from, to, text, translation_elapsed_ms)
         }
         unexpected => {
             let error = unexpected.err().unwrap_or(Error::InvalidReceipt);
@@ -672,7 +680,7 @@ mod tests {
         let pci = "0000:01:00.0";
         let transcript = String::from("Halo, 15 bukan 50.");
         let ptr = transcript.as_ptr();
-        let asr = native_text_receipt("transcribe", pci, Language::Indonesian, None, transcript);
+        let asr = native_text_receipt("transcribe", pci, Language::Indonesian, None, transcript, None);
         assert_eq!(asr["transcript_text"].as_str().unwrap().as_ptr(), ptr);
         assert_eq!(asr, json!({
             "ok":true,"stage":"transcribe","blocker":"","device":"cuda","cuda_pci_id":pci,
@@ -686,7 +694,7 @@ mod tests {
         ] {
             let translated = String::from("Complete text.");
             let ptr = translated.as_ptr();
-            let mt = native_text_receipt("translate", pci, from, Some(to), translated);
+            let mt = native_text_receipt("translate", pci, from, Some(to), translated, Some(42));
             assert_eq!(mt["translated_text"].as_str().unwrap().as_ptr(), ptr);
             assert_eq!(mt, json!({
                 "ok":true,"stage":"translate","blocker":"","device":"cuda","cuda_pci_id":pci,
@@ -696,7 +704,7 @@ mod tests {
                 "translation_degraded":false,"translation_fallback_reason":"",
                 "source_language":source,"target_language":target,"direction_pair":pair,
                 "complete":true,"finished_with_eos":true,"hit_token_ceiling":false,
-                "translated_text":"Complete text."
+                "translated_text":"Complete text.","elapsed_ms":42
             }));
         }
     }

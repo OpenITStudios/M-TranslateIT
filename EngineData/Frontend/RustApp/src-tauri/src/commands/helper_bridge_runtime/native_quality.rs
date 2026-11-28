@@ -54,8 +54,7 @@ fn valid(replay: &Replay) -> bool {
             !case.case_id.is_empty() && case.case_id.len() <= 128
                 && case.case_id.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-.".contains(&b))
                 && ids.insert(case.case_id.as_str()) && direction(case).is_some()
-                && !case.text.trim().is_empty() && !case.text.contains('\0')
-                && case.text.chars().take(2001).count() <= 2000
+                && translateit_native_cuda::translation_source_admitted(&case.text)
         })
 }
 

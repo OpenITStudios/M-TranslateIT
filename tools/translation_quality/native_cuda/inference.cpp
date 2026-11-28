@@ -597,6 +597,9 @@ static int32_t open_mt(const char * model_path, ggml_backend_dev_t device, ti_mt
         if (llama_vocab_bos(vocab) != expected[0] ||
             llama_vocab_eos(vocab) != mt->eos || !llama_vocab_is_eog(vocab, mt->eos))
             return TI_MODEL_LOAD;
+        // Publish MT with empty sequence metadata. Each entered inference
+        // then drains and clears on exit, before another request can enter.
+        llama_memory_clear(llama_get_memory(mt->context.get()), false);
         *out = mt.release();
         return TI_OK;
     } catch (...) {
@@ -607,11 +610,16 @@ static int32_t open_mt(const char * model_path, ggml_backend_dev_t device, ti_mt
 
 
 namespace {
-bool mt_source_admitted(std::string_view source) {
-    return !source.empty() && source.size() <= k_max_input_bytes &&
-        source.find_first_not_of(" \r\n\t") != std::string_view::npos &&
+// The ABI already admitted the pointer and byte length before this check.
+constexpr bool mt_source_content_admitted(std::string_view source) {
+    return source.find_first_not_of(" \r\n\t") != std::string_view::npos &&
         source.find('\0') == std::string_view::npos && !contains_mt_marker(source);
 }
+static_assert(mt_source_content_admitted("A < B"));
+static_assert(!mt_source_content_admitted(" \r\n\t"));
+static_assert(!mt_source_content_admitted(std::string_view("a\0b", 3)));
+static_assert(!mt_source_content_admitted("<think>"));
+static_assert(!mt_source_content_admitted(""));
 
 int32_t translate(ti_mt & mt, std::string_view source, const char * target,
                   const request_control & control, char * output, size_t * out_len) {
@@ -644,7 +652,8 @@ int32_t translate(ti_mt & mt, std::string_view source, const char * target,
         static_cast<uint32_t>(n) > limit - k_mt_max_tokens) return TI_INPUT_LIMIT;
     const uint32_t budget = std::min(k_mt_max_tokens, std::max(64u, 2u * static_cast<uint32_t>(n) + 32u));
 
-    llama_memory_clear(llama_get_memory(context), false);
+    // open_mt establishes the first empty context; the scope guard restores
+    // it on every exit after this point, including cancellation or exceptions.
     clear_utterance clear{context};
     llama_pos next_pos = 0;
     const auto status = decode_text_prefill(mt, tokens.data(), static_cast<size_t>(n), next_pos, true, control);
@@ -665,7 +674,7 @@ static int32_t translate_mt(ti_mt * mt, const char * source, size_t source_len,
           (source_language == 2 && target_language == 1))) return TI_INVALID_INPUT;
     if (mt->poisoned) return TI_POISONED;
     const std::string_view input(source, source_len);
-    if (!mt_source_admitted(input)) return TI_INVALID_INPUT;
+    if (!mt_source_content_admitted(input)) return TI_INVALID_INPUT;
     try {
         const auto status = translate(*mt, input, target_language == 1 ? "Indonesian" : "English",
                                       control, output, out_len);
