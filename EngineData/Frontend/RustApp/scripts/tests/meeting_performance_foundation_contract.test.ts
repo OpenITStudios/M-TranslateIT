@@ -99,7 +99,7 @@ test("finalized Meeting PCM enters the existing scheduler and only native infere
   assert.doesNotMatch(incoming, /utterance\.clone\(|drop\(utterance\.frame\)/);
   assert.doesNotMatch(outbound, /utterance\.clone\(|drop\(utterance\.frame\)/);
   const inner = transport.indexOf("fn send_worker_task_inner(");
-  const permit = transport.indexOf("acquire_helper_task_permit(priority)", inner);
+  const permit = transport.indexOf("acquire_scoped_helper_task_permit(priority, wait_generation)", inner);
   const defer = transport.indexOf("return incoming_deferred_response", permit);
   const nativeDispatch = transport.indexOf("return native::dispatch(", defer);
   const metadata = transport.indexOf("inject_request_metadata", nativeDispatch);

@@ -14,7 +14,10 @@ mod scheduler;
 #[cfg(all(test, windows))]
 mod native_quality;
 
-pub(crate) use scheduler::{acquire_helper_task_permit, HelperTaskPriority};
+pub(crate) use scheduler::{
+    acquire_helper_task_permit, acquire_scoped_helper_task_permit, wake_revoked_scheduler_waiters,
+    HelperTaskPriority, SCHEDULER_SCOPE_REVOKED,
+};
 #[cfg(windows)]
 pub(crate) use scheduler::HelperTaskPermit;
 

@@ -1,6 +1,10 @@
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use crate::engine::runtime_state::runtime_generation_matches_epoch;
+
+pub(crate) const SCHEDULER_SCOPE_REVOKED: &str = "helper_scheduler:meeting_scope_revoked";
+
 pub const HELPER_SCHEDULER_TOTAL_ADMISSION_CAP: u32 = 8;
 pub const HELPER_SCHEDULER_MEETING_OUTBOUND_WAIT_MS: u64 = 120_000;
 pub const HELPER_SCHEDULER_MEETING_INCOMING_WAIT_MS: u64 = 30_000;
@@ -58,6 +62,17 @@ static HELPER_SCHEDULER: OnceLock<(Mutex<HelperSchedulerState>, Condvar)> = Once
 
 fn scheduler() -> &'static (Mutex<HelperSchedulerState>, Condvar) {
     HELPER_SCHEDULER.get_or_init(|| (Mutex::new(HelperSchedulerState::default()), Condvar::new()))
+}
+
+// Revocation updates the atomic epoch before this notification. Synchronize
+// with the existing scheduler mutex to prevent a lost wake between a
+// waiter's predicate check and Condvar wait. No runtime-state lock is ever
+// taken inside the scheduler; its scope check is atomic-only.
+pub(crate) fn wake_revoked_scheduler_waiters() {
+    if let Some((lock, wake)) = HELPER_SCHEDULER.get() {
+        let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        wake.notify_all();
+    }
 }
 
 pub struct HelperTaskPermit {
@@ -159,12 +174,23 @@ fn acquire_helper_task_permit_with_wait_deadline(
     priority: HelperTaskPriority,
     wait_deadline: Duration,
 ) -> Result<HelperTaskPermit, String> {
+    acquire_scoped_permit_with_deadline(priority, wait_deadline, None)
+}
+
+fn acquire_scoped_permit_with_deadline(
+    priority: HelperTaskPriority,
+    wait_deadline: Duration,
+    generation: Option<u64>,
+) -> Result<HelperTaskPermit, String> {
     let wait_started = Instant::now();
     let (lock, wake) = scheduler();
     let mut state = lock
         .lock()
         .map_err(|_| "helper_scheduler:lock_poisoned".to_string())?;
 
+    if generation.is_some_and(|generation| !runtime_generation_matches_epoch(generation)) {
+        return Err(SCHEDULER_SCOPE_REVOKED.to_string());
+    }
     if !scheduler_can_admit(&state, priority) {
         return Err(format!(
             "helper_scheduler:admission_capacity_exceeded:{}:total={}:limit={}",
@@ -178,6 +204,11 @@ fn acquire_helper_task_permit_with_wait_deadline(
     // Check the deadline before every admission, even if the resource
     // became free while the waiter was reacquiring the mutex.
     loop {
+        if generation.is_some_and(|generation| !runtime_generation_matches_epoch(generation)) {
+            scheduler_waiting_decrement(&mut state, priority);
+            wake.notify_all();
+            return Err(SCHEDULER_SCOPE_REVOKED.to_string());
+        }
         let remaining = wait_deadline.saturating_sub(wait_started.elapsed());
         if remaining.is_zero() {
             scheduler_waiting_decrement(&mut state, priority);
@@ -216,6 +247,16 @@ pub fn acquire_helper_task_permit(
     acquire_helper_task_permit_with_wait_deadline(
         priority,
         Duration::from_millis(priority.scheduler_wait_deadline_ms()),
+    )
+}
+
+// Callers establish exact session authority before queuing. The epoch is
+// only a cancellation fence; the existing post-permit authority check stays.
+pub(crate) fn acquire_scoped_helper_task_permit(
+    priority: HelperTaskPriority, generation: Option<u64>,
+) -> Result<HelperTaskPermit, String> {
+    acquire_scoped_permit_with_deadline(
+        priority, Duration::from_millis(priority.scheduler_wait_deadline_ms()), generation,
     )
 }
 
@@ -396,6 +437,57 @@ mod scheduler_policy_tests {
             let state = lock.lock().expect("scheduler test lock");
             assert!(!state.active);
         }
+        reset_scheduler();
+    }
+
+    #[test]
+    fn revoked_meeting_waiters_exit_while_active_permit_is_still_held() {
+        use crate::engine::runtime_state::{
+            begin_application_meeting_session, clear_runtime_session_state,
+            clear_runtime_session_if_generation, revoke_runtime_session_authority,
+        };
+        let _serial = scheduler_test_guard();
+        reset_scheduler();
+        let _ = clear_runtime_session_state();
+        let generation = begin_application_meeting_session().snapshot.expect("Meeting scope").generation;
+        let active = acquire_helper_task_permit(HelperTaskPriority::Diagnostic).expect("active permit");
+        let (tx, rx) = mpsc::channel();
+        let mut handles = Vec::new();
+        for priority in [HelperTaskPriority::MeetingOutbound, HelperTaskPriority::MeetingIncoming] {
+            let tx = tx.clone();
+            handles.push(thread::spawn(move || {
+                let result = acquire_scoped_permit_with_deadline(priority, Duration::from_secs(5), Some(generation));
+                let _ = tx.send(result.err());
+            }));
+        }
+        drop(tx);
+        let registered = Instant::now() + Duration::from_secs(1);
+        loop {
+            let state = scheduler().0.lock().unwrap();
+            if state.waiting_meeting_outbound == 1 && state.waiting_meeting_incoming == 1 { break; }
+            drop(state);
+            assert!(Instant::now() < registered, "both scoped waiters registered");
+            thread::yield_now();
+        }
+        let _ = revoke_runtime_session_authority(generation, "fixture scope revoked");
+        let first = rx.recv_timeout(Duration::from_secs(1));
+        let second = rx.recv_timeout(Duration::from_secs(1));
+        let (still_active, waiting, sequence) = {
+            let state = scheduler().0.lock().unwrap();
+            (state.active, state.waiting_meeting_outbound + state.waiting_meeting_incoming, state.next_request_sequence)
+        };
+        drop(active);
+        for handle in handles { handle.join().unwrap(); }
+        assert_eq!(first.unwrap().as_deref(), Some(SCHEDULER_SCOPE_REVOKED));
+        assert_eq!(second.unwrap().as_deref(), Some(SCHEDULER_SCOPE_REVOKED));
+        assert!(still_active);
+        assert_eq!((waiting, sequence), (0, 1));
+        assert_eq!(acquire_scoped_helper_task_permit(HelperTaskPriority::MeetingOutbound, Some(generation)).err().as_deref(),
+            Some(SCHEDULER_SCOPE_REVOKED));
+        let next = acquire_helper_task_permit(HelperTaskPriority::Text).unwrap();
+        assert_eq!(next.request_id(), "helper-2");
+        drop(next);
+        let _ = clear_runtime_session_if_generation(generation);
         reset_scheduler();
     }
 

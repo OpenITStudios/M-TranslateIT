@@ -13,7 +13,7 @@ use super::functional_readiness::{
     failed_required_outbound_task_invalidates_cache, invalidate_required_outbound_ai_readiness,
 };
 use super::request_policy::{
-    clear_meeting_outbound_pipeline, incoming_session_is_eligible,
+    clear_meeting_outbound_pipeline, incoming_session_generation,
     inject_request_metadata,
     mark_meeting_outbound_pipeline, meeting_generation,
     meeting_outbound_pipeline_active, task_priority, RequestAdmission,
@@ -23,7 +23,7 @@ use super::{
     worker_message, HelperBridgeWorkerResponse,
 };
 use super::super::helper_bridge_runtime::{
-    acquire_helper_task_permit, apply_worker_response, clear_active_request, set_blocked,
+    acquire_scoped_helper_task_permit, apply_worker_response, clear_active_request, set_blocked, SCHEDULER_SCOPE_REVOKED,
     await_worker_stdin_write, await_worker_stdout_read,
     begin_worker_stdin_write, begin_worker_stdout_read,
     finish_received_stdin_write, finish_received_stdout_read,
@@ -143,43 +143,43 @@ fn blocked_response_from_runtime(
     )
 }
 
-fn stale_meeting_request(
-    task: &str,
-    request_id: &str,
-    priority: HelperTaskPriority,
-    generation: Option<u64>,
-    session_id: Option<&str>,
-    lane: Option<&str>,
-) -> Option<HelperBridgeWorkerResponse> {
-    if generation
-        .map(|value| !runtime_generation_is_authoritative(value))
-        .unwrap_or(false)
-    {
-        return Some(standalone_blocked_response(
-            task,
-            request_id,
-            priority,
-            "stale_generation",
-            "helper_scheduler:meeting_generation_not_authoritative",
-            "Queued outbound Meeting work was discarded because its generation no longer owns output authority.",
-        ));
-    }
+#[derive(Clone, Copy)]
+enum StaleMeetingScope { Generation, Session }
 
-    if lane == Some("incoming")
-        && session_id
-            .map(|value| !incoming_session_is_eligible(value))
-            .unwrap_or(true)
-    {
-        return Some(standalone_blocked_response(
-            task,
-            request_id,
-            priority,
-            "stale_session",
-            "helper_scheduler:incoming_meeting_session_not_eligible",
-            "Queued incoming Meeting work was discarded because its application Meeting session is no longer eligible for incoming promotion.",
-        ));
+impl StaleMeetingScope {
+    fn response(self, task: &str, request_id: &str, priority: HelperTaskPriority) -> HelperBridgeWorkerResponse {
+        let (state, blocker, message) = match self {
+            Self::Generation => ("stale_generation", "helper_scheduler:meeting_generation_not_authoritative",
+                "Queued outbound Meeting work was discarded because its generation no longer owns output authority."),
+            Self::Session => ("stale_session", "helper_scheduler:incoming_meeting_session_not_eligible",
+                "Queued incoming Meeting work was discarded because its application Meeting session is no longer eligible for incoming promotion."),
+        };
+        standalone_blocked_response(task, request_id, priority, state, blocker, message)
     }
-    None
+}
+
+// Resolve the exact current incoming generation once before waiting.
+// A queued request can only retain this epoch, never adopt a newer session.
+fn meeting_wait_generation(
+    generation: Option<u64>, session_id: Option<&str>, lane: Option<&str>,
+) -> Result<Option<u64>, StaleMeetingScope> {
+    if generation.is_some_and(|value| !runtime_generation_is_authoritative(value)) {
+        return Err(StaleMeetingScope::Generation);
+    }
+    if lane == Some("incoming") {
+        let incoming = session_id.and_then(incoming_session_generation)
+            .ok_or(StaleMeetingScope::Session)?;
+        return Ok(generation.or(Some(incoming)));
+    }
+    Ok(generation)
+}
+
+fn stale_meeting_request(
+    task: &str, request_id: &str, priority: HelperTaskPriority,
+    generation: Option<u64>, session_id: Option<&str>, lane: Option<&str>,
+) -> Option<HelperBridgeWorkerResponse> {
+    meeting_wait_generation(generation, session_id, lane).err()
+        .map(|stale| stale.response(task, request_id, priority))
 }
 
 #[derive(Clone, Copy)]
@@ -239,11 +239,16 @@ enum NativeVoiceIo<'a> {
 }
 
 fn send_worker_task_inner(task: &str, mut payload: Value, input: Option<MeetingInput<'_>>,
-                          voice: Option<NativeVoiceIo<'_>>, admission: RequestAdmission) -> HelperBridgeWorkerResponse {
+                          voice: Option<NativeVoiceIo<'_>>, admission: RequestAdmission,
+                          wait_generation: Option<u64>) -> HelperBridgeWorkerResponse {
     let RequestAdmission { priority, generation: meeting_generation,
         session_id: meeting_session_id, lane: meeting_lane } = admission;
-    let permit = match acquire_helper_task_permit(priority) {
+    let permit = match acquire_scoped_helper_task_permit(priority, wait_generation) {
         Ok(permit) => permit,
+        Err(error) if error == SCHEDULER_SCOPE_REVOKED => {
+            let stale = if meeting_generation.is_some() { StaleMeetingScope::Generation } else { StaleMeetingScope::Session };
+            return stale.response(task, "scheduler-scope-revoked", priority);
+        }
         Err(error) => {
             return standalone_blocked_response(
                 task,
@@ -709,6 +714,10 @@ fn send_worker_task_with_input(task: &str, payload: Value, input: Option<Meeting
     let admission = RequestAdmission::from_payload(task, &payload);
     let priority = admission.priority;
     let outbound_generation = admission.outbound_generation();
+    let wait_generation = match meeting_wait_generation(admission.generation, admission.session_id.as_deref(), admission.lane.as_deref()) {
+        Ok(generation) => generation,
+        Err(stale) => return stale.response(task, "scheduler-stale-before-admission", priority),
+    };
     // Reject new optional incoming stages immediately while a required outbound
     // utterance owns the helper pipeline. The post-permit check in the inner path
     // also catches incoming work that was already queued before this claim existed.
@@ -721,7 +730,7 @@ fn send_worker_task_with_input(task: &str, payload: Value, input: Option<Meeting
     }
 
     let first_started = Instant::now();
-    let mut response = send_worker_task_inner(task, payload, input, voice, admission);
+    let mut response = send_worker_task_inner(task, payload, input, voice, admission, wait_generation);
     let initial_attempt_ms = observed_elapsed_ms(first_started)
         .saturating_sub(input.and_then(MeetingInput::pcm).map_or(0, |pcm| pcm.prepare_ms.get()));
 
@@ -736,7 +745,10 @@ fn send_worker_task_with_input(task: &str, payload: Value, input: Option<Meeting
         }
     }
 
-    if failed_required_outbound_task_invalidates_cache(task, priority, &response) {
+    // A discarded old session cannot invalidate a newer generation's
+    // readiness merely because it was cancelled while waiting.
+    if !matches!(response.state.as_str(), "stale_generation" | "stale_session")
+        && failed_required_outbound_task_invalidates_cache(task, priority, &response) {
         invalidate_required_outbound_ai_readiness();
     }
     if outbound_generation.is_some() {

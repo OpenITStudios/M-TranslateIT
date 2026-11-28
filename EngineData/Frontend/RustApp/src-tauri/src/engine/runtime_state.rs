@@ -253,8 +253,14 @@ pub fn mark_runtime_session_cleanup_incomplete(
     build_session_state_report(Some(snapshot.clone()))
 }
 
+// Fast cancellation observation only. This does not establish session
+// identity, phase, owner or admission; use the full authority check for that.
+pub(crate) fn runtime_generation_matches_epoch(generation: u64) -> bool {
+    generation != 0 && RUNTIME_AUTHORITY_GENERATION.load(Ordering::Acquire) == generation
+}
+
 pub fn runtime_generation_is_authoritative(generation: u64) -> bool {
-    if RUNTIME_AUTHORITY_GENERATION.load(Ordering::Acquire) != generation {
+    if !runtime_generation_matches_epoch(generation) {
         return false;
     }
     let store = RUNTIME_SESSION_STATE.get_or_init(|| Mutex::new(None));
@@ -478,7 +484,12 @@ fn next_runtime_generation() -> u64 {
 }
 
 fn invalidate_runtime_generation() -> u64 {
-    RUNTIME_AUTHORITY_GENERATION.fetch_add(1, Ordering::AcqRel) + 1
+    let generation = RUNTIME_AUTHORITY_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+    // A revoked session must wake queued helper work before Stop waits for
+    // consumer teardown. The scheduler uses only the atomic epoch under its
+    // mutex, never the runtime-session mutex held by revocation.
+    crate::commands::helper_bridge_runtime::wake_revoked_scheduler_waiters();
+    generation
 }
 
 fn is_unsafe_runtime_state_character(character: char) -> bool {
