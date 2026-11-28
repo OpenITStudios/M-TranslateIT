@@ -14,9 +14,6 @@ mod consumer_runtime;
 mod incoming_activation;
 mod incoming_deferred;
 mod incoming_pipeline;
-// Pure source eligibility candidate; never invoked by production MT/TTS.
-#[cfg(test)]
-mod interpreter_policy;
 mod lifecycle;
 mod meeting_catalog;
 mod outbound_pipeline;
@@ -24,9 +21,6 @@ mod playback_runtime;
 pub(crate) use playback_runtime::wake_playback_waiters;
 mod preflight;
 mod session_state;
-// Source-only candidate: no live ASR, speculative GPU work, or Meeting cutover.
-#[cfg(test)]
-mod source_observations;
 mod suppression;
 mod transcript_export;
 mod transcript_archive;
