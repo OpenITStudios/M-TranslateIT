@@ -16,6 +16,7 @@ use super::session_state::update_incoming_status;
 use super::super::helper_bridge::{
     incoming_deferred_for_required_outbound, send_helper_worker_pcm_task, send_helper_meeting_translation,
 };
+use std::borrow::Cow;
 use std::time::Instant;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -175,48 +176,11 @@ fn process_incoming_pcm_with_direction(
 
     let held = translate_and_commit_incoming_transcript(
         turn,
-        transcript,
-        &source_language,
-        &target_language,
-        !retrying_deferred,
+        Cow::Borrowed(transcript),
+        source_language,
+        target_language,
         deferred_deadline,
     );
-    if held && retrying_deferred {
-        let held_count = requeue_deferred_incoming_front(DeferredIncomingJob {
-            session_id: session_id.to_string(),
-            event_sequence,
-            utterance_id,
-            stage: DeferredIncomingStage::NeedsTranslation {
-                transcript: transcript.to_owned(),
-                source_language: source_language.clone(),
-                target_language: target_language.clone(),
-            },
-            expires_at: deferred_expiration(
-                deferred_deadline,
-                Instant::now(),
-            ),
-        });
-        if held_count == 0 {
-            update_incoming_status(
-                session_id,
-                "degraded",
-                true,
-                "meeting_incoming:deferred_queue_unavailable",
-                "Incoming translation yielded to required outbound work, but the deferred queue was unavailable. Outbound remains available.",
-            );
-            return IncomingAudioProcessResult::Complete;
-        }
-        update_incoming_status(
-            session_id,
-            "listening",
-            false,
-            "",
-            &format!(
-                "Held {held_count}/{MAX_DEFERRED_INCOMING} after ASR while your outbound translation finishes. The original incoming order is preserved."
-            ),
-        );
-        return IncomingAudioProcessResult::DeferredTranslation;
-    }
     if held {
         IncomingAudioProcessResult::DeferredTranslation
     } else {
@@ -226,18 +190,26 @@ fn process_incoming_pcm_with_direction(
 
 fn translate_and_commit_incoming_transcript(
     turn: MeetingTurnIdentity<'_>,
-    transcript: &str,
-    source_language: &str,
-    target_language: &str,
-    allow_defer: bool,
+    transcript: Cow<'_, str>,
+    source_language: String,
+    target_language: String,
     deferred_deadline: Option<Instant>,
 ) -> bool {
     let MeetingTurnIdentity { session_id, event_sequence, utterance_id, .. } = turn;
-    // A deferred transcript can outlive the earlier ASR admission. Never
-    // start MiLMMT under a Codex/unverified engine or revoked Meeting.
-    if !incoming_session_is_eligible(session_id)
-        || !super::local_translated_meeting_route_admitted()
-    {
+    // A deferred transcript can outlive the earlier ASR admission.
+    if !incoming_session_is_eligible(session_id) {
+        return false;
+    }
+    if !super::local_translated_meeting_route_admitted() {
+        // Source text was already committed. Retire its pending translation
+        // rather than leave a permanent pending turn without a queue owner.
+        let _ = finish_meeting_turn_translation(
+            session_id, event_sequence, None, utterance_id, "incoming", None,
+        );
+        update_incoming_status(
+            session_id, "degraded", true, "meeting_incoming:translation_engine_not_admitted",
+            "Local translation is not admitted; recognized speech was retained.",
+        );
         return false;
     }
     update_incoming_status(
@@ -249,7 +221,7 @@ fn translate_and_commit_incoming_transcript(
     );
     let translation = send_helper_meeting_translation(
         turn.worker_metadata(None),
-        transcript, source_language, target_language, deferred_deadline,
+        transcript.as_ref(), &source_language, &target_language, deferred_deadline,
     );
     if !incoming_session_is_eligible(session_id) {
         return false;
@@ -263,44 +235,44 @@ fn translate_and_commit_incoming_transcript(
         return false;
     }
     if incoming_deferred_for_required_outbound(&translation) {
-        if allow_defer {
-            let held = enqueue_deferred_incoming(DeferredIncomingJob {
-                session_id: session_id.to_string(),
-                event_sequence,
-                utterance_id,
-                stage: DeferredIncomingStage::NeedsTranslation {
-                    transcript: transcript.to_string(),
-                    source_language: source_language.to_string(),
-                    target_language: target_language.to_string(),
-                },
-                expires_at: deferred_expiration(None, Instant::now()),
-            });
-            if held == 0 {
-                update_incoming_status(
-                    session_id,
-                    "degraded",
-                    true,
-                    "meeting_incoming:deferred_queue_unavailable",
-                    "Incoming translation yielded to required outbound work, but the deferred queue was unavailable. Outbound remains available.",
-                );
-                return false;
-            }
+        // One owner for all MT deferrals. The first deferral joins the tail;
+        // a retried ASR or MT retains its original deadline and front order.
+        let job = DeferredIncomingJob {
+            session_id: session_id.to_string(),
+            event_sequence,
+            utterance_id,
+            stage: DeferredIncomingStage::NeedsTranslation {
+                transcript: transcript.into_owned(),
+                source_language,
+                target_language,
+            },
+            expires_at: deferred_expiration(deferred_deadline, Instant::now()),
+        };
+        let held = if deferred_deadline.is_some() {
+            requeue_deferred_incoming_front(job)
+        } else {
+            enqueue_deferred_incoming(job)
+        };
+        if held == 0 {
             update_incoming_status(
-                session_id,
-                "listening",
-                false,
-                "",
-                &format!(
-                    "Held {held}/{MAX_DEFERRED_INCOMING} while your outbound translation finishes. It will run right after."
-                ),
+                session_id, "degraded", true,
+                "meeting_incoming:deferred_queue_unavailable",
+                "Incoming translation yielded to required outbound work, but the deferred queue was unavailable. Outbound remains available.",
             );
+            return false;
         }
+        update_incoming_status(
+            session_id, "listening", false, "",
+            &format!(
+                "Held {held}/{MAX_DEFERRED_INCOMING} while your outbound translation finishes. Incoming order and the original deadline are preserved."
+            ),
+        );
         return true;
     }
     let translated_text = validated_meeting_translation(
         &translation,
-        source_language,
-        target_language,
+        &source_language,
+        &target_language,
     );
     if translated_text.is_none() {
         let _ = finish_meeting_turn_translation(
@@ -377,37 +349,13 @@ pub(super) fn drain_due_deferred_incoming(session_id: &str) {
                 source_language,
                 target_language,
             } => {
-                let held = translate_and_commit_incoming_transcript(
+                if translate_and_commit_incoming_transcript(
                     MeetingTurnIdentity { session_id, generation: None, event_sequence, utterance_id },
-                    &transcript,
-                    &source_language,
-                    &target_language,
-                    false,
+                    Cow::Owned(transcript),
+                    source_language,
+                    target_language,
                     Some(expires_at),
-                );
-                if held {
-                    // Outbound still has priority; keep the original job at the
-                    // front so ordering and the original age budget are preserved.
-                    let held_count = requeue_deferred_incoming_front(DeferredIncomingJob {
-                        session_id: session_id.to_string(),
-                        event_sequence,
-                        utterance_id,
-                        stage: DeferredIncomingStage::NeedsTranslation {
-                            transcript,
-                            source_language,
-                            target_language,
-                        },
-                        expires_at,
-                    });
-                    if held_count == 0 {
-                        update_incoming_status(
-                            session_id,
-                            "degraded",
-                            true,
-                            "meeting_incoming:deferred_queue_unavailable",
-                            "Incoming translation yielded again, but the deferred queue was unavailable. Outbound remains available.",
-                        );
-                    }
+                ) {
                     break;
                 }
             }

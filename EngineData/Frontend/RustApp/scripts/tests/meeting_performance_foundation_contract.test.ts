@@ -167,7 +167,7 @@ test("deferred deadline survives dequeue and scheduler admission without changin
   const native = source("src-tauri/src/commands/helper_bridge/transport/native.rs");
   assert.match(deferred, /first_deadline\.unwrap_or_else\(\|\| now \+ MAX_DEFERRED_INCOMING_AGE\)/);
   assert.match(incoming, /deferred_deadline: Option<Instant>/);
-  assert.match(incoming, /transcript, source_language, target_language, deferred_deadline/);
+  assert.match(incoming, /transcript\.as_ref\(\), &source_language, &target_language, deferred_deadline/);
   assert.equal((incoming.match(/Some\(expires_at\)/g) ?? []).length, 2);
   assert.match(scheduler, /remaining\.min\(budget\)/);
   assert.match(scheduler, /SCHEDULER_DEFERRED_EXPIRED/);
@@ -180,6 +180,19 @@ test("deferred deadline survives dequeue and scheduler admission without changin
   assert.ok(lastExpiry >= 0 && lastExpiry < begin);
   assert.match(native, /owner\.owner\.begin\(input\.expect\("checked text or speech input"\), deadline\)/);
   assert.match(incoming, /record_deferred_expiration\(&translation\)[\s\S]*?finish_meeting_turn_translation\(/);
+});
+
+test("incoming translation owns initial and repeated deferral without renewing age or cloning queued text", () => {
+  const incoming = source("src-tauri/src/commands/meeting_session/incoming_pipeline.rs");
+  const mt = incoming.slice(incoming.indexOf("fn translate_and_commit_incoming_transcript("), incoming.indexOf("pub(super) fn drain_due_deferred_incoming("));
+  assert.equal((incoming.match(/stage: DeferredIncomingStage::NeedsTranslation \{/g) ?? []).length, 1);
+  assert.match(mt, /transcript: transcript\.into_owned\(\)/);
+  assert.match(mt, /expires_at: deferred_expiration\(deferred_deadline, Instant::now\(\)\)/);
+  assert.match(mt, /if deferred_deadline\.is_some\(\) \{\s*requeue_deferred_incoming_front\(job\)\s*\} else \{\s*enqueue_deferred_incoming\(job\)/);
+  assert.match(incoming, /Cow::Borrowed\(transcript\)/);
+  assert.match(incoming, /Cow::Owned\(transcript\)/);
+  assert.doesNotMatch(incoming, /allow_defer/);
+  assert.match(mt, /if !super::local_translated_meeting_route_admitted\(\) \{[\s\S]*?finish_meeting_turn_translation\([\s\S]*?"incoming", None/);
 });
 
 test("finalization checks only the required signal and clipping evidence before PCM handoff", () => {
