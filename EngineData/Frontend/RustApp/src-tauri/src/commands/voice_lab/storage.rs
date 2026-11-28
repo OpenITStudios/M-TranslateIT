@@ -1043,7 +1043,13 @@ fn inspect_canonical_wav(path: &Path) -> Result<CanonicalWavInfo, String> {
         return Err("voice_lab:wav_invalid_file".to_string());
     }
 
-    let mut file = File::open(path).map_err(|error| format!("voice_lab:wav_open_failed:{error}"))?;
+    let file = File::open(path).map_err(|error| format!("voice_lab:wav_open_failed:{error}"))?;
+    inspect_canonical_wav_reader(file, metadata.len())
+}
+
+// Inspect exactly the bytes already read for archive hashing, or the
+// existing file-backed reader. Both use the same chunk and format checks.
+fn inspect_canonical_wav_reader(mut file: impl Read + Seek, len: u64) -> Result<CanonicalWavInfo, String> {
     let mut riff = [0u8; 12];
     file.read_exact(&mut riff)
         .map_err(|error| format!("voice_lab:wav_header_read_failed:{error}"))?;
@@ -1057,7 +1063,7 @@ fn inspect_canonical_wav(path: &Path) -> Result<CanonicalWavInfo, String> {
         let position = file
             .stream_position()
             .map_err(|error| format!("voice_lab:wav_seek_failed:{error}"))?;
-        if position.saturating_add(8) > metadata.len() {
+        if position.saturating_add(8) > len {
             break;
         }
         let mut header = [0u8; 8];
@@ -1067,7 +1073,7 @@ fn inspect_canonical_wav(path: &Path) -> Result<CanonicalWavInfo, String> {
         let start = file
             .stream_position()
             .map_err(|error| format!("voice_lab:wav_seek_failed:{error}"))?;
-        if start.saturating_add(size) > metadata.len() {
+        if start.saturating_add(size) > len {
             return Err("voice_lab:wav_chunk_out_of_bounds".to_string());
         }
 

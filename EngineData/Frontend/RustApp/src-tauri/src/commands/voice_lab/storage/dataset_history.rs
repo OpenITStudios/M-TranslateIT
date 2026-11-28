@@ -35,7 +35,7 @@ fn snapshots_root(storage: &VoiceLabStoragePaths) -> std::path::PathBuf {
     storage.saved_root.join("DatasetSnapshots")
 }
 
-fn verify_snapshot(storage: &VoiceLabStoragePaths, id: &str) -> Result<DatasetSnapshot, String> {
+fn load_snapshot(storage: &VoiceLabStoragePaths, id: &str) -> Result<DatasetSnapshot, String> {
     let bytes = verify_manifest_by_id(&snapshots_root(storage), id)?;
     let data: DatasetSnapshot = serde_json::from_slice(&bytes)
         .map_err(|_| "voice_lab:snapshot_manifest_invalid")?;
@@ -47,6 +47,11 @@ fn verify_snapshot(storage: &VoiceLabStoragePaths, id: &str) -> Result<DatasetSn
     {
         return Err("voice_lab:snapshot_contract_invalid".into());
     }
+    Ok(data)
+}
+
+fn verify_snapshot(storage: &VoiceLabStoragePaths, id: &str) -> Result<DatasetSnapshot, String> {
+    let data = load_snapshot(storage, id)?;
     // A hash-only manifest is insufficient if the referenced audio later goes
     // missing or becomes corrupt. Verify bytes AND literal prompt binding.
     for (reference, take) in data.audio.iter().zip(&data.source_manifest.takes) {
@@ -108,9 +113,7 @@ pub(super) fn preserve_frozen_dataset_with_archives(
 
 /// An absent pointer can only mean an older pre-snapshot run. A malformed or
 /// missing referenced snapshot is NOT silently downgraded to legacy success.
-pub(super) fn frozen_dataset_snapshot_id(
-    storage: &VoiceLabStoragePaths,
-) -> Result<Option<String>, String> {
+fn read_frozen_snapshot_id(storage: &VoiceLabStoragePaths) -> Result<Option<String>, String> {
     let reference = storage.build_dataset_dir.join(SNAPSHOT_REF);
     let id = match fs::symlink_metadata(&reference) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -119,6 +122,12 @@ pub(super) fn frozen_dataset_snapshot_id(
             .map_err(|_| "voice_lab:snapshot_ref_invalid")?,
     };
     if !valid_id(&id) { return Err("voice_lab:snapshot_ref_invalid".into()); }
+    Ok(Some(id))
+}
+
+// Legacy checkpoint/lineage callers still require full archive verification.
+pub(super) fn frozen_dataset_snapshot_id(storage: &VoiceLabStoragePaths) -> Result<Option<String>, String> {
+    let Some(id) = read_frozen_snapshot_id(storage)? else { return Ok(None); };
     verify_snapshot(storage, &id)?;
     Ok(Some(id))
 }
@@ -169,8 +178,8 @@ pub(super) fn preserve_training_lineage(
 pub(crate) fn archived_frozen_review_matches(
     storage: &VoiceLabStoragePaths,
 ) -> Result<Option<bool>, String> {
-    let Some(id) = frozen_dataset_snapshot_id(storage)? else { return Ok(None); };
-    let snapshot = verify_snapshot(storage, &id)?;
+    let Some(id) = read_frozen_snapshot_id(storage)? else { return Ok(None); };
+    let snapshot = load_snapshot(storage, &id)?;
     let current_manifest = read_regular_bounded(
         &storage.build_dataset_dir.join("dataset.json"), 64 * 1024,
     )?;
@@ -181,9 +190,13 @@ pub(crate) fn archived_frozen_review_matches(
         let staged = read_regular_bounded(
             &storage.build_dataset_dir.join(&take.wav_file), 4 * 1024 * 1024 + 4096,
         )?;
-        let verified = super::recording_archive::saved_recording_audio(
-            storage, &link.archive_id,
-        )?;
+        // Check the exact prompt binding, canonical bytes and native-rate
+        // archive integrity together, once per linked take in this review.
+        let source = super::recording_archive::archived_take_for_training(storage, &link.archive_id)?;
+        if source.line_id != take.line_id || source.exact_text != take.exact_text {
+            return Err("voice_lab:snapshot_archive_prompt_mismatch".into());
+        }
+        let verified = source.canonical_audio;
         if staged != verified { return Ok(Some(false)); }
     }
     // Current-take Create additionally checks the mutable accepted set.

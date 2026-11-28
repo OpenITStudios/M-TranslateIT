@@ -8,7 +8,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use super::{inspect_canonical_wav, sha256_digest, VoiceLabStoragePaths};
+use super::{inspect_canonical_wav, inspect_canonical_wav_reader, sha256_digest, VoiceLabStoragePaths};
 
 const ARCHIVE_VERSION: u32 = 1;
 const MAX_CANONICAL_BYTES: u64 = 4 * 1024 * 1024 + 4096;
@@ -42,10 +42,10 @@ fn bounded_regular_bytes(path: &Path, cap: u64) -> Result<Vec<u8>, String> {
     if meta.file_type().is_symlink() || !meta.is_file() || !(44..=cap).contains(&meta.len()) {
         return Err("voice_lab:archive_source_invalid".to_string());
     }
-    let mut file = File::open(path)
+    let file = File::open(path)
         .map_err(|error| format!("voice_lab:archive_source_open_failed:{error}"))?;
     let mut bytes = Vec::with_capacity(meta.len() as usize);
-    file.read_to_end(&mut bytes)
+    file.take(cap.saturating_add(1)).read_to_end(&mut bytes)
         .map_err(|error| format!("voice_lab:archive_source_read_failed:{error}"))?;
     if bytes.len() as u64 != meta.len() {
         return Err("voice_lab:archive_source_changed".to_string());
@@ -62,7 +62,9 @@ fn write_new_synced(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .map_err(|error| format!("voice_lab:archive_stage_sync_failed:{error}"))
 }
 
-fn verified_archive(dir: &Path, expected: &ArchivedTake) -> Result<(), String> {
+// Return the exact canonical bytes and duration admitted by this check.
+// Consumers must not reopen the audio merely to serve or stage it.
+fn verified_archive(dir: &Path, expected: &ArchivedTake) -> Result<(Vec<u8>, u64), String> {
     let meta = fs::symlink_metadata(dir)
         .map_err(|error| format!("voice_lab:archive_missing:{error}"))?;
     if meta.file_type().is_symlink() || !meta.is_dir() {
@@ -74,9 +76,10 @@ fn verified_archive(dir: &Path, expected: &ArchivedTake) -> Result<(), String> {
     if &parsed != expected {
         return Err("voice_lab:archive_receipt_mismatch".to_string());
     }
-    let canonical = dir.join("canonical.wav");
-    inspect_canonical_wav(&canonical)?;
-    let canonical_bytes = bounded_regular_bytes(&canonical, MAX_CANONICAL_BYTES)?;
+    let canonical_bytes = bounded_regular_bytes(&dir.join("canonical.wav"), MAX_CANONICAL_BYTES)?;
+    let duration_ms = inspect_canonical_wav_reader(
+        std::io::Cursor::new(canonical_bytes.as_slice()), canonical_bytes.len() as u64,
+    )?.duration_ms;
     if sha256_hex(&canonical_bytes)? != expected.canonical_sha256 {
         return Err("voice_lab:archive_canonical_hash_mismatch".to_string());
     }
@@ -94,7 +97,7 @@ fn verified_archive(dir: &Path, expected: &ArchivedTake) -> Result<(), String> {
             }
         }
     }
-    Ok(())
+    Ok((canonical_bytes, duration_ms))
 }
 
 fn checked_dir(path: &Path) -> Result<(), String> {
@@ -532,11 +535,10 @@ pub(crate) fn saved_recordings_page(
             has_more = true;
             break;
         }
-        if verified_archive(&path, &receipt).is_err() {
-            attention += 1;
-            continue;
-        }
-        let duration_ms = inspect_canonical_wav(&path.join("canonical.wav"))?.duration_ms;
+        let (_, duration_ms) = match verified_archive(&path, &receipt) {
+            Ok(verified) => verified,
+            Err(_) => { attention += 1; continue; }
+        };
         items.push(SavedRecording {
             archive_id: id,
             line_id: receipt.line_id,
@@ -568,7 +570,7 @@ pub(super) fn verify_saved_take_binding(
     if receipt.line_id != line_id || receipt.exact_text != exact_text {
         return Err("voice_lab:snapshot_archive_prompt_mismatch".into());
     }
-    verified_archive(&dir, &receipt)
+    verified_archive(&dir, &receipt).map(|_| ())
 }
 
 /// Serves only audio whose bounded content, metadata and canonical archive ID
@@ -580,11 +582,7 @@ pub(crate) fn saved_recording_audio(
         .map_err(|_| "voice_lab:archive_lock_unavailable")?;
     let dir = saved_recording_location(storage, archive_id)?;
     let receipt = receipt_for_archive(&dir, archive_id)?;
-    verified_archive(&dir, &receipt)?;
-    let audio = bounded_regular_bytes(&dir.join("canonical.wav"), MAX_CANONICAL_BYTES)?;
-    if sha256_hex(&audio)? != receipt.canonical_sha256 {
-        return Err("voice_lab:saved_recording_audio_changed".into());
-    }
+    let (audio, _) = verified_archive(&dir, &receipt)?;
     Ok(audio)
 }
 
@@ -606,14 +604,9 @@ pub(crate) fn archived_take_for_training(
         .map_err(|_| "voice_lab:archive_lock_unavailable")?;
     let dir = saved_recording_location(storage, archive_id)?;
     let receipt = receipt_for_archive(&dir, archive_id)?;
-    verified_archive(&dir, &receipt)?;
-    let canonical_audio = bounded_regular_bytes(&dir.join("canonical.wav"), MAX_CANONICAL_BYTES)?;
-    let duration_ms = inspect_canonical_wav(&dir.join("canonical.wav"))?.duration_ms;
-    // The archive verifier already checks the native-rate sidecar. It is
-    // retained in the immutable archive, never materialized for synthesis.
-    if sha256_hex(&canonical_audio)? != receipt.canonical_sha256 {
-        return Err("voice_lab:saved_recording_audio_changed".into());
-    }
+    // The same verification checks the immutable native-rate sidecar but
+    // returns only the exact canonical bytes used for reference synthesis.
+    let (canonical_audio, duration_ms) = verified_archive(&dir, &receipt)?;
     Ok(ArchivedTrainingTake {
         line_id: receipt.line_id,
         exact_text: receipt.exact_text,
@@ -667,10 +660,14 @@ mod tests {
         assert_eq!(second_page.items.len(), 3);
         assert!(second_page.next_cursor.is_none());
         assert_eq!(saved_recording_audio(&storage, &first_id).unwrap(), first);
+        let selected = archived_take_for_training(&storage, &first_id).unwrap();
+        assert_eq!(selected.canonical_audio, first);
+        assert_eq!(selected.duration_ms, 1_000);
         assert!(saved_recording_audio(&storage, "../wrong").is_err());
         let tampered = storage.saved_root.join("Recordings").join(&first_id[..2]).join(&first_id).join("canonical.wav");
         fs::write(tampered, wav(250)).unwrap();
         assert!(saved_recording_audio(&storage, &first_id).is_err());
+        assert!(archived_take_for_training(&storage, &first_id).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 

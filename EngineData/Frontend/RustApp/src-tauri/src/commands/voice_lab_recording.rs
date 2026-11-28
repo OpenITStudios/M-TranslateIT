@@ -168,6 +168,7 @@ fn accepted_native_rate_path(line_id: u32) -> PathBuf {
 }
 
 fn current_state() -> GuidedRecordingState {
+    let paths = storage_paths();
     // A status refresh creates a new JSON object; its pending owner ID must
     // remain stable. Capture review and ID together under the same lock.
     let (pending_review, pending_review_id) = match draft_store().lock() {
@@ -181,7 +182,7 @@ fn current_state() -> GuidedRecordingState {
     // deletes audio from an interrupted session. Recovery revalidates both
     // WAVs after explicit user action.
     let (orphaned_drafts, draft_recovery_error) = match find_orphaned_guided_drafts(
-        &storage_paths().cache_root.join("Draft"),
+        &paths.cache_root.join("Draft"),
         |line| guided_text(line).is_some(),
     ) {
         Ok(found) => (found.into_iter().filter(|draft| {
@@ -197,13 +198,18 @@ fn current_state() -> GuidedRecordingState {
         draft_recovery_error,
         lines: guided_lines()
             .iter()
-            .map(|(line_id, text)| GuidedLineStatus {
-                line_id: *line_id,
-                text: (*text).to_string(),
-                accepted: accepted_path(*line_id).is_file(),
-                level: prompt_metadata(*line_id).map(|m| m.level).unwrap_or("unknown"),
-                focus: prompt_metadata(*line_id).map(|m| m.focus).unwrap_or("unknown"),
-                coverage: prompt_metadata(*line_id).map(|m| m.coverage).unwrap_or("unknown"),
+            .map(|(line_id, text)| {
+                let (level, focus, coverage) = prompt_metadata(*line_id)
+                    .map(|m| (m.level, m.focus, m.coverage))
+                    .unwrap_or(("unknown", "unknown", "unknown"));
+                GuidedLineStatus {
+                    line_id: *line_id,
+                    text: (*text).to_string(),
+                    accepted: paths.takes_dir.join(take_file_name(*line_id)).is_file(),
+                    level,
+                    focus,
+                    coverage,
+                }
             })
             .collect(),
     }
@@ -245,10 +251,11 @@ pub(crate) fn guided_recording_recommendations(
 }
 
 pub(crate) fn accepted_guided_recordings() -> Vec<AcceptedGuidedRecording> {
+    let paths = storage_paths();
     guided_lines()
         .iter()
         .filter_map(|(line_id, text)| {
-            let path = accepted_path(*line_id);
+            let path = paths.takes_dir.join(take_file_name(*line_id));
             path.is_file().then_some(AcceptedGuidedRecording {
                 line_id: *line_id,
                 text,

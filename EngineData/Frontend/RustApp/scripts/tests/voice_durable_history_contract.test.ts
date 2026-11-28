@@ -78,3 +78,30 @@ test("interrupted current-take Accept blocks new training before frozen dataset 
   assert.match(source, /canonical_only_legacy_take_keeps_its_existing_source_contract/);
   assert.match(source, /either_interrupted_previous_backup_blocks_before_dataset_mutation/);
 });
+
+
+test("archive playback and reference preparation reuse the exact validated buffer", () => {
+  const archive = rust("voice_lab/storage/recording_archive.rs");
+  const verifier = archive.slice(archive.indexOf("fn verified_archive("), archive.indexOf("fn checked_dir("));
+  assert.match(verifier, /inspect_canonical_wav_reader\(\s*std::io::Cursor::new\(canonical_bytes\.as_slice\(\)\)/);
+  assert.match(verifier, /sha256_hex\(&canonical_bytes\)\? != expected\.canonical_sha256/);
+  assert.match(verifier, /sha256_hex\(&native_bytes\)\? != \*hash/);
+  assert.match(verifier, /Ok\(\(canonical_bytes, duration_ms\)\)/);
+  assert.match(archive, /file\.take\(cap\.saturating_add\(1\)\)\.read_to_end/);
+  const playback = archive.slice(archive.indexOf("pub(crate) fn saved_recording_audio("), archive.indexOf("#[cfg(all(test"));
+  assert.match(playback, /let \(audio, _\) = verified_archive\(&dir, &receipt\)\?/);
+  assert.match(playback, /let \(canonical_audio, duration_ms\) = verified_archive\(&dir, &receipt\)\?/);
+  assert.doesNotMatch(playback, /bounded_regular_bytes|inspect_canonical_wav\(/);
+});
+
+test("recording observations resolve storage once per call, not once per prompt", () => {
+  const recording = rust("voice_lab_recording.rs");
+  const state = recording.slice(recording.indexOf("fn current_state()"), recording.indexOf("pub(crate) struct AcceptedGuidedRecording"));
+  const accepted = recording.slice(recording.indexOf("pub(crate) fn accepted_guided_recordings()"), recording.indexOf("pub(crate) fn voice_lab_recording_blocks_app_exit()"));
+  for (const body of [state, accepted]) {
+    assert.equal((body.match(/storage_paths\(\)/g) ?? []).length, 1);
+    assert.doesNotMatch(body, /accepted_path\(/);
+    assert.match(body, /paths\.takes_dir\.join\(take_file_name\(\*line_id\)\)\.is_file\(\)|let path = paths\.takes_dir\.join\(take_file_name\(\*line_id\)\)/);
+  }
+  assert.equal((state.match(/prompt_metadata\(\*line_id\)/g) ?? []).length, 1);
+});

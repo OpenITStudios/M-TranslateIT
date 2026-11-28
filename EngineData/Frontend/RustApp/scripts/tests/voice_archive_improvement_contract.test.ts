@@ -61,3 +61,17 @@ test("UI selects one saved version of each sentence, and uncertain builds never 
   assert.match(api, /start_product_voice_improvement/);
   assert.match(api, /Couldn't verify whether My Voice improvement started/);
 });
+
+
+test("review verifies each immutable archive once with exact prompt and canonical bytes", () => {
+  const snapshot = rust("voice_lab/storage/dataset_history.rs");
+  const review = snapshot.slice(snapshot.indexOf("pub(crate) fn archived_frozen_review_matches("), snapshot.indexOf("#[cfg(test)]"));
+  assert.match(review, /read_frozen_snapshot_id\(storage\)/);
+  assert.match(review, /load_snapshot\(storage, &id\)/);
+  assert.doesNotMatch(review, /verify_snapshot\(|= frozen_dataset_snapshot_id\(/);
+  assert.match(review, /archived_take_for_training\(storage, &link\.archive_id\)/);
+  assert.match(review, /source\.line_id != take\.line_id \|\| source\.exact_text != take\.exact_text/);
+  assert.match(review, /staged != verified/);
+  const legacy = snapshot.slice(snapshot.indexOf("pub(super) fn frozen_dataset_snapshot_id("), snapshot.indexOf("struct TrainingLineage"));
+  assert.match(legacy, /verify_snapshot\(storage, &id\)/);
+});
