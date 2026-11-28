@@ -87,7 +87,11 @@ test("legacy live preview remains capped while export reads the disk-backed sess
   assert.match(memory, /\.take\(MAX_LIVE_COMMITTED_TURNS\)/);
   assert.match(archive, /MAX_SAVED_PREVIEW: usize = 240/);
   assert.match(html, /stream_saved_turns\(&session_id/);
-  assert.doesNotMatch(html, /snapshot_for_export\(/);
+  assert.match(memory, /self\.turns\.iter\(\)\.skip\(hidden\)\.cloned\(\)\.collect\(\)/);
+  assert.match(memory, /let mut snapshot = store\.snapshot_for_review\(\)/);
+  assert.match(meeting, /if let Some\(snapshot\) = recent_committed_turn_snapshot\(\)/);
+  assert.doesNotMatch(meeting, /MAX_REVIEW_TURNS|snapshot\.turns\.split_off/);
+  assert.doesNotMatch(html, /snapshot_for_review\(|recent_committed_turn_snapshot\(/);
 });
 
 test("explicit Delete removes matching in-memory last-session review as well as archive", () => {

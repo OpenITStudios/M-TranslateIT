@@ -12,7 +12,7 @@ use super::{
 };
 
 const MAX_LIVE_COMMITTED_TURNS: usize = 240;
-// The UI stays small, but manual export may retain a much longer session.
+// The active store retains more turns than the UI preview for live authority.
 // Both limits are hard bounds; excess is explicitly counted as lost content.
 const MAX_SESSION_COMMITTED_TURNS: usize = 4_096;
 const MAX_SESSION_TRANSCRIPT_BYTES: usize = 8 * 1024 * 1024;
@@ -374,15 +374,17 @@ impl MeetingCommittedTurnStore {
         Some((count, p50, p95))
     }
 
-    fn snapshot_for_export(&self) -> MeetingCommittedTurnsSnapshot {
-        // Stored turns are already ordered by shared sequence; no re-sort needed.
+    fn snapshot_for_review(&self) -> MeetingCommittedTurnsSnapshot {
+        // Both active and Last Meeting views use the same bounded tail.
+        // Manual HTML export reads the complete available disk archive.
+        let hidden = self.turns.len().saturating_sub(MAX_LIVE_COMMITTED_TURNS);
         let archive_errors = transcript_archive::active_write_errors(&self.session_id);
         let archive_unverified = archive_errors.is_err();
         MeetingCommittedTurnsSnapshot {
             ok: !archive_unverified,
             has_session: true,
             session_id: Some(self.session_id.clone()),
-            turns: self.turns.iter().cloned().collect(),
+            turns: self.turns.iter().skip(hidden).cloned().collect(),
             dropped_turn_count: self.dropped_turn_count,
             archive_write_errors: archive_errors.unwrap_or(0),
             truncated: self.dropped_turn_count > 0,
@@ -396,8 +398,10 @@ impl MeetingCommittedTurnStore {
                     "The Live-memory buffer released {} earlier turns. The saved disk archive may retain them if each write succeeded.",
                     self.dropped_turn_count,
                 )
+            } else if hidden > 0 {
+                "Showing latest 240 phrases; export manually for the full available saved session.".to_string()
             } else {
-                "Complete currently retained Meeting turns for explicit manual export.".to_string()
+                "Currently retained Meeting turns for review.".to_string()
             },
             runtime_claim: "meeting_committed_turn_snapshot_source_contract_not_rendered_runtime_proof".to_string(),
         }
@@ -537,7 +541,7 @@ pub(super) fn clear_inactive_committed_turns() -> bool {
     true
 }
 
-pub(super) fn retain_committed_turns_for_export(session_id: &str) -> bool {
+pub(super) fn retain_committed_turns_for_review(session_id: &str) -> bool {
     let Ok(guard) = committed_turn_store().lock() else {
         return false;
     };
@@ -547,7 +551,7 @@ pub(super) fn retain_committed_turns_for_export(session_id: &str) -> bool {
     if store.session_id != session_id {
         return false;
     }
-    let mut snapshot = store.snapshot_for_export();
+    let mut snapshot = store.snapshot_for_review();
     snapshot.has_session = false;
     // Ending a session also ends all uncompleted incoming/outgoing work. The
     // last-session review must never display "Translating..." forever.
@@ -567,15 +571,15 @@ pub(super) fn retain_committed_turns_for_export(session_id: &str) -> bool {
     true
 }
 
-pub(super) fn exportable_committed_turn_snapshot() -> Option<MeetingCommittedTurnsSnapshot> {
+pub(super) fn recent_committed_turn_snapshot() -> Option<MeetingCommittedTurnsSnapshot> {
     // Only the active authoritative Meeting session or the last explicitly
-    // stopped session may be exported. Never expose a foreign runtime owner.
+    // stopped session may be reviewed. Never expose a foreign runtime owner.
     if let Some(session) = latest_runtime_session_state().snapshot {
         if session.owner_id == APPLICATION_MEETING_OWNER_ID {
             if let Ok(guard) = committed_turn_store().lock() {
                 if let Some(store) = guard.as_ref() {
                     if store.session_id == session.session_id && !store.turns.is_empty() {
-                        return Some(store.snapshot_for_export());
+                        return Some(store.snapshot_for_review());
                     }
                 }
             }
@@ -1178,7 +1182,7 @@ mod tests {
     }
 
     #[test]
-    fn repeated_no_session_cleanup_preserves_last_ended_export() {
+    fn repeated_no_session_cleanup_preserves_bounded_last_ended_review() {
         // Reuse the repository's single global-runtime fixture guard. Restore
         // both stores even if an assertion panics, so parallel tests cannot
         // inherit an unrelated transcript or a poisoned fixture state.
@@ -1210,9 +1214,15 @@ mod tests {
             session_id, 1, None, 11, "incoming", "en", "id",
             "Hello", "Halo", None, None, 1,
         ).is_some());
+        for sequence in 2..=(MAX_LIVE_COMMITTED_TURNS as u64 + 1) {
+            assert!(active.commit_at(
+                session_id, sequence, None, sequence + 20, "incoming", "en", "id",
+                "Hello", "Halo", None, None, u128::from(sequence),
+            ).is_some());
+        }
         *super::committed_turn_store().lock().unwrap() = Some(active);
 
-        assert!(super::retain_committed_turns_for_export(session_id));
+        assert!(super::retain_committed_turns_for_review(session_id));
         assert!(super::clear_committed_turns_for_session(session_id));
         assert!(super::clear_inactive_committed_turns());
         assert!(super::clear_inactive_committed_turns());
@@ -1220,7 +1230,10 @@ mod tests {
         let archived = super::ended_transcript_store().lock().unwrap().clone()
             .expect("second Stop must preserve the last-ended transcript");
         assert_eq!(archived.session_id.as_deref(), Some(session_id));
-        assert_eq!(archived.turns.len(), 1);
+        assert_eq!(archived.turns.len(), MAX_LIVE_COMMITTED_TURNS);
+        assert_eq!(archived.turns[0].sequence, 2);
+        assert_eq!(archived.turns.last().map(|turn| turn.sequence), Some(MAX_LIVE_COMMITTED_TURNS as u64 + 1));
+        assert!(!archived.truncated);
         assert_eq!(archived.turns[0].source_text, "Hello");
         assert_eq!(archived.turns[0].translated_text, "Halo");
 
@@ -1256,12 +1269,12 @@ mod tests {
             Some(MAX_SESSION_COMMITTED_TURNS as u64 + 2)
         );
         assert_eq!(store.snapshot().turns.len(), MAX_LIVE_COMMITTED_TURNS);
-        assert_eq!(store.snapshot_for_export().turns.len(), MAX_SESSION_COMMITTED_TURNS);
-        assert!(store.snapshot_for_export().truncated);
+        assert_eq!(store.snapshot_for_review().turns.len(), MAX_LIVE_COMMITTED_TURNS);
+        assert!(store.snapshot_for_review().truncated);
     }
 
     #[test]
-    fn recent_preview_is_short_but_manual_export_keeps_full_session() {
+    fn recent_preview_clones_only_tail_without_eviction() {
         let mut store = MeetingCommittedTurnStore::new("s1");
         for seq in 1..=(MAX_LIVE_COMMITTED_TURNS as u64 + 3) {
             assert!(store.commit_at(
@@ -1270,12 +1283,15 @@ mod tests {
             ).is_some());
         }
         let preview = store.snapshot();
-        let export = store.snapshot_for_export();
+        let review = store.snapshot_for_review();
         assert_eq!(preview.turns.len(), MAX_LIVE_COMMITTED_TURNS);
         assert_eq!(preview.turns.first().map(|turn| turn.sequence), Some(4));
         assert!(!preview.truncated);
-        assert_eq!(export.turns.len(), MAX_LIVE_COMMITTED_TURNS + 3);
-        assert!(!export.truncated);
+        assert_eq!(review.turns.len(), MAX_LIVE_COMMITTED_TURNS);
+        assert_eq!(review.turns.first().map(|turn| turn.sequence), Some(4));
+        assert_eq!(review.turns.last().map(|turn| turn.sequence), Some(MAX_LIVE_COMMITTED_TURNS as u64 + 3));
+        assert!(!review.truncated);
+        assert_eq!(store.turns.len(), MAX_LIVE_COMMITTED_TURNS + 3);
         assert_eq!(store.dropped_turn_count, 0);
     }
 
@@ -1290,7 +1306,7 @@ mod tests {
         assert!(store.turns.is_empty());
         assert_eq!(store.retained_text_bytes, 0);
         assert_eq!(store.dropped_turn_count, 1);
-        assert!(store.snapshot_for_export().truncated);
+        assert!(store.snapshot_for_review().truncated);
     }
 
     #[test]

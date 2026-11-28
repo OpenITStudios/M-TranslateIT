@@ -25,7 +25,7 @@ mod suppression;
 mod transcript_export;
 mod transcript_archive;
 
-use committed_turns::{current_committed_turn_snapshot, exportable_committed_turn_snapshot};
+use committed_turns::{current_committed_turn_snapshot, recent_committed_turn_snapshot};
 
 // Reuse the bounded Meeting owner; diagnostics must not introduce telemetry state.
 pub(super) fn current_outbound_latency_distribution() -> Option<(usize, u64, u64)> {
@@ -530,17 +530,7 @@ pub fn get_meeting_committed_turns(reconcile: Option<MeetingLiveReadRequest>) ->
 
 #[tauri::command]
 pub fn get_recent_meeting_transcript() -> MeetingCommittedTurnsSnapshot {
-    if let Some(mut snapshot) = exportable_committed_turn_snapshot() {
-        // The review remains lightweight; manual file Export retains every
-        // available session turn (subject only to explicit memory limits).
-        const MAX_REVIEW_TURNS: usize = 240;
-        if snapshot.turns.len() > MAX_REVIEW_TURNS {
-            let hidden = snapshot.turns.len() - MAX_REVIEW_TURNS;
-            snapshot.turns = snapshot.turns.split_off(hidden);
-            if !snapshot.truncated {
-                snapshot.note = "Showing latest 240 phrases; export manually for the full retained session.".to_string();
-            }
-        }
+    if let Some(snapshot) = recent_committed_turn_snapshot() {
         return snapshot;
     }
     MeetingCommittedTurnsSnapshot {

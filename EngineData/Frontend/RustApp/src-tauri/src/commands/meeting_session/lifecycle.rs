@@ -39,7 +39,7 @@ use super::super::helper_bridge::{
 use super::committed_turns::{
     clear_inactive_committed_turns, clear_committed_turns_for_session,
     interrupt_committed_turns_for_generation, reset_committed_turns,
-    retain_committed_turns_for_export,
+    retain_committed_turns_for_review,
 };
 use super::consumer_runtime::{
     finish_orphaned_meeting_consumers_without_session, inactive_meeting_consumers_may_need_stop,
@@ -1044,7 +1044,7 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
     original_voice_pcm::stop(generation);
 
     interrupt_committed_turns_for_generation(&session_id, generation);
-    let transcript_retained_for_export = retain_committed_turns_for_export(&session_id);
+    let transcript_retained_for_review = retain_committed_turns_for_review(&session_id);
     // Full native release stays with Stop and the existing cleanup gates.
     let original_stopped = stop_original_voice_output(generation);
     let output_cancelled = tts_cancelled && original_stopped;
@@ -1059,7 +1059,7 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
     let suppression_cleanup_ok = clear_self_output_suppression_for_session(&session_id);
     // Keep the original session's file identity through failed Stop.
     let transcript_cleanup_ok = clear_transcript_only_after_retention(
-        transcript_retained_for_export,
+        transcript_retained_for_review,
         || clear_committed_turns_for_session(&session_id),
     );
     // An unconfirmed consumer can still be writing/reading its deterministic
@@ -1084,7 +1084,7 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
         finalized_audio_cleanup.is_ok() && tts_cache_cleanup.is_ok();
     clear_outbound_status();
 
-    let released_resources = transcript_retained_for_export && meeting_cleanup_complete(
+    let released_resources = transcript_retained_for_review && meeting_cleanup_complete(
         output_cancelled,
         capture_stop.ok,
         incoming_capture_stop.ok,
@@ -1126,8 +1126,8 @@ pub(super) fn stop_meeting_translation_impl() -> MeetingSessionActionResult {
         if !suppression_cleanup_ok {
             failed.push("self-output suppression state");
         }
-        if !transcript_retained_for_export {
-            failed.push("transient transcript export snapshot");
+        if !transcript_retained_for_review {
+            failed.push("transient transcript review snapshot");
         }
         if !transcript_cleanup_ok {
             failed.push("committed transcript state");
