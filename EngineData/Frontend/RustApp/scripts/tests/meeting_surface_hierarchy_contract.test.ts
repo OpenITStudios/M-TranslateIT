@@ -356,37 +356,38 @@ test("A Meeting only highlights the Recent or Project row that opened it", () =>
   assert.match(app, /selectedSurface = \$state<"recent" \| "project">\("recent"\)/);
   assert.match(app, /function openMeetingSession\(id: string, source: "recent" \| "project" = "recent"\)/);
   assert.match(app, /selectedSurface = source/);
-  assert.match(navigation, /selectedIn\(session, "recent"\)/);
-  assert.match(navigation, /selectedIn\(session, "project"\)/);
+  assert.match(navigation, /selectedIn\(session, surface\)/);
+  assert.match(navigation, /selectedSessionId === session\.session_id && selectedSurface === surface/);
   assert.match(navigation, /liveSessionId === session\.session_id/);
-  assert.match(navigation, /"recent:" \+ session\.session_id/);
-  assert.match(navigation, /"project:" \+ session\.session_id/);
+  assert.match(navigation, /const key = surface \+ ":" \+ session\.session_id/);
   assert.match(navigation, /"category:" \+ project\.project_id/);
-  assert.match(navigation, /onOpenSession\(session\.session_id, "recent"\)/);
-  assert.match(navigation, /onOpenSession\(session\.session_id, "project"\)/);
+  assert.match(navigation, /openSession\(session\.session_id, surface\)/);
+  assert.match(navigation, /onOpenSession\(sessionId, surface\)/);
+  assert.equal((navigation.match(/\{@render meetingRow\(session, "recent"\)\}/g) ?? []).length, 1);
+  assert.equal((navigation.match(/\{@render meetingRow\(session, "project"\)\}/g) ?? []).length, 2);
 });
 
 test("A meeting has only one open action menu across Recent and Projects", () => {
   const navigation = readFileSync(new URL("../../src/components/layout/MeetingLibraryNavigation.svelte", import.meta.url), "utf8");
   // One shared state, not independent per-row booleans for duplicate sessions.
   assert.equal((navigation.match(/let menu = \$state<string \| null>\(null\)/g) ?? []).length, 1);
-  assert.match(navigation, /function toggleMenu\(key: string\)/);
+  assert.match(navigation, /function toggleMenu\(key: string, trigger: HTMLButtonElement\)/);
   assert.match(navigation, /const next = menu === key \? null : key;/);
-  assert.match(navigation, /clearMenus\(\);\s*menu = next;/);
-  assert.match(navigation, /toggleMenu\("recent:" \+ session\.session_id\)/);
-  assert.match(navigation, /toggleMenu\("project:" \+ session\.session_id\)/);
-  assert.match(navigation, /toggleMenu\("category:" \+ project\.project_id\)/);
-  assert.match(navigation, /menu === "recent:" \+ session\.session_id/);
-  assert.match(navigation, /menu === "project:" \+ session\.session_id/);
+  assert.match(navigation, /clearMenus\(\);\s*returnFocus = trigger;\s*menuStyle = "visibility:hidden";\s*menu = next;/);
+  assert.match(navigation, /toggleMenu\(key, event\.currentTarget\)/);
+  assert.match(navigation, /toggleMenu\("category:" \+ project\.project_id, event\.currentTarget\)/);
+  assert.match(navigation, /menu === key && library\?\.ok/);
+  assert.equal((navigation.match(/\{@snippet meetingRow\(/g) ?? []).length, 1);
+  assert.equal((navigation.match(/> Delete Meeting<\/button>/g) ?? []).length, 1);
   assert.doesNotMatch(navigation, /onclick=\{\(\) => menu = menu ===/);
 });
 
 test("Selecting a channel or starting another action closes the previous inline menu", () => {
   const navigation = readFileSync(new URL("../../src/components/layout/MeetingLibraryNavigation.svelte", import.meta.url), "utf8");
   assert.match(navigation, /function openSession\(sessionId: string, surface: "recent" \| "project"\)/);
-  assert.match(navigation, /function openMove\(sessionId: string\)/);
-  assert.match(navigation, /function requestDelete\(id: string\)/);
-  assert.match(navigation, /function openEdit\(kind: Edit\["kind"\], id: string, previous = ""\)/);
+  assert.match(navigation, /function openMove\(sessionId: string, surface: "recent" \| "project"\)/);
+  assert.match(navigation, /function requestDelete\(id: string, surface: "recent" \| "project" = "recent"\)/);
+  assert.match(navigation, /function openEdit\(kind: Edit\["kind"\], id: string, previous = "", surface: "recent" \| "project" = "recent", trigger\?: HTMLButtonElement\)/);
   assert.match(navigation, /function toggleProject\(projectId: string\)/);
   assert.match(navigation, /<svelte:window onkeydown=\{handleEscape\}/);
   assert.match(navigation, /if \(event\.key === "Escape"/);
@@ -395,6 +396,18 @@ test("Selecting a channel or starting another action closes the previous inline 
     assert.ok(start >= 0);
     assert.match(navigation.slice(start, start + 420), /clearMenus\(\)/, fn);
   }
+});
+
+test("Shared library rows preserve archive warnings and destructive confirmation", () => {
+  const navigation = readFileSync(new URL("../../src/components/layout/MeetingLibraryNavigation.svelte", import.meta.url), "utf8");
+  const row = navigation.slice(navigation.indexOf("{@snippet meetingRow"), navigation.indexOf("<svelte:window"));
+  assert.match(row, /session\.storage_warning \|\| !session\.complete/);
+  assert.match(row, /storage needs review/);
+  assert.match(row, /requestDelete\(session\.session_id, surface\)/);
+  assert.doesNotMatch(row, /deleteConfirmed\(/);
+  assert.match(navigation, /openEdit\("create_project", "", "", "recent", event\.currentTarget\)/);
+  assert.match(navigation, /event\.target instanceof Node && popup\?\.contains\(event\.target\)/);
+  assert.match(navigation, /Confirm Delete/);
 });
 
 test("Transcript display mode only changes presentation; failures retain original text", () => {

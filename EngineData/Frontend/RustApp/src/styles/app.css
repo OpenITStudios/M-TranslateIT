@@ -465,6 +465,18 @@
     outline: 2px solid var(--ti-accent);
     outline-offset: -2px;
   }
+  .ti-library-menu button.ti-library-menu-danger {
+    margin-top: 4px;
+    border-top: 1px solid var(--ti-border);
+    color: var(--ti-danger);
+  }
+
+  .ti-library-menu button.ti-library-menu-danger:hover:not(:disabled),
+  .ti-library-menu button.ti-library-menu-danger:focus-visible {
+    background: var(--ti-danger-surface);
+    color: var(--ti-danger);
+  }
+
   .ti-library-menu button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
