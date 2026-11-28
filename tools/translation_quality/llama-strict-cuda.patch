@@ -759,6 +759,44 @@ diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
 -    rs_buf.insert(rs_buf.end(), y.begin(), y.end());
      rs_in += (int64_t) n;
      resample(false, out);
+@@ -2000,24 +2020,32 @@
+ // on flush, the input is zero-extended and the output is ceil(new * rs_in / orig) samples
+ void mtmd_audio_zonos3_synth::resample(bool flush, std::vector<float> & out) {
+     const int     KL    = 2 * rs_width + rs_orig;
+     const int64_t total = flush ? ((int64_t) rs_new * rs_in + rs_orig - 1) / rs_orig : -1;
+-    std::vector<float> xw(KL);
+     for (;; rs_block++) {
+         const int64_t x0 = rs_block * rs_orig - rs_width;
+         if (flush ? rs_block * rs_new >= total : x0 + KL > rs_in) {
+             break;
+         }
+-        for (int k = 0; k < KL; k++) {
+-            const int64_t j = x0 + k;
+-            xw[k] = (j < 0 || j >= rs_in) ? 0.0f : rs_buf[(size_t) (j - rs_base)];
+-        }
++        const float * xw;
++        if (x0 >= rs_base && x0 + KL <= rs_in) {
++            // Complete windows already exist contiguously in history.
++            xw = rs_buf.data() + (size_t) (x0 - rs_base);
++        } else {
++            // Preserve the original zero extension at the edges.
++            rs_window.resize(KL);
++            for (int k = 0; k < KL; k++) {
++                const int64_t j = x0 + k;
++                rs_window[k] = (j < 0 || j >= rs_in) ? 0.0f : rs_buf[(size_t) (j - rs_base)];
++            }
++            xw = rs_window.data();
++        }
+         const int64_t n_emit = flush ? std::min<int64_t>(rs_new, total - rs_block * rs_new) : rs_new;
+         for (int64_t i = 0; i < n_emit; i++) {
+             const float * ki = rs_kernel.data() + (size_t) i * KL;
+             float acc = 0.0f;
+             for (int k = 0; k < KL; k++) {
+                 acc += ki[k] * xw[k];
+             }
+             out.push_back(acc);
+         }
+     }
 diff --git a/tests/test-mtmd-impl.cpp b/tests/test-mtmd-impl.cpp
 --- a/tests/test-mtmd-impl.cpp
 +++ b/tests/test-mtmd-impl.cpp
@@ -834,7 +872,7 @@ diff --git a/tests/test-mtmd-impl.cpp b/tests/test-mtmd-impl.cpp
  
  MAKE_TEST(test_audio_preprocessor_conformer) {
      mtmd_hparams hparams;
-@@ -1165,6 +1186,38 @@
+@@ -1165,6 +1186,59 @@
  }
  
 -// 13 tokens per 100-frame chunk; the tail is ceil^3 (one halving per stride-2 conv layer)
@@ -868,6 +906,27 @@ diff --git a/tests/test-mtmd-impl.cpp b/tests/test-mtmd-impl.cpp
 +    t.assert_true("finite nonzero waveform", std::all_of(a.begin(), a.end(), [](float v) { return std::isfinite(v); }) &&
 +                  std::any_of(a.begin(), a.end(), [](float v) { return v != 0.0f; }));
 +    t.assert_true("chunk parity", a == b);
++
++    // Identity resampling exposes the mixer input. Compare to the original
++    // zero-extended window algorithm with the same multiply/add order.
++    mtmd_audio_zonos3_synth identity(mixer, { 1.0f }, n_fft0, n_fft1, hop, 1, 1);
++    std::vector<float> source, expected;
++    identity.push(spec.data(), n_frames, source);
++    identity.flush(source);
++    const int64_t total = ((int64_t) source.size() * 3 + 1) / 2;
++    for (int64_t block = 0; block * 3 < total; ++block) {
++        float window[4];
++        for (int k = 0; k < 4; ++k) {
++            const int64_t j = block * 2 - 1 + k;
++            window[k] = j < 0 || j >= (int64_t) source.size() ? 0.0f : source[(size_t) j];
++        }
++        for (int64_t i = 0; i < std::min<int64_t>(3, total - block * 3); ++i) {
++            float acc = 0.0f;
++            for (int k = 0; k < 4; ++k) acc += kernel[(size_t) i * 4 + k] * window[k];
++            expected.push_back(acc);
++        }
++    }
++    t.assert_true("padded-window resampling parity", a == expected);
 +}
 +
 +// 13 tokens per 100-frame chunk; the tail is ceil^3 (one halving per stride-2 conv layer)
@@ -913,3 +972,44 @@ diff --git a/tests/test-batch-alloc.cpp b/tests/test-batch-alloc.cpp
      t.test("copies_pos_seq_output", [&](testing & t) {
          batch_builder bb;
          for (int i = 0; i < 4; ++i) {
+diff --git a/tools/mtmd/mtmd.cpp b/tools/mtmd/mtmd.cpp
+--- a/tools/mtmd/mtmd.cpp
++++ b/tools/mtmd/mtmd.cpp
+@@ -4384,11 +4384,21 @@
+         mtmd_image_f32_batch batch;
+         batch.is_audio = true;
+         batch.entries.push_back(std::move(hidden_state));
+ 
+-        std::vector<float>   out_embd(n_embd);
+-        std::vector<int32_t> out_codes;
+-        std::vector<float>   out_feats;
++        std::vector<float>   out_embd;
++        std::vector<int32_t> out_codes;
++        std::vector<float>   out_feats;
++        // The public output expires on the next process call. All inputs
++        // above are already copied; reclaim the ZONOS3 result capacity.
++        if (sctx->model.proj_type == PROJECTOR_TYPE_ZONOS3_GEN) {
++            out_embd.swap(state->out_embd);
++            out_codes.swap(state->out_codes);
++            out_feats.swap(state->out_feats);
++            out_codes.clear();
++            out_feats.clear();
++        }
++        out_embd.resize(n_embd);
+         bool is_eos = false;
+ 
+         mtmd_subctx_encode_params params;
+         params.imgs          = &batch;
+diff --git a/tools/mtmd/mtmd-audio.h b/tools/mtmd/mtmd-audio.h
+--- a/tools/mtmd/mtmd-audio.h
++++ b/tools/mtmd/mtmd-audio.h
+@@ -343,7 +343,8 @@
+ 
+     std::vector<float> rs_kernel;
+     int     rs_orig, rs_new, rs_width;
+-    std::vector<float> rs_buf; // from rs_base on
++    std::vector<float> rs_buf; // from rs_base on
++    std::vector<float> rs_window; // reusable zero-extended edge window
+     int64_t rs_base  = 0;
+     int64_t rs_in    = 0;
+     int64_t rs_block = 0;
