@@ -1,6 +1,6 @@
 # Tauri Command Modules
 
-This folder contains the Tauri command boundary for the current Meeting / Text / My Voice / Settings product.
+This folder contains the Tauri command boundary for the current Meeting / My Voice / Settings product.
 
 ## Active modules
 
@@ -14,7 +14,6 @@ This folder contains the Tauri command boundary for the current Meeting / Text /
 - `virtual_mic_route.rs` — managed virtual microphone used by the meeting application.
 - `voice_lab.rs`, `voice_lab_recording.rs`, `voice_lab_build.rs` — legacy internal protocol/storage implementation identifiers for the product feature now named **My Voice**; `voice_lab/storage.rs` owns dataset freezing, actor-package validation, WAV inspection, and transactional candidate promotion. These names remain only where changing them requires an explicit compatibility migration; they are not product vocabulary.
 - `diagnostic_trace.rs` — bounded diagnostics trace command support.
-- `bridge_paths.rs` — packaged private Python/runtime path resolution.
 - `registry.rs` — Tauri invoke registration list.
 
 ## Naming rule
@@ -31,4 +30,4 @@ Prefer names that describe the responsibility directly. New product-facing or se
 
 Existing `voice_lab` command names, state/error identifiers, and on-disk storage paths may remain only where changing them would require an explicit compatibility migration. Product-facing bridges must translate any legacy display copy to **My Voice** without rewriting those machine-facing identifiers.
 
-A source rename is complete only after the retained frontend, Python, Rust, repository, and MiLMMT checks pass on the candidate head. New command wrappers should be added only when a current product requirement and direct caller require them.
+A source rename must preserve affected frontend, Rust, repository, native quality and developer-tool checks; execution remains subject to the current validation holds. New command wrappers require a current product requirement and direct caller.

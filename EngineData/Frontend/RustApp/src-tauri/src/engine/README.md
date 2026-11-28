@@ -1,6 +1,6 @@
 # Engine Translate Runtime Modules
 
-This folder contains the Rust-side runtime logic that is still reachable from the current Meeting / Text / Settings product.
+This folder contains Rust runtime logic for Meeting, My Voice, Settings and their shared audio lifecycle.
 
 ## Current owners
 
@@ -12,7 +12,7 @@ This folder contains the Rust-side runtime logic that is still reachable from th
 - `logging.rs`: bounded runtime log writer used by current settings/runtime paths.
 - `state.rs`: shared command/lifecycle result types.
 
-ASR, translation, and TTS inference are owned by the persistent local worker rather than a parallel Rust inference/planning engine.
+ASR, translation and selected voice synthesis use one Rust-owned native CUDA runtime via `commands/helper_bridge*`. `audio/mod.rs` owns the shared bounded audio-thread exit observation; resource owners keep their own handles and cleanup.
 
 ## Maintenance rule
 

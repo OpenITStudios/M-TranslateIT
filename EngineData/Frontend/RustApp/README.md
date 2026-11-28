@@ -56,12 +56,12 @@ No SvelteKit, frontend router, Redux-like state library, heavy UI framework, CSS
 
 Normal UI is Meeting / My Voice / Settings, with Setup shown when required. Audio Studio, History/Saved, Documents, tone/mode controls, and developer pipeline controls are not initial core.
 
-Meeting lifecycle, settings persistence, audio truth, model/provider truth, My Voice training state, and translation execution remain owned by the existing Rust/Python runtime. Svelte state is presentation/application state only.
+Meeting lifecycle, settings persistence, audio truth, native AI readiness, My Voice candidate/review state, and translation execution remain owned by Rust and the single native CUDA runtime. Svelte state is presentation/application state only.
 
 ## Dependency / Proof Boundary
 
 Frontend dependencies and `package-lock.json` are current repository-owned inputs. Source changes require the existing Svelte typecheck/build and code-health gates before they are treated as verified.
 
-Target-PC behavior still requires the Rust/Tauri/Python/audio/installer proof described by the canonical project docs; repository/hosted checks do not substitute for installed Windows acceptance.
+Target-PC behavior still requires the Rust/Tauri/native CUDA/audio/installer proof described by the canonical project docs. Developer Python acquisition is separate; source checks do not substitute for installed Windows acceptance.
 
 Resume work through root `AGENTS.md`, `CONTEXT.md`, and `planning/development.md`.

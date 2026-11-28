@@ -15,7 +15,7 @@ const releasePayload = readFileSync(new URL("../validate_release_payload.mjs", i
 const nativePreview = readFileSync(new URL("../../src-tauri/src/commands/voice_lab_preview/native.rs", import.meta.url), "utf8");
 const nativeRuntime = readFileSync(new URL("../../src-tauri/src/commands/my_voice_runtime.rs", import.meta.url), "utf8");
 const nativeReference = readFileSync(new URL("../../src-tauri/src/commands/my_voice_reference.rs", import.meta.url), "utf8");
-const retiredPreview = new URL("../../../../Backend/LocalWorker/WorkerRuntime/voice_lab_quick_preview.py", import.meta.url);
+const legacyWorkerRoot = new URL("../../../../Backend/LocalWorker/WorkerRuntime/", import.meta.url);
 const actor = readFileSync(new URL("../../src-tauri/src/commands/voice_lab_build.rs", import.meta.url), "utf8");
 const mutations = readFileSync(new URL("../../src-tauri/src/commands/application_runtime/mutations.rs", import.meta.url), "utf8");
 const recordingUi = readFileSync(new URL("../../src/pages/MyVoice.svelte", import.meta.url), "utf8");
@@ -179,13 +179,13 @@ test("preview cancellation retains native owner through request cleanup", () => 
 });
 
 test("retired Python Quick Preview has no packaged consumer", () => {
-  assert.equal(existsSync(retiredPreview), false);
   const name = "voice_lab_quick_preview.py";
+  assert.equal(existsSync(new URL(name, legacyWorkerRoot)), false);
   const from = `../../../Backend/LocalWorker/WorkerRuntime/${name}`;
   assert.equal(releaseConfig.bundle.resources[from], undefined);
   assert.ok(!releaseContract.includes(name));
   assert.ok(!releasePayload.includes(name));
-  assert.equal(existsSync(new URL("../../../../Backend/LocalWorker/WorkerRuntime/voice_lab_build.py", import.meta.url)), false);
+  assert.equal(existsSync(new URL("voice_lab_build.py", legacyWorkerRoot)), false);
 });
 
 test("native approval requires audible review and affirmative human quality confirmation", () => {

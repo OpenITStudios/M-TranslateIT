@@ -49,7 +49,7 @@ This file maps semantic responsibility to the current owner. It does not carry p
 | Windows single-instance admission before runtime bootstrap | `src-tauri/src/app_bootstrap/single_instance.rs`, called by `src-tauri/src/main.rs` |
 | Product pages | `src/pages/` |
 | Product runtime composition | `src/app/bridge/runtimeProductFacade.ts` |
-| Product audio / translation / setup actions | `productAudioFacade.ts`, `productTranslationFacade.ts`, `productSetupFacade.ts` |
+| Product audio / setup actions | `productAudioFacade.ts`, `productSetupFacade.ts` |
 | Meeting product mapping | `productMeetingState.ts` |
 | Product readiness mapping | `productReadinessState.ts` |
 | Worker capability parsing | `workerCapabilities.ts` |
@@ -119,16 +119,15 @@ Domain algorithms remain in their domain modules; ApplicationRuntime coordinates
 
 | Responsibility | Owner |
 |---|---|
-| Canonical worker entry | `EngineData/Backend/LocalWorker/WorkerRuntime/realtime_local_worker.py` |
-| Worker orchestration/I/O | `realtime_local_worker_base.py`, `worker_io_runtime.py`, `worker_runtime_common.py` |
-| Helper process/transport/readiness | Rust `commands/helper_bridge*` |
+| Native runtime lifecycle, task admission and readiness | `commands/helper_bridge.rs`, `helper_bridge_runtime.rs`, `helper_bridge_runtime/scheduler.rs`, `helper_bridge/functional_readiness.rs` |
+| Native request transport and scoped dispatch | `commands/helper_bridge/transport.rs`, `helper_bridge/transport/native.rs`, `helper_bridge/request_policy.rs` |
 | Experimental Codex App Server account/usage probe and process lifecycle (not Meeting-capable) | Rust `commands/codex_gateway.rs`, `commands/codex_gateway/protocol.rs`, `transport.rs` (sealed source-only P25 offer/ACK/started/SDP exchange); `compatibility.rs` owns the source-derived Windows CLI version, initialize and account gateway-provider read-only gate; `realtime.rs` owns offline typed voice observations and PCM frame admission; `correlation.rs` owns one-flight unverified source/assistant evidence; `realtime_rpc.rs` owns offline typed V3 WebRTC RPC envelopes, in-flight ACK accounting and Stop handshake; `text.rs` owns source-only text request/final-result evidence, not production inference |
-| WebView2 Codex WebRTC SDP/ICE signalling peer (source-only; not a second Meeting/Voice owner) | `EngineData/Frontend/RustApp/src/app/bridge/codexRealtimePeer.ts`; bound by native Meeting generation/epoch only when later admitted. No browser microphone, media playback or production command caller today |
-| Canonical native ASR and MT | `tools/translation_quality/native_cuda/` + `commands/helper_bridge/transport/native.rs` |
+| WebView2 Codex WebRTC SDP/ICE signalling peer (test fixture only) | `EngineData/Frontend/RustApp/scripts/tests/fixtures/codexRealtimePeer.ts`; no production WebView peer, browser microphone, media playback or Meeting output authority |
+| Canonical native ASR, MT and selected voice synthesis | `tools/translation_quality/native_cuda/` + `commands/helper_bridge/transport/native.rs` |
 | Model inventory/staging | `model_manifest.json` + `prepare_model_assets*.py` |
 | My Voice recording/review | Rust `commands/voice_lab_recording.rs` |
-| My Voice build/evaluation | Rust `commands/voice_lab_build.rs` + `voice_lab_build.py` + `voice_lab_gpt_sovits_build.py` |
-| My Voice live inference | `voice_lab_gpt_sovits.py` + `worker_io_runtime.py` |
+| My Voice candidate build/evaluation | `commands/voice_lab_build.rs` + `voice_lab_build/native_build.rs`, `native_evaluation.rs`, `native_speaker.rs`, `native_review.rs` |
+| My Voice preview and native operation scope | `commands/voice_lab_preview/native.rs` + `my_voice_runtime.rs`; Meeting uses the same selected-voice native owner through the helper |
 | Voice storage/package promotion | Rust `commands/voice_lab/storage.rs` |
 
 ## Release / packaging
@@ -164,7 +163,7 @@ Command-name/response-shape parity is owned by `validate_bridge_contract.mjs`. R
 
 ### Local worker protocol ownership
 
-Disjoint native and Python voice task sets and their deadlines are guarded by `worker_task_protocol_contract.test.ts`. Rust-projected native status plus Python voice capability ↔ TypeScript capability parsing is guarded by `worker_status_protocol_contract.test.ts`. Transport remains Rust-owned in `commands/helper_bridge/` and `helper_bridge_runtime.rs`; only voice and control commands execute in `realtime_local_worker_base.py` / `worker_io_runtime.py`. No side may add or rename protocol fields/tasks without updating the cross-language contract.
+The single native task set and its deadlines are guarded by `worker_task_protocol_contract.test.ts`. Rust-projected native capability status ↔ TypeScript parsing is guarded by `worker_status_protocol_contract.test.ts`; request identity and native admission are guarded by `worker_request_metadata_contract.test.ts`. Rust owns transport and lifecycle; no production Python process or wire framing remains. Update the existing `tools/interop-contracts.json` binding when a contract owner or consumer changes.
 
 
 ### RuntimeSettings contract ownership

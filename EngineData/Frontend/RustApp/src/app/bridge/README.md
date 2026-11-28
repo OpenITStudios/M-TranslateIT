@@ -7,7 +7,10 @@ runtimeApi.ts
 -> thin Tauri command calls used by current product/setup callers
 
 runtimeProductFacade.ts
--> Meeting/Text readiness and high-level application actions
+-> canonical application snapshot projection and high-level product actions
+
+applicationRuntimeApi.ts
+-> canonical native snapshot, product intents and events
 
 myVoiceApi.ts
 -> My Voice guided recording commands

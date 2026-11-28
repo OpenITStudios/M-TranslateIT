@@ -15,14 +15,14 @@ app_bootstrap.rs
 
 commands/
 -> thin Tauri command boundary
--> Meeting, Text, My Voice, Settings, audio, worker, and diagnostics commands
+-> Meeting, My Voice, Settings, audio, native inference, and diagnostics commands
 
 engine/
 -> reusable Rust runtime/domain logic
 -> audio, capture lifecycle, settings, paths, logging, and runtime state
 ```
 
-There is no separate `bridge/` source tree here. Persistent Python worker/process integration is owned by the current command/runtime modules and must not be duplicated into another backend layer.
+There is no separate `bridge/` source tree here. `commands/helper_bridge*` owns native inference lifecycle/admission and dispatch to the existing `tools/translation_quality/native_cuda` crate. There is no production Python process or second AI runtime.
 
 ## Rule
 

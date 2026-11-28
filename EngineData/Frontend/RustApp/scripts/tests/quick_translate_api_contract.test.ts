@@ -16,8 +16,16 @@ test("standalone Text has no application route, setup shortcut or native entrypo
   }
 });
 
-test("text diagnostics stay on the canonical internal worker", () => {
-  const worker = readFileSync(new URL("../../../../Backend/LocalWorker/WorkerRuntime/realtime_local_worker_base.py", import.meta.url), "utf8");
-  assert.match(worker, /def handle_standalone_text_translate/);
-  assert.match(worker, /def handle_translate_request/);
+test("text diagnostics stay on the canonical native translation path", () => {
+  const transport = source("src-tauri/src/commands/helper_bridge/transport.rs");
+  const native = source("src-tauri/src/commands/helper_bridge/transport/native.rs");
+  const abi = readFileSync(new URL("../../../../../tools/translation_quality/native_cuda/src/lib.rs", import.meta.url), "utf8");
+  const runner = readFileSync(new URL("../../../../../tools/audio_validation/worker_runner.py", import.meta.url), "utf8");
+  assert.match(transport, /return native::dispatch\(task,/);
+  assert.match(native, /payload\.get\("text"\)\.and_then\(Value::as_str\)/);
+  assert.match(native, /translation_source_admitted\(source\)/);
+  assert.match(native, /InferenceInput::Translation \{ source, from, to \}/);
+  assert.match(abi, /pub fn translate<'a>\(/);
+  assert.match(runner, /def native_translation_requests\(/);
+  assert.match(runner, /def native_translation_replay\(/);
 });

@@ -111,11 +111,11 @@ test("explicit diagnostics refresh is not served from the event-reuse cache", ()
   );
   assert.match(
     productFacade,
-    /export async function loadProductRuntimeSnapshot\([\s\S]*?return mapApplicationSnapshotToProduct\([\s\S]*?true,\s*\);/,
+    /export async function loadProductRuntimeSnapshot\([\s\S]*?return mapApplicationSnapshotToProduct\(application\);/,
   );
   assert.match(
     applicationController,
-    /async refresh\(knownSettings\?: RuntimeSettings\)[\s\S]*?loadProductRuntimeSnapshot\(knownSettings\)/,
+    /async refresh\(initialApplication\?: ApplicationSnapshot\)[\s\S]*?loadProductRuntimeSnapshot\(initialApplication\)/,
   );
 });
 

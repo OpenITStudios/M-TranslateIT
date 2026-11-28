@@ -12,7 +12,8 @@ Frontend/RustApp
 → source/build validation scripts that directly protect the product
 
 Backend/LocalWorker
-→ canonical local Python worker runtime source
+→ pinned model inventory and developer-only acquisition
+→ retained historical dependency lock; no production Python worker
 
 Backend/RuntimeAssets
 → controlled production ASR/translation/voice/audio release inputs

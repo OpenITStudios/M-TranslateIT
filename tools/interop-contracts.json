@@ -32,18 +32,21 @@
       ]
     },
     {
-      "id": "local-worker-wire-framing",
+      "id": "native-helper-task-and-status",
       "domain": "local-ai",
-      "owner": "EngineData/Backend/LocalWorker/WorkerRuntime/worker_io_runtime.py",
+      "owner": "EngineData/Frontend/RustApp/src-tauri/src/commands/helper_bridge_runtime.rs",
       "consumers": [
-        "EngineData/Frontend/RustApp/src-tauri/src/commands/helper_bridge/transport.rs"
+        "EngineData/Frontend/RustApp/src-tauri/src/commands/helper_bridge/transport.rs",
+        "EngineData/Frontend/RustApp/src-tauri/src/commands/helper_bridge/transport/native.rs",
+        "EngineData/Frontend/RustApp/src/app/bridge/workerCapabilities.ts"
       ],
       "scripts": [
         "test:frontend-runtime"
       ],
       "tests": [
         "EngineData/Frontend/RustApp/scripts/tests/worker_task_protocol_contract.test.ts",
-        "EngineData/Backend/LocalWorker/WorkerRuntime/tests/test_worker_protocol_framing.py"
+        "EngineData/Frontend/RustApp/scripts/tests/worker_status_protocol_contract.test.ts",
+        "EngineData/Frontend/RustApp/scripts/tests/worker_request_metadata_contract.test.ts"
       ]
     },
     {
