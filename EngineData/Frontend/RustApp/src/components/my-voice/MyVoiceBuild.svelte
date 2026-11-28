@@ -45,7 +45,6 @@
     minimum_duration_ms: 6_000,
     native_pins_ready: false,
 
-    recording_suggestions: [],
     can_build: false,
     evaluation_ready: false,
     evaluation_review_id: null,

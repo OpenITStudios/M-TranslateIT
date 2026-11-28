@@ -104,7 +104,6 @@
   let selectedWorkspace = $state<VoiceWorkspace>(initialPreview?.workspace ?? "choose");
   let browseLinesOpen = $state(false);
   let browseLevel = $state("all");
-  let browseFocus = $state("all");
   let browseQuery = $state("");
   let browsePage = $state(0);
   const browsePageSize = 35;
@@ -114,14 +113,8 @@
     { value: "natural", label: "Natural Conversations" },
     { value: "detailed", label: "Detailed Explanations" },
   ];
-  const browseFocusOptions = $derived(
-    [...new Set(recordingState.lines
-      .filter((line) => browseLevel === "all" || line.level === browseLevel)
-      .map((line) => line.focus))].sort(),
-  );
   const browseFiltered = $derived(recordingState.lines.filter((line) =>
     (browseLevel === "all" || line.level === browseLevel) &&
-    (browseFocus === "all" || line.focus === browseFocus) &&
     (browseQuery.trim() === "" ||
       line.text.toLowerCase().includes(browseQuery.trim().toLowerCase()) ||
       String(line.line_id).includes(browseQuery.trim())),
@@ -1480,34 +1473,7 @@
               </details>
         </article>
 
-        <section class="mt-1 min-w-0 border-t border-[var(--ti-border)] pt-4" aria-label="Additional recording lines and suggestions">
-          {#if buildSnapshot && !buildStatusUnavailable}
-              {#if buildSnapshot.recording_suggestions?.length > 0 && !buildSnapshot.active && !isRecording && pendingLineId === null}
-                <details class="mt-4 overflow-hidden rounded-[var(--ti-radius-md)] border border-[var(--ti-border)]" aria-label="Optional recording suggestions">
-                  <summary class="min-h-10 cursor-pointer px-3 py-3 text-[13px] font-semibold hover:bg-[var(--ti-surface-soft)]">Suggested next lines</summary>
-                   <div class="border-t border-[var(--ti-border)] px-3 py-3">
-                  <p class="mb-2 text-[13px] leading-5 text-[var(--ti-text-muted)]">
-                    Optional examples of different English sound patterns. These are text-based estimates, not ratings of your pronunciation or voice quality.
-                  </p>
-                  <div class="space-y-2">
-                    {#each buildSnapshot.recording_suggestions as suggestion (suggestion.line_id)}
-                      {@const suggestedLine = recordingState.lines.find((line) => line.line_id === suggestion.line_id)}
-                      {#if suggestedLine}
-                        <button type="button"
-                          class="w-full rounded-[var(--ti-radius-sm)] border border-[var(--ti-border)] px-3 py-2 text-left hover:bg-[var(--ti-surface-soft)]"
-                          disabled={busy || voiceChangesLocked || recordingStatusUnknown || isRecording || pendingLineId !== null}
-                          onclick={() => void chooseBrowseLine(suggestion.line_id)}>
-                          <span class="block text-[13px] font-semibold">Line {suggestion.line_id} · {suggestedLine.text}</span>
-                          <span class="mt-1 block text-[13px] text-[var(--ti-text-muted)]">{suggestion.reason}</span>
-                        </button>
-                      {/if}
-                    {/each}
-                  </div>
-                </div>
-              </details>
-              {/if}
-
-          {/if}
+        <section class="mt-1 min-w-0 border-t border-[var(--ti-border)] pt-4" aria-label="Additional recording lines">
           <div class="border-t border-[var(--ti-border)] px-4 py-3">
             <details bind:open={browseLinesOpen}>
               <summary class="min-h-10 cursor-pointer py-2 text-[13px] font-semibold">Browse lines <span class="ml-1 text-[13px] font-normal text-[var(--ti-text-muted)]">({acceptedCount} saved)</span></summary>
@@ -1516,19 +1482,9 @@
                 <label class="block text-[13px] text-[var(--ti-text-muted)]">
                   Category
                   <select class="ti-field mt-1 min-h-10 px-3 text-sm" bind:value={browseLevel}
-                    onchange={() => { browsePage = 0; browseFocus = "all"; }}>
+                    onchange={() => { browsePage = 0; }}>
                     {#each levelOptions as option}
                       <option value={option.value}>{option.label}</option>
-                    {/each}
-                  </select>
-                </label>
-                <label class="block text-[13px] text-[var(--ti-text-muted)]">
-                  Focus
-                  <select class="ti-field mt-1 min-h-10 px-3 text-sm" bind:value={browseFocus}
-                    onchange={() => { browsePage = 0; }}>
-                    <option value="all">All topics</option>
-                    {#each browseFocusOptions as focus}
-                      <option value={focus}>{focus.replaceAll("-", " ")}</option>
                     {/each}
                   </select>
                 </label>

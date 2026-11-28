@@ -138,16 +138,6 @@ mod short;
 mod natural;
 #[path = "guided_corpus_detailed.rs"]
 mod detailed;
-#[path = "guided_phonetic_inventory.rs"]
-mod phonetic_inventory;
-#[path = "guided_phonetic_guidance.rs"]
-mod phonetic_guidance;
-pub(super) fn recommend_lines(
-    accepted_line_ids: &[u32], required_coverage: Option<&str>, limit: usize,
-) -> Vec<RecordingSuggestion> {
-    phonetic_guidance::recommend_lines(accepted_line_ids, required_coverage, limit)
-}
-pub(crate) use phonetic_guidance::RecordingSuggestion;
 
 use std::sync::OnceLock;
 
@@ -198,10 +188,6 @@ pub(super) fn prompt_metadata(id: u32) -> Option<PromptMetadata> {
     let (actual_id, _, focus, coverage) = *lines.get((id - start) as usize)?;
     if actual_id != id { return None; }
     Some(PromptMetadata { level, focus, coverage })
-}
-
-pub(super) fn coverage_for_id(id: u32) -> Option<&'static str> {
-    prompt_metadata(id).map(|meta| meta.coverage)
 }
 
 #[cfg(test)]

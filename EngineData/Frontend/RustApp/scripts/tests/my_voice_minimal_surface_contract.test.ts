@@ -101,9 +101,9 @@ test("Recording puts truthful progress above one focus-sized sentence and contex
   assert.match(record, /onclick=\{\(\) => void retryTake\(\)\}/);
   assert.match(record, /onclick=\{\(\) => void acceptTake\(\)\}/);
   assert.match(record, /onclick=\{\(\) => void replayTake\(\)\}/);
-  assert.match(record, /aria-label="Additional recording lines and suggestions"/);
+  assert.match(record, /aria-label="Additional recording lines"/);
   assert.match(record, /Browse lines/);
-  assert.match(record, /Suggested next lines/);
+  assert.doesNotMatch(record, /Suggested next lines|Optional recording suggestions|browseFocus/);
   assert.match(record, /Recording diagnostics/);
 });
 

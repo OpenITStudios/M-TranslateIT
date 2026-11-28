@@ -18,11 +18,6 @@ export type MyVoiceEvaluationSample = {
   artifact_flags: string[];
 };
 
-export type MyVoiceRecordingSuggestion = {
-  line_id: number;
-  reason: string;
-};
-
 export type MyVoiceBuildStatus = {
   active: boolean;
   preview_active: boolean;
@@ -33,7 +28,6 @@ export type MyVoiceBuildStatus = {
   accepted_take_count: number;
   accepted_duration_ms: number;
   minimum_duration_ms: number;
-  recording_suggestions: MyVoiceRecordingSuggestion[];
   can_build: boolean;
   evaluation_ready: boolean;
   evaluation_review_id: string | null;
@@ -80,7 +74,6 @@ function unavailableStatus(): MyVoiceBuildStatus {
     accepted_duration_ms: 0,
     minimum_duration_ms: 6_000,
     native_pins_ready: false,
-    recording_suggestions: [],
     can_build: false,
     evaluation_ready: false,
     evaluation_review_id: null,
@@ -100,7 +93,6 @@ function productMessage(message: string): string {
 function normalizeStatus(status: MyVoiceBuildStatus): MyVoiceBuildStatus {
   return {
     ...status,
-    recording_suggestions: status.recording_suggestions ?? [],
     message: productMessage(status.message),
   };
 }

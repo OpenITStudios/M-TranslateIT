@@ -303,7 +303,6 @@ export function makeMyVoicePreviewFixture(scenario: MyVoicePreviewScenario): MyV
     minimum_duration_ms: 6_000,
     native_pins_ready: true,
 
-    recording_suggestions: [],
     can_build: hasAccepted,
     evaluation_ready: inReview,
     evaluation_review_id: inReview ? "synthetic-held-out-review" : null,

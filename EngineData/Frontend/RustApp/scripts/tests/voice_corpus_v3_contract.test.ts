@@ -74,11 +74,9 @@ test("metadata separates user-facing reading levels from training coverage", () 
     "all five historic coverage categories have new prompt choices");
   const state = rust("voice_lab_recording.rs");
   const build = rust("voice_lab_build.rs");
-  assert.match(state, /guided_training_coverage/);
   assert.match(state, /prompt_metadata/);
-  assert.match(build, /guided_training_coverage\(take\.line_id\) == Some\(group\.coverage\)/);
-  assert.match(build, /suggested_line_id/);
-  assert.doesNotMatch(build, /\(group\.start_line_id\.\.=group\.end_line_id\)\.contains\(&take\.line_id\)/);
+  assert.doesNotMatch(build, /guided_training_coverage|suggested_line_id|recording_suggestions|MIN_TRAINING_SPEECH_MS/);
+  assert.match(build, /native_reference_count >= 2/);
 });
 
 test("UI handles the 600-prompt library through category/search and bounded pages", () => {

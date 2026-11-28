@@ -27,7 +27,7 @@ use super::voice_lab::{
 };
 use super::voice_lab_recording::{
     accepted_guided_recordings, guided_training_prompts,
-    guided_recording_recommendations, RecordingSuggestion, voice_lab_recording_active,
+    voice_lab_recording_active,
 };
 
 mod evaluation;
@@ -82,7 +82,6 @@ pub struct VoiceLabBuildStatus {
     pub accepted_take_count: usize,
     pub accepted_duration_ms: u64,
     pub minimum_duration_ms: u64,
-    pub recording_suggestions: Vec<RecordingSuggestion>,
     pub can_build: bool,
     pub evaluation_ready: bool,
     pub evaluation_review_id: Option<String>,
@@ -250,8 +249,6 @@ fn current_status() -> VoiceLabBuildStatus {
     let native_pins_ready = native_review::pins_ready();
     #[cfg(not(windows))]
     let native_pins_ready = false;
-    let accepted_ids: Vec<u32> = takes.iter().map(|take| take.line_id).collect();
-    let recording_suggestions = guided_recording_recommendations(&accepted_ids, None);
     #[cfg(windows)]
     let native_evaluation = if !snapshot.active && !process_cleanup_pending {
         native_review::status(&paths)
@@ -302,7 +299,6 @@ fn current_status() -> VoiceLabBuildStatus {
         accepted_duration_ms: duration_ms,
         minimum_duration_ms: 2 * MIN_REFERENCE_MS,
 
-        recording_suggestions,
         can_build: !snapshot.active
             && !process_cleanup_pending && !recording_active && takes.len() <= MAX_TRAINING_TAKES
             && native_pins_ready && native_reference_count >= 2,
