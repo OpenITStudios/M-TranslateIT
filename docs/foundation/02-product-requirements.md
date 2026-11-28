@@ -335,10 +335,10 @@ Physical microphone, incoming Meeting Sound and calling-app microphone/speaker r
 
 **MUST:** Preserve immutable recognized source before translation, independently track translation and delivery, and show failed or stopped translation as unavailable instead of inventing translated text or audio. Reject stale post-Stop completions. Pending turns already evicted from memory may remain pending in raw saved JSON; the stopped reader presents those as unavailable rather than mislabeling their persisted status.
 
-### PR-105 — Translation feedback
-**MAY:** Store opt-in local translation issue reports for quality review.
+### PR-105 — Legacy translation feedback compatibility
+**MUST:** New local translation issue reports are no longer collected. Preserve the existing storage key and any historical report data without automatic migration, rewriting or deletion. Show Past translation issue reports only when data exists or storage cannot be verified.
 
-**MUST:** Feedback remain bounded, explicitly reviewable/exportable/clearable, and never become automatic model context.
+**MUST:** Keep bounded review and explicit copy/export and confirmed clearing of historical reports. Distinguish unreadable or unverified data from empty storage; do not claim malformed records were verified or silently clear them. Historical reports must never become automatic model context or be uploaded.
 
 ### PR-106 — Durable accepted My Voice recordings
 **MUST:** Once the user explicitly accepts a guided take, preserve an immutable, verified on-device copy tied to the exact guided line and transcript before replacing an older active take. A new take of the same line must not delete a prior saved version. A failed archive verification must be reported as an unsuccessful save, not hidden or presented as protected.

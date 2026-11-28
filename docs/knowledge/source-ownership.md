@@ -62,7 +62,7 @@ This file maps semantic responsibility to the current owner. It does not carry p
 | Native close flow | `closeController.ts` + `nativeCloseRuntime.ts` + `closePolicy.ts` |
 | Translation overlay presentation | `translationOverlay*.ts` + `pages/TranslationOverlay.svelte` |
 | First-setup navigation/resume | `SetupNavigation.svelte` + `setupFlow.ts` |
-| Translation feedback | `translationFeedbackState.ts` |
+| Historical translation reports (compatibility only) | `translationFeedbackState.ts` + `TranslationFeedbackReview.svelte`; no new report writer |
 | One-shot updater frontend | `appUpdateApi.ts` + `UpdateAction.svelte` |
 | Native updater installation and cross-resource exclusion | `commands/app_update.rs` + `engine/runtime_state.rs` (one admission gate; Meeting/Voice keep their existing domain lifecycles) |
 

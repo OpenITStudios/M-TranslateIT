@@ -1,4 +1,4 @@
-export type TranslationIssueCategory =
+type TranslationIssueCategory =
   | "meaning_changed"
   | "wrong_terminology"
   | "name_number"
@@ -18,6 +18,8 @@ export type TranslationFeedbackEntry = {
 const KEY = "translateit.translation-feedback.v1";
 const MAX_ENTRIES = 40;
 const MAX_TEXT_CHARS = 2000;
+// Keep parsing bounded even if older or damaged storage exceeds the old writer's cap.
+const MAX_STORED_CHARS = 2 * 1024 * 1024;
 
 const VALID_CATEGORIES = new Set<TranslationIssueCategory>([
   "meaning_changed",
@@ -46,7 +48,7 @@ function validFeedback(value: unknown): TranslationFeedbackEntry | null {
     || typeof sourceLanguage !== "string"
     || typeof targetLanguage !== "string"
     || typeof createdAt !== "number"
-    || !Number.isFinite(createdAt)
+    || !Number.isFinite(new Date(createdAt).getTime())
   ) return null;
   return {
     id: id.slice(0, 80),
@@ -59,30 +61,31 @@ function validFeedback(value: unknown): TranslationFeedbackEntry | null {
   };
 }
 
-export function readTranslationFeedback(): TranslationFeedbackEntry[] {
-  try {
-    const raw = localStorage.getItem(KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed)) return [];
-    return parsed.map(validFeedback).filter((value): value is TranslationFeedbackEntry => value !== null).slice(0, MAX_ENTRIES);
-  } catch {
-    return [];
-  }
-}
+export type LegacyTranslationFeedback = {
+  state: "empty" | "ready" | "attention" | "unavailable";
+  entries: TranslationFeedbackEntry[];
+};
 
-export function saveTranslationFeedback(entry: Omit<TranslationFeedbackEntry, "id" | "createdAt">): boolean {
-  const next: TranslationFeedbackEntry = {
-    ...entry,
-    source: entry.source.slice(0, MAX_TEXT_CHARS),
-    translation: entry.translation.slice(0, MAX_TEXT_CHARS),
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    createdAt: Date.now(),
-  };
+// Compatibility reader only. Do not migrate, rewrite or silently clear
+// reports; a missing key differs from damaged or inaccessible storage.
+export function readTranslationFeedback(storage?: Pick<Storage, "getItem">): LegacyTranslationFeedback {
+  let raw: string | null;
   try {
-    localStorage.setItem(KEY, JSON.stringify([next, ...readTranslationFeedback()].slice(0, MAX_ENTRIES)));
-    return true;
+    raw = (storage ?? localStorage).getItem(KEY);
   } catch {
-    return false;
+    return { state: "unavailable", entries: [] };
+  }
+  if (raw === null) return { state: "empty", entries: [] };
+  if (raw.length > MAX_STORED_CHARS) return { state: "attention", entries: [] };
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return { state: "attention", entries: [] };
+    const entries = parsed.slice(0, MAX_ENTRIES).map(validFeedback)
+      .filter((value): value is TranslationFeedbackEntry => value !== null);
+    const state = entries.length !== parsed.length ? "attention" : entries.length ? "ready" : "empty";
+    return { state, entries };
+  } catch {
+    return { state: "attention", entries: [] };
   }
 }
 

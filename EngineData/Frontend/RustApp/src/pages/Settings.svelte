@@ -419,12 +419,7 @@
           <button type="button" class="ti-button ti-button-secondary" disabled={diagnosticsLoading} onclick={() => void refreshDiagnostics()}>{diagnosticsLoading ? "Opening..." : "Open Diagnostics"}</button>
         </footer>
       </article>
-      <details class="ti-panel mt-4">
-        <summary class="min-h-11 cursor-pointer px-5 py-4 text-sm font-medium hover:bg-[var(--ti-surface-soft)]">Past translation issue reports</summary>
-        <div class="border-t border-[var(--ti-border)] p-4">
-          <TranslationFeedbackReview {onNotice} />
-        </div>
-      </details>
+      <TranslationFeedbackReview {onNotice} />
     {:else}
       <div >
       <SettingsDiagnostics
