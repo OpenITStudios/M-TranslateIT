@@ -44,6 +44,8 @@ mod native_speaker;
 mod native_evaluation;
 #[cfg(windows)]
 mod native_review;
+#[cfg(windows)]
+mod native_build;
 mod phase;
 mod receipts;
 mod process_owner;
@@ -230,6 +232,9 @@ fn valid_nvidia_gpu_uuid(value: &str) -> bool {
 // Explicit-only read-only probe. Do NOT add CUDA/PyTorch imports to the
 // 1.4-second build-status poll or the persistent Meeting worker.
 fn probe_my_voice_compute_status() -> MyVoiceComputeStatus {
+    if super::helper_bridge::native_voice_candidate_enabled() {
+        return MyVoiceComputeStatus::unavailable("Native My Voice checks actual GPU admission when creating the voice; the legacy training probe is not used.");
+    }
     let Some(python) = resolve_worker_python_command() else {
         return MyVoiceComputeStatus::unavailable(
             "Local Python runtime is unavailable. Repair the installation before training.",
@@ -336,6 +341,8 @@ pub async fn get_my_voice_compute_status() -> MyVoiceComputeStatus {
 pub struct VoiceLabBuildStatus {
     pub active: bool,
     pub preview_active: bool,
+    pub native_candidate: bool,
+    pub native_pins_ready: bool,
     pub generation: Option<u64>,
     pub phase: String,
     pub message: String,
@@ -532,6 +539,13 @@ fn accepted_contract() -> (Vec<GuidedTakeContract>, u64, bool) {
     (takes, duration_ms, reference_take_ready)
 }
 
+// Metadata-only readiness; full signal and distinct-reference checks are
+// performed by the shared selector under the native build authority.
+fn native_build_reference_count(paths: &VoiceLabStoragePaths, takes: &[GuidedTakeContract]) -> usize {
+    takes.iter().filter(|take| a3_wav_duration_ms(&paths.takes_dir.join(&take.wav_file))
+        .is_some_and(|ms| (MIN_REFERENCE_MS..=MAX_REFERENCE_MS).contains(&ms))).count()
+}
+
 fn missing_training_coverage_group(
     takes: &[GuidedTakeContract],
 ) -> Option<TrainingCoverageGroup> {
@@ -575,20 +589,32 @@ fn current_status() -> VoiceLabBuildStatus {
     let process_cleanup_pending = build_process_cleanup_pending();
     let recording_active = voice_lab_recording_active();
     let (takes, duration_ms, reference_take_ready) = accepted_contract();
-    let missing_coverage = missing_training_coverage_group(&takes);
+    let native_candidate = super::helper_bridge::native_voice_candidate_enabled();
+    #[cfg(windows)]
+    let native_pins_ready = native_candidate && native_review::pins_ready();
+    #[cfg(not(windows))]
+    let native_pins_ready = false;
+    let missing_coverage = if native_candidate { None } else { missing_training_coverage_group(&takes) };
+    let native_reference_count = if native_candidate { native_build_reference_count(&paths, &takes) } else { 0 };
     let accepted_ids: Vec<u32> = takes.iter().map(|take| take.line_id).collect();
     // Advisory written-English patterns. This never gates training or edits WAVs.
     let recording_suggestions = guided_recording_recommendations(
         &accepted_ids, missing_coverage.map(|group| group.coverage),
     );
-    let evaluation = if process_cleanup_pending {
+    let evaluation = if native_candidate || process_cleanup_pending {
         None
     } else {
         reviewable_evaluation(&paths)
             .filter(|manifest| completion_matches(&paths, &manifest.review_id))
     };
+    #[cfg(windows)]
+    let native_evaluation = if native_candidate && !snapshot.active && !process_cleanup_pending {
+        native_review::status(&paths)
+    } else { None };
+    #[cfg(not(windows))]
+    let native_evaluation: Option<(String, Vec<VoiceLabEvaluationSample>)> = None;
     let preview_active = super::voice_lab_preview::quick_voice_preview_active();
-    let child = if preview_active { None } else { child_status(&paths) };
+    let child = if preview_active || native_candidate { None } else { child_status(&paths) };
     let approved_ready = approved_voice_actor_ready(&paths);
     let selected_voice = selected_voice_info(&paths);
     let terminal_message = process_store()
@@ -600,6 +626,14 @@ fn current_status() -> VoiceLabBuildStatus {
         "Stopping Quick Preview safely.".to_string()
     } else if preview_active {
         "Creating Quick Preview locally.".to_string()
+    } else if native_candidate && snapshot.active {
+        if snapshot.phase == "cancelling" {
+            "Stopping native voice creation safely. The previous Meeting voice is unchanged.".to_string()
+        } else if snapshot.phase == "evaluating" {
+            "Creating and evaluating your personal voice locally.".to_string()
+        } else {
+            "Preparing your accepted recordings.".to_string()
+        }
     } else if snapshot.active && snapshot.phase == "cancelling" {
         if terminal_message.is_empty() {
             "Stopping training safely. Waiting for a checkpoint boundary when possible; the current Meeting voice is unchanged.".to_string()
@@ -625,6 +659,14 @@ fn current_status() -> VoiceLabBuildStatus {
                 _ => "VoiceLab creation is running.".to_string(),
             }
         })
+    } else if native_evaluation.is_some() {
+        "Native voice samples are ready to listen to. Selecting this voice for Meeting is not yet available in this candidate build.".to_string()
+    } else if native_candidate {
+        if !terminal_message.is_empty() { terminal_message.clone() }
+        else if !native_pins_ready { "Native voice evaluation requires reviewed runtime and speaker verifier assets.".to_string() }
+        else if takes.len() > MAX_TRAINING_TAKES { "Choose up to 128 recordings from Saved Recordings.".to_string() }
+        else if native_reference_count < 2 { "Accept at least two clear, distinct recordings between 3 and 10 seconds each.".to_string() }
+        else { "Your recordings are ready for native voice creation. GPU admission is checked at Start.".to_string() }
     } else if evaluation.is_some() {
         "Voice Actor samples are ready. Listen before approving My Voice.".to_string()
     } else if child.as_ref().is_some_and(|status| status.phase == "ready_for_review") {
@@ -663,6 +705,8 @@ fn current_status() -> VoiceLabBuildStatus {
     VoiceLabBuildStatus {
         active: snapshot.active || process_cleanup_pending,
         preview_active,
+        native_candidate,
+        native_pins_ready,
         generation: snapshot.generation,
         phase: if !snapshot.active && process_cleanup_pending {
             "finalizing".to_string()
@@ -672,7 +716,7 @@ fn current_status() -> VoiceLabBuildStatus {
         message,
         accepted_take_count: takes.len(),
         accepted_duration_ms: duration_ms,
-        minimum_duration_ms: MIN_TRAINING_SPEECH_MS,
+        minimum_duration_ms: if native_candidate { 2 * MIN_REFERENCE_MS } else { MIN_TRAINING_SPEECH_MS },
         missing_coverage: missing_coverage.map(|group| {
             let suggested_line_id = guided_training_prompts().iter()
                 .filter(|(id, _)| guided_training_coverage(*id) == Some(group.coverage))
@@ -690,12 +734,16 @@ fn current_status() -> VoiceLabBuildStatus {
             && !process_cleanup_pending
             && !recording_active
             && takes.len() <= MAX_TRAINING_TAKES
-            && duration_ms >= MIN_TRAINING_SPEECH_MS
-            && missing_coverage.is_none()
-            && reference_take_ready,
-        evaluation_ready: evaluation.is_some(),
-        evaluation_review_id: evaluation.as_ref().map(|value| value.review_id.clone()),
-        evaluation_samples: evaluation.map(|value| value.samples).unwrap_or_default(),
+            && if native_candidate {
+                native_pins_ready && native_reference_count >= 2
+            } else {
+                duration_ms >= MIN_TRAINING_SPEECH_MS && missing_coverage.is_none() && reference_take_ready
+            },
+        evaluation_ready: native_evaluation.is_some() || evaluation.is_some(),
+        evaluation_review_id: native_evaluation.as_ref().map(|(id, _)| id.clone())
+            .or_else(|| evaluation.as_ref().map(|value| value.review_id.clone())),
+        evaluation_samples: native_evaluation.map(|(_, samples)| samples)
+            .or_else(|| evaluation.map(|value| value.samples)).unwrap_or_default(),
         evaluation_comparison: comparison,
         reference_selection,
         approved_voice_ready: approved_ready,
@@ -815,11 +863,9 @@ fn start_voice_lab_build_selected(
         return result(false, "voice_busy",
             "Stop Meeting or Quick Preview before improving My Voice.");
     }
-    // The native candidate's full Create/Improve review is not yet wired.
-    // Do not launch the old training provider as a fallback in this build.
+    #[cfg(windows)]
     if super::helper_bridge::native_voice_candidate_enabled() {
-        return result(false, "native_review_pending",
-            "Native Quick Preview is available, but full My Voice creation and approval are not yet available in this candidate build. Saved recordings and the previous approved voice are unchanged.");
+        return native_build::start(current, selected_archives);
     }
     // Inspect archive selection BEFORE claiming build ownership. The hard
     // per-run maximum is 128; a 600+ prompt library is not a training cap.
@@ -1319,6 +1365,12 @@ pub fn cancel_voice_lab_build() -> VoiceLabBuildActionResult {
         }
     }
 
+    #[cfg(windows)]
+    if super::helper_bridge::native_voice_candidate_enabled() {
+        return result(false, "cancel_pending",
+            "Stop requested. Waiting for the owned native voice operation to finish safely.");
+    }
+
     let lock = process_store();
     let mut process = match lock.lock() {
         Ok(process) => process,
@@ -1611,6 +1663,10 @@ pub fn approve_voice_lab_candidate(
         return result(false, "build_active",
             "Wait for the previous My Voice process to finish cleanup before approving.");
     }
+    if super::helper_bridge::native_voice_candidate_enabled() {
+        return result(false, "native_approval_pending",
+            "Native voice review is available, but personal profile activation is not yet enabled. Your current Meeting voice is unchanged.");
+    }
     let paths = storage();
     let ready_for_review = child_status(&paths)
         .map(|status| status.phase == "ready_for_review")
@@ -1683,6 +1739,13 @@ pub fn get_voice_lab_evaluation_audio(
     review_id: String,
 ) -> Result<tauri::ipc::Response, String> {
     let paths = storage();
+    #[cfg(windows)]
+    if super::helper_bridge::native_voice_candidate_enabled() {
+        if current_voice_lab_build_snapshot().active || build_process_cleanup_pending() {
+            return Err("native_review:build_active".into());
+        }
+        return native_review::review_audio(&paths, &review_id, line_id).map(tauri::ipc::Response::new);
+    }
     let manifest = reviewable_evaluation(&paths)
         .ok_or_else(|| "voice_lab:evaluation_unavailable".to_string())?;
     if review_id != manifest.review_id {

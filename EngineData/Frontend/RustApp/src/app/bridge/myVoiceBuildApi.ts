@@ -71,6 +71,8 @@ export type MyVoiceComputeStatus = {
 export type MyVoiceBuildStatus = {
   active: boolean;
   preview_active: boolean;
+  native_candidate?: boolean;
+  native_pins_ready?: boolean;
   generation: number | null;
   phase: string;
   message: string;

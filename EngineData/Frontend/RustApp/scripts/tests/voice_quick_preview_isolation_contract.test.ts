@@ -176,8 +176,8 @@ test("preview phase cannot be reconciled from stale trained-build status", () =>
   assert.match(status, /mod phase;/);
   assert.match(status, /use phase::reconcile_phase;/);
   assert.match(phase, /fn reconcile_phase\(/);
-  assert.match(phase, /if super::super::voice_lab_preview::quick_voice_preview_active\(\) \{\s*return;/);
-  assert.match(status, /let child = if preview_active \{ None \} else \{ child_status\(&paths\) \}/);
+  assert.match(phase, /if super::super::voice_lab_preview::quick_voice_preview_active\(\)\s*\|\| super::super::helper_bridge::native_voice_candidate_enabled\(\) \{\s*return;/);
+  assert.match(status, /let child = if preview_active \|\| native_candidate \{ None \} else \{ child_status\(&paths\) \}/);
   assert.match(status, /"Creating Quick Preview locally\."/);
   assert.match(status, /"Stopping Quick Preview safely\."/);
 });
@@ -346,4 +346,21 @@ test("My Voice keeps audio load feedback separate from verified playback and inv
   assert.match(preview, /quickPreviewLoading \? "Loading audio\.\.\."/);
   assert.match(evaluation, /reviewId !== build\.evaluation_review_id/);
   assert.match(evaluation, /audio !== player \|\| playbackVersion !== audioRequestVersion/);
+});
+
+
+test("native Create and Improve use the same build lifecycle and cannot approve an incomplete profile", () => {
+  const nativeBuild = readFileSync(new URL("../../src-tauri/src/commands/voice_lab_build/native_build.rs", import.meta.url), "utf8");
+  const nativeReview = readFileSync(new URL("../../src-tauri/src/commands/voice_lab_build/native_review.rs", import.meta.url), "utf8");
+  assert.match(status, /return native_build::start\(current, selected_archives\);/);
+  assert.match(nativeBuild, /prepare_guided_dataset_from_archives/);
+  assert.match(nativeBuild, /prepare_guided_dataset\(/);
+  assert.match(nativeBuild, /mark_native_voice_evaluating\(generation\)/);
+  assert.match(nativeBuild, /commit_voice_lab_review_if_active\(generation,/);
+  assert.match(nativeBuild, /commit_completion\(paths, &identity, &review_id\)/);
+  assert.doesNotMatch(nativeBuild, /resolve_worker_python_command|Command::new/);
+  assert.match(nativeReview, /completion_matches\(paths, review_id\)/);
+  assert.match(nativeReview, /verify_source\(paths, &manifest\)\?/);
+  assert.match(status, /native_approval_pending/);
+  assert.match(ui, /\{#if build.native_candidate\}[\s\S]*?Approval for Meeting is not yet enabled/);
 });

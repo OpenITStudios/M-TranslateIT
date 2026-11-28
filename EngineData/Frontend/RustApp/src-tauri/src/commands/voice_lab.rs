@@ -293,6 +293,12 @@ pub fn mark_voice_lab_build_training(generation: u64) -> Result<VoiceLabBuildSna
         .transition(generation, BuildPhase::Preparing, BuildPhase::Training)
 }
 
+#[cfg(windows)]
+pub(super) fn mark_native_voice_evaluating(generation: u64) -> Result<VoiceLabBuildSnapshot, String> {
+    build_store().lock().map_err(|_| "voice_lab:build_state_unavailable".to_string())?
+        .transition(generation, BuildPhase::Preparing, BuildPhase::Evaluating)
+}
+
 pub fn mark_voice_lab_build_evaluating(generation: u64) -> Result<VoiceLabBuildSnapshot, String> {
     build_store()
         .lock()
@@ -434,6 +440,18 @@ mod tests {
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         std::env::temp_dir().join(format!("translateit_voicelab_{label}_{now}"))
+    }
+
+    #[test]
+    fn native_evaluation_can_skip_training_and_stop_prevents_review_publication() {
+        let mut state = BuildLifecycle::default();
+        let generation = state.begin().unwrap().generation.unwrap();
+        assert!(state.transition(generation, BuildPhase::Preparing, BuildPhase::Evaluating).is_ok());
+        assert!(state.cancel(generation).is_ok());
+        let mut published = false;
+        assert!(state.complete_review(generation, || { published = true; Ok(()) }).is_err());
+        assert!(!published);
+        assert!(state.fail(generation).is_ok());
     }
 
     #[test]

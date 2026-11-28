@@ -10,7 +10,7 @@ use translateit_native_cuda::{InferenceInput, InferenceOutput};
 
 pub(super) fn authority(generation: u64, deadline: Instant) -> bool {
     let current = current_voice_lab_build_snapshot();
-    current.generation == Some(generation) && current.active && current.phase == "preparing"
+    current.generation == Some(generation) && current.active && matches!(current.phase.as_str(), "preparing" | "evaluating")
         && !current.cancel_requested && Instant::now() < deadline
         && {
             let state = crate::engine::runtime_state::latest_runtime_session_state();

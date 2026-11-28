@@ -76,9 +76,9 @@
   let computeChecking = $state(false);
   let computeReadVersion = 0;
   const computeCanStart = $derived(
-    !computeChecking &&
-    computeStatus?.state === "cuda_detected" &&
-    computeStatus.admission_state === "admitted",
+    build.native_candidate ? build.native_pins_ready === true :
+    (!computeChecking && computeStatus?.state === "cuda_detected" &&
+    computeStatus.admission_state === "admitted"),
   );
 
   // One hardware eligibility view, reused by Create and archive-backed Improve.
@@ -305,6 +305,7 @@
 
   function idleGuidance(): string {
     const coverage = coverageGuidance();
+    if (build.native_candidate) return build.message;
     if (build.approved_voice_ready && !build.can_build) {
       if (build.accepted_duration_ms < build.minimum_duration_ms) {
         return `Your current Meeting voice is ready. Keep recording if you want to create My Voice; ${formatDuration(build.minimum_duration_ms)} of usable speech is the minimum recording target.`;
@@ -460,6 +461,7 @@
   }
 
   async function checkCompute(): Promise<void> {
+    if (build.native_candidate) return;
     const requestVersion = ++computeReadVersion;
     computeChecking = true;
     computeStatus = null;
@@ -541,7 +543,7 @@
   }
 
   async function approve(): Promise<void> {
-    if (busy || statusCheckUnavailable || voiceChangesLocked || build.active || !build.evaluation_ready || !build.evaluation_review_id || !evaluationReviewComplete || !qualityConfirmed) return;
+    if (build.native_candidate || busy || statusCheckUnavailable || voiceChangesLocked || build.active || !build.evaluation_ready || !build.evaluation_review_id || !evaluationReviewComplete || !qualityConfirmed) return;
     invalidatePendingStatusReads();
     stopAudio();
     busy = true;
@@ -650,8 +652,8 @@
   {/if}
   <div class="flex flex-wrap items-start justify-between gap-4">
     <div class="min-w-0 flex-1">
-      <h4 class="mb-0 text-lg font-semibold">{build.evaluation_ready ? "Review & Use My Voice" : build.active ? activeTitle() : "Train My Voice"}</h4>
-      <p class="mb-0 mt-2 max-w-[680px] text-sm leading-6 text-[var(--ti-text-muted)]">{build.evaluation_ready ? "Listen to the new voice before selecting it for meetings." : "Use your accepted recordings to train a personal English voice."}</p>
+      <h4 class="mb-0 text-lg font-semibold">{build.evaluation_ready ? (build.native_candidate ? "Review My Voice" : "Review & Use My Voice") : build.active ? activeTitle() : (build.native_candidate ? "Create My Voice" : "Train My Voice")}</h4>
+      <p class="mb-0 mt-2 max-w-[680px] text-sm leading-6 text-[var(--ti-text-muted)]">{build.native_candidate ? "Create and review a personal English voice from your accepted recordings, without model training." : build.evaluation_ready ? "Listen to the new voice before selecting it for meetings." : "Use your accepted recordings to train a personal English voice."}</p>
     </div>
     {#if build.selected_voice_kind === "personal"}
       <span class="flex items-center gap-1.5 text-sm font-semibold text-[var(--ti-success)]"><Check size={15} />Personal voice selected</span>
@@ -690,6 +692,12 @@
       <div class="h-full rounded-full bg-[var(--ti-accent)]" style={`width:${speechProgress}%`}></div>
     </div>
     </section>
+    {#if build.native_candidate}
+      <section class="min-w-0" aria-label="Native voice readiness">
+        <strong class="text-[13px] font-semibold">Native voice readiness</strong>
+        <p class="mb-0 mt-2 text-[12px] leading-5" role="status">{build.native_pins_ready ? "Reviewed model pins are configured. GPU admission is checked when creating the voice." : "Reviewed runtime and verifier pins are required."}</p>
+      </section>
+    {:else}
     <section class="min-w-0" aria-label="Training hardware">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <strong class="text-[13px] font-semibold">Hardware readiness</strong>
@@ -723,6 +731,7 @@
     {/if}
     </details>
     </section>
+    {/if}
   </div>
 
   {#if quickPreviewBusy || build.preview_active}
@@ -850,6 +859,9 @@
         {/each}
       </div>
       <p class="mb-0 mt-3 text-[13px] leading-5 text-[var(--ti-text-muted)]" role="status" aria-live="polite">{reviewedLineIds.length} of {build.evaluation_samples.length} previews listened</p>
+      {#if build.native_candidate}
+        <p class="mb-0 mt-4 text-sm" role="status">Native voice review is available. Approval for Meeting is not yet enabled; your current voice is unchanged.</p>
+      {:else}
       <label class="mt-4 flex items-start gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-4">
         <input class="mt-0.5 size-5 shrink-0 accent-[var(--ti-accent)]" type="checkbox" bind:checked={qualityConfirmed} disabled={!evaluationReviewComplete || busy || statusCheckUnavailable} />
         <span class="text-sm leading-5 text-[var(--ti-text-muted)]">I listened to every preview. The voice is clear, sounds natural, resembles the authorized speaker, and I want to use it for meetings.</span>
@@ -860,6 +872,7 @@
       <button type="button" class="ti-button mt-4 w-full sm:w-auto" disabled={busy || statusCheckUnavailable || voiceChangesLocked || !evaluationReviewComplete || !qualityConfirmed} onclick={() => void approve()}>
         <Check size={15} /><span>{busy ? "Saving..." : "Use My Voice"}</span>
       </button>
+      {/if}
       <p class="mb-0 mt-4 text-[13px] leading-5 text-[var(--ti-text-muted)]">Not satisfied? Keep the current Meeting voice and record more samples before creating another candidate.</p>
       {#if build.can_build}
         <label class="mt-3 flex items-start gap-2 text-[13px] text-[var(--ti-text-muted)]">
@@ -887,7 +900,7 @@
         <span class="text-sm leading-5 text-[var(--ti-text-muted)]">I confirm these recordings are my voice, or a voice I have permission to create.</span>
       </label>
       <button type="button" class="ti-button mt-4 w-full sm:w-auto" disabled={busy || statusCheckUnavailable || voiceChangesLocked || !authorized || !computeCanStart} onclick={() => void startBuild()}>
-        <span>{busy ? "Starting..." : "Train My Voice"}</span>
+        <span>{busy ? "Starting..." : build.native_candidate ? "Create My Voice" : "Train My Voice"}</span>
       </button>
     {/if}
   {/if}
@@ -910,5 +923,5 @@
       />
     </div>
   </details>
-  <p class="mb-0 mt-5 text-[13px] leading-5 text-[var(--ti-text-muted)]">Only a trained, evaluated and explicitly approved My Voice can be selected for Meeting. Quick Preview is not an output voice.</p>
+  <p class="mb-0 mt-5 text-[13px] leading-5 text-[var(--ti-text-muted)]">Only an evaluated and explicitly approved My Voice can be selected for Meeting. Quick Preview is not an output voice.</p>
 </section>

@@ -9,7 +9,8 @@ use super::super::voice_lab::{
 pub(super) fn reconcile_phase(paths: &VoiceLabStoragePaths) {
     // The preview borrows the VoiceLab resource but is not a trained build.
     // Its phase must never be changed by a previous build's status.json.
-    if super::super::voice_lab_preview::quick_voice_preview_active() {
+    if super::super::voice_lab_preview::quick_voice_preview_active()
+        || super::super::helper_bridge::native_voice_candidate_enabled() {
         return;
     }
     let snapshot = current_voice_lab_build_snapshot();

@@ -1,8 +1,10 @@
 //! Native reference-based review package in the existing Candidate workspace.
 //! No model weights, no selected-profile mutation, no implicit approval.
 //! Stage under the existing authorized build; publish the small manifest
-//! only under the canonical build completion lock in the future caller.
-use super::evaluation::HELD_OUT_LINES;
+//! only under the canonical build completion lock.
+use super::evaluation::{HELD_OUT_LINES, held_out_contract, frozen_dataset_matches_current, VoiceLabEvaluationSample};
+use super::receipts::completion_matches;
+use super::super::voice_lab::{GuidedDatasetManifest, archived_frozen_review_matches, VOICE_LAB_SCHEMA_VERSION};
 use super::native_evaluation::{NativeEvaluation, word_error_rate};
 use super::super::my_voice_reference::synthesis_audio_valid;
 use super::super::my_voice_runtime::authority;
@@ -19,6 +21,8 @@ const REFERENCE: &str = "reference.wav";
 const MAX_MANIFEST: u64 = 128 * 1024;
 const MAX_REFERENCE: u64 = 2 * 1024 * 1024;
 const MAX_SAMPLE: u64 = 44 + 44_100 * 30 * 2;
+
+pub(super) fn pins_ready() -> bool { ModelIdentity::current().is_ok() }
 
 fn hash(bytes: &[u8]) -> [u8; 32] { Sha256::digest(bytes).into() }
 
@@ -193,6 +197,7 @@ pub(super) fn stage(
     }
     // Recheck the actual staged bytes, not only the in-memory payload.
     verify_files(&root, &manifest)?;
+    verify_source(paths, &manifest)?;
     if !authority(generation, deadline) { return Err("native_review:cancelled".into()); }
     write_new(&root.join(PENDING), &bytes)?;
     Ok(StagedReview { root, review_id: hex(&hash(&bytes)) })
@@ -212,6 +217,49 @@ fn verify_files(root: &Path, manifest: &Manifest) -> Result<(), String> {
     Ok(())
 }
 
+// Strong source checks only at completion/playback/approval, not status polling.
+fn verify_source(paths: &VoiceLabStoragePaths, manifest: &Manifest) -> Result<(), String> {
+    let dataset: GuidedDatasetManifest = serde_json::from_slice(
+        &read_exact(&paths.build_dataset_dir.join("dataset.json"), 64 * 1024)?)
+        .map_err(|_| "native_review:dataset_invalid")?;
+    if dataset.schema_version != VOICE_LAB_SCHEMA_VERSION || !dataset.authorized_voice_confirmed
+        || dataset.held_out_lines != held_out_contract() || !(2..=128).contains(&dataset.takes.len()) {
+        return Err("native_review:dataset_invalid".into());
+    }
+    let matches = match archived_frozen_review_matches(paths)? {
+        Some(matches) => matches,
+        None => frozen_dataset_matches_current(&paths.takes_dir, &paths.build_dataset_dir, &super::accepted_contract().0),
+    };
+    if !matches { return Err("native_review:source_changed".into()); }
+    for (id, digest) in &manifest.anchors {
+        let name = format!("take_{id:04}.wav");
+        if dataset.takes.iter().filter(|t| t.line_id == *id && t.wav_file == name).count() != 1 {
+            return Err("native_review:anchor_missing".into());
+        }
+        verified_bytes(&paths.build_dataset_dir.join(name), MAX_REFERENCE, digest)?;
+    }
+    Ok(())
+}
+
+/// Only a completed review receipt can appear in status. Strong file and
+/// source identity validation is on demand, never on the routine status poll.
+pub(super) fn status(paths: &VoiceLabStoragePaths) -> Option<(String, Vec<VoiceLabEvaluationSample>)> {
+    let root = &paths.candidate_actor_dir;
+    checked_root(root).ok()?;
+    let bytes = read_exact(&root.join(MANIFEST), MAX_MANIFEST).ok()?;
+    let id = hex(&hash(&bytes));
+    if !completion_matches(paths, &id) { return None; }
+    let manifest: Manifest = serde_json::from_slice(&bytes).ok()?;
+    if !manifest.valid() || manifest.models != ModelIdentity::current().ok()? { return None; }
+    let samples = manifest.samples.into_iter().map(|s| VoiceLabEvaluationSample {
+        line_id: s.line_id, exact_text: s.exact_text,
+        wav_file: format!("held_out_{}.wav", s.line_id), sha256: hex(&s.wav_sha256),
+        speaker_similarity: s.speaker_similarity, intelligibility_text: s.intelligibility_text,
+        intelligibility_wer: s.intelligibility_wer, artifact_flags: Vec::new(),
+    }).collect();
+    Some((id, samples))
+}
+
 fn load(root: &Path, review_id: &str) -> Result<Manifest, String> {
     checked_root(root)?;
     let bytes = read_exact(&root.join(MANIFEST), MAX_MANIFEST)?;
@@ -226,18 +274,22 @@ fn load(root: &Path, review_id: &str) -> Result<Manifest, String> {
 /// Exact bytes for a specific review. No caller-provided paths.
 pub(super) fn review_audio(paths: &VoiceLabStoragePaths, review_id: &str, line_id: u32) -> Result<Vec<u8>, String> {
     let root = &paths.candidate_actor_dir;
+    if !completion_matches(paths, review_id) { return Err("native_review:completion_required".into()); }
     let manifest = load(root, review_id)?;
+    verify_source(paths, &manifest)?;
     let sample = manifest.samples.iter().find(|s| s.line_id == line_id)
         .ok_or("native_review:line_missing")?;
     verified_bytes(&sample_path(root, line_id), MAX_SAMPLE, &sample.wav_sha256)
 }
 
-/// Before a future approval transaction, verify the complete review and
-/// reference payload again. This is integrity only, not listening approval,
-/// current-source equivalence, or permission to change Meeting's voice.
+/// Before a future approval transaction, verify complete review, reference
+/// and frozen/current source integrity. This does not grant listening approval
+/// or permission to change Meeting's voice.
 pub(super) fn verify_review(paths: &VoiceLabStoragePaths, review_id: &str) -> Result<(), String> {
     let root = &paths.candidate_actor_dir;
+    if !completion_matches(paths, review_id) { return Err("native_review:completion_required".into()); }
     let manifest = load(root, review_id)?;
+    verify_source(paths, &manifest)?;
     verify_files(root, &manifest)
 }
 
