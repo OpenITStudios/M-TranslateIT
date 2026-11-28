@@ -1,10 +1,13 @@
 # Native CUDA inference — source integration
 
-This Rust ↔ llama.cpp/mtmd ABI is the sole ASR/MT route in the Windows
-application source. The existing scheduler and lifecycle own the pair.
-Explicit preparation opens the DLL/model pair, not app startup or polling.
-Python IPC carries only control/status and existing voice operations.
-My Voice synthesis, training and evaluation algorithms are unchanged.
+This Rust ↔ llama.cpp/mtmd ABI owns the native ASR, MT and selected
+ZONOS3 voice synthesis route in the Windows application source. One
+existing scheduler and lifecycle own the resident runtime. Explicit
+preparation opens the required DLL/model assets, not app startup or polling.
+No production Python inference or personal model training remains.
+My Voice uses an authorized reference, independent evaluation and explicit approval.
+Native packaging and target quality/runtime acceptance remain held. Historical
+migration notes below are not active fallback paths.
 
 - Exact upstream: [llama.cpp 6d8a888](https://github.com/ggml-org/llama.cpp/tree/6d8a8886fa44a4a404c58ace93052ea680193981), MIT; use the upstream LICENSE in any eventual distribution.
 - Apply only the reviewed adjacent `llama-strict-cuda.patch` in a dedicated checkout at that SHA. The candidate CMake file checks SHA and reverse-patch applicability; it does not prove there are no unrelated changes. No fetch, install, patch application or build is performed by this source increment.
@@ -153,6 +156,8 @@ cancellation/timeout, process isolation, and combined VRAM remain unverified.
 Do not release or claim runtime acceptance until integrated source review and held Windows build/runtime proof are complete.
 
 ## Native TTS candidate — ZONOS3-Mini (explicit source candidate)
+
+**TTS02/TTS10/TTS12 — fixed conditioning and generation batch reuse (Unreleased):** Pinned ZONOS3 helper `6d8a888`: resolve the three default condition token IDs once per model helper, keeping first-match vocabulary lookup, order, missing-token rejection and the non-default lookup path. Borrow the one owner-local bound speaker vector for prompt segments (reset clears segments before rebinding; explicit per-request speaker encoding still owns its vector). Borrowing removes one host copy, not the downstream embedding batch copy. Replace per-frame temporary decode_embd_batch with one lazily allocated owner-local llama_batch_ext for generation; clear at reset and before each row, preserve embedding, sequence, positional array and output flag, fail closed on admission error. Pinned batch setter copies embedding data and clears token/embedding/state lengths; no pointer is retained from mtmd output. Keep all model, RNG, codec, state, limits and scheduler rules. Pinned `src/models/zonos3.cpp:147–158` computes unused vocabulary logits after the normalized embedding; context decode `2181–2225` forces all tokens to output in embedding mode and `2420–2451` reads logits and embeddings. Do not apply MT's one-row reservation or remove the logits graph without exact embedding/codebook parity, graph/API and placement review plus native profiling. Codebook head/embedding and causal codec/iSTFT transfers unchanged. Correct current native architecture in root orientation and LocalWorker README; historical docs and governance Skills not rewritten. Existing native repeated-request fixture extended; exact upstream patch preimages/counts reviewed; patch application, compile, seeded audio/quality, timing and DLL/pin rebuild NOT_EXECUTED. No dependency, ABI, model, fallback, streaming or persistent stream changes.
 
 **TTS01/TTS02/TTS05/TTS06 — bounded frame and prompt work, direct mono PCM (Unreleased):** At pinned llama.cpp `6d8a888`, ZONOS3 uses ten codebooks and at most 64 complete codec frames per decode chunk. The controlled patch uses fixed stack arrays for the silence row, generated row and 640-code codec scratch (only the initialized prefix is passed); preserves delayed rows, sampler/RNG calls, EOS/countdown, chunk boundaries, gain/limiter and full-output policy. Tokenize the same length-delimited current UTF-8 bytes directly into the final condition-token segment, with a checked int32 capacity, same token flags and failure condition; no intermediate string/vector/insert. Keep the existing bound speaker copy, reset, sampler and codec state isolation. The Meeting audio owner merges finite/range/signal checks into one scan and uses a direct mono read within the same rolling resampler; rate, interpolation, clipping, channel expansion, device authority and queue unchanged. Extend existing native repeated-utterance, PCM rejection/threshold and resampling parity fixtures (NOT_EXECUTED). No new dependencies, worker, ABI, model, streaming or device lifecycle change. Exact patch preimages/counts reviewed against the upstream source; patch application, compile, token/seeded acoustic parity, quality, native timing and package DLL/pin rebuild remain NOT_EXECUTED. TTS11 timing review and further evidence-gated candidates remain separate; persistent playback and streaming stay held.
 

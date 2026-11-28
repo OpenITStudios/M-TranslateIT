@@ -68,10 +68,9 @@ Alternate Meeting source: **Original Microphone** passes the selected physical m
 ```text
 Tauri 2 desktop application
 ├─ Svelte 5 + Vite + TypeScript frontend
-├─ Rust desktop/runtime backend
-│  └─ one native CUDA owner (Qwen3-ASR + Hy-MT2 ID ↔ EN)
-└─ one Python local voice worker
-   └─ GPT-SoVITS voice inference / My Voice build support
+└─ Rust desktop/runtime backend
+   ├─ one native CUDA owner (Qwen3-ASR + Hy-MT2 ID ↔ EN + ZONOS3-Mini)
+   └─ independent CPU ONNX speaker evaluation for My Voice
 ```
 
 Current source roots:
@@ -112,7 +111,7 @@ Release-source validation runs from current `Local`. Normal users do not install
 
 ```text
 REMOTE_GITHUB
-→ GitHub source/version history and static inspection; separately approved Windows source CI runs on Local pushes, but never hosted model/device acceptance
+→ GitHub source/version history and static inspection; hosted CI/build/inference remains disabled
 
 LOCAL_CODE
 → exact Local checkout/toolchain/build/generator/filesystem proof

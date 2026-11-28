@@ -222,13 +222,10 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
      virtual int32_t set_input(const mtmd_helper_gen_audio_inp * inp) = 0;
      // decodes at most n_batch prompt tokens; returns remaining count (0 = done), <0 on error
      virtual int32_t step_prompt(int32_t n_batch) = 0;
-@@ -3403,7 +3405,21 @@
- public:
-     using mtmd_gen_audio_pipeline::mtmd_gen_audio_pipeline;
+@@ -3405,10 +3407,25 @@
  
--    bool supports_delivery() const override { return true; }
-+    bool supports_delivery() const override { return true; }
-+
+     bool supports_delivery() const override { return true; }
+ 
 +    int32_t bind_speaker(mtmd_bitmap * speaker) override {
 +        reset();
 +        bound_speaker.clear();
@@ -242,31 +239,54 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
 +        bound_speaker = std::move(encoded);
 +        return 0;
 +    }
- 
++
      void reset() override {
          seq_id = 0;
-@@ -3453,10 +3469,14 @@
-             if (!encode_speaker(inp->speaker_ref, seg.embd)) {
+         pos = 0;
+         segments.clear();
++        if (frame_batch) llama_batch_ext_clear(frame_batch.get());
+         seg_idx = 0;
+         seg_pos = 0;
+         rows.clear();
+@@ -3454,37 +3471,55 @@
                  return 1;
              }
--            segments.push_back(std::move(seg));
--        }
--
--        // condition rows: the bucket of each value over the checkpoint edges, or unknown
-+            segments.push_back(std::move(seg));
+             segments.push_back(std::move(seg));
 +        } else if (!bound_speaker.empty()) {
 +            segment seg;
-+            seg.embd = bound_speaker;
++            seg.borrowed_embd = &bound_speaker;
 +            segments.push_back(std::move(seg));
-+        }
-+
-+        // condition rows: the bucket of each value over the checkpoint edges, or unknown
+         }
+ 
+         // condition rows: the bucket of each value over the checkpoint edges, or unknown
          auto bucket = [](const std::vector<float> & edges, float v) {
              return std::to_string(std::upper_bound(edges.begin(), edges.end(), v) - edges.begin());
          };
-@@ -3471,24 +3491,30 @@
+-        const std::string loudness = inp->loudness != 0.0f ? bucket(loudness_edges, inp->loudness) : "unk";
+-        const std::string rate     = inp->speed != 1.0f ? bucket(rate_edges, inp->speed * typical_rate) : "unk";
+         segment text;
+-        for (const std::string & name : { "<|loudness_" + loudness + "|>", std::string("<|fmax_unk|>"), "<|speaking_rate_" + rate + "|>" }) {
+-            const llama_token t = find_special_token(vocab, name);
+-            if (t == LLAMA_TOKEN_NULL) {
+-                LOG_ERR("mtmd_helper_gen_audio: missing ZONOS3 token %s in vocab\n", name.c_str());
++        if (inp->loudness == 0.0f && inp->speed == 1.0f) {
++            if (std::find(default_condition_tokens.begin(), default_condition_tokens.end(), LLAMA_TOKEN_NULL) != default_condition_tokens.end()) {
++                LOG_ERR("mtmd_helper_gen_audio: missing default ZONOS3 condition token\n");
+                 return 1;
              }
-             text.tokens.push_back(t);
+-            text.tokens.push_back(t);
++            text.tokens.assign(default_condition_tokens.begin(), default_condition_tokens.end());
++        } else {
++            const std::string loudness = inp->loudness != 0.0f ? bucket(loudness_edges, inp->loudness) : "unk";
++            const std::string rate     = inp->speed != 1.0f ? bucket(rate_edges, inp->speed * typical_rate) : "unk";
++            for (const std::string & name : { "<|loudness_" + loudness + "|>", std::string("<|fmax_unk|>"), "<|speaking_rate_" + rate + "|>" }) {
++                const llama_token t = find_special_token(vocab, name);
++                if (t == LLAMA_TOKEN_NULL) {
++                    LOG_ERR("mtmd_helper_gen_audio: missing ZONOS3 token %s in vocab\n", name.c_str());
++                    return 1;
++                }
++                text.tokens.push_back(t);
++            }
          }
 -        const std::string prompt(inp->prompt, inp->prompt_len);
 -        std::vector<llama_token> ids(prompt.size() + 16);
@@ -296,11 +316,16 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
              for (int cb = 0; cb <= k && cb < n_cb; cb++) {
                  row[cb] = silence_frame[cb];
              }
-             const float * embd = embed_row(row);
-             if (!embd) {
-                 return 1;
+@@ -3533,7 +3568,7 @@
              }
-@@ -3579,8 +3605,8 @@
+             ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+         } else {
+-            decode_embd_batch batch(seg.embd.data() + (size_t) seg_pos * n_embd, n, 1, n_embd);
++            decode_embd_batch batch(seg.embeddings().data() + (size_t) seg_pos * n_embd, n, 1, n_embd);
+             batch.set_position_normal(pos, seq_id);
+             batch.logits[n - 1] = last;
+             ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.render(lctx, 0, n));
+@@ -3579,7 +3614,7 @@
              return 1;
          }
  
@@ -309,21 +334,16 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
          for (int cb = 0; cb < n_cb; cb++) {
              frame[cb] = sample(out.feats + (size_t) cb * n_vocab, cb);
          }
-         // codebooks whose delayed stream has not started yet are pad
-@@ -3602,11 +3628,16 @@
+@@ -3602,20 +3637,32 @@
              eos_row   = std::max(0, r - max_eoa);
              countdown = n_cb + 1;
          }
 -        if ((countdown > 0 && --countdown == 0) || step >= max_frames || (uint32_t) pos >= llama_n_ctx_seq(lctx)) {
--            done = true;
--            *out_stop = true;
--            return 0;
--        }
 +        if (countdown > 0 && --countdown == 0) {
-+            done = true;
-+            *out_stop = true;
-+            return 0;
-+        }
+             done = true;
+             *out_stop = true;
+             return 0;
+         }
 +        // A capacity limit is not a completed utterance. Never publish it as EOS.
 +        if (step >= max_frames || (uint32_t) pos >= llama_n_ctx_seq(lctx)) {
 +            LOG_ERR("translateit:zonos3_generation_incomplete\n");
@@ -332,24 +352,47 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
  
          const float * next = embed_row(frame);
          if (!next) {
-@@ -3633,8 +3664,13 @@
-     int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples) override {
+             return 1;
+         }
+-        decode_embd_batch batch(next, 1, 1, n_embd);
+-        batch.set_position_normal(pos, seq_id);
+-        batch.logits[0] = 1;
+-        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.render(lctx, 0, 1)) != 0) {
++        // Same single embedding, sequence, position and output flag as
++        // decode_embd_batch; reuse the owner-local batch storage.
++        if (!frame_batch) frame_batch.reset(llama_batch_ext_init(lctx));
++        if (!frame_batch) return 1;
++        llama_batch_ext_clear(frame_batch.get());
++        const llama_embd embd = { next, 1, (size_t) n_embd };
++        const int32_t idx = llama_batch_ext_add_embd(frame_batch.get(), seq_id, embd);
++        const llama_pos positions[GGML_MROPE_SECTIONS] = { pos, 0, 0, 0 };
++        if (idx < 0 || !llama_batch_ext_set_pos(frame_batch.get(), idx, positions) ||
++            !llama_batch_ext_set_output_logits(frame_batch.get(), idx, true) ||
++            llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, frame_batch.get()) != 0) {
+             LOG_ERR("mtmd_helper_gen_audio: decode failed\n");
+             return 1;
+         }
+@@ -3634,6 +3681,11 @@
          *out_sample_rate = info.sample_rate;
  
--        if (!stream) {
--            if (flush() != 0) {
-+        if (!stream) {
+         if (!stream) {
 +            // A caller-side limit or failed generation must not produce a success PCM receipt.
 +            if (!done) {
 +                LOG_ERR("translateit:zonos3_generation_not_complete\n");
 +                return 1;
 +            }
-+            if (flush() != 0) {
+             if (flush() != 0) {
                  return 1;
              }
-             if (out_n_samples) {
-@@ -3714,10 +3750,10 @@
-         size_t n_rows(int n) const { return tokens.empty() ? embd.size() / (size_t) n : tokens.size(); }
+@@ -3711,10 +3763,13 @@
+     struct segment {
+         std::vector<llama_token> tokens; // either tokens or embd rows
+         std::vector<float>       embd;
+-        size_t n_rows(int n) const { return tokens.empty() ? embd.size() / (size_t) n : tokens.size(); }
++        // Reset destroys segments before the selected binding is replaced.
++        const std::vector<float> * borrowed_embd = nullptr;
++        const std::vector<float> & embeddings() const { return borrowed_embd ? *borrowed_embd : embd; }
++        size_t n_rows(int n) const { return tokens.empty() ? embeddings().size() / (size_t) n : tokens.size(); }
      };
  
 -    const float * embed_row(const std::vector<int32_t> & codes) {
@@ -357,10 +400,7 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
          mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
          inp.type    = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
          inp.codes   = const_cast<int32_t *>(codes.data());
-         inp.n_codes = codes.size();
-         mtmd_gen_out out{};
-         if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
-@@ -3727,81 +3763,93 @@
+@@ -3727,15 +3782,25 @@
          return out.embd;
      }
  
@@ -388,18 +428,7 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
              for (size_t f = n_prefill + n_rows - n_win; f < n_prefill + n_rows; f++) {
                  const int32_t c = rows[f * n_cb + (size_t) cb];
                  if (c >= 0 && c < audio_eoa && !seen[(size_t) c]) {
-                     seen[(size_t) c] = true;
-                     l[c] = l[c] > 0.0f ? l[c] / rep_pen : l[c] * rep_pen;
-                 }
-             }
-         }
- 
-         if (temp <= 0.0f) {
-             return (int32_t) (std::max_element(l.begin(), l.end()) - l.begin());
-         }
-         for (auto & v : l) {
-             v /= temp;
-         }
+@@ -3754,27 +3819,29 @@
  
          float kth = -INFINITY;
          if (top_k > 0 && top_k < n_vocab) {
@@ -437,34 +466,7 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
          for (size_t j = 0; j < ord.size(); j++) {
              ord[j] = j;
          }
-         std::sort(ord.begin(), ord.end(), [&](size_t a, size_t b) { return p[a] > p[b]; });
-         if (top_p > 0.0f && top_p < 1.0f) {
-             double before = 0.0;
-             for (size_t j : ord) {
-                 const double pj = p[j];
-                 if (before > top_p * sum) {
-                     p[j] = 0.0;
-                 }
-                 before += pj;
-             }
-         }
-         double kept = 0.0;
-         for (double v : p) {
-             kept += v;
-         }
-         double u = std::uniform_real_distribution<double>(0.0, kept)(rng);
-         for (size_t j = 0; j < p.size(); j++) {
-             u -= p[j];
-             if (u <= 0.0 && p[j] > 0.0) {
-                 return idx[j];
-             }
-         }
-         return idx[ord[0]];
-     }
- 
-     // frames with all codebooks known
-     size_t n_ready() const {
-@@ -3846,18 +3894,17 @@
+@@ -3846,10 +3913,9 @@
      // the silence frames are decoded too, as left context
      bool decode_wav(bool final) {
          const size_t n_frames = n_ready();
@@ -476,7 +478,7 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
              for (size_t f = 0; f < n; f++) {
                  for (int cb = 0; cb < n_cb; cb++) {
                      // EOA and pad have no codec row
-                     const int32_t c = rows[(n_decoded + f + cb) * n_cb + cb];
+@@ -3857,7 +3923,7 @@
                      codes[f * n_cb + cb] = std::clamp(c, 0, audio_eoa - 1);
                  }
              }
@@ -485,17 +487,22 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
                  return false;
              }
              n_decoded += n;
-@@ -3892,7 +3939,8 @@
+@@ -3892,6 +3958,14 @@
          return true;
      }
  
--    std::vector<segment> segments;
++    // Immutable vocabulary IDs; non-default controls retain upstream lookup.
++    const std::array<llama_token, 3> default_condition_tokens = {
++        find_special_token(vocab, "<|loudness_unk|>"),
++        find_special_token(vocab, "<|fmax_unk|>"),
++        find_special_token(vocab, "<|speaking_rate_unk|>"),
++    };
++    llama_batch_ext_ptr frame_batch;
 +    std::vector<float> bound_speaker; // one owner-local selected speaker embedding
-+    std::vector<segment> segments;
+     std::vector<segment> segments;
      size_t seg_idx = 0;
      int    seg_pos = 0;
- 
-@@ -5659,7 +5707,11 @@
+@@ -5659,7 +5733,11 @@
      }
  }
  

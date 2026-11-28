@@ -497,6 +497,11 @@ mod tests {
         }, Instant::now() + Duration::from_secs(90)).unwrap().wait_output().unwrap();
         let InferenceOutput::Voice(third_pcm) = third else { panic!("missing complete PCM"); };
         validate_voice_pcm(&third_pcm).expect("bounded finite non-silent PCM");
+        let fourth = owner.begin(InferenceInput::Voice {
+            text: "Please review the API at 10:05, then confirm the final version.".into(), binding,
+        }, Instant::now() + Duration::from_secs(90)).unwrap().wait_output().unwrap();
+        let InferenceOutput::Voice(fourth_pcm) = fourth else { panic!("missing complete PCM"); };
+        validate_voice_pcm(&fourth_pcm).expect("bounded finite non-silent PCM");
         // Invalid replacement revokes prior authority rather than falling back.
         assert!(owner.begin(InferenceInput::BindVoice { reference: Vec::new() },
             Instant::now() + Duration::from_secs(30)).unwrap().wait_output().is_err());

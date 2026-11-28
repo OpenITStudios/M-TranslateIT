@@ -58,7 +58,7 @@ Meeting works on day one with two built-in English voice references. My Voice is
 ```text
 guided recording
 → replay / accept / retry
-→ GPT-SoVITS V2ProPlus training
+→ native reference selection and synthesis
 → held-out evaluation
 → user approval
 → approved reusable My Voice
@@ -73,11 +73,12 @@ General History beyond the Meeting-specific Saved Transcripts surface, Document 
 ```text
 Tauri 2
 ├─ Svelte 5 + Vite + TypeScript
-├─ Rust desktop/runtime backend
-└─ one canonical Python local worker
-   ├─ ASR
-   ├─ Indonesian ↔ English translation
-   └─ GPT-SoVITS voice runtime
+└─ Rust desktop/runtime backend
+   ├─ one native CUDA inference owner
+   │  ├─ Qwen3-ASR
+   │  ├─ Hy-MT2 Indonesian ↔ English translation
+   │  └─ ZONOS3-Mini selected voice synthesis
+   └─ independent CPU ONNX speaker evaluation (My Voice)
 ```
 
 Canonical roots:
@@ -105,7 +106,7 @@ For ChatGPT source work use GitHub branch `Local`: `AGENTS.md` → `GITHUB_RULES
 | `manage.cmd`, `tooling/windows/config/requirements.json` | Toolchain policy and optional thin launcher | [Tooling](tooling/README.md) |
 | `docs/` | Durable product/system/developer knowledge | [Documentation](docs/README.md) |
 | `planning/` | Current development intent/next action | [Development](planning/README.md) |
-| `EngineData/` | Tauri frontend, Rust runtime, Python AI worker/assets |
+| `EngineData/` | Tauri frontend, Rust/native AI runtime, model assets and developer acquisition |
 | `.workspace/` | Ignored development caches, downloads, tools and staging | [Workspace ownership](docs/system/windows-workspace-boundaries.md) | [Source owners](docs/knowledge/source-ownership.md) |
 | `UserData/` | Private runtime/user storage placeholders only | [Storage](UserData/README.md) |
 | `tools/` | Repository/quality validation and source-derived planning | [Tools](tools/README.md) |
@@ -198,7 +199,7 @@ TranslateIT-Setup.exe
 TranslateIT-Payload.7z
 ```
 
-Release-source validation is performed from `Local`. Setup owns validating and installing its colocated payload, private Python/runtime/model assets, and supported Meeting audio provider inputs. Normal users are not asked to run pip, manually extract runtime assets, or download core models.
+Release-source validation is performed from `Local`. Setup owns validating and installing its colocated payload, reviewed native runtime/model assets, and supported Meeting audio provider inputs. Normal users are not asked to run pip, manually extract runtime assets, or download core models.
 
 Publishing a tag/GitHub Release is a separate explicit action and does not change repository branch authority.
 
