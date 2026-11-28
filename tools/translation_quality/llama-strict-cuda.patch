@@ -292,7 +292,109 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
                  return 1;
              }
              if (out_n_samples) {
-@@ -3892,7 +3921,8 @@
+@@ -3727,81 +3756,95 @@
+         return out.embd;
+     }
+ 
++    // Owner-local scratch; every used element is initialized on each sample.
++    // Reuse capacity across codebooks/frames, never reuse sampling state.
++    std::vector<float> sample_logits, sample_top_k;
++    std::vector<bool> sample_seen;
++    std::vector<int32_t> sample_indices;
++    std::vector<double> sample_probabilities;
++    std::vector<size_t> sample_order;
++
+     // same as the reference sampler (servers/ggml/src/zonos3-sampler.cpp)
+     int32_t sample(const float * in, int cb) {
+-        std::vector<float> l(in, in + n_vocab);
++        auto & l = sample_logits;
++        l.assign(in, in + n_vocab);
+         l[audio_pad] = -INFINITY;
+ 
+         if (rep_pen != 1.0f && cb < rep_codebooks) {
+             const size_t n_rows = rows.size() / n_cb - n_prefill;
+             const size_t n_win  = std::min(n_rows, (size_t) std::max(rep_win, 0));
+-            std::vector<bool> seen(audio_eoa, false);
++            auto & seen = sample_seen;
++            seen.assign(audio_eoa, false);
+             for (size_t f = n_prefill + n_rows - n_win; f < n_prefill + n_rows; f++) {
+                 const int32_t c = rows[f * n_cb + (size_t) cb];
+                 if (c >= 0 && c < audio_eoa && !seen[(size_t) c]) {
+                     seen[(size_t) c] = true;
+                     l[c] = l[c] > 0.0f ? l[c] / rep_pen : l[c] * rep_pen;
+                 }
+             }
+         }
+ 
+         if (temp <= 0.0f) {
+             return (int32_t) (std::max_element(l.begin(), l.end()) - l.begin());
+         }
+         for (auto & v : l) {
+             v /= temp;
+         }
+ 
+         float kth = -INFINITY;
+         if (top_k > 0 && top_k < n_vocab) {
+-            std::vector<float> tmp(l);
++            auto & tmp = sample_top_k;
++            tmp.assign(l.begin(), l.end());
+             std::nth_element(tmp.begin(), tmp.begin() + (top_k - 1), tmp.end(), std::greater<float>());
+             kth = tmp[(size_t) top_k - 1];
+         }
+-        std::vector<int32_t> idx;
++        auto & idx = sample_indices;
++        idx.clear();
+         for (int32_t i = 0; i < n_vocab; i++) {
+             if (l[i] >= kth && l[i] > -INFINITY) {
+                 idx.push_back(i);
+             }
+         }
+         float lmax = -INFINITY;
+         for (int32_t i : idx) {
+             lmax = std::max(lmax, l[i]);
+         }
+-        std::vector<double> p(idx.size());
++        auto & p = sample_probabilities;
++        p.resize(idx.size());
+         double sum = 0.0;
+         for (size_t j = 0; j < idx.size(); j++) {
+             p[j] = std::exp((double) (l[idx[j]] - lmax));
+             sum += p[j];
+         }
+-        std::vector<size_t> ord(idx.size());
++        auto & ord = sample_order;
++        ord.resize(idx.size());
+         for (size_t j = 0; j < ord.size(); j++) {
+             ord[j] = j;
+         }
+         std::sort(ord.begin(), ord.end(), [&](size_t a, size_t b) { return p[a] > p[b]; });
+         if (top_p > 0.0f && top_p < 1.0f) {
+             double before = 0.0;
+             for (size_t j : ord) {
+                 const double pj = p[j];
+                 if (before > top_p * sum) {
+                     p[j] = 0.0;
+                 }
+                 before += pj;
+             }
+         }
+         double kept = 0.0;
+         for (double v : p) {
+             kept += v;
+         }
+         double u = std::uniform_real_distribution<double>(0.0, kept)(rng);
+         for (size_t j = 0; j < p.size(); j++) {
+             u -= p[j];
+             if (u <= 0.0 && p[j] > 0.0) {
+                 return idx[j];
+             }
+         }
+         return idx[ord[0]];
+     }
+ 
+     // frames with all codebooks known
+     size_t n_ready() const {
+@@ -3892,7 +3935,8 @@
          return true;
      }
  
@@ -302,7 +404,7 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
      size_t seg_idx = 0;
      int    seg_pos = 0;
  
-@@ -5659,7 +5689,11 @@
+@@ -5659,7 +5703,11 @@
      }
  }
  

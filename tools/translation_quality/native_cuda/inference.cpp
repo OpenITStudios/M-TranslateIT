@@ -563,12 +563,17 @@ int32_t translate(ti_mt & mt, std::string_view source, const char * target,
     if (!vocab) return TI_INFERENCE;
     // Tencent's single-user-turn template and default translation instruction.
     // No system message, past turns, user instructions or second model.
-    std::string prompt = k_mt_bos;
+    constexpr std::string_view instruction_prefix = "Translate the following text into ";
+    constexpr std::string_view instruction_suffix = ". Note that you should only output the translated result without any additional explanation:\n\n";
+    std::string prompt;
+    prompt.reserve(sizeof(k_mt_bos) + sizeof(k_mt_user) + sizeof(k_mt_assistant)
+        + instruction_prefix.size() + std::strlen(target) + instruction_suffix.size() + source.size());
+    prompt += k_mt_bos;
     prompt += k_mt_user;
     const size_t body_start = prompt.size();
-    prompt += "Translate the following text into ";
+    prompt += instruction_prefix;
     prompt += target;
-    prompt += ". Note that you should only output the translated result without any additional explanation:\n\n";
+    prompt += instruction_suffix;
     prompt.append(source.data(), source.size());
     const size_t body_size = prompt.size() - body_start;
     prompt += k_mt_assistant;

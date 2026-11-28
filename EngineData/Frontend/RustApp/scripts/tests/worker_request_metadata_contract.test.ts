@@ -111,3 +111,24 @@ test("native ASR and MT avoid full-vocabulary sampler materialization without ch
   assert.match(voice, /mtmd_helper_gen_audio_step_gen/);
   assert.doesNotMatch(voice, /greedy_token\(/);
 });
+
+test("Zonos3 reuses bounded sampling scratch and MT reserves the intact prompt", () => {
+  const patch = readFileSync(new URL("../../../../../tools/translation_quality/llama-strict-cuda.patch", import.meta.url), "utf8");
+  for (const [field, initialization] of [
+    ["sample_logits", "l.assign(in, in + n_vocab);"],
+    ["sample_seen", "seen.assign(audio_eoa, false);"],
+    ["sample_top_k", "tmp.assign(l.begin(), l.end());"],
+    ["sample_indices", "idx.clear();"],
+    ["sample_probabilities", "p.resize(idx.size());"],
+    ["sample_order", "ord.resize(idx.size());"],
+  ]) {
+    assert.ok(patch.includes(field) && patch.includes("+" + " ".repeat(field === "sample_seen" || field === "sample_top_k" ? 12 : 8) + initialization));
+  }
+  assert.match(patch, /std::nth_element\(tmp\.begin\(\), tmp\.begin\(\) \+ \(top_k - 1\)/);
+  assert.match(patch, /std::uniform_real_distribution<double>\(0\.0, kept\)\(rng\)/);
+  const cpp = readFileSync(new URL("../../../../../tools/translation_quality/native_cuda/inference.cpp", import.meta.url), "utf8");
+  const mt = cpp.slice(cpp.indexOf("int32_t translate(ti_mt"), cpp.indexOf("static int32_t translate_mt("));
+  assert.ok(mt.indexOf("prompt.reserve(") >= 0 && mt.indexOf("prompt.reserve(") < mt.indexOf("prompt += k_mt_bos"));
+  assert.equal((mt.match(/llama_tokenize\(/g) ?? []).length, 1);
+  assert.match(mt, /prompt\.append\(source\.data\(\), source\.size\(\)\)/);
+});
