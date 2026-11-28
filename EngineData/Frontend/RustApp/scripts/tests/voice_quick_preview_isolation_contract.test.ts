@@ -8,7 +8,7 @@ const bridge = readFileSync(new URL("../../src/app/bridge/myVoiceBuildApi.ts", i
 const ui = readFileSync(new URL("../../src/components/my-voice/MyVoiceBuild.svelte", import.meta.url), "utf8");
 const quickPreviewUi = readFileSync(new URL("../../src/components/my-voice/QuickVoicePreview.svelte", import.meta.url), "utf8");
 const status = readFileSync(new URL("../../src-tauri/src/commands/voice_lab_build.rs", import.meta.url), "utf8");
-const phase = readFileSync(new URL("../../src-tauri/src/commands/voice_lab_build/phase.rs", import.meta.url), "utf8");
+const nativeReview = readFileSync(new URL("../../src-tauri/src/commands/voice_lab_build/native_review.rs", import.meta.url), "utf8");
 const releaseConfig = JSON.parse(readFileSync(new URL("../../src-tauri/tauri.release.conf.json", import.meta.url), "utf8"));
 const releaseContract = readFileSync(new URL("../validate_release_package_contract.mjs", import.meta.url), "utf8");
 const releasePayload = readFileSync(new URL("../validate_release_payload.mjs", import.meta.url), "utf8");
@@ -22,7 +22,6 @@ const mutations = readFileSync(new URL("../../src-tauri/src/commands/application
 const recordingUi = readFileSync(new URL("../../src/pages/MyVoice.svelte", import.meta.url), "utf8");
 const guidedAudio = readFileSync(new URL("../../src-tauri/src/engine/audio/guided_take.rs", import.meta.url), "utf8");
 const evaluation = readFileSync(new URL("../../src-tauri/src/commands/voice_lab_build/evaluation.rs", import.meta.url), "utf8");
-const synthesis = readFileSync(new URL("../../../../Backend/LocalWorker/WorkerRuntime/voice_lab_gpt_sovits_build.py", import.meta.url), "utf8");
 
 test("quick preview is an isolated native one-WAV task with existing VoiceLab authority", () => {
   assert.match(preview, /native::generate\(accepted\)/);
@@ -167,12 +166,8 @@ test("preview readiness is invalidated when accepted recording revision or train
   assert.match(ui, /quickPreviewReady = false;\s*stopAudio\(\)/);
 });
 
-test("preview phase cannot be reconciled from stale trained-build status", () => {
-  assert.match(status, /mod phase;/);
-  assert.match(status, /use phase::reconcile_phase;/);
-  assert.match(phase, /fn reconcile_phase\(/);
-  assert.match(phase, /if super::super::voice_lab_preview::quick_voice_preview_active\(\)\s*\|\| super::super::helper_bridge::native_voice_candidate_enabled\(\) \{\s*return;/);
-  assert.match(status, /let child = if preview_active \|\| native_candidate \{ None \} else \{ child_status\(&paths\) \}/);
+test("preview phase is owned by native lifecycle, not stale child status", () => {
+  assert.doesNotMatch(status, /child_status|reconcile_phase|mod phase;/);
   assert.match(status, /"Creating Quick Preview locally\."/);
   assert.match(status, /"Stopping Quick Preview safely\."/);
 });
@@ -195,15 +190,15 @@ test("retired Python Quick Preview has no packaged consumer", () => {
   assert.match(buildChild, /from voice_lab_gpt_sovits_build import build_candidate/);
 });
 
-test("trained voice approval requires audible review and affirmative human quality confirmation", () => {
+test("native approval requires audible review and affirmative human quality confirmation", () => {
   assert.match(ui, /qualityConfirmed = \$state\(false\)/);
   assert.match(ui, /!evaluationReviewComplete \|\| !qualityConfirmed/);
   assert.match(ui, /myVoiceBuildApi\.approve\(reviewedLineIds, qualityConfirmed, build\.evaluation_review_id\)/);
   assert.match(bridge, /reviewedLineIds,\s*qualityConfirmed,\s*reviewId,/);
   assert.match(mutations, /approve_voice_lab_candidate\(reviewed_line_ids, quality_confirmed, review_id\)/);
-  assert.match(actor, /if !evaluation_review_complete\(&evaluation, &reviewed_line_ids\)/);
-  assert.match(actor, /if !quality_confirmed\s*\{\s*return result\(\s*false,\s*"evaluation_quality_confirmation_required"/);
-  assert.ok(actor.indexOf("if !quality_confirmed") < actor.indexOf("match promote_voice_actor_candidate"));
+  assert.match(nativeReview, /!quality_confirmed \|\| reviewed\.len\(\) != HELD_OUT_LINES\.len\(\)/);
+  assert.match(nativeReview, /verify_review\(paths, review_id\)\?/);
+  assert.match(actor, /native_review::approved_payload/);
   assert.match(ui, /Create Another Candidate/);
 });
 
@@ -252,18 +247,18 @@ test("guided take offers conservative replay advice without changing the approve
 });
 
 test("My Voice listening and approval require the same synthesized review identity", () => {
-  assert.match(status, /evaluation_review_id: evaluation\.as_ref\(\)\.map\(/);
+  assert.match(status, /evaluation_review_id: native_evaluation\.as_ref\(\)\.map\(/);
   assert.match(ui, /build\.evaluation_review_id !== next\.evaluation_review_id/);
   assert.match(ui, /myVoiceBuildApi\.getEvaluationAudio\(lineId, reviewId, expectedSha256\)/);
   assert.match(bridge, /get_voice_lab_evaluation_audio", \{ lineId, reviewId \}/);
-  assert.match(actor, /if review_id != evaluation\.review_id/);
-  assert.match(actor, /if review_id != manifest\.review_id/);
+  assert.match(nativeReview, /hex\(&hash\(&bytes\)\) != review_id/);
+  assert.match(nativeReview, /completion_matches\(paths, review_id\)/);
 });
 
 test("review playback hashes the actual returned WAV and never accepts a stale clip", () => {
-  assert.match(synthesis, /"sha256": str\(sample\["sha256"\]\)/);
+  assert.match(nativeReview, /wav_sha256: hash\(&s\.wav\)/);
   assert.match(evaluation, /pub sha256: String/);
-  assert.match(evaluation, /!valid_sha256\(&sample\.sha256\)/);
+  assert.match(nativeReview, /verified_bytes\(&sample_path\(root, line_id\), MAX_SAMPLE, &sample\.wav_sha256\)/);
   assert.match(bridge, /subtle\.digest\("SHA-256", bytes\)/);
   assert.match(bridge, /actual === expectedSha256 \? bytes : null/);
   assert.match(ui, /sample\.line_id === lineId\)\?\.sha256/);
@@ -341,7 +336,7 @@ test("My Voice keeps audio load feedback separate from verified playback and inv
 test("native Create and Improve use the same build lifecycle and cannot approve an incomplete profile", () => {
   const nativeBuild = readFileSync(new URL("../../src-tauri/src/commands/voice_lab_build/native_build.rs", import.meta.url), "utf8");
   const nativeReview = readFileSync(new URL("../../src-tauri/src/commands/voice_lab_build/native_review.rs", import.meta.url), "utf8");
-  assert.match(status, /return native_build::start\(current, selected_archives\);/);
+  assert.match(status, /native_build::start\(current, selected_archives\)/);
   assert.match(nativeBuild, /prepare_guided_dataset_from_archives/);
   assert.match(nativeBuild, /prepare_guided_dataset\(/);
   assert.match(nativeBuild, /mark_native_voice_evaluating\(generation\)/);

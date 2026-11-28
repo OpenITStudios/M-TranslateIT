@@ -70,5 +70,5 @@ test("no on-device model change, extra inference dependency or aggressive qualit
   const build = rust("voice_lab_build.rs");
   assert.match(build, /let recording_suggestions = guided_recording_recommendations/);
   assert.match(build, /can_build: !snapshot\.active/);
-  assert.match(build, /minimum_duration_ms: if native_candidate \{ 2 \* MIN_REFERENCE_MS \} else \{ MIN_TRAINING_SPEECH_MS \}/);
+  assert.match(build, /minimum_duration_ms: 2 \* MIN_REFERENCE_MS/);
 });

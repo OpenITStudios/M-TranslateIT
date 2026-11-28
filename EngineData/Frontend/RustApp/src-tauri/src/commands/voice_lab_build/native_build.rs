@@ -47,14 +47,13 @@ pub(super) fn start(current: VoiceLabBuildStatus, archive_ids: Option<Vec<String
             Ok(process) => process,
             Err(_) => { let _ = fail_voice_lab_build(generation); return result(false, "build_blocked", "My Voice cleanup state is unavailable."); }
         };
-        if process.generation.is_some() || process.pid.is_some() || process.owned_job.is_some() {
+        if process.generation.is_some() {
             drop(process);
             let _ = fail_voice_lab_build(generation);
             return result(false, "build_blocked", "Previous My Voice cleanup is incomplete.");
         }
         process.generation = Some(generation);
         process.terminal_message.clear();
-        process.cancel_requested_at = None;
     }
     let spawned = std::thread::Builder::new().name("my-voice-build".into()).spawn(move || {
         let outcome = run(&paths, generation, selection);
@@ -69,7 +68,6 @@ pub(super) fn start(current: VoiceLabBuildStatus, archive_ids: Option<Vec<String
             if process.generation == Some(generation) {
                 process.generation = None;
                 process.terminal_message = message;
-                process.cancel_requested_at = None;
             }
         }
         emit_voice_build_runtime_event(reason, generation);

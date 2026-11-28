@@ -8,7 +8,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const rust = (p: string) => readFileSync(resolve(root, "src-tauri/src/commands/" + p), "utf8");
 const ui = (p: string) => readFileSync(resolve(root, "src/" + p), "utf8");
 
-test("archive improvement is a separate user-authorized intent on the original GPT-SoVITS build owner", () => {
+test("archive improvement is a separate user-authorized intent on the native build owner", () => {
   const build = rust("voice_lab_build.rs");
   const source = rust("voice_lab/storage/archive_dataset.rs");
   const worker = rust("voice_lab/storage/dataset_history.rs");
@@ -19,11 +19,12 @@ test("archive improvement is a separate user-authorized intent on the original G
   assert.match(wrapper, /emit_after\(&app, "start_voice_improvement"/);
   assert.match(build, /pub fn start_voice_lab_improvement/);
   assert.match(build, /start_voice_lab_build_selected\(authorized_voice_confirmed, Some\(archive_ids\)\)/);
-  assert.match(build, /missing_training_coverage_group\(&selection.takes\)/);
-  assert.match(build, /selection.duration_ms < MIN_TRAINING_SPEECH_MS/);
-  assert.match(build, /selection.reference_ready/);
-  assert.match(build, /prepare_guided_dataset_from_archives\(/);
-  assert.match(build, /reviewable_evaluation\(&paths\)/);
+  const native = rust("voice_lab_build/native_build.rs");
+  assert.match(build, /native_build::start\(current, selected_archives\)/);
+  assert.match(native, /choose_archived_takes\(/);
+  assert.match(native, /prepare_guided_dataset_from_archives\(/);
+  assert.match(native, /native_evaluation::evaluate/);
+  assert.doesNotMatch(build, /MIN_TRAINING_SPEECH_MS|missing_training_coverage_group/);
   assert.match(source, /const MAX_SELECTED_TAKES: usize = 128/);
   assert.match(source, /improvement_one_recording_per_line/);
   assert.match(source, /improvement_transcript_mismatch/);
@@ -32,7 +33,7 @@ test("archive improvement is a separate user-authorized intent on the original G
 });
 
 test("existing held-out approval follows exact frozen immutable audio for archive rebuilds", () => {
-  const evaluation = rust("voice_lab_build/evaluation.rs");
+  const evaluation = rust("voice_lab_build/native_review.rs");
   const snapshot = rust("voice_lab/storage/dataset_history.rs");
   const archive = rust("voice_lab/storage/recording_archive.rs");
   assert.match(evaluation, /archived_frozen_review_matches\(paths\)/);
@@ -43,7 +44,7 @@ test("existing held-out approval follows exact frozen immutable audio for archiv
   assert.match(snapshot, /verify_saved_take_binding/);
   assert.match(archive, /archived_take_for_training/);
   assert.match(snapshot, /archived_frozen_review_matches/);
-  assert.match(evaluation, /candidate_selection_matches_actor_json/);
+  assert.match(evaluation, /verify_source\(paths, &manifest\)\?/);
 });
 
 test("UI selects one saved version of each sentence, and uncertain builds never claim success", () => {
