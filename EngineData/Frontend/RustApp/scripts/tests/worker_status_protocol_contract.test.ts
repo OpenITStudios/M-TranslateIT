@@ -133,3 +133,32 @@ test("candidate readiness updates runtime directly and emits JSON only for expli
   assert.match(startup, /project_candidate_status\(&mut runtime, false\)/);
   assert.match(native, /project_candidate_status\(&mut host, true\)/);
 });
+
+test("functional preparation refreshes capability inside the bind permit without a separate status task", () => {
+  const native = readFileSync(new URL("../../src-tauri/src/commands/helper_bridge/transport/native.rs", import.meta.url), "utf8");
+  const probe = readFileSync(new URL("../../src-tauri/src/commands/helper_bridge/functional_probe.rs", import.meta.url), "utf8");
+  const bind = native.slice(native.indexOf("let reference = if is_bind {"), native.indexOf("if host.native_inference.is_none()"));
+  const refresh = bind.indexOf("project_candidate_status(&mut host, false)");
+  const gate = bind.indexOf("if !host.provider_ready");
+  const previous = bind.indexOf("let previous_device");
+  const close = bind.indexOf("host.release_idle_native_inference()");
+  const reference = bind.indexOf("selected_native_reference(&paths)");
+  const scopeBeforeRelease = bind.indexOf("!scope_is_current(&request_scope)");
+  const scope = bind.indexOf("!scope_is_current(&request_scope)", reference);
+  const open = bind.indexOf("NativeInferenceOwner::open_voice_candidate(");
+  const compare = bind.indexOf("observed != owner.owner.device_id()");
+  const retain = bind.indexOf("host.native_inference = Some(owner)");
+  const reject = bind.indexOf("if device_changed");
+  assert.ok(refresh >= 0 && refresh < gate && gate < scopeBeforeRelease
+    && scopeBeforeRelease < previous && previous < close
+    && close < reference && reference < scope && scope < open && open < compare
+    && compare < retain && retain < reject);
+  assert.match(bind.slice(reject), /host\.provider_ready = false;[\s\S]*invalidate_required_outbound_ai_readiness\(\);[\s\S]*return fail\("native_inference:cuda_device_changed"/);
+  assert.doesNotMatch(probe, /send_worker_task\(\s*"status"/);
+  assert.match(probe, /response\.state == "ready" && response\.generation_token != 0/);
+  assert.match(probe, /let generation_token = preparation\.generation_token/);
+  for (const stage of ["translation", "voice", "asr_inference"]) {
+    assert.match(probe, new RegExp("same_probe_inference\\(&" + stage + ", generation_token, native_device\\)"));
+  }
+  assert.match(probe, /current\.generation_token != generation_token/);
+});

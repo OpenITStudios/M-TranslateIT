@@ -233,7 +233,7 @@ test("worker restart admission is native, generation-scoped, and updater-safe", 
 test("Meeting Stop helper cancellation is bounded and only its matching retry may reap retained resources", () => {
   const cancel = helper.slice(
     helper.indexOf("pub fn cancel_helper_bridge_meeting_session("),
-    helper.indexOf("// Worker status probes"),
+    helper.indexOf("pub async fn helper_bridge_worker_status("),
   );
   assert.match(cancel, /if session_id\.is_empty\(\) \{/);
   assert.match(cancel, /clear_meeting_outbound_pipeline_for_session\(session_id\)/);

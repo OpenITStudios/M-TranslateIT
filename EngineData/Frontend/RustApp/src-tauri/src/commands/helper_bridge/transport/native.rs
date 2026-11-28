@@ -300,7 +300,22 @@ pub(super) fn dispatch(
         return fail("native_voice:preparation_required", "Voice preparation and probe PCM require preparation authority.");
     }
     let reference = if is_bind {
-        if !host.provider_ready { return fail("native_voice:owner_not_ready", "Prepare the admitted helper first."); }
+        // Refresh the same current capability facts inside the bind permit.
+        // No separate status receipt, scheduler turn or stale provider reuse.
+        let _ = crate::commands::helper_bridge_runtime::project_candidate_status(&mut host, false);
+        if !host.provider_ready {
+            return fail(host.last_error.as_deref().unwrap_or("native_voice:owner_not_ready"),
+                "Current native voice preparation prerequisites are unavailable.");
+        }
+        // The capability scan may have taken time. Do not release an idle
+        // owner for preparation whose authority or budget has since expired.
+        if !scope_is_current(&request_scope) || Instant::now() >= deadline {
+            return fail("native_voice:scope_revoked", "Voice preparation authority expired.");
+        }
+        // Preserve the device identity check that previously compared the
+        // separate status receipt with the bind receipt.
+        let previous_device = host.native_inference.as_ref()
+            .map(|native| native.owner.device_id().to_owned());
         // A stale idle Text pair has no voice context. Release it through the
         // existing cleanup owner before opening the exact five-asset closure.
         if host.native_inference.is_some() && !host.release_idle_native_inference() {
@@ -315,7 +330,20 @@ pub(super) fn dispatch(
             return fail("native_voice:scope_revoked", "Voice preparation authority expired.");
         }
         match unsafe { crate::commands::helper_bridge_runtime::NativeInferenceOwner::open_voice_candidate(request_scope.session_id.clone()) } {
-            Ok(owner) => { host.native_inference = Some(owner); host.cuda_ready = true; }
+            Ok(owner) => {
+                let device_changed = previous_device.as_deref()
+                    .is_some_and(|observed| observed != owner.owner.device_id());
+                // Retain exact ownership for rollback even if the device changed.
+                host.native_inference = Some(owner);
+                if device_changed {
+                    host.provider_ready = false;
+                    host.cuda_ready = false;
+                    host.last_error = Some("native_inference:cuda_device_changed".into());
+                    invalidate_required_outbound_ai_readiness();
+                    return fail("native_inference:cuda_device_changed", "Native CUDA device changed during voice preparation.");
+                }
+                host.cuda_ready = true;
+            }
             Err(error) => {
                 let (blocker, _) = error_blocker(error, task);
                 host.provider_ready = false;

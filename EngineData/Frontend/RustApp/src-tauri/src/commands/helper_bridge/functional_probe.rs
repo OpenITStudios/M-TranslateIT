@@ -9,7 +9,7 @@ use super::functional_readiness::{
 use super::{
     get_helper_bridge_status, meeting_asr_compute_admitted,
     meeting_translation_compute_admitted, send_worker_task, worker_text,
-    HelperBridgeWorkerResponse, NATIVE_INFERENCE_CLAIM, NATIVE_STATUS_CLAIM,
+    HelperBridgeWorkerResponse, NATIVE_INFERENCE_CLAIM,
 };
 
 const REQUIRED_OUTBOUND_FUNCTIONAL_ID_FIXTURE: &str = "selamat pagi";
@@ -26,6 +26,7 @@ fn same_probe_inference(response: &HelperBridgeWorkerResponse, generation: u64,
 fn native_binding_compute_admitted(response: &HelperBridgeWorkerResponse) -> bool {
     let body = &response.worker_response_json;
     response.ok && response.task == "voice_actor_preflight"
+        && response.state == "ready" && response.generation_token != 0
         && response.runtime_claim == NATIVE_INFERENCE_CLAIM
         && body.get("stage").and_then(Value::as_str) == Some("voice_actor_preflight")
         && body.get("device").and_then(Value::as_str) == Some("cuda")
@@ -46,50 +47,27 @@ pub(super) fn run_required_outbound_ai_probe(
     }
     let meeting_start_prepare = meeting_generation.is_some();
 
-    // Refresh cheap capability truth first so a newly approved/rebuilt My Voice is
-    // visible to explicit setup checks and to the generation-bound Meeting probe.
-    let refreshed = send_worker_task(
-        "status",
-        json!({
-            "meeting_start_prepare": meeting_start_prepare,
-            "meeting_generation": meeting_generation,
-        }),
-    );
-    if !refreshed.ok {
-        invalidate_required_outbound_ai_readiness();
-        return Err("local translation runtime");
-    }
-    if refreshed.runtime_claim != NATIVE_STATUS_CLAIM {
-        invalidate_required_outbound_ai_readiness();
-        return Err("native CUDA capability");
-    }
-    let helper = get_helper_bridge_status();
-    if helper.state != "ready" || !helper.provider_ready || helper.generation_token == 0
-        || refreshed.generation_token != helper.generation_token
-    {
-        invalidate_required_outbound_ai_readiness();
-        return Err("local translation runtime");
-    }
-    let generation_token = helper.generation_token;
-
+    // The bind request refreshes capability under its own admitted lifecycle
+    // lock, then verifies exact assets and the selected reference. The
+    // resulting native receipt establishes the helper generation for the probe.
     let preparation = super::transport::bind_native_voice(json!({
         "meeting_start_prepare": meeting_start_prepare,
         "meeting_generation": meeting_generation,
     }));
+    if !native_binding_compute_admitted(&preparation) {
+        invalidate_required_outbound_ai_readiness();
+        return Err("native selected voice");
+    }
     let Some(native_device) = preparation.worker_response_json.get("cuda_pci_id").and_then(Value::as_str)
         .filter(|pci| !pci.is_empty()) else {
         invalidate_required_outbound_ai_readiness();
         return Err("native CUDA identity");
     };
-    let preparation_valid = native_binding_compute_admitted(&preparation);
-    if !same_probe_inference(&preparation, generation_token, native_device)
-        || !preparation_valid
-        || refreshed.worker_response_json.get("cuda_pci_id").and_then(Value::as_str)
-            .is_some_and(|observed| observed != native_device)
-    {
+    let generation_token = preparation.generation_token;
+    let Some(actor_token) = worker_text(&preparation.worker_response_json, "actor_token") else {
         invalidate_required_outbound_ai_readiness();
-        return Err("native selected voice");
-    }
+        return Err("My Voice");
+    };
 
     let translation = send_worker_task(
         "translate",
@@ -109,19 +87,6 @@ pub(super) fn run_required_outbound_ai_probe(
     let Some(translated_fixture) = functional_translation_output(&translation) else {
         invalidate_required_outbound_ai_readiness();
         return Err("Indonesian to English translation");
-    };
-
-    let actor_preflight = &preparation;
-    if !actor_preflight.ok || actor_preflight.generation_token != generation_token
-        || actor_preflight.task != "voice_actor_preflight"
-        || actor_preflight.worker_response_json.get("stage").and_then(Value::as_str) != Some("voice_actor_preflight")
-    {
-        invalidate_required_outbound_ai_readiness();
-        return Err("My Voice");
-    }
-    let Some(actor_token) = worker_text(&actor_preflight.worker_response_json, "actor_token") else {
-        invalidate_required_outbound_ai_readiness();
-        return Err("My Voice");
     };
 
     let (voice, samples) = super::transport::synthesize_native_voice(json!({
@@ -183,6 +148,12 @@ mod tests {
                 "model_id":"zonos3-mini-q8_0","actor_token":"bound","cuda_pci_id":"0000:01:00.0"}),
         };
         assert!(super::native_binding_compute_admitted(&receipt));
+        receipt.generation_token = 0;
+        assert!(!super::native_binding_compute_admitted(&receipt));
+        receipt.generation_token = 7;
+        receipt.state = "blocked".into();
+        assert!(!super::native_binding_compute_admitted(&receipt));
+        receipt.state = "ready".into();
         for (key, bad) in [("stage", json!("asr_preload")), ("device", json!("cpu")),
             ("model_id", json!("other")), ("actor_token", json!(""))] {
             let original = receipt.worker_response_json[key].clone();
