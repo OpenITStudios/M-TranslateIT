@@ -36,7 +36,7 @@ use functional_readiness::{
     remember_required_outbound_functional_readiness,
 };
 pub use functional_readiness::required_outbound_voice_actor_token;
-pub(crate) use request_policy::meeting_outbound_pipeline_active;
+pub(crate) use request_policy::{meeting_outbound_pipeline_active, OutboundPipelineRelease};
 use request_policy::{
     clear_any_meeting_outbound_pipeline, clear_meeting_outbound_pipeline_for_session,
     live_outbound_generation_is_authoritative,

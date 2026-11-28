@@ -14,7 +14,7 @@ use super::committed_turns::{
 };
 use super::super::helper_bridge::{
     required_outbound_voice_actor_token, send_helper_worker_pcm_task, send_helper_worker_task,
-    send_helper_meeting_translation,
+    send_helper_meeting_translation, OutboundPipelineRelease,
     native_voice_candidate_enabled, synthesize_native_voice, native_voice_pcm_receipt_matches,
 };
 use crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance;
@@ -368,6 +368,9 @@ pub(super) fn process_outbound_pcm(
         return stale_outbound_result(generation, session_id, event_sequence, utterance_id);
     }
 
+    // Exactly one serialized outbound utterance owns this scope. Release
+    // its generation marker even when ASR/MT succeeds but later promotion fails.
+    let _pipeline_release = OutboundPipelineRelease::new(generation);
     update_outbound_status(
         generation,
         session_id,

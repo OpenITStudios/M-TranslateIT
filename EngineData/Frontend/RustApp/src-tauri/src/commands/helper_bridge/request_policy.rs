@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::engine::audio::finalized_utterance::wake_incoming_consumer;
 
 use crate::engine::runtime_state::{
-    latest_runtime_session_state, runtime_generation_is_authoritative,
+    latest_runtime_session_state, runtime_generation_is_authoritative, runtime_generation_matches_epoch,
     RuntimeSessionSnapshot, APPLICATION_MEETING_OWNER_ID,
 };
 
@@ -56,13 +56,29 @@ pub(super) fn meeting_start_prepare(payload: &Value) -> bool {
 }
 
 pub(crate) fn meeting_outbound_pipeline_active() -> bool {
-    MEETING_OUTBOUND_PIPELINE_GENERATION.load(Ordering::Acquire) != 0
+    runtime_generation_matches_epoch(MEETING_OUTBOUND_PIPELINE_GENERATION.load(Ordering::Acquire))
 }
 
 pub(super) fn mark_meeting_outbound_pipeline(generation: u64) {
-    if generation != 0 {
-        MEETING_OUTBOUND_PIPELINE_GENERATION.store(generation, Ordering::Release);
-    }
+    // A delayed older request must never overwrite a newer Meeting's mark.
+    let _ = MEETING_OUTBOUND_PIPELINE_GENERATION.fetch_update(
+        Ordering::AcqRel, Ordering::Acquire,
+        |current| (current <= generation && runtime_generation_matches_epoch(generation))
+            .then_some(generation),
+    );
+}
+
+// Transport releases the marker at TTS completion/failure. The serialized
+// utterance owner also guarantees release when it exits between worker stages,
+// e.g. after a source change, invalid receipt or failed transcript commit.
+pub(crate) struct OutboundPipelineRelease(u64);
+
+impl OutboundPipelineRelease {
+    pub(crate) fn new(generation: u64) -> Self { Self(generation) }
+}
+
+impl Drop for OutboundPipelineRelease {
+    fn drop(&mut self) { clear_meeting_outbound_pipeline(self.0); }
 }
 
 pub(super) fn clear_meeting_outbound_pipeline(generation: u64) {
@@ -216,6 +232,41 @@ mod scoped_cancellation_tests {
             &json!({"meeting_lane":" INCOMING ","meeting_session_id":" s "}));
         assert_eq!(incoming.lane.as_deref(), Some("incoming"));
         assert_eq!(incoming.session_id.as_deref(), Some("s"));
+    }
+
+    #[test]
+    fn utterance_exit_releases_priority_and_stale_claim_cannot_replace_current() {
+        use super::{clear_any_meeting_outbound_pipeline, mark_meeting_outbound_pipeline,
+            meeting_outbound_pipeline_active, OutboundPipelineRelease, MEETING_OUTBOUND_PIPELINE_GENERATION};
+        use std::sync::atomic::Ordering;
+        use crate::engine::runtime_state::{begin_application_meeting_session,
+            clear_runtime_session_if_generation, clear_runtime_session_state};
+        let _serial = crate::engine::runtime_state::runtime_test_guard();
+        let _ = clear_runtime_session_state();
+        clear_any_meeting_outbound_pipeline();
+        let old = begin_application_meeting_session().snapshot.unwrap().generation;
+        {
+            let _release = OutboundPipelineRelease::new(old);
+            mark_meeting_outbound_pipeline(old);
+            assert!(meeting_outbound_pipeline_active());
+            // Simulate an early return after successful ASR, before TTS.
+        }
+        assert!(!meeting_outbound_pipeline_active());
+        assert_eq!(MEETING_OUTBOUND_PIPELINE_GENERATION.load(Ordering::Acquire), 0);
+
+        let _ = clear_runtime_session_if_generation(old);
+        let current = begin_application_meeting_session().snapshot.unwrap().generation;
+        {
+            let _release = OutboundPipelineRelease::new(current);
+            mark_meeting_outbound_pipeline(current);
+            mark_meeting_outbound_pipeline(old);
+            drop(OutboundPipelineRelease::new(old));
+            assert_eq!(MEETING_OUTBOUND_PIPELINE_GENERATION.load(Ordering::Acquire), current);
+            assert!(meeting_outbound_pipeline_active());
+        }
+        assert!(!meeting_outbound_pipeline_active());
+        let _ = clear_runtime_session_if_generation(current);
+        clear_any_meeting_outbound_pipeline();
     }
 
     #[test]

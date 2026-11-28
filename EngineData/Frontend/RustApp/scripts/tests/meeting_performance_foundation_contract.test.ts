@@ -147,3 +147,12 @@ test("native output cancellation wakes the existing completion channel", () => {
   assert.match(output, /!runtime_generation_matches_epoch\(self\.generation\)/);
   assert.match(output, /release_output_stream\(stream, generation\)/);
 });
+
+test("outbound priority cannot survive an early utterance return", () => {
+  const policy = source("src-tauri/src/commands/helper_bridge/request_policy.rs");
+  const scope = outbound.slice(outbound.indexOf("pub(super) fn process_outbound_pcm("));
+  assert.ok(scope.indexOf("OutboundPipelineRelease::new(generation)") >= 0);
+  assert.ok(scope.indexOf("OutboundPipelineRelease::new(generation)") < scope.indexOf("send_helper_worker_pcm_task("));
+  assert.match(policy, /impl Drop for OutboundPipelineRelease \{[\s\S]*?clear_meeting_outbound_pipeline\(self\.0\)/);
+  assert.match(policy, /current <= generation && runtime_generation_matches_epoch\(generation\)/);
+});
