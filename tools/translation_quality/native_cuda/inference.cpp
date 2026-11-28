@@ -213,7 +213,8 @@ struct decoder {
 };
 
 int32_t open_decoder(decoder & d, const char * path, ggml_backend_dev_t device,
-                     const char * expected_arch, bool audio_generation = false) {
+                     const char * expected_arch, bool audio_generation = false,
+                     uint32_t max_outputs = 0) {
     ggml_backend_dev_t devices[] = {device, nullptr};
     auto model_params = llama_model_default_params();
     model_params.devices = devices;
@@ -234,6 +235,7 @@ int32_t open_decoder(decoder & d, const char * path, ggml_backend_dev_t device,
     params.n_batch = k_batch;
     params.n_ubatch = k_batch;
     params.n_seq_max = 1;
+    params.n_outputs_max = max_outputs;
     params.n_threads = 4;
     params.n_threads_batch = 4;
     params.offload_kqv = true;
@@ -578,7 +580,10 @@ static int32_t open_mt(const char * model_path, ggml_backend_dev_t device, ti_mt
     if (!model_path || !*model_path || !device) return TI_INVALID_INPUT;
     try {
         auto mt = std::make_unique<ti_mt>();
-        const auto status = open_decoder(*mt, model_path, device, "hunyuan-dense");
+        // MT prefill requests logits only for the final input token, and
+        // generation requests one row per decode. Reserve graph outputs
+        // for that contract, not for the whole 256-token input batch.
+        const auto status = open_decoder(*mt, model_path, device, "hunyuan-dense", false, 1);
         if (status != TI_OK) return status;
         const auto * vocab = llama_model_get_vocab(mt->model.get());
         // Verify publisher control markers resolve to single native tokens,
