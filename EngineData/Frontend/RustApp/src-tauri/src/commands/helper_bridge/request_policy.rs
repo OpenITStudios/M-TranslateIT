@@ -1,4 +1,6 @@
 use serde_json::Value;
+use std::borrow::Cow;
+use super::super::meeting_session::MeetingTurnIdentity;
 use std::sync::atomic::{AtomicU64, Ordering};
 use crate::engine::audio::finalized_utterance::wake_incoming_consumer;
 
@@ -151,17 +153,17 @@ pub(super) fn incoming_session_generation(session_id: &str) -> Option<u64> {
 
 // Scheduling metadata is parsed once per request. It is not a live
 // authority receipt: the transport still checks current session/generation.
-pub(super) struct RequestAdmission {
+pub(super) struct RequestAdmission<'a> {
     pub(super) priority: HelperTaskPriority,
     pub(super) generation: Option<u64>,
-    pub(super) session_id: Option<String>,
+    pub(super) session_id: Option<Cow<'a, str>>,
     pub(super) lane: Option<&'static str>,
 }
 
-impl RequestAdmission {
+impl<'a> RequestAdmission<'a> {
     pub(super) fn from_payload(task: &str, payload: &Value) -> Self {
         let generation = meeting_generation(payload);
-        let session_id = meeting_session_id(payload);
+        let session_id = meeting_session_id(payload).map(Cow::Owned);
         let lane = meeting_lane(payload);
         let priority = if generation.is_some() || meeting_start_prepare(payload) {
             HelperTaskPriority::MeetingOutbound
@@ -175,6 +177,15 @@ impl RequestAdmission {
         Self { priority, generation, session_id, lane }
     }
 
+    pub(super) fn from_meeting(turn: MeetingTurnIdentity<'a>) -> Self {
+        Self {
+            priority: if turn.generation.is_some() { HelperTaskPriority::MeetingOutbound } else { HelperTaskPriority::MeetingIncoming },
+            generation: turn.generation,
+            session_id: Some(Cow::Borrowed(turn.session_id)),
+            lane: Some(turn.lane()),
+        }
+    }
+
     pub(super) fn outbound_generation(&self) -> Option<u64> {
         if self.priority == HelperTaskPriority::MeetingOutbound && self.lane == Some("you") {
             self.generation
@@ -182,10 +193,6 @@ impl RequestAdmission {
             None
         }
     }
-}
-
-pub(super) fn task_priority(task: &str, payload: &Value) -> HelperTaskPriority {
-    RequestAdmission::from_payload(task, payload).priority
 }
 
 #[cfg(test)]
@@ -230,6 +237,24 @@ mod scoped_cancellation_tests {
             &json!({"meeting_lane":" INCOMING ","meeting_session_id":" s "}));
         assert_eq!(incoming.lane, Some("incoming"));
         assert_eq!(incoming.session_id.as_deref(), Some("s"));
+    }
+
+    #[test]
+    fn typed_meeting_admission_borrows_exact_session_and_preserves_priority() {
+        let turn = super::MeetingTurnIdentity {
+            session_id: "meeting-1", generation: Some(41), event_sequence: 7, utterance_id: 8,
+        };
+        let outbound = RequestAdmission::from_meeting(turn);
+        assert_eq!(outbound.priority, HelperTaskPriority::MeetingOutbound);
+        assert_eq!(outbound.outbound_generation(), Some(41));
+        assert!(matches!(outbound.session_id, Some(std::borrow::Cow::Borrowed("meeting-1"))));
+        let incoming = RequestAdmission::from_meeting(super::MeetingTurnIdentity { generation: None, ..turn });
+        assert_eq!(incoming.priority, HelperTaskPriority::MeetingIncoming);
+        assert_eq!(incoming.lane, Some("incoming"));
+        assert_eq!(incoming.outbound_generation(), None);
+        assert!(turn.is_valid());
+        assert!(!(super::MeetingTurnIdentity { event_sequence: 0, ..turn }).is_valid());
+        assert!(!(super::MeetingTurnIdentity { utterance_id: 0, ..turn }).is_valid());
     }
 
     #[test]

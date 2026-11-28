@@ -119,12 +119,12 @@ test("P11 protects worker, final transcript and native playback without a second
   const asr = pcm.indexOf("send_helper_worker_pcm_task(");
   assert.ok(asrGuard >= 0 && asr > asrGuard);
   const pipeline = outbound.slice(transcriptStart);
-  for (const dispatch of ["let translation = send_helper_meeting_translation(", "let (tts, native_pcm) = synthesize_native_voice("]) {
+  for (const dispatch of ["let translation = send_helper_meeting_translation(", "let (tts, native_pcm) = synthesize_meeting_voice("]) {
     const call = pipeline.indexOf(dispatch);
     const guard = pipeline.lastIndexOf("!super::local_translated_meeting_route_admitted()", call);
     assert.ok(call >= 0 && guard >= 0 && call > guard, dispatch);
   }
-  assert.ok(pipeline.indexOf("let (tts, native_pcm) = synthesize_native_voice(") >
+  assert.ok(pipeline.indexOf("let (tts, native_pcm) = synthesize_meeting_voice(") >
     pipeline.indexOf("let translation = send_helper_meeting_translation("));
   assert.match(outbound, /state: "engine_not_admitted"/);
   assert.match(outbound, /"meeting_outbound:codex_voice_not_admitted"/);
@@ -229,6 +229,11 @@ test("P12 preserves Original Microphone and limits incoming AI to the admitted L
     const dispatch = incoming.indexOf(dispatchName, start);
     assert.ok(start >= 0 && guard > start && dispatch > guard, `${dispatchName} requires Local admission`);
   }
+  // First ASR checks one combined settings/admission receipt; deferred
+  // ASR retains its captured direction and separately rechecks admission.
+  const asr = incoming.slice(incoming.indexOf("fn process_incoming_pcm_with_direction("), incoming.indexOf("let (asr, deferred_utterance) = send_helper_worker_pcm_task("));
+  assert.match(asr, /let \(settings, admission\) = load_settings_with_admission\(\);\s*if !super::local_translated_route_for_admission\(admission\)/);
+  assert.match(asr, /Some\(direction\) => \{\s*if !super::local_translated_meeting_route_admitted\(\)/);
   assert.match(committed, /if lane == "you" && !super::local_translated_meeting_route_admitted\(\)/);
   assert.match(incoming, /session_id, event_sequence, None, utterance_id, "incoming"/);
 });

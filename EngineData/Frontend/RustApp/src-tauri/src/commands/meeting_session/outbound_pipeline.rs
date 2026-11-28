@@ -14,7 +14,7 @@ use super::committed_turns::{
 use super::super::helper_bridge::{
     required_outbound_voice_actor_token, send_helper_worker_pcm_task,
     send_helper_meeting_translation, OutboundPipelineRelease,
-    synthesize_native_voice, native_voice_pcm_receipt_matches,
+    synthesize_meeting_voice, native_voice_pcm_receipt_matches,
 };
 use crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance;
 use super::{
@@ -174,7 +174,6 @@ pub(super) fn process_outbound_pcm(
     let session_id = utterance.session_id.as_str();
     let event_sequence = utterance.sequence;
     let utterance_id = utterance.utterance_id;
-    let speech_duration_ms = utterance.speech_duration_ms;
     // Defense in depth: a direct/late consumer request cannot invoke local
     // Whisper, MiLMMT or GPT-SoVITS for an unverified Codex preference,
     // even if an old Meeting generation was previously Live.
@@ -212,7 +211,7 @@ pub(super) fn process_outbound_pcm(
         session_id, generation: Some(generation), event_sequence, utterance_id,
     };
     let (asr, _) = send_helper_worker_pcm_task(
-        turn.worker_metadata(Some(speech_duration_ms)),
+        turn,
         "id",
         utterance,
         noise_suppression_enabled,
@@ -346,7 +345,7 @@ fn process_outbound_transcript(
     }
     let translation_started_at = Instant::now();
     let translation = send_helper_meeting_translation(
-        turn.worker_metadata(None),
+        turn,
         transcript, "id", "en", None,
     );
     timing.metrics.translation_ms = Some(elapsed_millis(translation_started_at, Instant::now()));
@@ -459,8 +458,8 @@ fn process_outbound_transcript(
         );
     }
     let tts_started_at = Instant::now();
-    let (tts, native_pcm) = synthesize_native_voice(
-        turn.worker_metadata(None), translated_text, &actor_token,
+    let (tts, native_pcm) = synthesize_meeting_voice(
+        turn, translated_text, &actor_token,
     );
     timing.metrics.tts_ms = Some(elapsed_millis(tts_started_at, Instant::now()));
     timing.metrics.tts_scheduler_wait_ms = super::worker_scheduler_wait_ms(&tts);

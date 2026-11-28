@@ -79,7 +79,7 @@ fn process_incoming_pcm_with_direction(
         session_id, generation: None, event_sequence, utterance_id,
     };
     let (asr, deferred_utterance) = send_helper_worker_pcm_task(
-        turn.worker_metadata(None),
+        turn,
         &source_language,
         utterance,
         noise_suppression_enabled,
@@ -228,7 +228,7 @@ fn translate_and_commit_incoming_transcript(
         "Final Meeting Sound transcript is being translated.",
     );
     let translation = send_helper_meeting_translation(
-        turn.worker_metadata(None),
+        turn,
         transcript.as_ref(), &source_language, &target_language, deferred_deadline,
     );
     if !incoming_session_is_eligible(session_id) {

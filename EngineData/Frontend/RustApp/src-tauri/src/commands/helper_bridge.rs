@@ -154,6 +154,10 @@ pub(crate) fn synthesize_native_voice(payload: Value, text: &str, actor_token: &
     transport::synthesize_native_voice(payload, text, actor_token)
 }
 
+pub(super) fn synthesize_meeting_voice(turn: super::meeting_session::MeetingTurnIdentity<'_>, text: &str, actor_token: &str) -> (HelperBridgeWorkerResponse, Option<Vec<f32>>) {
+    transport::synthesize_meeting_voice(turn, text, actor_token)
+}
+
 pub(crate) fn native_voice_pcm_receipt_matches(response: &HelperBridgeWorkerResponse,
                                               token: &str, samples: Option<&[f32]>) -> bool {
     let body = &response.worker_response_json;
@@ -171,23 +175,23 @@ pub(crate) fn native_voice_pcm_receipt_matches(response: &HelperBridgeWorkerResp
 }
 
 // Internal Meeting translation content stays borrowed until native admission.
-pub(crate) fn send_helper_meeting_translation(
-    payload: Value, source: &str, source_language: &str, target_language: &str,
+pub(super) fn send_helper_meeting_translation(
+    turn: super::meeting_session::MeetingTurnIdentity<'_>, source: &str, source_language: &str, target_language: &str,
     deferred_deadline: Option<std::time::Instant>,
 ) -> HelperBridgeWorkerResponse {
-    transport::send_meeting_translation(payload, source, source_language, target_language, deferred_deadline)
+    transport::send_meeting_translation(turn, source, source_language, target_language, deferred_deadline)
 }
 
 // Internal Meeting-only owned PCM handoff; PCM never enters JSON. Only
 // a pre-execution incoming deferral returns its original owned frame.
-pub(crate) fn send_helper_worker_pcm_task(
-    payload: Value,
+pub(super) fn send_helper_worker_pcm_task(
+    turn: super::meeting_session::MeetingTurnIdentity<'_>,
     language: &str,
     utterance: crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance,
     noise_suppression_enabled: bool,
     deferred_deadline: Option<std::time::Instant>,
 ) -> (HelperBridgeWorkerResponse, Option<crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance>) {
-    transport::send_worker_pcm_task(payload, language, utterance, noise_suppression_enabled, deferred_deadline)
+    transport::send_worker_pcm_task(turn, language, utterance, noise_suppression_enabled, deferred_deadline)
 }
 
 #[cfg(test)]

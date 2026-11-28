@@ -10,7 +10,7 @@ use crate::commands::helper_bridge::{
 use std::time::Duration;
 use translateit_native_cuda::{Error, InferenceInput, InferenceOutput, Language, MT_TOKEN_LIMIT};
 
-fn language(value: &Value, key: &str) -> Option<Language> {
+fn language(value: &RequestPayload<'_>, key: &str) -> Option<Language> {
     parse_language(value.get(key).and_then(Value::as_str)?)
 }
 
@@ -20,13 +20,6 @@ fn parse_language(code: &str) -> Option<Language> {
         "en" => Some(Language::English),
         _ => None,
     }
-}
-
-// A typed Meeting translation has exactly one source of model content.
-fn meeting_translation_metadata_only(payload: &Value) -> bool {
-    payload.is_object()
-        && ["text", "source_language", "target_language"].iter().all(|key| payload.get(*key).is_none())
-        && matches!(payload.get("meeting_lane").and_then(Value::as_str), Some("you" | "incoming"))
 }
 
 fn language_code(value: Language) -> &'static str {
@@ -116,6 +109,13 @@ fn scope_from_snapshot<'a>(payload: &Value, snapshot: Option<&'a RuntimeSessionS
         None | Some(Value::Null) => false,
         Some(value) => value.as_bool()?,
     };
+    scope_from_fields(generation, session, lane, prepare, snapshot)
+}
+
+fn scope_from_fields<'a>(
+    generation: Option<u64>, session: Option<&str>, lane: Option<&str>, prepare: bool,
+    snapshot: Option<&'a RuntimeSessionSnapshot>,
+) -> Option<(Option<u64>, Option<&'a str>, bool)> {
     if generation.is_none() && session.is_none() && lane.is_none() && !prepare {
         return snapshot.is_none().then_some((None, None, false));
     }
@@ -130,9 +130,18 @@ fn scope_from_snapshot<'a>(payload: &Value, snapshot: Option<&'a RuntimeSessionS
     matches.then_some((Some(snapshot.generation), Some(snapshot.session_id.as_str()), prepare))
 }
 
-fn scope(payload: &Value) -> Option<Scope> {
+fn request_scope_from_snapshot<'a>(payload: &RequestPayload<'_>, snapshot: Option<&'a RuntimeSessionSnapshot>) -> Option<(Option<u64>, Option<&'a str>, bool)> {
+    match payload {
+        RequestPayload::Json(payload) => scope_from_snapshot(payload, snapshot),
+        RequestPayload::Meeting(turn) if turn.is_valid() =>
+            scope_from_fields(turn.generation, Some(turn.session_id), Some(turn.lane()), false, snapshot),
+        RequestPayload::Meeting(_) => None,
+    }
+}
+
+fn scope(payload: &RequestPayload<'_>) -> Option<Scope> {
     observe_runtime_session(|snapshot| {
-        scope_from_snapshot(payload, snapshot).map(|(generation, session_id, prepare)| Scope {
+        request_scope_from_snapshot(payload, snapshot).map(|(generation, session_id, prepare)| Scope {
             generation, session_id: session_id.map(str::to_owned), prepare,
         })
     }).flatten()
@@ -207,7 +216,8 @@ pub(super) fn control(task: &str, payload: &Value, permit: &HelperTaskPermit, pr
     if (payload.get("meeting_start_prepare").and_then(Value::as_bool) == Some(true)
         || payload.get("meeting_generation").is_some_and(|value| !value.is_null())
         || payload.get("meeting_session_id").is_some_and(|value| !value.is_null()))
-        && !scope(payload).is_some_and(|scope| scope.generation == wait_generation)
+        && !observe_runtime_session(|snapshot| scope_from_snapshot(payload, snapshot)
+            .is_some_and(|(generation, _, _)| generation == wait_generation)).unwrap_or(false)
     {
         return standalone_blocked_response(task, request_id, priority, "error",
             "native_inference:scope_revoked", "Native control request has no current Meeting authority.");
@@ -242,7 +252,7 @@ pub(super) fn control(task: &str, payload: &Value, permit: &HelperTaskPermit, pr
 
 /// ASR/MT has one production route. Missing resources are terminal.
 pub(super) fn dispatch(
-    task: &str, payload: &mut Value, input: Option<MeetingInput<'_>>,
+    task: &str, payload: &mut RequestPayload<'_>, input: Option<MeetingInput<'_>>,
     mut voice: Option<NativeVoiceIo<'_>>,
     priority: HelperTaskPriority, permit: &HelperTaskPermit, deadline_ms: u128,
     admitted_lane: Option<&'static str>, wait_generation: Option<u64>,
@@ -255,17 +265,18 @@ pub(super) fn dispatch(
     let pcm = input.and_then(MeetingInput::pcm);
     let translation = input.and_then(MeetingInput::translation);
     let deferred_deadline = input.and_then(MeetingInput::deferred_deadline);
-    if input.is_some() && (voice.is_some()
+    let turn = match &*payload { RequestPayload::Meeting(turn) => Some(*turn), RequestPayload::Json(_) => None };
+    if input.is_some() && (turn.is_none() || voice.is_some()
         || !matches!((task, input), ("transcribe", Some(MeetingInput::Pcm(_)))
             | ("translate", Some(MeetingInput::Translation(_))))) {
         return fail("native_inference:typed_request_invalid", "Native Meeting input does not match its task.");
     }
-    if translation.is_some() && !meeting_translation_metadata_only(payload) {
-        return fail("translation:typed_request_invalid", "Native Meeting translation content must not enter JSON.");
-    }
     let is_bind = matches!(voice.as_ref(), Some(NativeVoiceIo::Bind));
     let is_voice = matches!(voice.as_ref(), Some(NativeVoiceIo::Synthesize { .. }));
     let is_probe_speech = matches!(voice.as_ref(), Some(NativeVoiceIo::ProbeSpeech(_)));
+    if turn.is_some() && input.is_none() && !(is_voice && turn.is_some_and(|turn| turn.generation.is_some())) {
+        return fail("native_inference:typed_request_invalid", "Meeting identity requires typed ASR, MT or outbound voice.");
+    }
     if voice.is_some() && (pcm.is_some()
         || !matches!((task, voice.as_ref()),
             ("voice_actor_preflight", Some(NativeVoiceIo::Bind))
@@ -508,7 +519,7 @@ pub(super) fn dispatch(
                 _ => return fail("native_voice:probe_pcm_invalid", "Native voice probe PCM could not be prepared."),
             }
         } else if let Some(pcm) = pcm {
-            if !pcm.matches(task, payload) {
+            if !turn.is_some_and(|turn| pcm.matches(turn)) {
                 return fail("asr:finalized_pcm_contract_invalid", "Finalized PCM identity is invalid.");
             }
             let started = Instant::now();
@@ -528,7 +539,7 @@ pub(super) fn dispatch(
         let source = match translation {
             Some(input) => input.source.to_owned(),
             None => {
-                let Some(Value::String(source)) = payload.as_object_mut().and_then(|object| object.remove("text")) else {
+                let Some(source) = payload.take_text() else {
                     return fail("translation:empty_text", "Translation source text is required.");
                 };
                 source
@@ -727,15 +738,33 @@ mod tests {
     }
 
     #[test]
-    fn typed_meeting_translation_rejects_duplicate_content_and_missing_lane() {
-        let metadata = json!({"meeting_lane":"you","meeting_session_id":"meeting-1","meeting_generation":41});
-        assert!(meeting_translation_metadata_only(&metadata));
-        for key in ["text", "source_language", "target_language"] {
-            let mut mixed = metadata.clone();
-            mixed[key] = Value::Null;
-            assert!(!meeting_translation_metadata_only(&mixed));
+    fn typed_meeting_scope_uses_the_same_exact_owner_rules_as_json_preparation() {
+        let current = snapshot();
+        let turn = MeetingTurnIdentity {
+            session_id: "meeting-1", generation: Some(41), event_sequence: 9, utterance_id: 8,
+        };
+        for identity in [turn, MeetingTurnIdentity { generation: None, ..turn }] {
+            let typed = RequestPayload::Meeting(identity);
+            let json = json!({"meeting_generation": identity.generation,
+                "meeting_session_id": identity.session_id, "meeting_lane": identity.lane()});
+            let mut revoked = current.clone();
+            revoked.authority_active = false;
+            let mut starting = current.clone();
+            starting.phase = "starting".into();
+            for observed in [None, Some(&current), Some(&revoked), Some(&starting)] {
+                assert_eq!(request_scope_from_snapshot(&typed, observed), scope_from_snapshot(&json, observed));
+            }
+            assert!(typed.get("text").is_none());
+            assert!(typed.get("source_language").is_none());
         }
-        assert!(!meeting_translation_metadata_only(&json!({})));
+        for invalid in [
+            MeetingTurnIdentity { session_id: "other", ..turn },
+            MeetingTurnIdentity { generation: Some(42), ..turn },
+            MeetingTurnIdentity { event_sequence: 0, ..turn },
+            MeetingTurnIdentity { utterance_id: 0, ..turn },
+        ] {
+            assert!(request_scope_from_snapshot(&RequestPayload::Meeting(invalid), Some(&current)).is_none());
+        }
         assert_eq!(parse_language("id"), Some(Language::Indonesian));
         assert_eq!(parse_language("en"), Some(Language::English));
         assert_eq!(parse_language("ID"), None);

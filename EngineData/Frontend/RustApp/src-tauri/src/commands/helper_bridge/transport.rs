@@ -8,14 +8,15 @@ use std::time::Instant;
 use crate::engine::audio::finalized_utterance::{finalized_asr_frame_rejection, FinalizedMeetingUtterance};
 
 use crate::engine::runtime_state::runtime_generation_is_authoritative;
+use super::super::meeting_session::MeetingTurnIdentity;
 
 use super::functional_readiness::{
     failed_required_outbound_task_invalidates_cache, invalidate_required_outbound_ai_readiness,
 };
 use super::request_policy::{
     clear_meeting_outbound_pipeline, incoming_session_generation,
-    mark_meeting_outbound_pipeline, meeting_generation,
-    meeting_outbound_pipeline_active, task_priority, RequestAdmission,
+    mark_meeting_outbound_pipeline,
+    meeting_outbound_pipeline_active, RequestAdmission,
 };
 use super::{
     incoming_deferred_for_required_outbound,
@@ -174,6 +175,36 @@ fn stale_meeting_request(
     stale.map(|stale| stale.response(task, request_id, priority))
 }
 
+// Live Meeting requests have no JSON metadata. Explicit preparation, status
+// and compatibility callers keep their existing JSON boundary.
+enum RequestPayload<'a> {
+    Meeting(MeetingTurnIdentity<'a>),
+    Json(Value),
+}
+
+impl<'a> RequestPayload<'a> {
+    fn admission(&self, task: &str) -> RequestAdmission<'a> {
+        match self {
+            Self::Meeting(turn) => RequestAdmission::from_meeting(*turn),
+            Self::Json(payload) => RequestAdmission::from_payload(task, payload),
+        }
+    }
+
+    #[cfg(windows)]
+    fn get(&self, key: &str) -> Option<&Value> {
+        match self { Self::Json(payload) => payload.get(key), Self::Meeting(_) => None }
+    }
+
+    #[cfg(windows)]
+    fn take_text(&mut self) -> Option<String> {
+        let Self::Json(payload) = self else { return None };
+        match payload.as_object_mut()?.remove("text")? {
+            Value::String(text) => Some(text),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct MeetingPcmInput<'a> {
     utterance: &'a RefCell<Option<FinalizedMeetingUtterance>>,
@@ -184,19 +215,15 @@ struct MeetingPcmInput<'a> {
 }
 
 impl MeetingPcmInput<'_> {
-    fn matches(&self, task: &str, payload: &Value) -> bool {
+    fn matches(&self, turn: MeetingTurnIdentity<'_>) -> bool {
         let slot = self.utterance.borrow();
         let Some(u) = slot.as_ref() else { return false; };
-        task == "transcribe"
-            && payload.get("audio_path").is_none()
-            && payload.get("language").is_none()
-            && payload.get("meeting_session_id").and_then(Value::as_str) == Some(u.session_id.as_str())
-            && payload.get("meeting_lane").and_then(Value::as_str) == Some(u.lane.as_str())
-            && payload.get("meeting_sequence").and_then(Value::as_u64) == Some(u.sequence)
-            && payload.get("utterance_id").and_then(Value::as_u64) == Some(u.utterance_id)
-            && meeting_generation(payload) == u.generation
-            && matches!(u.lane.as_str(), "you" | "incoming")
-            && ((u.lane == "you") == u.generation.is_some())
+        turn.is_valid()
+            && turn.session_id == u.session_id.as_str()
+            && turn.lane() == u.lane.as_str()
+            && turn.event_sequence == u.sequence
+            && turn.utterance_id == u.utterance_id
+            && turn.generation == u.generation
     }
 }
 
@@ -238,8 +265,8 @@ enum NativeVoiceIo<'a> {
     ProbeSpeech(Vec<f32>),
 }
 
-fn send_worker_task_inner(task: &str, mut payload: Value, input: Option<MeetingInput<'_>>,
-                          voice: Option<NativeVoiceIo<'_>>, admission: RequestAdmission,
+fn send_worker_task_inner(task: &str, mut payload: RequestPayload<'_>, input: Option<MeetingInput<'_>>,
+                          voice: Option<NativeVoiceIo<'_>>, admission: RequestAdmission<'_>,
                           wait_generation: Option<u64>) -> HelperBridgeWorkerResponse {
     let RequestAdmission { priority, generation: meeting_generation,
         session_id: meeting_session_id, lane: meeting_lane } = admission;
@@ -307,7 +334,12 @@ fn send_worker_task_inner(task: &str, mut payload: Value, input: Option<MeetingI
         );
     }
     #[cfg(windows)]
-    return native::control(task, &payload, &permit, priority, wait_generation, false);
+    if let RequestPayload::Json(payload) = &payload {
+        return native::control(task, payload, &permit, priority, wait_generation, false);
+    }
+    #[cfg(windows)]
+    return standalone_blocked_response(task, request_id, priority, "error",
+        "native_inference:typed_request_invalid", "Meeting identity requires a native inference task.");
     #[cfg(not(windows))]
     return standalone_blocked_response(task, request_id, priority, "error",
         "native_inference:platform_unsupported", "Native CUDA requires Windows.");
@@ -375,14 +407,22 @@ pub(super) fn observe_worker_status() -> HelperBridgeWorkerResponse {
 }
 
 pub(super) fn send_worker_task(task: &str, payload: Value) -> HelperBridgeWorkerResponse {
-    send_worker_task_with_input(task, payload, None, None)
+    send_worker_task_with_input(task, RequestPayload::Json(payload), None, None)
 }
 
 pub(super) fn bind_native_voice(payload: Value) -> HelperBridgeWorkerResponse {
-    send_worker_task_with_input("voice_actor_preflight", payload, None, Some(NativeVoiceIo::Bind))
+    send_worker_task_with_input("voice_actor_preflight", RequestPayload::Json(payload), None, Some(NativeVoiceIo::Bind))
 }
 
 pub(super) fn synthesize_native_voice(payload: Value, text: &str, actor_token: &str) -> (HelperBridgeWorkerResponse, Option<Vec<f32>>) {
+    synthesize_voice_request(RequestPayload::Json(payload), text, actor_token)
+}
+
+pub(super) fn synthesize_meeting_voice(turn: MeetingTurnIdentity<'_>, text: &str, actor_token: &str) -> (HelperBridgeWorkerResponse, Option<Vec<f32>>) {
+    synthesize_voice_request(RequestPayload::Meeting(turn), text, actor_token)
+}
+
+fn synthesize_voice_request(payload: RequestPayload<'_>, text: &str, actor_token: &str) -> (HelperBridgeWorkerResponse, Option<Vec<f32>>) {
     let mut samples = None;
     let response = send_worker_task_with_input("voice_actor_synthesize", payload, None,
         Some(NativeVoiceIo::Synthesize { text, actor_token, samples: &mut samples }));
@@ -391,19 +431,19 @@ pub(super) fn synthesize_native_voice(payload: Value, text: &str, actor_token: &
 }
 
 pub(super) fn transcribe_native_voice_probe(payload: Value, samples: Vec<f32>) -> HelperBridgeWorkerResponse {
-    send_worker_task_with_input("transcribe", payload, None, Some(NativeVoiceIo::ProbeSpeech(samples)))
+    send_worker_task_with_input("transcribe", RequestPayload::Json(payload), None, Some(NativeVoiceIo::ProbeSpeech(samples)))
 }
 
 pub(super) fn send_meeting_translation(
-    payload: Value, source: &str, source_language: &str, target_language: &str,
+    turn: MeetingTurnIdentity<'_>, source: &str, source_language: &str, target_language: &str,
     deferred_deadline: Option<Instant>,
 ) -> HelperBridgeWorkerResponse {
     let input = MeetingTranslationInput { source, source_language, target_language, deferred_deadline };
-    send_worker_task_with_input("translate", payload, Some(MeetingInput::Translation(input)), None)
+    send_worker_task_with_input("translate", RequestPayload::Meeting(turn), Some(MeetingInput::Translation(input)), None)
 }
 
 pub(super) fn send_worker_pcm_task(
-    payload: Value,
+    turn: MeetingTurnIdentity<'_>,
     language: &str,
     utterance: FinalizedMeetingUtterance,
     noise_suppression_enabled: bool,
@@ -413,19 +453,20 @@ pub(super) fn send_worker_pcm_task(
     let utterance = RefCell::new(Some(utterance));
     let prepare_ms = Cell::new(0);
     let input = MeetingPcmInput { utterance: &utterance, language, noise_suppression_enabled, prepare_ms: &prepare_ms, deferred_deadline };
-    let mut response = if !input.matches("transcribe", &payload) {
+    let priority = RequestAdmission::from_meeting(turn).priority;
+    let mut response = if !input.matches(turn) {
         standalone_blocked_response(
-            "transcribe", "invalid-meeting-pcm", task_priority("transcribe", &payload),
+            "transcribe", "invalid-meeting-pcm", priority,
             "error", "asr:finalized_pcm_contract_invalid",
             "Finalized PCM Meeting event ownership is invalid.",
         )
     } else if let Some(rejection) = rejection {
         standalone_blocked_response(
-            "transcribe", "invalid-meeting-pcm", task_priority("transcribe", &payload),
+            "transcribe", "invalid-meeting-pcm", priority,
             "error", rejection, "Finalized PCM is outside the admitted native ASR contract.",
         )
     } else {
-        send_worker_task_with_input("transcribe", payload, Some(MeetingInput::Pcm(input)), None)
+        send_worker_task_with_input("transcribe", RequestPayload::Meeting(turn), Some(MeetingInput::Pcm(input)), None)
     };
     if let Some(object) = response.worker_response_json.as_object_mut() {
         object.insert("audio_prepare_ms".into(), json!(prepare_ms.get()));
@@ -444,9 +485,9 @@ fn retain_deferred_pcm(
         .then_some(utterance)
 }
 
-fn send_worker_task_with_input(task: &str, payload: Value, input: Option<MeetingInput<'_>>,
+fn send_worker_task_with_input(task: &str, payload: RequestPayload<'_>, input: Option<MeetingInput<'_>>,
                                voice: Option<NativeVoiceIo<'_>>) -> HelperBridgeWorkerResponse {
-    let admission = RequestAdmission::from_payload(task, &payload);
+    let admission = payload.admission(task);
     let priority = admission.priority;
     let outbound_generation = admission.outbound_generation();
     let wait_generation = match meeting_wait_generation(admission.generation, admission.session_id.as_deref(), admission.lane) {
@@ -621,28 +662,22 @@ mod finalized_pcm_handoff_tests {
             frame: AudioFrame { sample_rate_hz: 16_000, channels: 1, samples: vec![0.1; 4_800] },
         };
         let prepare_ms = Cell::new(0);
-        let payload = json!({
-            "meeting_session_id": "session-test", "meeting_lane": "you",
-            "meeting_generation": 7, "meeting_sequence": 9, "utterance_id": 8,
-        });
+        let turn = MeetingTurnIdentity {
+            session_id: "session-test", generation: Some(7), event_sequence: 9, utterance_id: 8,
+        };
         assert!(finalized_asr_frame_rejection(&utterance).is_none());
         let utterance = RefCell::new(Some(utterance));
         let input = MeetingPcmInput { utterance: &utterance, language: "id", noise_suppression_enabled: false, prepare_ms: &prepare_ms, deferred_deadline: None };
-        assert!(input.matches("transcribe", &payload));
-        for (key, value) in [
-            ("meeting_session_id", json!("another")),
-            ("meeting_lane", json!("incoming")),
-            ("meeting_generation", json!(6)),
-            ("meeting_sequence", json!(10)),
-            ("utterance_id", json!(9)),
-            ("audio_path", json!("unowned.wav")),
-            ("language", json!("en")),
+        assert!(input.matches(turn));
+        for invalid in [
+            MeetingTurnIdentity { session_id: "another", ..turn },
+            MeetingTurnIdentity { generation: None, ..turn },
+            MeetingTurnIdentity { generation: Some(6), ..turn },
+            MeetingTurnIdentity { event_sequence: 10, ..turn },
+            MeetingTurnIdentity { utterance_id: 9, ..turn },
         ] {
-            let mut invalid = payload.clone();
-            invalid[key] = value;
-            assert!(!input.matches("transcribe", &invalid), "{key}");
+            assert!(!input.matches(invalid));
         }
-        assert!(!input.matches("translate", &payload));
         let mut utterance = utterance.into_inner().unwrap();
         utterance.frame.samples.truncate(4_799);
         assert_eq!(finalized_asr_frame_rejection(&utterance).unwrap(),

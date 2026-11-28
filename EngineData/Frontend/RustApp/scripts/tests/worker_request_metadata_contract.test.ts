@@ -28,7 +28,7 @@ test("native synthesis borrows text and actor authority through admission and re
   assert.match(native, /token\.is_empty\(\) \|\| token\.len\(\) > 512/);
   assert.match(native, /\*\*slot = Some\(samples\)/);
   const outbound = read("meeting_session/outbound_pipeline.rs");
-  assert.match(outbound, /synthesize_native_voice\(\s*turn\.worker_metadata\(None\), translated_text, &actor_token,?\s*\)/);
+  assert.match(outbound, /synthesize_meeting_voice\(\s*turn, translated_text, &actor_token,?\s*\)/);
   const probe = read("helper_bridge/functional_probe.rs");
   const call = probe.slice(probe.indexOf("synthesize_native_voice(json!({"));
   assert.ok(call.startsWith("synthesize_native_voice(json!({"));
@@ -74,7 +74,7 @@ test("scheduler fast path avoids wait registration and native scope keeps the qu
   assert.match(scheduler, /if registered \{\s*scheduler_waiting_decrement\(&mut state, priority\);\s*\}\s*state.active = true/);
   assert.match(transport, /Ok\(current\) if current != wait_generation/);
   assert.match(native, /request_scope\.generation != wait_generation/);
-  assert.match(native, /scope\.generation == wait_generation/);
+  assert.match(native, /generation == wait_generation/);
 });
 
 test("invalid text and language direction are rejected before model preparation", () => {
@@ -165,18 +165,21 @@ test("Meeting stages share one typed event identity and preserve boundary metada
   const meeting = read("meeting_session.rs");
   const outbound = read("meeting_session/outbound_pipeline.rs");
   const incoming = read("meeting_session/incoming_pipeline.rs");
-  const metadata = meeting.slice(meeting.indexOf("fn worker_metadata("), meeting.indexOf("mod meeting_turn_metadata_tests"));
-  for (const field of ["meeting_session_id", "meeting_lane", "meeting_generation", "meeting_sequence", "utterance_id", "source_speech_duration_ms"]) {
-    assert.ok(metadata.includes('"' + field + '"'));
+  const metadata = meeting.slice(meeting.indexOf("struct MeetingTurnIdentity"), meeting.indexOf("fn worker_text("));
+  for (const field of ["session_id", "generation", "event_sequence", "utterance_id"]) {
+    assert.ok(metadata.includes(field));
   }
-  assert.doesNotMatch(metadata, /"text"|"expected_actor_token"|"audio_path"|"language"/);
-  assert.match(outbound, /send_helper_worker_pcm_task\(\s*turn\.worker_metadata\(Some\(speech_duration_ms\)\)/);
+  assert.match(transport, /enum RequestPayload<'a> \{\s*Meeting\(MeetingTurnIdentity<'a>\),\s*Json\(Value\)/);
+  assert.match(policy, /session_id: Some\(Cow::Borrowed\(turn\.session_id\)\)/);
+  assert.match(native, /scope_from_fields\(turn\.generation, Some\(turn\.session_id\), Some\(turn\.lane\(\)\), false, snapshot\)/);
+  assert.match(native, /pcm\.matches\(turn\)/);
+  assert.match(outbound, /send_helper_worker_pcm_task\(\s*turn,/);
   assert.match(outbound, /process_outbound_transcript\(\s*turn,/);
-  assert.match(outbound, /send_helper_meeting_translation\(\s*turn\.worker_metadata\(None\)/);
-  assert.match(incoming, /send_helper_worker_pcm_task\(\s*turn\.worker_metadata\(None\)/);
+  assert.match(outbound, /send_helper_meeting_translation\(\s*turn,/);
+  assert.match(incoming, /send_helper_worker_pcm_task\(\s*turn,/);
   assert.match(incoming, /translate_and_commit_incoming_transcript\(\s*turn,/);
-  assert.match(incoming, /send_helper_meeting_translation\(\s*turn\.worker_metadata\(None\)/);
+  assert.match(incoming, /send_helper_meeting_translation\(\s*turn,/);
   assert.match(incoming, /MeetingTurnIdentity \{ session_id, generation: None, event_sequence, utterance_id \},\s*Cow::Owned\(transcript\)/);
-  assert.doesNotMatch(outbound + incoming, /"meeting_session_id":|"meeting_sequence":|"utterance_id":/);
-  assert.match(meeting, /fn native_stage_metadata_preserves_lane_identity_and_exact_fields/);
+  assert.doesNotMatch(outbound + incoming + metadata, /worker_metadata\(|"meeting_session_id":|"meeting_sequence":|"utterance_id":/);
+  assert.match(native, /fn typed_meeting_scope_uses_the_same_exact_owner_rules_as_json_preparation/);
 });
