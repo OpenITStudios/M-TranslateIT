@@ -140,3 +140,10 @@ test("playback capacity waits for receiver and cancellation notifications", () =
   const state = source("src-tauri/src/engine/runtime_state.rs");
   assert.match(state, /crate::commands::meeting_session::wake_playback_waiters\(\)/);
 });
+
+test("native output cancellation wakes the existing completion channel", () => {
+  assert.match(output, /control\.cancel_requested\.store\(true, Ordering::Release\);\s*\/\/[^\n]*\n\s*let _ = control\.completion_tx\.try_send\(Duration::ZERO\)/);
+  assert.match(output, /wait_for_output_tail\(&completion_rx, tail,/);
+  assert.match(output, /!runtime_generation_matches_epoch\(self\.generation\)/);
+  assert.match(output, /release_output_stream\(stream, generation\)/);
+});

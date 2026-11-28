@@ -4,12 +4,11 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::engine::audio::device_selection::resolve_unique_named_device;
 use crate::engine::audio::original_voice_pcm;
-use crate::engine::runtime_state::runtime_generation_is_authoritative;
+use crate::engine::runtime_state::{runtime_generation_is_authoritative, runtime_generation_matches_epoch};
 
 #[path = "meeting_output_runtime/audio_format.rs"]
 mod audio_format;
@@ -125,6 +124,8 @@ pub struct MeetingOutputDeliveryReport {
 struct MeetingOutputCancelControl {
     generation: u64,
     cancel_requested: Arc<AtomicBool>,
+    // Reuse the delivery's completion channel to wake the owner on cancel.
+    completion_tx: mpsc::SyncSender<Duration>,
 }
 
 #[derive(Clone)]
@@ -287,6 +288,7 @@ impl PlaybackCursor {
         // Recheck the callback-safe atomics before publishing this buffer;
         // never send an entire in-flight buffer belonging to a revoked source.
         if self.cancel_requested.load(Ordering::Acquire)
+            || !runtime_generation_matches_epoch(self.generation)
             || original_voice_pcm::is_output_muted(self.generation)
             || self.source_epoch.is_some_and(|epoch|
                 !original_voice_pcm::translated_epoch_matches(self.generation, epoch))
@@ -534,7 +536,9 @@ pub fn probe_prepared_meeting_output_device_functionally(
     }
 }
 
-fn install_cancel_control(generation: u64) -> Result<Arc<AtomicBool>, String> {
+fn install_cancel_control(
+    generation: u64, completion_tx: mpsc::SyncSender<Duration>,
+) -> Result<Arc<AtomicBool>, String> {
     let mut guard = cancel_control()
         .lock()
         .map_err(|_| "meeting_output:cancel_state_lock_failed".to_string())?;
@@ -554,6 +558,7 @@ fn install_cancel_control(generation: u64) -> Result<Arc<AtomicBool>, String> {
     *guard = Some(MeetingOutputCancelControl {
         generation,
         cancel_requested: Arc::clone(&cancel_requested),
+        completion_tx,
     });
     Ok(cancel_requested)
 }
@@ -584,12 +589,13 @@ pub fn cancel_meeting_output_for_generation(generation: u64) -> bool {
         return true;
     }
     control.cancel_requested.store(true, Ordering::Release);
+    // A full channel already contains a wake. Never block the Stop caller.
+    let _ = control.completion_tx.try_send(Duration::ZERO);
     true
 }
 
-// Native callbacks normally signal completion. If a device stops invoking
-// callbacks after Stop, wait in short, bounded slices so a generation revoke
-// can release the playback consumer without exhausting the WAV deadline.
+// Native callbacks and explicit cancellation signal the same channel.
+// Retain bounded authority checks as a fallback if no signal arrives.
 // Returning Timeout for cancellation is intentional: the caller's cancellation
 // flag / revoked generation owns the final blocker classification.
 fn wait_for_output_completion(
@@ -619,18 +625,27 @@ fn wait_for_output_completion(
 // The final device callback may enqueue up to one callback buffer of audio.
 // Wait only while this generation still owns playback: Stop must not wait a
 // full tail interval when an output stream has already been cancelled.
-fn wait_for_output_tail(tail: Duration, mut cancelled: impl FnMut() -> bool) -> bool {
+fn wait_for_output_tail(
+    receiver: &mpsc::Receiver<Duration>, tail: Duration,
+    mut interrupted: impl FnMut() -> bool,
+) -> bool {
     let bounded = tail.min(Duration::from_secs(1));
     let started = Instant::now();
     loop {
-        if cancelled() {
+        if interrupted() {
             return false;
         }
         let remaining = bounded.saturating_sub(started.elapsed());
         if remaining.is_zero() {
-            return !cancelled();
+            return !interrupted();
         }
-        thread::sleep(remaining.min(DELIVERY_CANCEL_POLL_INTERVAL));
+        // The same delivery channel carries cancel/device-error wakes.
+        // Preserve the short fallback bound for authority changes with no
+        // explicit signal (e.g. unavailable runtime state).
+        match receiver.recv_timeout(remaining.min(DELIVERY_CANCEL_POLL_INTERVAL)) {
+            Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+        }
     }
 }
 
@@ -772,7 +787,8 @@ fn deliver_meeting_output_inner(
     }
     let delivery_started_at = Instant::now();
     let delivery_started_unix_ms = current_unix_ms();
-    let cancel_requested = match install_cancel_control(generation) {
+    let (completion_tx, completion_rx) = mpsc::sync_channel(1);
+    let cancel_requested = match install_cancel_control(generation, completion_tx.clone()) {
         Ok(value) => value,
         Err(blocker) => {
             return blocked(&blocker, false)
@@ -786,7 +802,6 @@ fn deliver_meeting_output_inner(
         clear_cancel_control(generation);
         return blocked("meeting_output:cancelled", false);
     }
-    let (completion_tx, completion_rx) = mpsc::sync_channel(1);
     let (first_playback_tx, first_playback_rx) = mpsc::sync_channel(1);
     let callback_failed = Arc::new(AtomicBool::new(false));
     let stream_build_started_at = Instant::now();
@@ -828,26 +843,29 @@ fn deliver_meeting_output_inner(
         config.channels,
         config.sample_rate,
     ));
-    let completion = wait_for_output_completion(&completion_rx, deadline, || {
-        if !runtime_generation_is_authoritative(generation) {
+    let is_cancelled = || {
+        if !runtime_generation_is_authoritative(generation)
+            || original_voice_pcm::is_output_muted(generation)
+            || source_epoch.is_some_and(|epoch|
+                !original_voice_pcm::translated_epoch_matches(generation, epoch))
+        {
             cancel_requested.store(true, Ordering::Release);
         }
         cancel_requested.load(Ordering::Acquire)
-    });
+    };
+    let completion = wait_for_output_completion(&completion_rx, deadline, is_cancelled);
     let callback_failed_before_tail = callback_failed.load(Ordering::Acquire);
     let first_playback_at = first_playback_rx.try_recv().ok();
     let stream_start_to_first_audio_ms =
         stream_start_to_first_audio_ms(stream_started_at, first_playback_at);
     let first_playback_unix_ms = first_playback_at
         .map(|instant| projected_unix_ms(delivery_started_at, delivery_started_unix_ms, instant));
-    let cancelled = cancel_requested.load(Ordering::Acquire)
-        || !runtime_generation_is_authoritative(generation);
+    let cancelled = is_cancelled();
 
     match completion {
         Ok(tail) if !cancelled && !callback_failed_before_tail => {
-            let _ = wait_for_output_tail(tail, || {
-                cancel_requested.load(Ordering::Acquire)
-                    || !runtime_generation_is_authoritative(generation)
+            let _ = wait_for_output_tail(&completion_rx, tail, || {
+                is_cancelled() || callback_failed.load(Ordering::Acquire)
             });
         }
         Ok(_) => {}
@@ -859,8 +877,7 @@ fn deliver_meeting_output_inner(
 
     // Cancellation and callback errors can arrive while the final buffered
     // audio drains. A pre-tail snapshot must never report their output as OK.
-    let cancelled_after_tail = cancel_requested.load(Ordering::Acquire)
-        || !runtime_generation_is_authoritative(generation);
+    let cancelled_after_tail = is_cancelled();
     let callback_failed_after_tail = callback_failed.load(Ordering::Acquire);
     if let Some(blocker) = output_completion_blocker(
         cancelled_after_tail,
@@ -1019,7 +1036,7 @@ mod tests {
         assert!(revoked.snapshot.is_some());
         assert!(cancel_meeting_output_for_generation(generation));
         assert_eq!(
-            install_cancel_control(generation).unwrap_err(),
+            install_cancel_control(generation, mpsc::sync_channel(1).0).unwrap_err(),
             "meeting_output:generation_not_authoritative",
         );
         let _ = clear_runtime_session_state();
@@ -1035,17 +1052,19 @@ mod tests {
         let started = begin_application_meeting_session();
         let generation = started.snapshot.expect("Meeting generation").generation;
 
-        let old = install_cancel_control(generation).expect("first delivery owns control");
+        let (tx, rx) = mpsc::sync_channel(1);
+        let old = install_cancel_control(generation, tx).expect("first delivery owns control");
         assert!(cancel_meeting_output_for_generation(generation));
         assert!(old.load(Ordering::Acquire));
+        assert_eq!(rx.try_recv(), Ok(Duration::ZERO), "Stop wakes delivery without a CPAL callback");
         assert_eq!(
-            install_cancel_control(generation).unwrap_err(),
+            install_cancel_control(generation, mpsc::sync_channel(1).0).unwrap_err(),
             "meeting_output:delivery_already_active",
             "cancelled output must not allow a newer stream to overwrite its control",
         );
         clear_cancel_control(generation);
         assert!(
-            install_cancel_control(generation).is_ok(),
+            install_cancel_control(generation, mpsc::sync_channel(1).0).is_ok(),
             "released control permits another authorized delivery",
         );
         clear_cancel_control(generation);
@@ -1082,7 +1101,7 @@ mod tests {
             .snapshot
             .expect("Meeting generation")
             .generation;
-        let _token = install_cancel_control(generation).expect("control admitted");
+        let _token = install_cancel_control(generation, mpsc::sync_channel(1).0).expect("control admitted");
         let observed = Arc::new(AtomicBool::new(false));
         release_output_stream(
             StreamDropProbe {
@@ -1142,7 +1161,8 @@ mod tests {
     #[test]
     fn final_output_tail_checks_cancellation_during_drain() {
         let mut polls = 0;
-        let completed = wait_for_output_tail(Duration::from_secs(1), || {
+        let (_tx, rx) = mpsc::sync_channel(1);
+        let completed = wait_for_output_tail(&rx, Duration::from_secs(1), || {
             polls += 1;
             polls >= 2
         });
@@ -1153,12 +1173,13 @@ mod tests {
     #[test]
     fn final_output_tail_checks_authority_even_for_zero_duration() {
         let mut polls = 0;
-        assert!(wait_for_output_tail(Duration::ZERO, || {
+        let (_tx, rx) = mpsc::sync_channel(1);
+        assert!(wait_for_output_tail(&rx, Duration::ZERO, || {
             polls += 1;
             false
         }));
         assert!(polls >= 2);
-        assert!(!wait_for_output_tail(Duration::ZERO, || true));
+        assert!(!wait_for_output_tail(&rx, Duration::ZERO, || true));
     }
 
     #[test]
