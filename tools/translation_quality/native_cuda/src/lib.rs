@@ -276,14 +276,21 @@ fn validate_voice_pcm(samples: &[f32]) -> Result<(), Error> {
         return Err(Error::InvalidReceipt);
     }
     let mut has_signal = false;
+    let mut has_variation = false;
+    let first = samples[0];
     for &sample in samples {
         let level = sample.abs();
         if !sample.is_finite() || level > 1.0 {
             return Err(Error::InvalidReceipt);
         }
         has_signal |= level >= 0.0001;
+        has_variation |= sample != first;
     }
-    if !has_signal { return Err(Error::InvalidReceipt); }
+    // A constant multi-sample waveform is DC, not speech. Retain the
+    // existing single-sample structural contract and duration bounds.
+    if !has_signal || (samples.len() > 1 && !has_variation) {
+        return Err(Error::InvalidReceipt);
+    }
     Ok(())
 }
 
@@ -527,6 +534,9 @@ mod tests {
         assert_eq!(validate_voice_pcm(&[-0.0001]), Ok(()));
         assert_eq!(validate_voice_pcm(&[0.1, f32::INFINITY]), Err(Error::InvalidReceipt));
         assert_eq!(validate_voice_pcm(&[1.0, -1.0]), Ok(()));
+        assert_eq!(validate_voice_pcm(&[0.2; 16]), Err(Error::InvalidReceipt));
+        assert_eq!(validate_voice_pcm(&[-1.0; 16]), Err(Error::InvalidReceipt));
+        assert_eq!(validate_voice_pcm(&[0.2, 0.200001]), Ok(()));
         let mut delayed_signal = vec![0.0; MAX_VOICE_SAMPLES];
         delayed_signal[MAX_VOICE_SAMPLES - 1] = 0.1;
         assert_eq!(validate_voice_pcm(&delayed_signal), Ok(()));

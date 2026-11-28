@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -72,12 +73,21 @@ def main() -> int:
                            ("version 1.21.4.", "1.21.4"), ("eight forty-five", "eight forty five")]:
         assert evaluator.contains_critical_phrase(evaluator.critical_tokens(good), expected)
     timed = evidence(corpus)
+    context = {
+        "model_sha256": "a" * 64, "projector_sha256": "b" * 64,
+        "reference_sha256": "c" * 64, "environment_sha256": "d" * 64,
+        "settings_sha256": "e" * 64, "build_sha256": "f" * 64,
+        "warmup_count": 1,
+    }
     for index, case in enumerate(corpus["cases"], 1):
-        timed[case["id"]].update(elapsed_ms=index * 100, sample_count=44_100)
-    def timing(rows, identity="native-fixture", fp=fingerprint):
+        timed[case["id"]].update(elapsed_ms=index * 100, sample_count=44_100,
+                                 sample_rate_hz=44_100, execution_index=index,
+                                 request_id=f"request-{index}")
+    def timing(rows, identity="native-fixture", fp=fingerprint, ctx=context):
         return evaluator.evaluate(corpus, rows, result_corpus_fingerprint=fp,
-                                  source_identity=identity)["native_timing"]
+                                  source_identity=identity, timing_context=ctx)["native_timing"]
     assert timing(timed) == {
+        "context": context,
         "case_count": 30, "first_ms": 100, "p50_ms": 1500,
         "p95_ms": 2900, "max_ms": 3000,
         "audio_sample_count": 30 * 44_100, "aggregate_rtf": 1.55,
@@ -87,7 +97,10 @@ def main() -> int:
     first = corpus["cases"][0]["id"]
     for field, value in [("elapsed_ms", None), ("elapsed_ms", True),
                          ("elapsed_ms", -1), ("elapsed_ms", 1.5),
-                         ("sample_count", 0), ("sample_count", 44_100 * 60 + 1)]:
+                         ("sample_count", 0), ("sample_count", 44_100 * 60 + 1),
+                         ("execution_index", 2), ("execution_index", True),
+                         ("sample_rate_hz", 48_000), ("request_id", ""),
+                         ("request_id", "request-2")]:
         invalid = {key: dict(row) for key, row in timed.items()}
         invalid[first][field] = value
         assert timing(invalid) is None
@@ -95,6 +108,31 @@ def main() -> int:
     del incomplete[first]
     assert timing(incomplete) is None
     assert timing({**timed, "unknown": timed[first]}) is None
+    assert timing(timed, ctx=None) is None
+    assert timing(timed, ctx={**context, "warmup_count": True}) is None
+    assert timing(timed, ctx={**context, "reference_sha256": "unknown"}) is None
+    # JSON loader must preserve the optional receipt fields, not reconstruct order.
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "timed.json"
+        path.write_text(json.dumps({
+            "corpus_fingerprint": fingerprint, "source_identity": "native-fixture",
+            "timing_context": context,
+            "results": [{"case_id": key, **row} for key, row in reversed(list(timed.items()))],
+        }), encoding="utf-8")
+        loaded = evaluator.load_result_bundle(path)
+        assert timing(loaded["results"], ctx=loaded["timing_context"]) == timing(timed)
+    def comparable(candidate_context):
+        result = evaluator.compare_reports(
+            corpus, timed, timed, baseline_corpus_fingerprint=fingerprint,
+            candidate_corpus_fingerprint=fingerprint, baseline_source_identity="base",
+            candidate_source_identity="candidate", baseline_timing_context=context,
+            candidate_timing_context=candidate_context,
+        )
+        return result["native_timing_comparable_on_declared_context"]
+    assert comparable({**context, "build_sha256": "1" * 64})
+    assert not comparable({**context, "warmup_count": 2})
+    assert not comparable({**context, "environment_sha256": "1" * 64})
+    assert not comparable(None)
 
     # Complete rows and source identity cannot substitute for the corpus identity.
     missing_fingerprint = evaluator.evaluate(

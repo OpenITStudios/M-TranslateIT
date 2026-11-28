@@ -165,6 +165,9 @@ def load_result_bundle(path: Path) -> dict:
             # Optional timing evidence is independent of the audio-quality gate.
             "elapsed_ms": row.get("elapsed_ms"),
             "sample_count": row.get("sample_count"),
+            "sample_rate_hz": row.get("sample_rate_hz"),
+            "execution_index": row.get("execution_index"),
+            "request_id": row.get("request_id"),
         }
     return {
         "results": output,
@@ -174,21 +177,52 @@ def load_result_bundle(path: Path) -> dict:
             else ""
         ),
         "source_identity": (
-            str(raw.get("source_identity", "")).strip()
-            if isinstance(raw, dict)
+            raw["source_identity"].strip()
+            if isinstance(raw, dict) and isinstance(raw.get("source_identity"), str)
             else ""
         ),
+        "timing_context": raw.get("timing_context") if isinstance(raw, dict) else None,
     }
 
 
-def native_timing_summary(cases: list[dict], results: dict) -> dict | None:
-    """Complete ordered native handoff receipts only; no partial aggregates."""
+def valid_timing_context(context: object) -> bool:
+    # These digests identify locally retained evidence, not authenticated
+    # execution. Build may differ; all other comparison conditions must match.
+    digest_fields = {
+        "model_sha256", "projector_sha256", "reference_sha256",
+        "environment_sha256", "settings_sha256", "build_sha256",
+    }
+    return (
+        isinstance(context, dict)
+        and set(context) == digest_fields | {"warmup_count"}
+        and all(isinstance(context[key], str)
+                and re.fullmatch(r"[0-9a-f]{64}", context[key])
+                for key in digest_fields)
+        and type(context["warmup_count"]) is int
+        and context["warmup_count"] >= 0
+    )
+
+
+def native_timing_summary(cases: list[dict], results: dict, context: object) -> dict | None:
+    """Complete declared ordered native handoff receipts; no partial aggregates."""
+    if not valid_timing_context(context):
+        return None
     elapsed = []
     samples = []
-    for case in cases:
+    request_ids = set()
+    for index, case in enumerate(cases, 1):
         row = results.get(case["id"], {})
         ms = row.get("elapsed_ms")
         count = row.get("sample_count")
+        request_id = row.get("request_id")
+        if type(row.get("execution_index")) is not int or row["execution_index"] != index:
+            return None
+        if type(row.get("sample_rate_hz")) is not int or row["sample_rate_hz"] != 44_100:
+            return None
+        if (not isinstance(request_id, str) or not request_id.strip()
+                or len(request_id) > 128 or request_id in request_ids):
+            return None
+        request_ids.add(request_id)
         if type(ms) is not int or not 0 <= ms <= 2**64 - 1:
             return None
         if type(count) is not int or not 0 < count <= 44_100 * 60:
@@ -199,6 +233,7 @@ def native_timing_summary(cases: list[dict], results: dict) -> dict | None:
         return None
     ordered = sorted(elapsed)
     return {
+        "context": dict(context),
         "case_count": len(elapsed),
         "first_ms": elapsed[0],
         "p50_ms": ordered[(len(ordered) * 50 + 99) // 100 - 1],
@@ -215,6 +250,7 @@ def evaluate(
     *,
     result_corpus_fingerprint: str = "",
     source_identity: str = "",
+    timing_context: object = None,
 ) -> dict:
     expected = {case["id"] for case in corpus["cases"]}
     missing = sorted(expected - results.keys())
@@ -277,8 +313,9 @@ def evaluate(
         "provenance_matches_corpus": provenance_matches,
         "complete_result_set": not missing and not unknown and provenance_matches,
         "native_timing": (
-            native_timing_summary(corpus["cases"], results)
-            if not missing and not unknown and provenance_matches and source_identity
+            native_timing_summary(corpus["cases"], results, timing_context)
+            if not missing and not unknown and provenance_matches
+            and isinstance(source_identity, str) and source_identity.strip()
             else None
         ),
         "missing_case_ids": missing,
@@ -324,18 +361,22 @@ def compare_reports(
     candidate_corpus_fingerprint: str = "",
     baseline_source_identity: str = "",
     candidate_source_identity: str = "",
+    baseline_timing_context: object = None,
+    candidate_timing_context: object = None,
 ) -> dict:
     baseline = evaluate(
         corpus,
         baseline_results,
         result_corpus_fingerprint=baseline_corpus_fingerprint,
         source_identity=baseline_source_identity,
+        timing_context=baseline_timing_context,
     )
     candidate = evaluate(
         corpus,
         candidate_results,
         result_corpus_fingerprint=candidate_corpus_fingerprint,
         source_identity=candidate_source_identity,
+        timing_context=candidate_timing_context,
     )
     baseline_cases = {row["case_id"]: row for row in baseline["cases"]}
     candidate_cases = {row["case_id"]: row for row in candidate["cases"]}
@@ -368,6 +409,13 @@ def compare_reports(
         and baseline["provenance_matches_corpus"]
         and candidate["provenance_matches_corpus"]
     )
+    base_timing, cand_timing = baseline["native_timing"], candidate["native_timing"]
+    timing_comparable = (
+        base_timing is not None and cand_timing is not None
+        and all(value == cand_timing["context"][key]
+                for key, value in base_timing["context"].items()
+                if key != "build_sha256")
+    )
     return {
         "schema": "translateit.tts_quality.comparison.v1",
         "corpus_fingerprint": corpus_fingerprint(corpus),
@@ -378,6 +426,7 @@ def compare_reports(
         ),
         "baseline_native_timing": baseline["native_timing"],
         "candidate_native_timing": candidate["native_timing"],
+        "native_timing_comparable_on_declared_context": timing_comparable,
         "critical_regressions": critical_regressions,
         "critical_recoveries": critical_recoveries,
         "artifact_regressions": artifact_regressions,
@@ -471,6 +520,8 @@ def main() -> int:
             candidate_corpus_fingerprint=candidate["corpus_fingerprint"],
             baseline_source_identity=baseline["source_identity"],
             candidate_source_identity=candidate["source_identity"],
+            baseline_timing_context=baseline["timing_context"],
+            candidate_timing_context=candidate["timing_context"],
         )
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0 if (report["promotion_safe_on_declared_critical_invariants"]
@@ -484,6 +535,7 @@ def main() -> int:
         bundle["results"],
         result_corpus_fingerprint=bundle["corpus_fingerprint"],
         source_identity=bundle["source_identity"],
+        timing_context=bundle["timing_context"],
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["complete_result_set"] and report["critical_failures"] == 0 else 1
