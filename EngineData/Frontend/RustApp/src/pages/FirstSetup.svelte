@@ -317,7 +317,7 @@
       const result = await runtimeProductFacade.runProductRecoveryAction("fix-setup");
       await refreshSnapshot();
       message = setupReadState === "verified"
-        ? compact(result, "Setup check finished.")
+        ? compact(result.message, "Setup check finished.")
         : "Repair was requested, but setup status could not be verified. Select Check Again.";
     } catch {
       message = "Couldn't fix setup. Try again.";
@@ -357,7 +357,7 @@
     message = "Refreshing status...";
     try {
       const readinessMessage = step === 4 && setupReadState === "verified"
-        ? await runtimeProductFacade.runProductSetupAction("check-readiness")
+        ? (await runtimeProductFacade.runProductSetupAction("check-readiness")).message
         : null;
       await refreshSnapshot();
       if (setupReadState !== "verified") return;

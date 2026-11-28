@@ -90,3 +90,24 @@ test("native Meeting and Mic Test receipts reuse the exact application sequence"
   assert.match(mic, /refreshFromApplication\(\s*result\.snapshot, result\.intent/);
   assert.match(mic, /result\.snapshot\.revision <= 0 \|\| result\.snapshot\.lifecycle === "unavailable"/);
 });
+
+test("setup actions reconcile a valid native receipt instead of refetching its snapshot", () => {
+  const setup = readFileSync(new URL("../../src/app/bridge/productSetupFacade.ts", import.meta.url), "utf8");
+  const wizard = readFileSync(new URL("../../src/pages/FirstSetup.svelte", import.meta.url), "utf8");
+  const owner = app.slice(app.indexOf("async function reconcileSetupResult("), app.indexOf("async function toggleMicTest("));
+  assert.match(setup, /receipt: ApplicationIntentResult \| null/);
+  for (const intent of ["retry_blocked_worker", "check_readiness", "fix_setup"]) {
+    assert.match(setup, new RegExp('dispatchIntent\\("' + intent + '"\\)'));
+  }
+  assert.equal((setup.match(/receipt: result/g) ?? []).length, 5);
+  assert.match(setup, /runtimeApi\.verifyModels\(\)[\s\S]*receipt: null/);
+  assert.match(owner, /!receipt \|\| receipt\.snapshot\.revision <= 0 \|\| receipt\.snapshot\.lifecycle === "unavailable"/);
+  assert.match(owner, /observed\.settings\.translation_engine === "local"[\s\S]*observed\.settings\.meeting_setup_state !== "new"[\s\S]*observed\.summaries\.worker\.state === "not_started"/);
+  assert.equal((owner.match(/await refreshSnapshot\(message\)/g) ?? []).length, 2);
+  assert.match(owner, /refreshFromApplication\(observed, intent\)/);
+  assert.match(owner, /applicationController\.read\(\)\.applicationRevision === observed\.revision/);
+  assert.match(owner, /reconcileSetupResult\(await runtimeProductFacade\.runProductSetupAction\(action\)\)/);
+  assert.match(owner, /reconcileSetupResult\(await runtimeProductFacade\.runProductRecoveryAction\("fix-setup"\)\)/);
+  assert.match(wizard, /compact\(result\.message, "Setup check finished\."\)/);
+  assert.match(wizard, /\(await runtimeProductFacade\.runProductSetupAction\("check-readiness"\)\)\.message/);
+});

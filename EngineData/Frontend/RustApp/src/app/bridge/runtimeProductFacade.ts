@@ -47,6 +47,7 @@ export type {
 export type {
   ProductRecoveryAction,
   ProductSetupAction,
+  ProductSetupResult,
 } from "./productSetupFacade";
 export type {
   ProductMeetingState,

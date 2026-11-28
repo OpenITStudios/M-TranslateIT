@@ -10,6 +10,7 @@
   import {
     runtimeProductFacade,
     type ProductSetupAction,
+    type ProductSetupResult,
   } from "./app/bridge/runtimeProductFacade";
   import { startMeetingRuntimeMonitors, type ReliabilityChannel, type ReliabilityNotice } from "./app/runtime/reliabilityMonitor";
 import { appNotice, visibleAppNotice, noticeForVoiceBuildReason, type AppNotice, type AppNoticeKind } from "./app/runtime/applicationNotice";
@@ -442,13 +443,35 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     }
   }
 
+  async function reconcileSetupResult({ message, receipt }: ProductSetupResult): Promise<void> {
+    // Model-file verification has no application receipt. Unknown receipts
+    // still need the existing fresh-read recovery, never optimistic mapping.
+    if (!receipt || receipt.snapshot.revision <= 0 || receipt.snapshot.lifecycle === "unavailable") {
+      await refreshSnapshot(message);
+      return;
+    }
+    const { snapshot: observed, intent } = receipt;
+    // Preserve the existing explicit refresh's cold-local bootstrap behavior.
+    if (observed.settings.translation_engine === "local"
+      && observed.settings.meeting_setup_state !== "new"
+      && observed.summaries.worker.state === "not_started") {
+      await refreshSnapshot(message);
+      return;
+    }
+    // The event and receipt share a sequence. Map once through the ordered
+    // controller and surface the action notice only for that exact state.
+    applyRefreshResult(await applicationController.refreshFromApplication(observed, intent), message);
+    if (applicationController.read().applicationRevision === observed.revision) {
+      setNotice(message);
+    }
+  }
+
   async function runSetupAction(action: ProductSetupAction): Promise<void> {
     if (setupActionBusy) return;
     setupActionBusy = true;
     setKnownNotice(action === "verify-models" ? "Checking translation files..." : "Checking setup...", "progress");
     try {
-      const message = await runtimeProductFacade.runProductSetupAction(action);
-      await refreshSnapshot(message);
+      await reconcileSetupResult(await runtimeProductFacade.runProductSetupAction(action));
     } catch {
       setNotice("The setup check could not finish. Open Help or try again.");
     } finally {
@@ -461,8 +484,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     setupActionBusy = true;
     setKnownNotice("Checking setup...", "progress");
     try {
-      const message = await runtimeProductFacade.runProductRecoveryAction("fix-setup");
-      await refreshSnapshot(message);
+      await reconcileSetupResult(await runtimeProductFacade.runProductRecoveryAction("fix-setup"));
     } catch {
       setNotice("Repair Setup could not finish. Check your devices and try again.");
     } finally {
