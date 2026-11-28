@@ -23,9 +23,13 @@ test("native creation preserves interrupted legacy work before changing dataset 
   const build = rust("voice_lab_build/native_build.rs");
   const recovery = rust("voice_lab/storage/training_recovery.rs");
   const capture = build.indexOf("preserve_training_checkpoints(paths)?");
-  const prepare = build.indexOf("prepare_guided_dataset_from_archives(", capture);
+  const legacyClear = build.indexOf('remove_dir_if_present(&work_dir(paths), "work")?', capture);
+  const prepare = build.indexOf("prepare_guided_dataset_from_archives(", legacyClear);
   const clear = build.indexOf("clear_previous_build_workspace(paths)?", prepare);
-  assert.ok(capture >= 0 && prepare > capture && clear > prepare);
+  assert.ok(capture >= 0 && legacyClear > capture && prepare > legacyClear && clear > prepare);
+  const owner = rust("voice_lab_build.rs");
+  const cleanup = owner.slice(owner.indexOf("fn clear_previous_build_workspace("), owner.indexOf("fn a3_wav_duration_ms("));
+  assert.doesNotMatch(cleanup, /remove_dir_if_present\(&work_dir\(paths\)/);
   assert.match(recovery, /create_dir\(&pending\)/);
   assert.match(recovery, /verify_package\(&pending/);
   assert.match(recovery, /fs::rename\(&pending, &complete\)/);

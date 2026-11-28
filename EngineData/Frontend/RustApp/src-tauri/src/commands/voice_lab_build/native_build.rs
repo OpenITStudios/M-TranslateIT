@@ -90,6 +90,11 @@ fn run(paths: &VoiceLabStoragePaths, generation: u64, selection: Option<Archived
     // dataset and legacy recovery budgets are separately measured.
     super::super::my_voice_resources::preflight(&paths.cache_root, &paths.saved_root)?;
     preserve_training_checkpoints(paths)?;
+    // Historical checkpoint data is bound to the old dataset. Remove its
+    // disposable work directory only after verified preservation and BEFORE
+    // replacing that dataset, so an interrupted native build cannot rebind
+    // old checkpoints to a new snapshot on Retry.
+    remove_dir_if_present(&work_dir(paths), "work")?;
     let takes = selection.as_ref().map(|s| s.takes.clone()).unwrap_or_else(|| accepted_contract().0);
     if !(2..=MAX_TRAINING_TAKES).contains(&takes.len()) {
         return Err("native_build:distinct_recordings_required".into());

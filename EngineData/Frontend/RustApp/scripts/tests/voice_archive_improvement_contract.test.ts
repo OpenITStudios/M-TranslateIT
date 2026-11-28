@@ -41,6 +41,8 @@ test("existing held-out approval follows exact frozen immutable audio for archiv
   assert.match(snapshot, /from_saved_archive: bool/);
   assert.match(snapshot, /snapshot_selected_take_changed/);
   assert.match(snapshot, /staged != verified/);
+  assert.match(snapshot, /snapshot\.from_saved_archive\.then_some\(true\)/);
+  assert.doesNotMatch(archive.split("#[cfg(test)]")[0], /pub native_audio: Option<Vec<u8>>/);
   assert.match(snapshot, /verify_saved_take_binding/);
   assert.match(archive, /archived_take_for_training/);
   assert.match(snapshot, /archived_frozen_review_matches/);

@@ -61,12 +61,14 @@ pub(crate) fn choose_archived_takes(
     })
 }
 
-/// Freeze only the chosen immutable audio, not the mutable current-take path.
-/// The existing GPT-SoVITS flat WAV layout and dataset.json stay identical.
+/// Freeze canonical reference audio from verified immutable archives for both
+/// Create and Improve. Preserve the existing manifest and archive identities;
+/// the unused native-rate sidecars stay in their original durable archives.
 pub(super) fn prepare_archived_dataset(
     storage: &VoiceLabStoragePaths,
     manifest: &GuidedDatasetManifest,
     archive_ids: &[String],
+    from_saved_archive: bool,
 ) -> Result<(), String> {
     validate_guided_dataset_manifest(manifest)?;
     if archive_ids.len() != manifest.takes.len() || archive_ids.len() > MAX_SELECTED_TAKES {
@@ -90,15 +92,9 @@ pub(super) fn prepare_archived_dataset(
         let target = storage.build_dataset_dir.join(&take.wav_file);
         write_new_synced(&target, &source.canonical_audio)?;
         inspect_canonical_wav(&target)?;
-        if let Some(native) = source.native_audio {
-            let dir = storage.build_dataset_dir.join("NativeRate");
-            fs::create_dir_all(&dir)
-                .map_err(|_| "voice_lab:improvement_native_dir_failed")?;
-            write_new_synced(&dir.join(&take.wav_file), &native)?;
-        }
     }
     write_json(&storage.build_dataset_dir.join("dataset.json"), manifest)?;
-    dataset_history::preserve_frozen_dataset_with_archives(storage, manifest, archive_ids)?;
+    dataset_history::preserve_frozen_dataset_with_archives(storage, manifest, archive_ids, from_saved_archive)?;
     Ok(())
 }
 
@@ -156,7 +152,7 @@ mod tests {
                 line_id: 1001, exact_text: "Never used to train.".into(),
             }],
         };
-        prepare_archived_dataset(&storage, &manifest, &chosen.archive_ids).unwrap();
+        prepare_archived_dataset(&storage, &manifest, &chosen.archive_ids, true).unwrap();
         assert_eq!(dataset_history::archived_frozen_review_matches(&storage).unwrap(), Some(true));
         // Current accepted recording changed after freeze; the archived review
         // must still refer to the original chosen immutable take.

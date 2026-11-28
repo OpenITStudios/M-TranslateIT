@@ -159,7 +159,6 @@ fn clear_previous_build_workspace(paths: &VoiceLabStoragePaths) -> Result<(), St
     remove_file_if_present(&identity_file(paths), "run_identity")?;
     remove_file_if_present(&status_path(paths), "status")?;
     remove_dir_if_present(&evaluation_dir(paths), "evaluation")?;
-    remove_dir_if_present(&work_dir(paths), "work")?;
     remove_dir_if_present(&paths.candidate_actor_dir, "candidate_actor")?;
     Ok(())
 }
@@ -174,7 +173,6 @@ fn cleanup_approved_build_workspace(paths: &VoiceLabStoragePaths) -> Result<(), 
     let mut errors = Vec::new();
     for result in [
         remove_dir_if_present(&evaluation_dir(paths), "evaluation"),
-        remove_dir_if_present(&work_dir(paths), "work"),
         remove_dir_if_present(&paths.candidate_actor_dir, "candidate_actor"),
         remove_dir_if_present(&paths.build_dataset_dir, "build_dataset"),
         remove_file_if_present(&status_path(paths), "status"),

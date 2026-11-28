@@ -174,11 +174,22 @@ pub(crate) fn guided_take_is_archived(
     storage: &VoiceLabStoragePaths, line_id: u32, exact_text: &str,
     canonical_path: &Path, native_rate_path: Option<&Path>,
 ) -> Result<bool, String> {
-    let _guard = ARCHIVE_LOCK.get_or_init(|| Mutex::new(())).lock()
-        .map_err(|_| "voice_lab:archive_lock_unavailable")?;
-    Ok(verified_archive_id_for_pair_locked(
+    Ok(verified_archive_id_for_pair(
         storage, line_id, exact_text, canonical_path, native_rate_path,
     )?.is_some())
+}
+
+// Retain the verified immutable identity, not merely a Boolean, when the
+// native build needs to freeze the exact accepted recording.
+pub(super) fn verified_archive_id_for_pair(
+    storage: &VoiceLabStoragePaths, line_id: u32, exact_text: &str,
+    canonical_path: &Path, native_rate_path: Option<&Path>,
+) -> Result<Option<String>, String> {
+    let _guard = ARCHIVE_LOCK.get_or_init(|| Mutex::new(())).lock()
+        .map_err(|_| "voice_lab:archive_lock_unavailable")?;
+    verified_archive_id_for_pair_locked(
+        storage, line_id, exact_text, canonical_path, native_rate_path,
+    )
 }
 
 // Files may be split across Accepted, *.previous and Draft after a crash.
@@ -578,13 +589,12 @@ pub(crate) fn saved_recording_audio(
 }
 
 
-/// Verified archive material for an explicitly selected training take.
+/// Verified canonical archive material for a native reference candidate.
 /// All paths are derived from a validated archive ID, never from a UI path.
 pub(crate) struct ArchivedTrainingTake {
     pub line_id: u32,
     pub exact_text: String,
     pub canonical_audio: Vec<u8>,
-    pub native_audio: Option<Vec<u8>>,
     pub duration_ms: u64,
 }
 
@@ -599,14 +609,15 @@ pub(crate) fn archived_take_for_training(
     verified_archive(&dir, &receipt)?;
     let canonical_audio = bounded_regular_bytes(&dir.join("canonical.wav"), MAX_CANONICAL_BYTES)?;
     let duration_ms = inspect_canonical_wav(&dir.join("canonical.wav"))?.duration_ms;
-    let native_audio = if receipt.native_rate_sha256.is_some() {
-        Some(bounded_regular_bytes(&dir.join("native-rate.wav"), MAX_NATIVE_BYTES)?)
-    } else { None };
+    // The archive verifier already checks the native-rate sidecar. It is
+    // retained in the immutable archive, never materialized for synthesis.
+    if sha256_hex(&canonical_audio)? != receipt.canonical_sha256 {
+        return Err("voice_lab:saved_recording_audio_changed".into());
+    }
     Ok(ArchivedTrainingTake {
         line_id: receipt.line_id,
         exact_text: receipt.exact_text,
         canonical_audio,
-        native_audio,
         duration_ms,
     })
 }

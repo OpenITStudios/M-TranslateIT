@@ -1,5 +1,6 @@
-//! Persistent dataset lineage: frozen GPT-SoVITS WAVs continue to be temporary
-//! worker input, while immutable guided take archives and a snapshot survive.
+//! Persistent dataset lineage: existing immutable archive identities survive
+//! temporary canonical native-reference preparation. Historical manifests
+//! retain their original schema and engine revision for compatibility.
 use serde::{Deserialize, Serialize};
 use std::fs;
 
@@ -7,7 +8,7 @@ use super::immutable_store::{
     hash_bytes, persist_manifest, read_regular_bounded, valid_id, verify_manifest_by_id,
     write_new_synced,
 };
-use super::{archive_guided_take, VoiceLabStoragePaths};
+use super::VoiceLabStoragePaths;
 use crate::commands::voice_lab::{GuidedDatasetManifest, VOICE_ACTOR_ENGINE_REVISION};
 
 const SNAPSHOT_SCHEMA: u32 = 1;
@@ -56,57 +57,36 @@ fn verify_snapshot(storage: &VoiceLabStoragePaths, id: &str) -> Result<DatasetSn
     Ok(data)
 }
 
-/// Called only after the legacy dataset was fully frozen. Every frozen WAV is
-/// itself archived before the immutable manifest is committed. No source file
-/// is modified; the worker continues reading the exact existing dataset.
-pub(super) fn preserve_frozen_dataset(
-    storage: &VoiceLabStoragePaths,
-    manifest: &GuidedDatasetManifest,
-) -> Result<String, String> {
-    preserve_frozen_dataset_inner(storage, manifest, None)
-}
-
+/// Publish the same immutable snapshot schema using already verified archive
+/// identities. A native-rate sidecar is never copied into the temporary dataset.
 pub(super) fn preserve_frozen_dataset_with_archives(
     storage: &VoiceLabStoragePaths,
     manifest: &GuidedDatasetManifest,
     archive_ids: &[String],
+    from_saved_archive: bool,
 ) -> Result<String, String> {
     if archive_ids.len() != manifest.takes.len() {
         return Err("voice_lab:snapshot_archive_selection_mismatch".into());
     }
-    preserve_frozen_dataset_inner(storage, manifest, Some(archive_ids))
-}
-
-fn preserve_frozen_dataset_inner(
-    storage: &VoiceLabStoragePaths,
-    manifest: &GuidedDatasetManifest,
-    expected_archives: Option<&[String]>,
-) -> Result<String, String> {
     let mut audio = Vec::with_capacity(manifest.takes.len());
-    for take in &manifest.takes {
-        let canonical = storage.build_dataset_dir.join(&take.wav_file);
-        let sidecar = storage.build_dataset_dir.join("NativeRate").join(&take.wav_file);
-        let native = match fs::symlink_metadata(&sidecar) {
-            Ok(_) => Some(sidecar.as_path()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(_) => return Err("voice_lab:snapshot_native_metadata_unknown".into()),
-        };
-        let archive_id = archive_guided_take(
-            storage, take.line_id, &take.exact_text, &canonical, native,
+    for (take, id) in manifest.takes.iter().zip(archive_ids) {
+        // Verify the binding and the actual written canonical bytes before
+        // publishing a snapshot; the archive still verifies its native sidecar.
+        let staged = read_regular_bounded(
+            &storage.build_dataset_dir.join(&take.wav_file), 4 * 1024 * 1024 + 4096,
         )?;
-        if let Some(ids) = expected_archives {
-            if ids[audio.len()] != archive_id {
-                return Err("voice_lab:snapshot_selected_take_changed".into());
-            }
+        let verified = super::recording_archive::saved_recording_audio(storage, id)?;
+        if staged != verified {
+            return Err("voice_lab:snapshot_selected_take_changed".into());
         }
-        audio.push(TakeLink { line_id: take.line_id, wav_file: take.wav_file.clone(), archive_id });
+        audio.push(TakeLink { line_id: take.line_id, wav_file: take.wav_file.clone(), archive_id: id.clone() });
     }
     let payload = DatasetSnapshot {
         schema_version: SNAPSHOT_SCHEMA,
         engine_revision: VOICE_ACTOR_ENGINE_REVISION.into(),
         source_manifest: manifest.clone(),
         audio,
-        from_saved_archive: expected_archives.is_some(),
+        from_saved_archive,
     };
     let bytes = serde_json::to_vec(&payload)
         .map_err(|_| "voice_lab:snapshot_serialize_failed")?;
@@ -191,7 +171,6 @@ pub(crate) fn archived_frozen_review_matches(
 ) -> Result<Option<bool>, String> {
     let Some(id) = frozen_dataset_snapshot_id(storage)? else { return Ok(None); };
     let snapshot = verify_snapshot(storage, &id)?;
-    if !snapshot.from_saved_archive { return Ok(None); }
     let current_manifest = read_regular_bounded(
         &storage.build_dataset_dir.join("dataset.json"), 64 * 1024,
     )?;
@@ -207,7 +186,8 @@ pub(crate) fn archived_frozen_review_matches(
         )?;
         if staged != verified { return Ok(Some(false)); }
     }
-    Ok(Some(true))
+    // Current-take Create additionally checks the mutable accepted set.
+    Ok(snapshot.from_saved_archive.then_some(true))
 }
 
 #[cfg(test)]
@@ -247,8 +227,12 @@ mod tests {
             }],
             held_out_lines: vec![],
         };
-        let id = preserve_frozen_dataset(&storage, &manifest).unwrap();
-        assert_eq!(id, preserve_frozen_dataset(&storage, &manifest).unwrap());
+        let archive_id = super::super::archive_guided_take(
+            &storage, 1, "Good morning.", &storage.build_dataset_dir.join("take_0001.wav"), None,
+        ).unwrap();
+        let archive_ids = vec![archive_id];
+        let id = preserve_frozen_dataset_with_archives(&storage, &manifest, &archive_ids, false).unwrap();
+        assert_eq!(id, preserve_frozen_dataset_with_archives(&storage, &manifest, &archive_ids, false).unwrap());
         fs::remove_dir_all(&storage.build_dataset_dir).unwrap();
         assert!(verify_snapshot(&storage, &id).is_ok());
         let item_id = verify_snapshot(&storage, &id).unwrap().audio[0].archive_id.clone();

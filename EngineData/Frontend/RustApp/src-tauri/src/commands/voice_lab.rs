@@ -712,7 +712,7 @@ mod tests {
     }
 
     #[test]
-    fn native_rate_sidecars_are_frozen_without_changing_canonical_training_wavs() {
+    fn native_reference_freeze_retains_sidecar_in_immutable_archive_only() {
         let root = test_root("native-dataset");
         let storage = VoiceLabStoragePaths::from_roots(&root.join("cache"), &root.join("saved"));
         let filename = canonical_take_file_name(1);
@@ -724,18 +724,23 @@ mod tests {
         let canonical_bytes = fs::read(&accepted).expect("read canonical source");
         let native_bytes = fs::read(&sidecar).expect("read native source");
         let manifest = dataset();
-        archive_guided_take(&storage, 1, &manifest.takes[0].exact_text, &accepted, Some(&sidecar))
+        let archive_id = archive_guided_take(&storage, 1, &manifest.takes[0].exact_text, &accepted, Some(&sidecar))
             .expect("archive exact accepted pair");
 
         prepare_guided_dataset_at(&storage, &manifest).expect("freeze dataset");
         let frozen_canonical = storage.build_dataset_dir.join(&filename);
-        let frozen_native = storage.build_dataset_dir.join("NativeRate").join(&filename);
+        let archived_native = storage.saved_root.join("Recordings").join(&archive_id[..2])
+            .join(&archive_id).join("native-rate.wav");
         assert_eq!(fs::read(&frozen_canonical).unwrap(), canonical_bytes);
-        assert_eq!(fs::read(&frozen_native).unwrap(), native_bytes);
+        assert!(!storage.build_dataset_dir.join("NativeRate").exists());
+        assert_eq!(fs::read(&archived_native).unwrap(), native_bytes);
 
         fs::write(&sidecar, b"source modified after freeze").unwrap();
-        assert_eq!(fs::read(&frozen_native).unwrap(), native_bytes);
+        assert_eq!(fs::read(&archived_native).unwrap(), native_bytes);
         assert_eq!(fs::read(&frozen_canonical).unwrap(), canonical_bytes);
+        assert_eq!(archived_frozen_review_matches(&storage).unwrap(), None);
+        fs::write(&frozen_canonical, b"changed").unwrap();
+        assert_eq!(archived_frozen_review_matches(&storage).unwrap(), Some(false));
         let _ = fs::remove_dir_all(root);
     }
 

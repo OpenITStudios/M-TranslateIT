@@ -756,7 +756,7 @@ fn ensure_accepted_take_backup_absent(path: &Path) -> Result<(), String> {
 fn ensure_accepted_take_sources_safe(
     storage: &VoiceLabStoragePaths,
     manifest: &GuidedDatasetManifest,
-) -> Result<Vec<bool>, String> {
+) -> Result<Vec<Option<String>>, String> {
     let native_root = storage.takes_dir.join("NativeRate");
     let native_root_available = match fs::symlink_metadata(&native_root) {
         Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => true,
@@ -765,7 +765,7 @@ fn ensure_accepted_take_sources_safe(
         Err(_) => return Err("voice_lab:accepted_native_directory_unknown".to_string()),
     };
 
-    let mut native_required = Vec::with_capacity(manifest.takes.len());
+    let mut archive_ids = Vec::with_capacity(manifest.takes.len());
     for take in &manifest.takes {
         let canonical = storage.takes_dir.join(&take.wav_file);
         let native = native_root.join(&take.wav_file);
@@ -792,14 +792,16 @@ fn ensure_accepted_take_sources_safe(
         // A mismatched/currently-unpublished pair must not be frozen into a
         // new dataset receipt. Genuine legacy canonical-only takes remain
         // supported, as they predate the native-rate sidecar contract.
-        if native_present && !recording_archive::guided_take_is_archived(
-            storage, take.line_id, &take.exact_text, &canonical, Some(&native),
-        )? {
-            return Err("voice_lab:accepted_native_pair_archive_unverified".to_string());
-        }
-        native_required.push(native_present);
+        let archive_id = if native_present {
+            Some(recording_archive::verified_archive_id_for_pair(
+                storage, take.line_id, &take.exact_text, &canonical, Some(&native),
+            )?.ok_or("voice_lab:accepted_native_pair_archive_unverified")?)
+        } else {
+            None
+        };
+        archive_ids.push(archive_id);
     }
-    Ok(native_required)
+    Ok(archive_ids)
 }
 
 pub(super) fn prepare_guided_dataset_at(
@@ -809,53 +811,23 @@ pub(super) fn prepare_guided_dataset_at(
     validate_guided_dataset_manifest(manifest)?;
     // This preflight is read-only and runs BEFORE dataset deletion and copying;
     // on failure preserve the existing Build snapshot and all Takes files.
-    let native_required = ensure_accepted_take_sources_safe(storage, manifest)?;
-    fs::create_dir_all(&storage.takes_dir)
-        .map_err(|error| format!("voice_lab:takes_directory_unavailable:{error}"))?;
-
-    if storage.build_dataset_dir.exists() {
-        fs::remove_dir_all(&storage.build_dataset_dir)
-            .map_err(|error| format!("voice_lab:build_dataset_cleanup_failed:{error}"))?;
+    let verified = ensure_accepted_take_sources_safe(storage, manifest)?;
+    let mut archive_ids = Vec::with_capacity(manifest.takes.len());
+    for (take, archive_id) in manifest.takes.iter().zip(verified) {
+        // Canonical-only legacy takes may predate immutable storage. Preserve
+        // them before replacing the old dataset; paired takes must already
+        // have the exact published archive verified during admission.
+        let id = match archive_id {
+            Some(id) => id,
+            None => archive_guided_take(
+                storage, take.line_id, &take.exact_text,
+                &storage.takes_dir.join(&take.wav_file), None,
+            )?,
+        };
+        archive_ids.push(id);
     }
-    fs::create_dir_all(&storage.build_dataset_dir)
-        .map_err(|error| format!("voice_lab:build_dataset_create_failed:{error}"))?;
-
-    // Preserve canonical GPT-SoVITS input and legacy canonical-only support.
-    // A native-rate sidecar admitted before the build snapshot was reset is
-    // REQUIRED to survive copying; disappearing/changed sidecars fail closed.
-    // Otherwise a mixed Accept state could be silently frozen without its
-    // native half and published as if it were a complete training take.
-    let native_source_root = storage.takes_dir.join("NativeRate");
-    let native_dataset_root = storage.build_dataset_dir.join("NativeRate");
-    for (take, native_is_required) in manifest.takes.iter().zip(native_required) {
-        let source = storage.takes_dir.join(&take.wav_file);
-        let target = storage.build_dataset_dir.join(&take.wav_file);
-        fs::copy(&source, &target)
-            .map_err(|error| format!("voice_lab:build_take_copy_failed:{error}"))?;
-        inspect_canonical_wav(&target)?;
-
-        if native_is_required {
-            let native = native_source_root.join(&take.wav_file);
-            let frozen_native = native_dataset_root.join(&take.wav_file);
-            fs::create_dir_all(&native_dataset_root)
-                .map_err(|error| format!("voice_lab:native_dataset_dir_failed:{error}"))?;
-            fs::copy(&native, &frozen_native)
-                .map_err(|error| format!("voice_lab:native_dataset_copy_failed:{error}"))?;
-            // Copy completion does not prove the two files still match the
-            // preflight-approved immutable pair. Re-verify the actual frozen
-            // bytes before they become a source for a new archive receipt.
-            if !recording_archive::guided_take_is_archived(
-                storage, take.line_id, &take.exact_text, &target, Some(&frozen_native),
-            )? {
-                return Err("voice_lab:frozen_native_pair_archive_unverified".to_string());
-            }
-        }
-    }
-
-    let manifest_path = storage.build_dataset_dir.join(DATASET_MANIFEST_FILE);
-    write_json(&manifest_path, manifest)?;
-    dataset_history::preserve_frozen_dataset(storage, manifest)?;
-    Ok(manifest_path)
+    archive_dataset::prepare_archived_dataset(storage, manifest, &archive_ids, false)?;
+    Ok(storage.build_dataset_dir.join(DATASET_MANIFEST_FILE))
 }
 
 pub(super) fn prepare_guided_dataset_from_archive_at(
@@ -863,7 +835,7 @@ pub(super) fn prepare_guided_dataset_from_archive_at(
     manifest: &GuidedDatasetManifest,
     archive_ids: &[String],
 ) -> Result<(), String> {
-    archive_dataset::prepare_archived_dataset(storage, manifest, archive_ids)
+    archive_dataset::prepare_archived_dataset(storage, manifest, archive_ids, true)
 }
 
 pub(super) fn validate_actor_package(dir: &Path) -> Result<VoiceActorPackageManifest, String> {
@@ -1225,7 +1197,7 @@ mod interrupted_accepted_dataset_admission_tests {
         let (root, storage) = isolated_storage("legacy_canonical_only");
         fs::write(storage.takes_dir.join("take_0001.wav"), canonical_wav()).unwrap();
         let required = ensure_accepted_take_sources_safe(&storage, &manifest()).unwrap();
-        assert_eq!(required, vec![false]);
+        assert_eq!(required, vec![None]);
         fs::remove_dir_all(root).unwrap();
     }
 
