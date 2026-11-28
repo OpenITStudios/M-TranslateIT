@@ -2,7 +2,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::engine::runtime_state::{
-    latest_runtime_session_state, runtime_generation_is_authoritative,
+    observe_runtime_session, runtime_generation_matches_epoch,
     APPLICATION_MEETING_OWNER_ID,
 };
 
@@ -367,24 +367,22 @@ fn worker_attempt_timing(response: &HelperBridgeWorkerResponse) -> Option<Meetin
     serde::Deserialize::deserialize(response.worker_response_json.get("worker_attempt_timing")?).ok()
 }
 
+// The epoch is the cheap cancellation fence; observe generation, authority
+// and phase together under the session mutex, without building a report.
+fn generation_in_phase(generation: u64, phase: &str) -> bool {
+    runtime_generation_matches_epoch(generation)
+        && observe_runtime_session(|snapshot| {
+            snapshot.is_some_and(|snapshot| snapshot.generation == generation
+                && snapshot.authority_active && snapshot.phase == phase)
+        }).unwrap_or(false)
+}
+
 fn generation_is_live(generation: u64) -> bool {
-    if !runtime_generation_is_authoritative(generation) {
-        return false;
-    }
-    latest_runtime_session_state()
-        .snapshot
-        .map(|snapshot| snapshot.generation == generation && snapshot.phase == "live")
-        .unwrap_or(false)
+    generation_in_phase(generation, "live")
 }
 
 fn generation_is_starting(generation: u64) -> bool {
-    if !runtime_generation_is_authoritative(generation) {
-        return false;
-    }
-    latest_runtime_session_state()
-        .snapshot
-        .map(|snapshot| snapshot.generation == generation && snapshot.phase == "starting")
-        .unwrap_or(false)
+    generation_in_phase(generation, "starting")
 }
 
 fn incoming_session_is_eligible(session_id: &str) -> bool {
@@ -395,15 +393,14 @@ fn incoming_session_is_eligible(session_id: &str) -> bool {
         return false;
     }
 
-    latest_runtime_session_state()
-        .snapshot
-        .map(|snapshot| {
+    observe_runtime_session(|snapshot| {
+        snapshot.is_some_and(|snapshot| {
             snapshot.owner_id == APPLICATION_MEETING_OWNER_ID
                 && snapshot.session_id == session_id
                 && snapshot.authority_active
                 && snapshot.phase == "live"
         })
-        .unwrap_or(false)
+    }).unwrap_or(false)
 }
 
 fn process_authoritative_finalized_outbound_pcm(

@@ -196,3 +196,25 @@ test("finalization checks only the required signal and clipping evidence before 
   assert.match(check, /!has_signal \|\| safe_ratio\(clipping_count, samples\.len\(\)\) > max_clipping_ratio/);
   assert.doesNotMatch(check, /frame_metrics\(|AudioEvidenceReport::from_samples/);
 });
+
+test("Meeting critical path borrows session authority without building diagnostic reports", () => {
+  const meeting = source("src-tauri/src/commands/meeting_session.rs");
+  const phase = meeting.slice(meeting.indexOf("fn generation_in_phase("), meeting.indexOf("fn process_authoritative_finalized_outbound_pcm("));
+  assert.doesNotMatch(phase, /latest_runtime_session_state\(|runtime_generation_is_authoritative\(/);
+  assert.match(phase, /runtime_generation_matches_epoch\(generation\)\s*&& observe_runtime_session/);
+  assert.match(phase, /snapshot\.generation == generation\s*&& snapshot\.authority_active && snapshot\.phase == phase/);
+  assert.match(phase, /generation_in_phase\(generation, "live"\)/);
+  assert.match(phase, /generation_in_phase\(generation, "starting"\)/);
+  assert.match(phase, /snapshot\.owner_id == APPLICATION_MEETING_OWNER_ID[\s\S]*?snapshot\.session_id == session_id[\s\S]*?snapshot\.authority_active[\s\S]*?snapshot\.phase == "live"/);
+  const turns = source("src-tauri/src/commands/meeting_session/committed_turns.rs");
+  const mutation = turns.slice(turns.indexOf("pub(super) fn commit_meeting_turn("), turns.indexOf("pub(super) fn interrupt_committed_turns_for_generation("));
+  assert.doesNotMatch(mutation, /latest_runtime_session_state\(/);
+  assert.equal((mutation.match(/observe_runtime_session\(\|snapshot\| live_turn_owner_matches/g) ?? []).length, 5);
+  assert.match(mutation, /if delivery_state != "interrupted" \{\s*if !observe_runtime_session/);
+  assert.match(mutation, /transcript_archive::queue_turn/);
+  const status = source("src-tauri/src/commands/meeting_session/session_state.rs");
+  assert.doesNotMatch(status, /latest_runtime_session_state\(/);
+  assert.match(status, /observe_runtime_session\(\|snapshot\| outbound_status_update_allowed/);
+  assert.match(status, /observe_runtime_session\(\|snapshot\| incoming_status_update_allowed/);
+  assert.match(status, /status\.timing\.take\(\)/);
+});

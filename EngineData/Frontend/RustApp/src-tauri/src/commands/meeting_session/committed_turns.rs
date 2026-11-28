@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
 
 use crate::engine::runtime_events::emit_meeting_runtime_event;
-use crate::engine::runtime_state::{latest_runtime_session_state, RuntimeSessionSnapshot};
+use crate::engine::runtime_state::{latest_runtime_session_state, observe_runtime_session, RuntimeSessionSnapshot};
 
 use super::super::helper_bridge_runtime::unix_ms;
 use super::transcript_archive;
@@ -615,8 +615,8 @@ pub(super) fn commit_meeting_turn(
     // Stop revokes runtime authority first, then obtains this turn mutex.
     // Recheck Live while holding it: a late ASR result cannot insert a
     // pending turn after Stop already finalized the old session.
-    let current = latest_runtime_session_state();
-    if !live_turn_owner_matches(current.snapshot.as_ref(), session_id, generation) {
+    if !observe_runtime_session(|snapshot| live_turn_owner_matches(snapshot, session_id, generation))
+        .unwrap_or(false) {
         return false;
     }
     let Some(store) = guard.as_mut() else {
@@ -664,8 +664,8 @@ pub(super) fn finish_meeting_turn_translation(
     // Translation may return after Stop, even when its pre-request check was
     // Live. Keep the final eligibility read inside this store lock, so it is
     // serialized with the Stop interruption of pending translations.
-    let current = latest_runtime_session_state();
-    if !live_turn_owner_matches(current.snapshot.as_ref(), session_id, generation) {
+    if !observe_runtime_session(|snapshot| live_turn_owner_matches(snapshot, session_id, generation))
+        .unwrap_or(false) {
         return false;
     }
     let Some(store) = guard.as_mut() else {
@@ -701,8 +701,8 @@ pub(super) fn begin_committed_playback(
     let Ok(mut guard) = committed_turn_store().lock() else {
         return false;
     };
-    let current = latest_runtime_session_state();
-    if !live_turn_owner_matches(current.snapshot.as_ref(), session_id, Some(generation)) {
+    if !observe_runtime_session(|snapshot| live_turn_owner_matches(snapshot, session_id, Some(generation)))
+        .unwrap_or(false) {
         return false;
     }
     let Some(store) = guard.as_mut() else {
@@ -740,8 +740,8 @@ pub(super) fn update_committed_turn_delivery_state(
     // must still belong to the current Live generation, or a late native
     // completion could falsely survive Stop as successfully delivered.
     if delivery_state != "interrupted" {
-        let current = latest_runtime_session_state();
-        if !live_turn_owner_matches(current.snapshot.as_ref(), session_id, Some(generation)) {
+        if !observe_runtime_session(|snapshot| live_turn_owner_matches(snapshot, session_id, Some(generation)))
+            .unwrap_or(false) {
             return false;
         }
     }
@@ -781,8 +781,8 @@ pub(super) fn update_committed_turn_outbound_timing(
     let Ok(mut guard) = committed_turn_store().lock() else {
         return false;
     };
-    let current = latest_runtime_session_state();
-    if !live_turn_owner_matches(current.snapshot.as_ref(), session_id, Some(generation)) {
+    if !observe_runtime_session(|snapshot| live_turn_owner_matches(snapshot, session_id, Some(generation)))
+        .unwrap_or(false) {
         return false;
     }
     let Some(store) = guard.as_mut() else {

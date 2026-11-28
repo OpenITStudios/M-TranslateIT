@@ -6,7 +6,7 @@ use crate::engine::audio::finalized_utterance::{
 };
 use crate::engine::audio::meeting_sound_capture::meeting_sound_capture_status;
 use crate::engine::runtime_state::{
-    latest_runtime_session_state, RuntimeSessionSnapshot, APPLICATION_MEETING_OWNER_ID,
+    observe_runtime_session, RuntimeSessionSnapshot, APPLICATION_MEETING_OWNER_ID,
 };
 
 use super::super::helper_bridge_runtime::unix_ms;
@@ -233,8 +233,8 @@ pub(super) fn update_outbound_status(
         // Read the runtime owner under the existing outbound status mutex.
         // If Stop already revoked the generation, its cleared status cannot
         // be repopulated; if this write wins first, Stop clears it afterward.
-        let owner = latest_runtime_session_state();
-        if !outbound_status_update_allowed(owner.snapshot.as_ref(), generation, session_id)
+        if !observe_runtime_session(|snapshot| outbound_status_update_allowed(snapshot, generation, session_id))
+            .unwrap_or(false)
             || !outbound_status_sequence_is_fresh(&status, generation, session_id, utterance_sequence)
         {
             // Also suppress an obsolete error incident: the committed turn
@@ -245,7 +245,7 @@ pub(super) fn update_outbound_status(
             && status.session_id.as_deref() == Some(session_id)
             && status.utterance_sequence == utterance_sequence
         {
-            status.timing.clone()
+            status.timing.take()
         } else {
             None
         };
@@ -407,8 +407,8 @@ pub(super) fn update_incoming_status(
         // Check the runtime owner while holding the status lock. Stop first
         // revokes authority, then resets status; therefore an old completion
         // cannot republish after the next Meeting claims this surface.
-        let owner = latest_runtime_session_state();
-        if !incoming_status_update_allowed(&status, session_id, owner.snapshot.as_ref()) {
+        if !observe_runtime_session(|snapshot| incoming_status_update_allowed(&status, session_id, snapshot))
+            .unwrap_or(false) {
             return;
         }
         let capture = meeting_sound_capture_status();
