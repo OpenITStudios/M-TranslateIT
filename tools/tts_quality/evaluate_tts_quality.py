@@ -147,6 +147,9 @@ def load_result_bundle(path: Path) -> dict:
             "speaker_similarity": float(similarity),
             "artifact_flags": artifacts,
             "wav_sha256": wav_sha256,
+            # Optional timing evidence is independent of the audio-quality gate.
+            "elapsed_ms": row.get("elapsed_ms"),
+            "sample_count": row.get("sample_count"),
         }
     return {
         "results": output,
@@ -160,6 +163,34 @@ def load_result_bundle(path: Path) -> dict:
             if isinstance(raw, dict)
             else ""
         ),
+    }
+
+
+def native_timing_summary(cases: list[dict], results: dict) -> dict | None:
+    """Complete ordered native handoff receipts only; no partial aggregates."""
+    elapsed = []
+    samples = []
+    for case in cases:
+        row = results.get(case["id"], {})
+        ms = row.get("elapsed_ms")
+        count = row.get("sample_count")
+        if type(ms) is not int or not 0 <= ms <= 2**64 - 1:
+            return None
+        if type(count) is not int or not 0 < count <= 44_100 * 60:
+            return None
+        elapsed.append(ms)
+        samples.append(count)
+    if not elapsed:
+        return None
+    ordered = sorted(elapsed)
+    return {
+        "case_count": len(elapsed),
+        "first_ms": elapsed[0],
+        "p50_ms": ordered[(len(ordered) * 50 + 99) // 100 - 1],
+        "p95_ms": ordered[(len(ordered) * 95 + 99) // 100 - 1],
+        "max_ms": ordered[-1],
+        "audio_sample_count": sum(samples),
+        "aggregate_rtf": round(sum(elapsed) * 44_100 / (1000 * sum(samples)), 6),
     }
 
 
@@ -230,6 +261,11 @@ def evaluate(
         "source_identity": source_identity or None,
         "provenance_matches_corpus": provenance_matches,
         "complete_result_set": not missing and not unknown and provenance_matches,
+        "native_timing": (
+            native_timing_summary(corpus["cases"], results)
+            if not missing and not unknown and provenance_matches and source_identity
+            else None
+        ),
         "missing_case_ids": missing,
         "unknown_case_ids": unknown,
         "critical_failures": critical_failures,
@@ -315,6 +351,8 @@ def compare_reports(
         "complete_result_sets": (
             baseline["complete_result_set"] and candidate["complete_result_set"]
         ),
+        "baseline_native_timing": baseline["native_timing"],
+        "candidate_native_timing": candidate["native_timing"],
         "critical_regressions": critical_regressions,
         "critical_recoveries": critical_recoveries,
         "artifact_regressions": artifact_regressions,

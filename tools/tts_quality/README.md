@@ -97,6 +97,8 @@ Result bundles use:
 }
 ```
 
+Optional native performance evidence: add integer `elapsed_ms` (the existing native owner handoff-to-reply measurement, excluding scheduler wait, preparation and playback) and `sample_count` (actual complete 44.1 kHz mono F32 PCM samples before WAV encoding) from the exact successful synthesis receipt to each case. Do not use whole Meeting latency, GPU kernel time, WAV duration estimates or failed attempts in these fields. The evaluator reports first, nearest-rank P50/P95, maximum latency and aggregate real-time factor (sum of measured seconds / sum of PCM seconds) only with all 30 cases, valid timing, matching corpus fingerprint and nonempty source identity. Missing/malformed timing leaves the separate timing summary null without changing the existing quality gate. Comparison exposes both summaries; compare only equivalent ordered runs, exact model/projector, selected reference, device, warm-up policy and source/build identities; report quality alongside timing. Capture is not automated by the evaluator and no timing is inferred from WAVs.
+
 Promotion comparison is fail-closed when provenance is missing/mismatched or when a new critical/artifact regression appears. It is deliberately not a standalone verdict on naturalness or speaker fidelity; listening acceptance remains TARGET_WINDOWS evidence.
 
 

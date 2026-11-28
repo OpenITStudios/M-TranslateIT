@@ -63,6 +63,31 @@ def main() -> int:
     assert report["critical_failures"] == 0
     assert report["mean_intelligibility_wer"] == 0.0
     assert report["mean_speaker_similarity"] == 0.9
+    assert report["native_timing"] is None  # historical bundles stay valid
+    timed = evidence(corpus)
+    for index, case in enumerate(corpus["cases"], 1):
+        timed[case["id"]].update(elapsed_ms=index * 100, sample_count=44_100)
+    def timing(rows, identity="native-fixture", fp=fingerprint):
+        return evaluator.evaluate(corpus, rows, result_corpus_fingerprint=fp,
+                                  source_identity=identity)["native_timing"]
+    assert timing(timed) == {
+        "case_count": 30, "first_ms": 100, "p50_ms": 1500,
+        "p95_ms": 2900, "max_ms": 3000,
+        "audio_sample_count": 30 * 44_100, "aggregate_rtf": 1.55,
+    }
+    assert timing(timed, identity="") is None
+    assert timing(timed, fp="") is None
+    first = corpus["cases"][0]["id"]
+    for field, value in [("elapsed_ms", None), ("elapsed_ms", True),
+                         ("elapsed_ms", -1), ("elapsed_ms", 1.5),
+                         ("sample_count", 0), ("sample_count", 44_100 * 60 + 1)]:
+        invalid = {key: dict(row) for key, row in timed.items()}
+        invalid[first][field] = value
+        assert timing(invalid) is None
+    incomplete = dict(timed)
+    del incomplete[first]
+    assert timing(incomplete) is None
+    assert timing({**timed, "unknown": timed[first]}) is None
 
     # Complete rows and source identity cannot substitute for the corpus identity.
     missing_fingerprint = evaluator.evaluate(

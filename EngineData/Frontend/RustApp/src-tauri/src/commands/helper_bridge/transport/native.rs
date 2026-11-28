@@ -546,7 +546,7 @@ pub(super) fn dispatch(
         return expired_deferred_response(task, request_id, priority);
     }
     let bridge_generation = host.generation_token;
-    let translation_started = (task == "translate").then(Instant::now);
+    let inference_started = (task == "translate" || is_voice).then(Instant::now);
     let pending_result = {
         let owner = host.native_inference.as_mut().expect("checked owner");
         if let Some(reference) = reference {
@@ -585,7 +585,8 @@ pub(super) fn dispatch(
     // The original permit outlives the native reply. Do not wait under the
     // lifecycle lock; Stop can signal and retain the exact active owner.
     let result = pending.wait_output();
-    let translation_elapsed_ms = translation_started.map(observed_elapsed_ms);
+    let native_elapsed_ms = inference_started.map(observed_elapsed_ms);
+    let translation_elapsed_ms = if task == "translate" { native_elapsed_ms } else { None };
     let Ok(mut host) = runtime().lock() else {
         return fail("helper_bridge:lock_poisoned_after_native_response", "Native inference result ownership could not be verified.");
     };
@@ -662,6 +663,13 @@ pub(super) fn dispatch(
         }
     };
     let mut body = body;
+    // Same owner handoff-to-reply boundary as MT; not GPU-only time.
+    // Earlier admission/scope failures have no native synthesis receipt.
+    if is_voice {
+        if let Some(elapsed_ms) = native_elapsed_ms {
+            body["elapsed_ms"] = json!(elapsed_ms);
+        }
+    }
     body["request_id"] = json!(request_id);
     body["scheduler_priority"] = json!(priority.label());
     body["scheduler_wait_ms"] = json!(permit.scheduler_wait_ms());

@@ -360,7 +360,7 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
          inp.n_codes = codes.size();
          mtmd_gen_out out{};
          if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
-@@ -3727,81 +3763,95 @@
+@@ -3727,81 +3763,93 @@
          return out.embd;
      }
  
@@ -412,15 +412,17 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
 -        std::vector<int32_t> idx;
 +        auto & idx = sample_indices;
 +        idx.clear();
++        float lmax = -INFINITY;
          for (int32_t i = 0; i < n_vocab; i++) {
              if (l[i] >= kth && l[i] > -INFINITY) {
                  idx.push_back(i);
++                lmax = std::max(lmax, l[i]);
              }
          }
-         float lmax = -INFINITY;
-         for (int32_t i : idx) {
-             lmax = std::max(lmax, l[i]);
-         }
+-        float lmax = -INFINITY;
+-        for (int32_t i : idx) {
+-            lmax = std::max(lmax, l[i]);
+-        }
 -        std::vector<double> p(idx.size());
 +        auto & p = sample_probabilities;
 +        p.resize(idx.size());
@@ -462,7 +464,7 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
  
      // frames with all codebooks known
      size_t n_ready() const {
-@@ -3846,18 +3896,17 @@
+@@ -3846,18 +3894,17 @@
      // the silence frames are decoded too, as left context
      bool decode_wav(bool final) {
          const size_t n_frames = n_ready();
@@ -483,7 +485,7 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
                  return false;
              }
              n_decoded += n;
-@@ -3892,7 +3941,8 @@
+@@ -3892,7 +3939,8 @@
          return true;
      }
  
@@ -493,7 +495,7 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
      size_t seg_idx = 0;
      int    seg_pos = 0;
  
-@@ -5659,7 +5709,11 @@
+@@ -5659,7 +5707,11 @@
      }
  }
  
