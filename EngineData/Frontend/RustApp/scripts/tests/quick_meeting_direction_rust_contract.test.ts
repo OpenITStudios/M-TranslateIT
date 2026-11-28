@@ -11,7 +11,7 @@ test("incoming direction is snapshotted per utterance and survives deferral", ()
   assert.match(incoming, /meeting_listen_target_language/);
   assert.match(deferred, /source_language: String/);
   assert.match(deferred, /target_language: String/);
-  assert.match(incoming, /deferred_direction/);
+  assert.match(incoming, /deferred_direction\s*\.unwrap_or_else\(\|\| \{\s*let settings = load_settings\(\);/);
 });
 
 test("outbound voice remains explicitly Indonesian to English", () => {

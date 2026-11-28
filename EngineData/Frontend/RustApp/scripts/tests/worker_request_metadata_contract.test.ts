@@ -27,13 +27,14 @@ test("native synthesis borrows text and actor authority through admission and re
   assert.match(native, /actor_token\.expect\("checked token"\), preparing, \(\*text\)\.to_owned\(\), deadline/);
   assert.match(native, /token\.is_empty\(\) \|\| token\.len\(\) > 512/);
   assert.match(native, /\*\*slot = Some\(samples\)/);
-  for (const caller of [read("meeting_session/outbound_pipeline.rs"), read("helper_bridge/functional_probe.rs")]) {
-    const call = caller.slice(caller.indexOf("synthesize_native_voice(json!({"));
-    assert.ok(call.startsWith("synthesize_native_voice(json!({"));
-    const metadata = call.slice(0, call.indexOf("}),"));
-    assert.doesNotMatch(metadata, /"text":|"expected_actor_token":/);
-    assert.match(call, /\}\), &?translated_(?:text|fixture), &actor_token\)/);
-  }
+  const outbound = read("meeting_session/outbound_pipeline.rs");
+  assert.match(outbound, /synthesize_native_voice\(\s*turn\.worker_metadata\(None\), translated_text, &actor_token,?\s*\)/);
+  const probe = read("helper_bridge/functional_probe.rs");
+  const call = probe.slice(probe.indexOf("synthesize_native_voice(json!({"));
+  assert.ok(call.startsWith("synthesize_native_voice(json!({"));
+  const metadata = call.slice(0, call.indexOf("}),"));
+  assert.doesNotMatch(metadata, /"text":|"expected_actor_token":/);
+  assert.match(call, /\}\), &?translated_fixture, &actor_token\)/);
 });
 
 test("native scope fences observe borrowed session identity without building diagnostics", () => {
@@ -149,4 +150,25 @@ test("ASR releases completed input storage and reuses decoder text batches", () 
   assert.match(mt, /decode_text_prefill\(mt, tokens\.data\(\), static_cast<size_t>\(n\), next_pos, true, control\)/);
   const patch = readFileSync(new URL("../../../../../tools/translation_quality/llama-strict-cuda.patch", import.meta.url), "utf8");
   assert.match(patch, /mtmd_audio_fill_entries\(mels, false, out\.entries\);[\s\S]*?\+    std::vector<float>\(\)\.swap\(out\.samples\);/);
+});
+
+
+test("Meeting stages share one typed event identity and preserve boundary metadata", () => {
+  const meeting = read("meeting_session.rs");
+  const outbound = read("meeting_session/outbound_pipeline.rs");
+  const incoming = read("meeting_session/incoming_pipeline.rs");
+  const metadata = meeting.slice(meeting.indexOf("fn worker_metadata("), meeting.indexOf("mod meeting_turn_metadata_tests"));
+  for (const field of ["meeting_session_id", "meeting_lane", "meeting_generation", "meeting_sequence", "utterance_id", "source_speech_duration_ms"]) {
+    assert.ok(metadata.includes('"' + field + '"'));
+  }
+  assert.doesNotMatch(metadata, /"text"|"expected_actor_token"|"audio_path"|"language"/);
+  assert.match(outbound, /send_helper_worker_pcm_task\(\s*turn\.worker_metadata\(Some\(speech_duration_ms\)\)/);
+  assert.match(outbound, /process_outbound_transcript\(\s*turn,/);
+  assert.match(outbound, /send_helper_meeting_translation\(\s*turn\.worker_metadata\(None\)/);
+  assert.match(incoming, /send_helper_worker_pcm_task\(\s*turn\.worker_metadata\(None\)/);
+  assert.match(incoming, /translate_and_commit_incoming_transcript\(\s*turn,/);
+  assert.match(incoming, /send_helper_meeting_translation\(\s*turn\.worker_metadata\(None\)/);
+  assert.match(incoming, /MeetingTurnIdentity \{ session_id, generation: None, event_sequence, utterance_id \},\s*&transcript/);
+  assert.doesNotMatch(outbound + incoming, /"meeting_session_id":|"meeting_sequence":|"utterance_id":/);
+  assert.match(meeting, /fn native_stage_metadata_preserves_lane_identity_and_exact_fields/);
 });

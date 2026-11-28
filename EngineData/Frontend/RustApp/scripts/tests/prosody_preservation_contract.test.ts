@@ -11,7 +11,9 @@ test("prosody preservation promotes measured speech duration through the outboun
   assert.match(utterance, /speech_duration_ms: u64/);
   assert.match(utterance, /duration_ms\(speech_end, state\.sample_rate_hz\)/);
   assert.match(consumer, /utterance\.speech_duration_ms/);
-  assert.match(outbound, /"source_speech_duration_ms": speech_duration_ms/);
+  const meeting = readFileSync(new URL("../../src-tauri/src/commands/meeting_session.rs", import.meta.url), "utf8");
+  assert.match(outbound, /turn\.worker_metadata\(Some\(speech_duration_ms\)\)/);
+  assert.match(meeting, /metadata\["source_speech_duration_ms"\] = serde_json::json!\(duration\)/);
   assert.match(outbound, /"source_text": transcript\.clone\(\)/);
 });
 

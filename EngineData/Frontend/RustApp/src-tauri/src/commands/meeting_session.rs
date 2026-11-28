@@ -275,6 +275,62 @@ pub struct MeetingLiveReadRequest {
     known_revision: Option<String>,
 }
 
+// One borrowed identity follows a finalized turn through all native stages.
+#[derive(Clone, Copy)]
+struct MeetingTurnIdentity<'a> {
+    session_id: &'a str,
+    generation: Option<u64>,
+    event_sequence: u64,
+    utterance_id: u64,
+}
+
+impl MeetingTurnIdentity<'_> {
+    // Preserve the existing worker metadata contract at its boundary.
+    // Incoming has no generation field; only outbound ASR carries duration.
+    fn worker_metadata(self, speech_duration_ms: Option<u64>) -> Value {
+        let mut metadata = serde_json::json!({
+            "meeting_session_id": self.session_id,
+            "meeting_lane": if self.generation.is_some() { "you" } else { "incoming" },
+            "meeting_sequence": self.event_sequence,
+            "utterance_id": self.utterance_id,
+        });
+        if let Some(generation) = self.generation {
+            metadata["meeting_generation"] = serde_json::json!(generation);
+            if let Some(duration) = speech_duration_ms {
+                metadata["source_speech_duration_ms"] = serde_json::json!(duration);
+            }
+        }
+        metadata
+    }
+}
+
+#[cfg(test)]
+mod meeting_turn_metadata_tests {
+    use super::MeetingTurnIdentity;
+    use serde_json::json;
+
+    #[test]
+    fn native_stage_metadata_preserves_lane_identity_and_exact_fields() {
+        let outbound = MeetingTurnIdentity {
+            session_id: "meeting-1", generation: Some(7), event_sequence: 9, utterance_id: 8,
+        };
+        let expected = json!({
+            "meeting_session_id": "meeting-1", "meeting_lane": "you",
+            "meeting_generation": 7, "meeting_sequence": 9, "utterance_id": 8,
+        });
+        assert_eq!(outbound.worker_metadata(None), expected);
+        let mut asr = expected;
+        asr["source_speech_duration_ms"] = json!(1200);
+        assert_eq!(outbound.worker_metadata(Some(1200)), asr);
+        let incoming = MeetingTurnIdentity { generation: None, ..outbound };
+        assert_eq!(incoming.worker_metadata(None), json!({
+            "meeting_session_id": "meeting-1", "meeting_lane": "incoming",
+            "meeting_sequence": 9, "utterance_id": 8,
+        }));
+        assert_eq!(incoming.worker_metadata(Some(1200)), incoming.worker_metadata(None));
+    }
+}
+
 // The parsed receipt owns its strings. Borrow validated text while the
 // receipt is alive; allocate only when a downstream owner needs to retain it.
 fn worker_text_ref<'a>(response: &'a HelperBridgeWorkerResponse, key: &str) -> Option<&'a str> {

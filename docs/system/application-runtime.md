@@ -110,6 +110,10 @@ matched target timing proving repeated inference dominates warm Start.
 Do not replace the full functional probe with cached readiness or file
 presence on this source evidence alone.
 
+### Meeting request identity
+
+The outbound ASR, MT and TTS stages and incoming ASR/MT stages use one borrowed Meeting turn identity (session, optional generation, sequence and utterance ID). The existing helper boundary metadata is constructed in one place with exact prior fields; incoming omits generation, outbound ASR alone carries source speech duration. PCM and model text remain typed, separate from metadata. Deferred incoming ASR reuses its captured language direction without another display Settings read; strict route admission and the existing deadline remain unchanged. No new scheduler or transport contract is introduced.
+
 ### Worker response ownership
 
 The newline-JSON worker transport parses and validates each received response

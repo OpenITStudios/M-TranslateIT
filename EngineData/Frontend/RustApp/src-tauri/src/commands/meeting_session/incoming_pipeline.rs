@@ -1,5 +1,3 @@
-use serde_json::json;
-
 use crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance;
 use crate::engine::runtime_settings::load_settings;
 
@@ -13,7 +11,7 @@ use super::incoming_deferred::{
     take_due_deferred_incoming, DeferredIncomingJob, DeferredIncomingStage,
     IncomingAsrDisposition, MAX_DEFERRED_INCOMING,
 };
-use super::{incoming_session_is_eligible, validated_meeting_translation, worker_blocker};
+use super::{incoming_session_is_eligible, validated_meeting_translation, worker_blocker, MeetingTurnIdentity};
 use super::session_state::update_incoming_status;
 use super::super::helper_bridge::{
     incoming_deferred_for_required_outbound, send_helper_worker_pcm_task, send_helper_meeting_translation,
@@ -52,12 +50,11 @@ fn process_incoming_pcm_with_direction(
     {
         return IncomingAudioProcessResult::Complete;
     }
-    let settings = load_settings();
     let (source_language, target_language) = deferred_direction
-        .unwrap_or_else(|| (
-            settings.meeting_listen_source_language,
-            settings.meeting_listen_target_language,
-        ));
+        .unwrap_or_else(|| {
+            let settings = load_settings();
+            (settings.meeting_listen_source_language, settings.meeting_listen_target_language)
+        });
 
     update_incoming_status(
         session_id,
@@ -69,13 +66,11 @@ fn process_incoming_pcm_with_direction(
     // Keep only the small event identity after transferring PCM ownership.
     let owned_session_id = utterance.session_id.clone();
     let session_id = owned_session_id.as_str();
+    let turn = MeetingTurnIdentity {
+        session_id, generation: None, event_sequence, utterance_id,
+    };
     let (asr, deferred_utterance) = send_helper_worker_pcm_task(
-        json!({
-            "meeting_session_id": session_id,
-            "meeting_lane": "incoming",
-            "meeting_sequence": event_sequence,
-            "utterance_id": utterance_id,
-        }),
+        turn.worker_metadata(None),
         &source_language,
         utterance,
         noise_suppression_enabled,
@@ -179,9 +174,7 @@ fn process_incoming_pcm_with_direction(
     }
 
     let held = translate_and_commit_incoming_transcript(
-        session_id,
-        event_sequence,
-        utterance_id,
+        turn,
         transcript,
         &source_language,
         &target_language,
@@ -232,15 +225,14 @@ fn process_incoming_pcm_with_direction(
 }
 
 fn translate_and_commit_incoming_transcript(
-    session_id: &str,
-    event_sequence: u64,
-    utterance_id: u64,
+    turn: MeetingTurnIdentity<'_>,
     transcript: &str,
     source_language: &str,
     target_language: &str,
     allow_defer: bool,
     deferred_deadline: Option<Instant>,
 ) -> bool {
+    let MeetingTurnIdentity { session_id, event_sequence, utterance_id, .. } = turn;
     // A deferred transcript can outlive the earlier ASR admission. Never
     // start MiLMMT under a Codex/unverified engine or revoked Meeting.
     if !incoming_session_is_eligible(session_id)
@@ -256,12 +248,7 @@ fn translate_and_commit_incoming_transcript(
         "Final Meeting Sound transcript is being translated.",
     );
     let translation = send_helper_meeting_translation(
-        json!({
-            "meeting_session_id": session_id,
-            "meeting_lane": "incoming",
-            "meeting_sequence": event_sequence,
-            "utterance_id": utterance_id,
-        }),
+        turn.worker_metadata(None),
         transcript, source_language, target_language, deferred_deadline,
     );
     if !incoming_session_is_eligible(session_id) {
@@ -391,9 +378,7 @@ pub(super) fn drain_due_deferred_incoming(session_id: &str) {
                 target_language,
             } => {
                 let held = translate_and_commit_incoming_transcript(
-                    session_id,
-                    event_sequence,
-                    utterance_id,
+                    MeetingTurnIdentity { session_id, generation: None, event_sequence, utterance_id },
                     &transcript,
                     &source_language,
                     &target_language,

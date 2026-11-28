@@ -1,4 +1,3 @@
-use serde_json::json;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -21,7 +20,7 @@ use crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance;
 use super::{
     generation_is_live, validated_meeting_asr_transcript, validated_meeting_translation,
     worker_blocker, worker_number,
-    MeetingOutboundProcessResult,
+    MeetingOutboundProcessResult, MeetingTurnIdentity,
 };
 use super::playback_runtime::{
     cleanup_job, enqueue_meeting_playback, PreparedPlaybackJob,
@@ -209,15 +208,11 @@ pub(super) fn process_outbound_pcm(
     // Keep only the small event identity after transferring PCM ownership.
     let owned_session_id = utterance.session_id.clone();
     let session_id = owned_session_id.as_str();
+    let turn = MeetingTurnIdentity {
+        session_id, generation: Some(generation), event_sequence, utterance_id,
+    };
     let (asr, _) = send_helper_worker_pcm_task(
-        json!({
-            "meeting_session_id": session_id,
-            "meeting_lane": "you",
-            "meeting_generation": generation,
-            "meeting_sequence": event_sequence,
-            "utterance_id": utterance_id,
-            "source_speech_duration_ms": speech_duration_ms,
-        }),
+        turn.worker_metadata(Some(speech_duration_ms)),
         "id",
         utterance,
         noise_suppression_enabled,
@@ -278,10 +273,7 @@ pub(super) fn process_outbound_pcm(
     let transcript = transcript.unwrap_or_default();
     // The ASR owner already released its PCM before returning.
     process_outbound_transcript(
-        generation,
-        session_id,
-        event_sequence,
-        utterance_id,
+        turn,
         source_epoch,
         transcript,
         timing,
@@ -289,14 +281,13 @@ pub(super) fn process_outbound_pcm(
 }
 
 fn process_outbound_transcript(
-    generation: u64,
-    session_id: &str,
-    event_sequence: u64,
-    utterance_id: u64,
+    turn: MeetingTurnIdentity<'_>,
     source_epoch: u64,
     transcript: &str,
     mut timing: OutboundTimingContext,
 ) -> MeetingOutboundProcessResult {
+    let MeetingTurnIdentity { session_id, generation, event_sequence, utterance_id } = turn;
+    let generation = generation.unwrap_or_default();
     if !super::local_translated_meeting_route_admitted() {
         return unadmitted_outbound_result(generation, session_id, event_sequence, utterance_id);
     }
@@ -355,13 +346,7 @@ fn process_outbound_transcript(
     }
     let translation_started_at = Instant::now();
     let translation = send_helper_meeting_translation(
-        json!({
-            "meeting_session_id": session_id,
-            "meeting_lane": "you",
-            "meeting_generation": generation,
-            "meeting_sequence": event_sequence,
-            "utterance_id": utterance_id,
-        }),
+        turn.worker_metadata(None),
         transcript, "id", "en", None,
     );
     timing.metrics.translation_ms = Some(elapsed_millis(translation_started_at, Instant::now()));
@@ -473,13 +458,9 @@ fn process_outbound_transcript(
         );
     }
     let tts_started_at = Instant::now();
-    let (tts, native_pcm) = synthesize_native_voice(json!({
-        "meeting_session_id": session_id,
-        "meeting_lane": "you",
-        "meeting_generation": generation,
-        "meeting_sequence": event_sequence,
-        "utterance_id": utterance_id,
-    }), translated_text, &actor_token);
+    let (tts, native_pcm) = synthesize_native_voice(
+        turn.worker_metadata(None), translated_text, &actor_token,
+    );
     timing.metrics.tts_ms = Some(elapsed_millis(tts_started_at, Instant::now()));
     timing.metrics.tts_scheduler_wait_ms = super::worker_scheduler_wait_ms(&tts);
     timing.metrics.tts_worker_attempt_timing = super::worker_attempt_timing(&tts);
