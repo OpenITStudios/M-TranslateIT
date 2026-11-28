@@ -29,7 +29,11 @@ test("explicit bootstrap validates its replacement receipt before mapping", () =
   const body = facade.slice(start, facade.indexOf("export async function loadProductRuntimeSnapshotFromApplication", start));
   assert.match(body, /initialApplication \?\? await applicationRuntimeApi\.getSnapshot\(\)/);
   assert.match(body, /requireApplicationSnapshot\(application\);\s*if \(shouldBootstrapLocalRuntime\(application\)\)/);
-  assert.match(body, /dispatchIntent\("ensure_runtime_ready"\)\)\.snapshot;\s*requireApplicationSnapshot\(application\);\s*if \(application\.revision <= initialRevision\)/);
+  assert.match(body, /application = \(await prepareLocalRuntime\(application\.revision\)\)\.snapshot;/);
+  const preparation = facade.slice(facade.indexOf("export async function prepareLocalRuntime("), facade.indexOf("async function mapApplicationSnapshotToProduct("));
+  assert.match(preparation, /dispatchIntent\("ensure_runtime_ready"\);\s*requireApplicationSnapshot\(outcome\.snapshot\);\s*if \(outcome\.snapshot\.revision <= initialRevision\)/);
+  assert.match(preparation, /throw new Error\("TranslateIT runtime preparation returned a stale snapshot\."\)/);
+  assert.match(preparation, /return outcome;/);
   assert.match(body, /return mapApplicationSnapshotToProduct\(application\)/);
 });
 

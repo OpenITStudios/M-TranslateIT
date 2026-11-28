@@ -52,7 +52,7 @@ The floating translation overlay remains frontend-owned. It manages window prese
 
 ### Snapshot and bootstrap reconciliation
 
-Returning startup, explicit refresh and setup recovery share the existing Local cold-start predicate. Startup still renders the shell before requesting preparation; ordinary events never bootstrap. A valid setup receipt can seed the explicit refresh without another snapshot IPC. The replacement bootstrap receipt must be available and newer, and its Settings are the only Settings mapped into that revision. The shell's new-setup path commits the canonical sequence and Settings without a discarded worker capability read; First Setup retains its independent readiness/readback checks. Existing native admission, event ordering, helper generation checks and fallback recovery remain unchanged.
+Returning startup, explicit refresh and setup recovery share the existing Local cold-start predicate. Startup still renders the shell before requesting preparation; ordinary events never bootstrap. A valid setup receipt can seed the explicit refresh without another snapshot IPC. Startup and explicit refresh use the same bootstrap receipt validator: the replacement receipt must be available and newer, and its Settings are the only Settings mapped into that revision. Startup action notices are applied only while their exact reconciled revision remains current. The shell's new-setup path commits the canonical sequence and Settings without a discarded worker capability read; First Setup retains its independent readiness/readback checks. Existing native admission, event ordering, helper generation checks and fallback recovery remain unchanged.
 
 ### Snapshot cost rule
 

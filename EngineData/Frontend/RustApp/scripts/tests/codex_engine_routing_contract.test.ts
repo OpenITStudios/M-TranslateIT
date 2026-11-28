@@ -152,8 +152,11 @@ test("P11 protects worker, final transcript and native playback without a second
 });
 
 test("startup does not warm the local AI worker for a selected Codex engine", () => {
-  assert.match(boot, /initialSnapshot\.settings\.translation_engine === "local"/);
-  assert.match(facade, /settings\.translation_engine === "local"/);
+  const policy = facade.slice(facade.indexOf("export function shouldBootstrapLocalRuntime("), facade.indexOf("export async function prepareLocalRuntime("));
+  assert.match(policy, /snapshot\?\.settings\.translation_engine === "local"\s*&& snapshot\.settings\.meeting_setup_state !== "new"\s*&& snapshot\.helper\?\.state === "not_started"/);
+  assert.match(boot, /shouldBootstrapLocalRuntime\(initialSnapshot\)\s*&& shouldBootstrapLocalRuntime\(applicationController\.read\(\)\.snapshot\)/);
+  assert.match(boot, /await prepareLocalRuntime\(applicationController\.read\(\)\.applicationRevision\)/);
+  assert.match(facade, /if \(shouldBootstrapLocalRuntime\(application\)\) \{\s*application = \(await prepareLocalRuntime\(application\.revision\)\)\.snapshot;/);
   assert.match(readiness, /meeting_session:codex_voice_not_admitted/);
   assert.match(readiness, /meeting_session:settings_unverified/);
   assert.match(readiness, /Select Local in Settings to start offline translation/);

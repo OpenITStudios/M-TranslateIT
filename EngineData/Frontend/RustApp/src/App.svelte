@@ -9,6 +9,8 @@
   } from "./app/bridge/applicationRuntimeApi";
   import {
     runtimeProductFacade,
+    prepareLocalRuntime,
+    requireApplicationSnapshot,
     shouldBootstrapLocalRuntime,
     type ProductSetupAction,
     type ProductSetupResult,
@@ -599,10 +601,9 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     const boot = async () => {
       let initialSnapshot: ApplicationSnapshot | null = null;
       try {
-        initialSnapshot = await applicationRuntimeApi.getSnapshot();
-        if (initialSnapshot.revision <= 0 || initialSnapshot.lifecycle === "unavailable") {
-          throw new Error("Initial application state was unavailable.");
-        }
+        const observed = await applicationRuntimeApi.getSnapshot();
+        requireApplicationSnapshot(observed);
+        initialSnapshot = observed;
         if (disposed) return;
         applyRefreshResult(
           await applicationController.refreshFromApplication(
@@ -622,19 +623,17 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
         ) {
           setKnownNotice("Preparing the local AI worker. Meeting and Settings remain accessible while it starts.", "progress");
           void (async () => {
-            const outcome = await applicationRuntimeApi.dispatchIntent("ensure_runtime_ready");
+            const outcome = await prepareLocalRuntime(applicationController.read().applicationRevision);
             if (disposed) return;
-            if (outcome.snapshot.revision > 0 && outcome.snapshot.lifecycle !== "unavailable") {
-              await refreshFromApplicationEvent(outcome.snapshot, outcome.intent);
-            }
+            await refreshFromApplicationEvent(outcome.snapshot, outcome.intent);
             if (disposed) return;
+            // A later action may already own the current UI state.
+            const current = applicationController.read();
+            if (current.applicationRevision !== outcome.snapshot.revision) return;
             if (!outcome.ok) {
               setKnownNotice(outcome.message, "attention");
-            } else {
-              const current = applicationController.read().snapshot;
-              if (current?.helper?.state === "ready" && !current.meeting.hasSession) {
-                setNotice(current.readiness.summary);
-              }
+            } else if (current.snapshot?.helper?.state === "ready" && !current.snapshot.meeting.hasSession) {
+              setNotice(current.snapshot.readiness.summary);
             }
           })().catch(() => {
             if (!disposed) setKnownNotice("Could not confirm local AI startup. Check Help before retrying the worker.", "unverified");

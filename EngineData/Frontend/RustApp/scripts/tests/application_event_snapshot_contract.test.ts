@@ -13,5 +13,5 @@ test("application runtime events map from the supplied snapshot without refetchi
   const body = facade.slice(start, start + 700);
   assert.doesNotMatch(body, /applicationRuntimeApi\.getSnapshot\(/);
   assert.match(body, /mapApplicationSnapshotToProduct\(application, previous, reason\)/);
-  assert.doesNotMatch(body, /dispatchIntent\("ensure_runtime_ready"\)/);
+  assert.doesNotMatch(body, /dispatchIntent\("ensure_runtime_ready"\)|prepareLocalRuntime\(/);
 });

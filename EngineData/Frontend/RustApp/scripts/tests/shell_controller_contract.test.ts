@@ -54,13 +54,15 @@ test("returning startup renders the native shell before cold worker initializati
   assert.doesNotMatch(boot, /applicationController\.applySettings\(initialSnapshot\.settings\)/);
   assert.doesNotMatch(boot, /await refreshSnapshot\(/);
   const shellReady = boot.indexOf("booting = false;");
-  assert.ok(shellReady >= 0 && shellReady < boot.indexOf('dispatchIntent("ensure_runtime_ready")'));
+  assert.ok(shellReady >= 0 && shellReady < boot.indexOf("await prepareLocalRuntime("));
   assert.match(boot, /shouldBootstrapLocalRuntime\(initialSnapshot\)/);
   assert.match(boot, /shouldBootstrapLocalRuntime\(applicationController\.read\(\)\.snapshot\)/);
   assert.match(facade, /snapshot\?\.settings\.translation_engine === "local"[\s\S]*snapshot\.settings\.meeting_setup_state !== "new"[\s\S]*snapshot\.helper\?\.state === "not_started"/);
-  assert.match(boot, /if \(outcome\.snapshot\.revision > 0 && outcome\.snapshot\.lifecycle !== "unavailable"\)/);
+  assert.match(boot, /requireApplicationSnapshot\(observed\);\s*initialSnapshot = observed/);
+  assert.match(boot, /await prepareLocalRuntime\(applicationController\.read\(\)\.applicationRevision\)/);
+  assert.doesNotMatch(boot, /dispatchIntent\("ensure_runtime_ready"\)/);
   assert.match(boot, /refreshFromApplicationEvent\(outcome\.snapshot, outcome\.intent\)/);
-  assert.match(boot, /if \(!outcome\.ok\) \{\s*setKnownNotice\(outcome\.message, "attention"\)/);
+  assert.match(boot, /if \(current\.applicationRevision !== outcome\.snapshot\.revision\) return;\s*if \(!outcome\.ok\) \{\s*setKnownNotice\(outcome\.message, "attention"\)/);
   assert.doesNotMatch(boot, /setInterval|setTimeout|retry_blocked_worker/);
 });
 

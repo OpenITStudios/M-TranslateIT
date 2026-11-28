@@ -1,5 +1,6 @@
 import {
   applicationRuntimeApi,
+  type ApplicationIntentResult,
   type ApplicationSnapshot,
 } from "./applicationRuntimeApi";
 import { runtimeApi, type MeetingSessionActionResult } from "./runtimeApi";
@@ -101,6 +102,16 @@ export function shouldBootstrapLocalRuntime(snapshot: {
     && snapshot.helper?.state === "not_started";
 }
 
+// Startup and explicit refresh consume the same verified preparation receipt.
+export async function prepareLocalRuntime(initialRevision: number): Promise<ApplicationIntentResult> {
+  const outcome = await applicationRuntimeApi.dispatchIntent("ensure_runtime_ready");
+  requireApplicationSnapshot(outcome.snapshot);
+  if (outcome.snapshot.revision <= initialRevision) {
+    throw new Error("TranslateIT runtime preparation returned a stale snapshot.");
+  }
+  return outcome;
+}
+
 async function mapApplicationSnapshotToProduct(
   application: ApplicationSnapshot,
   previous?: ProductRuntimeSnapshot | null,
@@ -167,12 +178,7 @@ export async function loadProductRuntimeSnapshot(
   let application = initialApplication ?? await applicationRuntimeApi.getSnapshot();
   requireApplicationSnapshot(application);
   if (shouldBootstrapLocalRuntime(application)) {
-    const initialRevision = application.revision;
-    application = (await applicationRuntimeApi.dispatchIntent("ensure_runtime_ready")).snapshot;
-    requireApplicationSnapshot(application);
-    if (application.revision <= initialRevision) {
-      throw new Error("TranslateIT runtime preparation returned a stale snapshot.");
-    }
+    application = (await prepareLocalRuntime(application.revision)).snapshot;
   }
   return mapApplicationSnapshotToProduct(application);
 }
