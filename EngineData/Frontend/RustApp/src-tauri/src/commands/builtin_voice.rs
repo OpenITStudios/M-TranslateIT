@@ -46,6 +46,11 @@ pub fn install_builtin_voice(
         return Err("builtin_voice:unknown_voice".to_string());
     }
 
+    #[cfg(windows)]
+    if super::helper_bridge::native_voice_candidate_enabled() {
+        return super::voice_lab::install_native_builtin(project_paths, voice_id, target_dir);
+    }
+
     let voice_root = PathBuf::from(project_paths.voice_runtime_dir.clone());
     let engine_revision = fs::read_to_string(
         voice_root.join("GPTSoVITS/Source/TRANSLATEIT_GPTSOVITS_REVISION.txt"),

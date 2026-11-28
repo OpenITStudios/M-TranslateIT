@@ -13,7 +13,7 @@ pub(crate) use storage::version_is_native;
 #[cfg(windows)]
 pub(crate) use storage::preserve_native_version;
 #[cfg(windows)]
-pub(crate) use storage::{selected_native_identity, selected_native_reference, NativeSelectedReference};
+pub(crate) use storage::{selected_native_identity, selected_native_reference, NativeSelectedReference, install_native_builtin, native_builtin_preview};
 pub(crate) use storage::{inspect_accepted_take_recovery, AcceptedTakeRecoveryInspection};
 pub(crate) use storage::{preserve_training_checkpoints, training_recovery_status, TrainingRecoveryStatus, create_voice_backup, check_voice_backup, restore_voice_backup, voice_backup_active, BackupReport, actor_version_page, activate_archived_personal_voice, selected_personal_actor_matches_version, ActorVersionPage, archive_guided_take, legacy_protection_status, migrate_legacy_recordings, saved_recordings_page, saved_recording_audio, choose_archived_takes, ArchivedSelection, archived_frozen_review_matches, LegacyMigrationResult, LegacyProtectionStatus, SavedRecordingPage, sha256_digest};
 pub(crate) use storage::{

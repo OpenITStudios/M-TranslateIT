@@ -147,13 +147,17 @@ fn native_selection_id(path: &Path) -> Result<Option<String>, String> {
     }
     let bytes = immutable_store::read_regular_bounded(&marker, 256)?;
     let id: String = serde_json::from_slice(&bytes).map_err(|_| "native_voice:selection_invalid")?;
-    if !immutable_store::valid_id(&id) { return Err("native_voice:selection_invalid".into()); }
+    if !immutable_store::valid_id(&id) && !matches!(id.as_str(), "MaleVoice" | "FemaleVoice") {
+        return Err("native_voice:selection_invalid".into());
+    }
     Ok(Some(id))
 }
 
 fn actor_kind(path: &Path) -> ActorKind {
     if !path.exists() { return ActorKind::Missing; }
     match native_selection_id(path) {
+        Ok(Some(id)) if matches!(id.as_str(), "MaleVoice" | "FemaleVoice") =>
+            return ActorKind::Builtin(Some(id)),
         Ok(Some(id)) => return ActorKind::Native(id),
         Ok(None) => {},
         Err(_) => return ActorKind::Unverified,
@@ -205,7 +209,7 @@ fn builtin_reference_pin(id: &str) -> Option<(&'static str, &'static str)> {
 }
 
 #[cfg(windows)]
-fn read_pinned_builtin_reference(path: &Path, expected: &str) -> Result<Vec<f32>, &'static str> {
+fn read_pinned_builtin_wav(path: &Path, expected: &str) -> Result<Vec<u8>, &'static str> {
     use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
     const MAX_REFERENCE_BYTES: u64 = 2 * 1024 * 1024;
     // Decode exactly the bytes whose identity is checked. The selected
@@ -227,8 +231,46 @@ fn read_pinned_builtin_reference(path: &Path, expected: &str) -> Result<Vec<f32>
     let digest = sha256_digest(&bytes).ok_or("native_voice:reference_identity_unverified")?;
     let actual: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
     if actual != expected { return Err("native_voice:reference_identity_mismatch"); }
+    Ok(bytes)
+}
+
+#[cfg(windows)]
+fn read_pinned_builtin_reference(path: &Path, expected: &str) -> Result<Vec<f32>, &'static str> {
+    let bytes = read_pinned_builtin_wav(path, expected)?;
     crate::engine::audio::meeting_output::decode_native_voice_reference(&bytes)
         .map_err(|_| "native_voice:reference_audio_invalid")
+}
+
+// Native built-ins use the same immutable source assets as the shipped
+// listening previews; no selected copy of GPT/SoVITS weights or WAV.
+#[cfg(windows)]
+fn shipped_builtin_path(paths: &ProjectPaths, id: &str) -> PathBuf {
+    PathBuf::from(&paths.voice_runtime_dir).join("BuiltInVoices").join(id).join(REFERENCE_WAV_FILE)
+}
+
+#[cfg(windows)]
+pub(crate) fn native_builtin_preview(paths: &ProjectPaths, id: &str) -> Result<Vec<u8>, String> {
+    if !paths.packaged_context_initialized && !paths.development_root_verified {
+        return Err("native_voice:runtime_root_unverified".into());
+    }
+    let (_, expected) = builtin_reference_pin(id).ok_or("native_voice:unknown_builtin")?;
+    read_pinned_builtin_wav(&shipped_builtin_path(paths, id), expected).map_err(str::to_owned)
+}
+
+#[cfg(windows)]
+pub(crate) fn install_native_builtin(paths: &ProjectPaths, id: &str, target: &Path) -> Result<(), String> {
+    let bytes = native_builtin_preview(paths, id)?;
+    crate::engine::audio::meeting_output::decode_native_voice_source(&bytes)?;
+    // The selected directory already owns explicit choice and atomic swap.
+    // No personal profile, training weights, or Python source is installed.
+    let selection = serde_json::to_vec(id).map_err(|_| "native_voice:selection_invalid")?;
+    super::super::builtin_voice::replace_directory_atomically(target, |staging| {
+        immutable_store::write_new_synced(&staging.join(NATIVE_SELECTION), &selection)?;
+        if native_selection_id(staging)?.as_deref() != Some(id) {
+            return Err("native_voice:selection_invalid".into());
+        }
+        Ok(())
+    })
 }
 
 #[cfg(windows)]
@@ -267,7 +309,18 @@ pub(crate) fn selected_native_reference(paths: &ProjectPaths) -> Result<NativeSe
             .map_err(|_| "native_voice:personal_review_or_runtime_mismatch")?
     } else {
         let (_, expected) = builtin_reference_pin(&voice_id).ok_or("native_voice:selected_reference_unverified")?;
-        read_pinned_builtin_reference(&storage.approved_actor_dir.join(REFERENCE_WAV_FILE), expected)?
+        // Old built-in selections still bind their exact selected WAV.
+        // Explicit native choices point at the pinned shipped source instead.
+        let marker = native_selection_id(&storage.approved_actor_dir)
+            .map_err(|_| "native_voice:selection_invalid")?;
+        let path = if marker.as_deref() == Some(voice_id.as_str()) {
+            shipped_builtin_path(paths, &voice_id)
+        } else if marker.is_none() {
+            storage.approved_actor_dir.join(REFERENCE_WAV_FILE)
+        } else {
+            return Err("native_voice:selected_reference_changed");
+        };
+        read_pinned_builtin_reference(&path, expected)?
     };
     Ok(NativeSelectedReference { voice_id, pcm })
 }
@@ -299,6 +352,10 @@ mod native_builtin_reference_tests {
         fs::write(root.join(ACTOR_MANIFEST_FILE), b"{}").unwrap();
         assert_eq!(actor_kind(&root), ActorKind::Unverified);
         fs::remove_file(root.join(ACTOR_MANIFEST_FILE)).unwrap();
+        fs::write(&marker, serde_json::to_vec("MaleVoice").unwrap()).unwrap();
+        assert_eq!(actor_kind(&root), ActorKind::Builtin(Some("MaleVoice".into())));
+        assert!(!root.join(GPT_WEIGHT_FILE).exists());
+        assert!(!root.join(SOVITS_WEIGHT_FILE).exists());
         fs::write(&marker, b"\"../outside\"").unwrap();
         assert_eq!(actor_kind(&root), ActorKind::Unverified);
         fs::remove_dir_all(root).unwrap();
@@ -378,6 +435,7 @@ pub(crate) fn recover_selected_actor_if_missing(
 fn validate_selected_package(paths: &VoiceLabStoragePaths, dir: &Path) -> Result<(), String> {
     match actor_kind(dir) {
         ActorKind::Native(id) => actor_history::verify_native_version(paths, &id),
+        ActorKind::Builtin(Some(id)) if native_selection_id(dir)?.as_deref() == Some(id.as_str()) => Ok(()),
         ActorKind::Builtin(_) | ActorKind::Personal => validate_actor_package(dir).map(|_| ()),
         _ => Err("voice_lab:selected_actor_unverified".into()),
     }
@@ -392,7 +450,11 @@ pub(crate) fn selected_actor_ready(paths: &VoiceLabStoragePaths) -> bool {
         ActorKind::Native(id) => super::super::helper_bridge::native_voice_candidate_enabled()
             && actor_history::version_is_native(paths, &id).unwrap_or(false),
         ActorKind::Personal => !super::super::helper_bridge::native_voice_candidate_enabled(),
-        ActorKind::Builtin(_) => true,
+        ActorKind::Builtin(_) => match native_selection_id(&paths.approved_actor_dir) {
+            Ok(Some(_)) => super::super::helper_bridge::native_voice_candidate_enabled(),
+            Ok(None) => true,
+            Err(_) => false,
+        },
         _ => false,
     }
 }

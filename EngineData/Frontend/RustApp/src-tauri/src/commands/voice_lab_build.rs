@@ -1414,6 +1414,11 @@ pub fn get_builtin_voice_preview_audio(voice_id: String) -> Result<tauri::ipc::R
         return Err("builtin_voice:unknown_voice".to_string());
     }
     let project_paths = ProjectPaths::discover();
+    #[cfg(windows)]
+    if super::helper_bridge::native_voice_candidate_enabled() {
+        return super::voice_lab::native_builtin_preview(&project_paths, &voice_id)
+            .map(tauri::ipc::Response::new);
+    }
     let path = std::path::PathBuf::from(project_paths.voice_runtime_dir)
         .join("BuiltInVoices")
         .join(&voice_id)

@@ -1,6 +1,10 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+if ($env:TRANSLATEIT_NATIVE_VOICE_CANDIDATE -eq '1') {
+    throw 'This is the legacy release staging path. Native My Voice packaging is held pending its exact artifact closure and integrated target acceptance.'
+}
+
 $Implementation = Join-Path $PSScriptRoot 'stage_release_inputs_impl.ps1'
 if (-not (Test-Path -LiteralPath $Implementation -PathType Leaf)) {
     throw "Release staging implementation missing: $Implementation"

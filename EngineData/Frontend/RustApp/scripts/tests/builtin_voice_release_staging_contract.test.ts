@@ -43,3 +43,18 @@ test("canonical built-in voice source inventory has two approved IDs and digest 
 test("release payload requires the Quick Preview Python child", () => {
   assert.match(validator, /"voice_lab_quick_preview\.py"/);
 });
+
+
+test("native built-in provisioning bypasses legacy weights and release stays fail-closed", () => {
+  const provision = readFileSync(new URL("../../src-tauri/src/commands/builtin_voice.rs", import.meta.url), "utf8");
+  const store = readFileSync(new URL("../../src-tauri/src/commands/voice_lab/storage.rs", import.meta.url), "utf8");
+  const release = readFileSync(new URL("../build_release.ps1", import.meta.url), "utf8");
+  const wrapper = readFileSync(new URL("../stage_release_inputs.ps1", import.meta.url), "utf8");
+  assert.match(provision, /native_voice_candidate_enabled\(\)[\s\S]*?return super::voice_lab::install_native_builtin/);
+  const install = store.slice(store.indexOf("pub(crate) fn install_native_builtin"), store.indexOf("pub(crate) fn selected_native_identity"));
+  assert.match(install, /native_builtin_preview/);
+  assert.match(install, /write_new_synced/);
+  assert.doesNotMatch(install, /GPT_WEIGHT_FILE|SOVITS_WEIGHT_FILE|fs::copy|Command::new/);
+  assert.match(release, /TRANSLATEIT_NATIVE_VOICE_CANDIDATE -eq '1'[\s\S]*?Native My Voice release is held/);
+  assert.match(wrapper, /TRANSLATEIT_NATIVE_VOICE_CANDIDATE -eq '1'[\s\S]*?Native My Voice packaging is held/);
+});
