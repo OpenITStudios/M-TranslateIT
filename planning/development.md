@@ -2,6 +2,8 @@
 
 ## Current Status
 
+- **AUD-06C — Storage event contract alignment (Unreleased):** Replace the stale direct-poll assertion in the touched transcript regression with the actual existing event→coalesced reconciliation path, revision fence and fallback. No production behavior change. Source review only; tests/build/native NOT_EXECUTED.
+
 - **AUD-06B — Nonblocking live archive health observation (Unreleased):** The existing Stop writer can hold its mutex while awaiting Finish; live reconciliation now uses a nonblocking observation of that same owner, returning unverified on contention instead of waiting or fabricating zero errors. Explicit saved-session operations, Last Meeting retention, ordered writes, fsync and Finish/Retry Stop remain unchanged. The existing frontend revision/unknown-health handling retains its retry path. One isolated Rust contention fixture and affected source contract authored; build/tests/native NOT_EXECUTED. No storage coalescing or weakening of durability.
 
 - **AUD-06A — Exact outbound turn lookup (Unreleased):** Reuse the existing sequence-sorted VecDeque for delivery/timing/playback claims through one binary-search helper, checking session, generation, sequence, utterance ID and lane. Thread the existing event sequence through outbound and playback callers; no new index or ownership store. Preserve all archive writes (including deliberate idempotent terminal acknowledgements), ordering and Stop semantics. Rust negative fixtures and source contract updated; build/tests/native NOT_EXECUTED. Storage coalescing and measured latency remain separate evidence-gated decisions.

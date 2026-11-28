@@ -342,7 +342,12 @@ test("Live transcript surfaces the first actual storage failure with existing Me
   assert.match(live, /turns\.archive_write_errors/);
   assert.match(live, /role="alert"/);
   assert.match(live, /saved archive/);
-  assert.match(eventMonitors, /if \(!disposed\) void pollMeeting\(\)/);
+  // Storage-error events enter the same coalesced revision reader as all
+  // Meeting events; direct immediate polling was retired.
+  assert.match(eventMonitors, /createMeetingReconcileSchedule\(\s*pollMeeting,/);
+  assert.match(eventMonitors, /listen<MeetingRuntimeEvent>\(MEETING_RUNTIME_EVENT, \(event\) => \{\s*if \(disposed \|\| event\.payload\.revision <= lastRevision\) return;\s*lastRevision = event\.payload\.revision;\s*schedule\.request\(\)/);
+  const schedule = file("src/app/runtime/meetingReconcileSchedule.ts");
+  assert.match(schedule, /if \(!disposed\) arm\(pending \? eventWindowMs : fallbackMs\)/);
   // Archive errors participate in the authoritative token even when speech
   // and delivery state have not changed. A storage event is not a forced read.
   assert.match(memory, /format!\("\{\}:\{\}:\{\}", self\.session_id, self\.revision, errors\)/);
