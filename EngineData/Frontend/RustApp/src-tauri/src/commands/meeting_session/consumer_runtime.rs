@@ -1,6 +1,6 @@
 use std::sync::{Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::engine::audio::finalized_utterance::{
     clear_finalized_incoming_utterance_producer_for_session,
@@ -8,6 +8,7 @@ use crate::engine::audio::finalized_utterance::{
     wait_for_incoming_work, wait_take_finalized_outbound_utterance, IncomingWork,
 };
 use crate::engine::runtime_state::runtime_generation_is_authoritative;
+use crate::engine::audio::{audio_thread_finished_within, AUDIO_THREAD_STOP_WAIT_BUDGET};
 use crate::engine::audio::original_voice_pcm;
 use crate::engine;
 
@@ -24,23 +25,6 @@ use super::{
     process_authoritative_finalized_outbound_pcm,
 };
 
-// Stop must never block indefinitely on inference/driver work. If the old
-// thread is still running at this deadline, its JoinHandle stays in the
-// canonical store and Start remains blocked until Retry Stop proves exit.
-const CONSUMER_STOP_WAIT_BUDGET: Duration = Duration::from_millis(500);
-const CONSUMER_STOP_POLL: Duration = Duration::from_millis(10);
-
-fn consumer_thread_finished_within(thread: &JoinHandle<()>, budget: Duration) -> bool {
-    let started = Instant::now();
-    while !thread.is_finished() {
-        let remaining = budget.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
-            return false;
-        }
-        thread::sleep(remaining.min(CONSUMER_STOP_POLL));
-    }
-    true
-}
 
 struct MeetingOutboundConsumerRuntime {
     generation: u64,
@@ -74,25 +58,16 @@ fn incoming_consumer_store() -> &'static Mutex<Option<MeetingIncomingConsumerRun
 }
 
 pub(super) fn ensure_meeting_outbound_consumer(generation: u64, session_id: &str) -> Result<(), String> {
-    if !super::local_translated_meeting_route_admitted() {
-        return Err("meeting_outbound:codex_voice_not_admitted".to_string());
-    }
-    if !runtime_generation_is_authoritative(generation) {
-        return Err("meeting_outbound:generation_not_authoritative".to_string());
-    }
-    {
-        let store = outbound_consumer_store()
-            .lock().map_err(|_| "meeting_outbound:consumer_state_lock_failed".to_string())?;
-        if let Some(active) = store.as_ref() {
-            return if active.generation == generation && active.session_id == session_id {
-                Ok(())
-            } else { Err("meeting_outbound:another_runtime_active".to_string()) };
-        }
-    }
-    start_meeting_outbound_consumer(generation, session_id)
+    start_or_reuse_meeting_outbound_consumer(generation, session_id, true)
 }
 
 pub(super) fn start_meeting_outbound_consumer(generation: u64, session_id: &str) -> Result<(), String> {
+    start_or_reuse_meeting_outbound_consumer(generation, session_id, false)
+}
+
+fn start_or_reuse_meeting_outbound_consumer(
+    generation: u64, session_id: &str, reuse_existing: bool,
+) -> Result<(), String> {
     // Do not allocate a Local ASR/MT/TTS consumer for the Codex preference.
     // The original microphone uses its independent native passthrough path.
     if !super::local_translated_meeting_route_admitted() {
@@ -102,11 +77,20 @@ pub(super) fn start_meeting_outbound_consumer(generation: u64, session_id: &str)
     let mut guard = store
         .lock()
         .map_err(|_| "meeting_outbound:consumer_state_lock_failed".to_string())?;
-    if guard.is_some() {
+    if guard.is_some() && !reuse_existing {
         return Err("meeting_outbound:consumer_already_active".to_string());
     }
     if !runtime_generation_is_authoritative(generation) {
         return Err("meeting_outbound:generation_not_authoritative".to_string());
+    }
+    if let Some(active) = guard.as_ref() {
+        if active.generation != generation || active.session_id != session_id {
+            return Err("meeting_outbound:another_runtime_active".to_string());
+        }
+        if active.join_failed || active.thread.as_ref().is_none_or(|thread| thread.is_finished()) {
+            return Err("meeting_outbound:consumer_not_running".to_string());
+        }
+        return Ok(());
     }
 
     let thread_session_id = session_id.to_string();
@@ -197,7 +181,7 @@ pub(super) fn stop_meeting_outbound_consumer(generation: u64) -> MeetingConsumer
         };
     }
     if active.thread.as_ref().is_some_and(|handle| {
-        !consumer_thread_finished_within(handle, CONSUMER_STOP_WAIT_BUDGET)
+        !audio_thread_finished_within(handle, AUDIO_THREAD_STOP_WAIT_BUDGET)
     }) {
         return MeetingConsumerCleanupResult {
             ok: false,
@@ -316,7 +300,7 @@ pub(super) fn stop_meeting_incoming_consumer(session_id: &str) -> MeetingConsume
         };
     }
     if active.thread.as_ref().is_some_and(|handle| {
-        !consumer_thread_finished_within(handle, CONSUMER_STOP_WAIT_BUDGET)
+        !audio_thread_finished_within(handle, AUDIO_THREAD_STOP_WAIT_BUDGET)
     }) {
         return MeetingConsumerCleanupResult {
             ok: false,
@@ -396,7 +380,7 @@ pub(super) fn finish_orphaned_meeting_consumers_without_session() -> Result<(), 
 
 #[cfg(test)]
 mod bounded_consumer_stop_tests {
-    use super::consumer_thread_finished_within;
+    use super::audio_thread_finished_within;
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
@@ -407,10 +391,10 @@ mod bounded_consumer_stop_tests {
         let thread = thread::spawn(move || {
             let _ = blocked.recv();
         });
-        assert!(!consumer_thread_finished_within(&thread, Duration::ZERO));
+        assert!(!audio_thread_finished_within(&thread, Duration::ZERO));
         assert!(!thread.is_finished());
         release.send(()).expect("release owned fixture thread");
-        assert!(consumer_thread_finished_within(
+        assert!(audio_thread_finished_within(
             &thread,
             Duration::from_secs(2),
         ));
@@ -522,7 +506,7 @@ mod bounded_consumer_stop_tests {
     #[test]
     fn already_exited_consumer_is_immediately_joinable() {
         let thread = thread::spawn(|| {});
-        assert!(consumer_thread_finished_within(
+        assert!(audio_thread_finished_within(
             &thread,
             Duration::from_secs(2),
         ));

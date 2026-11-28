@@ -31,6 +31,25 @@ mod audio_contract_tests;
 mod meeting_output_public_contract_tests;
 
 use serde::{Deserialize, Serialize};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
+pub(crate) const AUDIO_THREAD_STOP_WAIT_BUDGET: Duration = Duration::from_millis(500);
+const AUDIO_THREAD_STOP_POLL: Duration = Duration::from_millis(10);
+
+// Callers retain their own resource owner and handle until exit is confirmed.
+// No join, detach, authority change or cleanup belongs in this shared wait.
+pub(crate) fn audio_thread_finished_within(thread: &JoinHandle<()>, budget: Duration) -> bool {
+    let started = Instant::now();
+    while !thread.is_finished() {
+        let remaining = budget.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return false;
+        }
+        thread::sleep(remaining.min(AUDIO_THREAD_STOP_POLL));
+    }
+    true
+}
 
 pub const TARGET_SAMPLE_RATE_HZ: u32 = 16_000;
 pub const TARGET_CHANNELS: u16 = 1;

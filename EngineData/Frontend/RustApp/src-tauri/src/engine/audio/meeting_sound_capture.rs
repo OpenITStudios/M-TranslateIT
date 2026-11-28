@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use super::{audio_thread_finished_within, AUDIO_THREAD_STOP_WAIT_BUDGET};
 use super::device_selection::resolve_unique_named_device;
 use super::finalized_utterance::{
     bind_finalized_incoming_capture_errors, clear_finalized_incoming_utterance_producer,
@@ -85,9 +86,6 @@ struct MeetingSoundReady {
 static MEETING_SOUND_CAPTURE_RUNTIME: OnceLock<Mutex<Option<MeetingSoundCaptureRuntime>>> =
     OnceLock::new();
 
-const CAPTURE_STOP_WAIT_BUDGET: Duration = Duration::from_millis(500);
-const CAPTURE_STOP_POLL: Duration = Duration::from_millis(10);
-
 // Optional loopback capture must belong to the currently Live Meeting.
 // Unlike the earlier activation-thread eligibility check, this is evaluated
 // after acquiring the canonical capture store lock: a prior Stop cannot finish
@@ -104,19 +102,6 @@ fn capture_start_owner_matches(
     })
 }
 
-// Never detach a capture whose device thread has not exited; retry on the
-// same stored JoinHandle after the finite wait budget.
-fn capture_finished_within(thread: &thread::JoinHandle<()>, budget: Duration) -> bool {
-    let started = std::time::Instant::now();
-    while !thread.is_finished() {
-        let remaining = budget.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
-            return false;
-        }
-        thread::sleep(remaining.min(CAPTURE_STOP_POLL));
-    }
-    true
-}
 
 
 pub fn start_meeting_sound_capture_runtime(
@@ -338,7 +323,7 @@ fn stop_meeting_sound_capture_runtime_owned(
             };
         }
         if runtime.capture_thread.as_ref().is_some_and(|thread| {
-            !capture_finished_within(thread, CAPTURE_STOP_WAIT_BUDGET)
+            !audio_thread_finished_within(thread, AUDIO_THREAD_STOP_WAIT_BUDGET)
         }) {
             runtime.cleanup_pending = true;
             return MeetingSoundCaptureStopReport {
@@ -740,7 +725,7 @@ fn finish_failed_meeting_sound_start(
 ) -> MeetingSoundCaptureStartReport {
     let _ = runtime.stop_tx.send(());
     if !runtime.capture_thread.as_ref().is_some_and(|thread| {
-        capture_finished_within(thread, CAPTURE_STOP_WAIT_BUDGET)
+        audio_thread_finished_within(thread, AUDIO_THREAD_STOP_WAIT_BUDGET)
     }) {
         runtime.cleanup_pending = true;
         *store = Some(runtime);
@@ -817,7 +802,7 @@ fn current_unix_ms() -> u128 {
 
 #[cfg(test)]
 mod isolation_tests {
-    use super::{capture_finished_within, incoming_output_conflicts_with_virtual_tts};
+    use super::{audio_thread_finished_within, incoming_output_conflicts_with_virtual_tts};
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
@@ -920,9 +905,9 @@ mod isolation_tests {
     fn loopback_thread_exit_stays_unconfirmed_at_timeout() {
         let (release, blocked) = mpsc::channel::<()>();
         let thread = thread::spawn(move || { let _ = blocked.recv(); });
-        assert!(!capture_finished_within(&thread, Duration::ZERO));
+        assert!(!audio_thread_finished_within(&thread, Duration::ZERO));
         release.send(()).expect("release loopback fixture");
-        assert!(capture_finished_within(&thread, Duration::from_secs(2)));
+        assert!(audio_thread_finished_within(&thread, Duration::from_secs(2)));
         thread.join().expect("loopback fixture joined");
     }
 

@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use super::{audio_thread_finished_within, AUDIO_THREAD_STOP_WAIT_BUDGET};
 use super::device_selection::resolve_unique_named_device;
 use super::original_voice_pcm;
 use super::finalized_utterance::{
@@ -59,6 +60,8 @@ struct LiveCaptureRuntime {
     stop_tx: mpsc::Sender<()>,
     capture_thread: Option<thread::JoinHandle<()>>,
     cleanup_pending: bool,
+    // A failed join must remain visible to all subsequent Stop attempts.
+    join_failed: bool,
     owner_id: String,
     session_id: String,
     device_name: Option<String>,
@@ -73,22 +76,6 @@ struct LiveCaptureRuntime {
 
 static LIVE_CAPTURE_RUNTIME: OnceLock<Mutex<Option<LiveCaptureRuntime>>> = OnceLock::new();
 
-const CAPTURE_STOP_WAIT_BUDGET: Duration = Duration::from_millis(500);
-const CAPTURE_STOP_POLL: Duration = Duration::from_millis(10);
-
-// Never detach a capture whose device thread has not exited; retry on the
-// same stored JoinHandle after the finite wait budget.
-fn capture_finished_within(thread: &thread::JoinHandle<()>, budget: Duration) -> bool {
-    let started = std::time::Instant::now();
-    while !thread.is_finished() {
-        let remaining = budget.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
-            return false;
-        }
-        thread::sleep(remaining.min(CAPTURE_STOP_POLL));
-    }
-    true
-}
 
 
 struct LiveCaptureReady {
@@ -165,6 +152,7 @@ pub fn start_live_capture_runtime(
         stop_tx,
         capture_thread: Some(capture_thread),
         cleanup_pending: false,
+        join_failed: false,
         owner_id: session.owner_id.clone(),
         session_id: session.session_id.clone(),
         device_name: None,
@@ -259,8 +247,16 @@ pub fn stop_live_capture_runtime() -> LiveCaptureStopReport {
     // an old capture thread's late producer teardown.
     let active = guard.as_mut().expect("capture owner checked above");
     let _ = active.stop_tx.send(());
+    if active.join_failed {
+        active.cleanup_pending = true;
+        return LiveCaptureStopReport {
+            ok: false,
+            status: build_status_from_guard(guard.as_ref()),
+            message: "Microphone capture previously failed to join; its original owner remains reserved.".to_string(),
+        };
+    }
     if active.capture_thread.as_ref().is_some_and(|thread| {
-        !capture_finished_within(thread, CAPTURE_STOP_WAIT_BUDGET)
+        !audio_thread_finished_within(thread, AUDIO_THREAD_STOP_WAIT_BUDGET)
     }) {
         active.cleanup_pending = true;
         return LiveCaptureStopReport {
@@ -270,30 +266,31 @@ pub fn stop_live_capture_runtime() -> LiveCaptureStopReport {
         };
     }
 
+    // A successfully joined thread can be absent on Retry Stop while
+    // its producer still needs cleanup. A failed join never becomes success.
+    if active.capture_thread.take().is_some_and(|handle| handle.join().is_err()) {
+        active.join_failed = true;
+        active.cleanup_pending = true;
+        return LiveCaptureStopReport {
+            ok: false,
+            status: build_status_from_guard(guard.as_ref()),
+            message: "Microphone capture thread failed to join; its original owner remains reserved.".to_string(),
+        };
+    }
     if !clear_finalized_outbound_utterance_producer() {
         active.cleanup_pending = true;
         return LiveCaptureStopReport { ok: false, status: build_status_from_guard(guard.as_ref()),
             message: "Speech detector CPU cleanup is unconfirmed; Retry Stop before Start.".to_string() };
     }
-    let mut runtime = guard.take().expect("matching capture owner still held");
-    let thread_stopped = runtime
-        .capture_thread
-        .take()
-        .map(|handle| handle.join().is_ok())
-        .unwrap_or(false);
     clear_live_audio_buffer();
-    clear_finalized_outbound_utterance_producer();
+    let _ = guard.take().expect("matching verified capture owner");
     LiveCaptureStopReport {
-        ok: thread_stopped,
+        ok: true,
         status: inactive_status(
             "live_capture:stopped",
             "Live microphone stream ownership was released.",
         ),
-        message: if thread_stopped {
-            "Live microphone stream stopped; rolling and pending finalized audio were cleared and ownership was released.".to_string()
-        } else {
-            "Live microphone stream stopped and audio state was cleared, but its owner thread exited unexpectedly.".to_string()
-        },
+        message: "Live microphone stream stopped; rolling and pending finalized audio were cleared and ownership was released.".to_string(),
     }
 }
 
@@ -655,7 +652,7 @@ fn build_status_with_capture_health(
                     speech_fault.unwrap_or_default()
                 },
                 note: if runtime.cleanup_pending {
-                    "Microphone capture thread exit is unconfirmed. The previous owner is reserved; Retry Stop before Start.".to_string()
+                    "Microphone capture or speech detector cleanup is unconfirmed. The previous owner is reserved; Retry Stop before Start.".to_string()
                 } else {
                     format!(
                     "Live microphone stream is active. age_ms={}, sample_rate_hz={}, channels={}. Rolling audio remains preview-capable; finalized output production is scoped to the application Meeting owner.",
@@ -679,7 +676,7 @@ fn finish_failed_live_capture_start(
 ) -> LiveCaptureStartReport {
     let _ = runtime.stop_tx.send(());
     if !runtime.capture_thread.as_ref().is_some_and(|thread| {
-        capture_finished_within(thread, CAPTURE_STOP_WAIT_BUDGET)
+        audio_thread_finished_within(thread, AUDIO_THREAD_STOP_WAIT_BUDGET)
     }) {
         runtime.cleanup_pending = true;
         *store = Some(runtime);
@@ -689,9 +686,18 @@ fn finish_failed_live_capture_start(
             message: format!("{message} Capture thread exit is not confirmed; Retry Stop before another Start."),
         };
     }
-    let _ = runtime.capture_thread.take().map(|thread| thread.join());
+    let joined = runtime.capture_thread.take().is_some_and(|thread| thread.join().is_ok());
+    runtime.join_failed |= !joined;
+    if !joined || !clear_finalized_outbound_utterance_producer() {
+        runtime.cleanup_pending = true;
+        *store = Some(runtime);
+        return LiveCaptureStartReport {
+            ok: false,
+            status: build_status_from_guard(store.as_ref()),
+            message: format!("{message} Capture or speech detector cleanup remains unverified; Retry Stop."),
+        };
+    }
     clear_live_audio_buffer();
-    clear_finalized_outbound_utterance_producer();
     blocked_start(blocker, message)
 }
 
@@ -742,17 +748,21 @@ fn safe_sample(value: f32) -> f32 {
 mod tests {
     use super::*;
 
-    #[test]
-    fn capture_status_separates_native_errors_from_pcm_loss() {
+    fn capture_fixture(capture_thread: Option<thread::JoinHandle<()>>) -> LiveCaptureRuntime {
         let (stop_tx, _) = mpsc::channel();
-        let runtime = LiveCaptureRuntime {
-            stop_tx, capture_thread: None, cleanup_pending: false,
+        LiveCaptureRuntime {
+            stop_tx, capture_thread, cleanup_pending: false, join_failed: false,
             owner_id: APPLICATION_MEETING_OWNER_ID.to_string(), session_id: "capture-test".into(),
             device_name: None, sample_rate_hz: 48_000, channels: 1, sample_format: "f32".into(),
             started_unix_ms: current_unix_ms(), frames_received: Arc::new(AtomicU64::new(48_000)),
             callback_errors: Arc::new(Mutex::new(Vec::new())),
             callback_error_epoch: Arc::new(AtomicU64::new(0)),
-        };
+        }
+    }
+
+    #[test]
+    fn capture_status_separates_native_errors_from_pcm_loss() {
+        let runtime = capture_fixture(None);
         let status = build_status_with_capture_health(Some(&runtime), 3, None);
         assert_eq!(status.callback_error_count, 0, "PCM loss is not a native stream error");
         assert_eq!(status.latest_callback_error, None);
@@ -772,10 +782,44 @@ mod tests {
     fn capture_exit_wait_is_bounded_and_rechecks_exact_thread() {
         let (release, blocked) = mpsc::channel::<()>();
         let thread = thread::spawn(move || { let _ = blocked.recv(); });
-        assert!(!capture_finished_within(&thread, Duration::ZERO));
+        assert!(!audio_thread_finished_within(&thread, Duration::ZERO));
         release.send(()).expect("release fixture capture");
-        assert!(capture_finished_within(&thread, Duration::from_secs(2)));
+        assert!(audio_thread_finished_within(&thread, Duration::from_secs(2)));
         thread.join().expect("capture fixture joined");
+    }
+
+    #[test]
+    fn failed_capture_join_retains_owner_across_start_rollback_and_retry_stop() {
+        let _serial = crate::engine::runtime_state::runtime_test_guard();
+        let store = LIVE_CAPTURE_RUNTIME.get_or_init(|| Mutex::new(None));
+        for failed_start in [false, true] {
+            let thread = thread::spawn(|| panic!("simulated capture panic"));
+            assert!(audio_thread_finished_within(&thread, Duration::from_secs(2)));
+            let runtime = capture_fixture(Some(thread));
+            {
+                let mut guard = store.lock().expect("capture fixture owner");
+                assert!(guard.is_none());
+                if failed_start {
+                    let report = finish_failed_live_capture_start(
+                        &mut guard, runtime, "live_capture:stream_build_failed", "fixture",
+                    );
+                    assert!(!report.ok);
+                    assert_eq!(report.status.blocker, "live_capture:cleanup_pending");
+                } else {
+                    *guard = Some(runtime);
+                }
+            }
+            for _ in 0..2 {
+                let report = stop_live_capture_runtime();
+                assert!(!report.ok);
+                assert_eq!(report.status.blocker, "live_capture:cleanup_pending");
+                assert_eq!(report.status.session_id.as_deref(), Some("capture-test"));
+                let guard = store.lock().expect("failed owner retained");
+                let owner = guard.as_ref().expect("same owner remains");
+                assert!(owner.join_failed && owner.capture_thread.is_none());
+            }
+            let _ = store.lock().expect("fixture release").take();
+        }
     }
 
     #[test]

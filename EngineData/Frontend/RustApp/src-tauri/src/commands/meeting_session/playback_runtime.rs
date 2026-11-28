@@ -8,6 +8,7 @@ use crate::engine::audio::meeting_output::{
     MAX_DELIVERY_DEADLINE_MS,
 };
 use crate::engine::runtime_state::{runtime_generation_is_authoritative, runtime_generation_matches_epoch};
+use crate::engine::audio::{audio_thread_finished_within, AUDIO_THREAD_STOP_WAIT_BUDGET};
 use crate::engine::audio::original_voice_pcm;
 use crate::engine::audio::meeting_sound_capture::meeting_sound_capture_status;
 
@@ -26,22 +27,6 @@ use super::suppression::{
 use super::{generation_is_live, incoming_session_is_eligible};
 
 const PLAYBACK_QUEUE_CAPACITY: usize = 1;
-const PLAYBACK_STOP_WAIT_BUDGET: Duration = Duration::from_millis(500);
-const PLAYBACK_STOP_POLL: Duration = Duration::from_millis(10);
-
-// Caller keeps the canonical runtime mutex while waiting; no other Start may
-// replace a thread whose exit is not yet confirmed.
-fn playback_finished_within(thread: &JoinHandle<()>, budget: Duration) -> bool {
-    let started = Instant::now();
-    while !thread.is_finished() {
-        let remaining = budget.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
-            return false;
-        }
-        thread::sleep(remaining.min(PLAYBACK_STOP_POLL));
-    }
-    true
-}
 
 pub(super) struct PreparedPlaybackJob {
     pub(super) generation: u64,
@@ -347,27 +332,18 @@ fn process_playback_job(mut job: PreparedPlaybackJob, last_sequence: &mut u64) {
 }
 
 pub(super) fn ensure_meeting_playback_runtime(generation: u64, session_id: &str) -> Result<(), String> {
-    if !super::local_translated_meeting_route_admitted() {
-        return Err("meeting_playback:codex_voice_not_admitted".to_string());
-    }
-    if !runtime_generation_is_authoritative(generation) {
-        return Err("meeting_playback:generation_not_authoritative".to_string());
-    }
-    {
-        let store = playback_runtime_store()
-            .lock().map_err(|_| "meeting_playback:runtime_state_lock_failed".to_string())?;
-        if let Some(active) = store.as_ref() {
-            return if active.generation == generation && active.session_id == session_id {
-                Ok(())
-            } else { Err("meeting_playback:another_runtime_active".to_string()) };
-        }
-    }
-    start_meeting_playback_runtime(generation, session_id)
+    start_or_reuse_meeting_playback_runtime(generation, session_id, true)
 }
 
 pub(super) fn start_meeting_playback_runtime(
     generation: u64,
     session_id: &str,
+) -> Result<(), String> {
+    start_or_reuse_meeting_playback_runtime(generation, session_id, false)
+}
+
+fn start_or_reuse_meeting_playback_runtime(
+    generation: u64, session_id: &str, reuse_existing: bool,
 ) -> Result<(), String> {
     if !super::local_translated_meeting_route_admitted() {
         return Err("meeting_playback:codex_voice_not_admitted".to_string());
@@ -376,11 +352,22 @@ pub(super) fn start_meeting_playback_runtime(
     let mut guard = store
         .lock()
         .map_err(|_| "meeting_playback:runtime_state_lock_failed".to_string())?;
-    if guard.is_some() {
+    if guard.is_some() && !reuse_existing {
         return Err("meeting_playback:runtime_already_active".to_string());
     }
     if !runtime_generation_is_authoritative(generation) {
         return Err("meeting_playback:generation_not_authoritative".to_string());
+    }
+    if let Some(active) = guard.as_ref() {
+        if active.generation != generation || active.session_id != session_id {
+            return Err("meeting_playback:another_runtime_active".to_string());
+        }
+        if active.join_failed || active.sender.is_none()
+            || active.thread.as_ref().is_none_or(|thread| thread.is_finished())
+        {
+            return Err("meeting_playback:runtime_not_running".to_string());
+        }
+        return Ok(());
     }
 
     let (sender, receiver) =
@@ -550,7 +537,7 @@ pub(super) fn stop_meeting_playback_runtime(
         };
     }
     if active.thread.as_ref().is_some_and(|thread| {
-        !playback_finished_within(thread, PLAYBACK_STOP_WAIT_BUDGET)
+        !audio_thread_finished_within(thread, AUDIO_THREAD_STOP_WAIT_BUDGET)
     }) {
         return MeetingPlaybackCleanupResult {
             ok: false,
@@ -614,7 +601,7 @@ pub(super) fn finish_orphaned_meeting_playback_without_session() -> Result<(), S
 
 #[cfg(test)]
 mod tests {
-    use super::{enqueue_with_deadline, notify_playback_waiters, playback_finished_within, sequence_is_monotonic, PlaybackWake, PLAYBACK_QUEUE_CAPACITY};
+    use super::{enqueue_with_deadline, notify_playback_waiters, audio_thread_finished_within, sequence_is_monotonic, PlaybackWake, PLAYBACK_QUEUE_CAPACITY};
     use std::sync::{Condvar, Mutex};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
@@ -625,9 +612,9 @@ mod tests {
     fn unconfirmed_playback_exit_does_not_force_blocking_join() {
         let (release, blocked) = mpsc::channel::<()>();
         let thread = thread::spawn(move || { let _ = blocked.recv(); });
-        assert!(!playback_finished_within(&thread, Duration::ZERO));
+        assert!(!audio_thread_finished_within(&thread, Duration::ZERO));
         release.send(()).expect("release playback fixture");
-        assert!(playback_finished_within(&thread, Duration::from_secs(2)));
+        assert!(audio_thread_finished_within(&thread, Duration::from_secs(2)));
         thread.join().expect("playback fixture joined");
     }
 

@@ -89,6 +89,10 @@ callback, never for an unchanged size after allocation. The VAD gate moves
 its evidence rather than cloning it. No additional audio owner, model,
 queue, polling cadence, dependency or transport is introduced.
 
+### Bounded audio thread lifecycle
+
+Microphone capture, optional Meeting Sound, both Meeting consumers and playback share one bounded thread-exit observation (500 ms per owner, 10 ms poll ceiling). Each original resource owner still retains its own handle, cancellation, join and cleanup decisions. Microphone Stop and failed Start retain the original owner on a failed join or unverified speech producer cleanup; Retry Stop never converts a panicked join into clean release. A confirmed join is not repeated, and verified producer cleanup is not repeated inside the same Stop. Source switching and normal Start share each outbound/playback allocation path under its owner lock; reuse is allowed only for the exact live thread/session/generation (and available playback sender). No automatic replacement, new queue, persistent stream, or change to native callback/scheduling policy.
+
 ### Meeting Start observation boundaries
 
 The initial Start preflight returns its checked virtual-route observation to

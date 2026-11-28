@@ -118,3 +118,57 @@ test("Mute blocks new VAD speech in all supported capture formats", () => {
   );
   assert.match(source, /reset_finalized_outbound_speech_boundary\(&session\.session_id, generation\)/);
 });
+
+
+test("capture, consumers and playback use the same bounded thread-exit observation", () => {
+  const audio = read("src-tauri/src/engine/audio/mod.rs");
+  assert.match(audio, /AUDIO_THREAD_STOP_WAIT_BUDGET: Duration = Duration::from_millis\(500\)/);
+  assert.match(audio, /AUDIO_THREAD_STOP_POLL: Duration = Duration::from_millis\(10\)/);
+  assert.match(audio, /while !thread\.is_finished\(\)/);
+  for (const path of [
+    "engine/audio/live_capture.rs", "engine/audio/meeting_sound_capture.rs",
+    "commands/meeting_session/consumer_runtime.rs", "commands/meeting_session/playback_runtime.rs",
+  ]) {
+    const source = read("src-tauri/src/" + path);
+    assert.match(source, /audio_thread_finished_within\([^,]+, AUDIO_THREAD_STOP_WAIT_BUDGET\)/);
+    assert.doesNotMatch(source, /fn (?:capture|consumer_thread|playback)_finished_within/);
+  }
+});
+
+test("source switching reuses only a matching running consumer or playback owner", () => {
+  for (const [path, owner] of [
+    ["consumer_runtime.rs", "outbound_consumer"],
+    ["playback_runtime.rs", "playback_runtime"],
+  ]) {
+    const source = read("src-tauri/src/commands/meeting_session/" + path);
+    assert.ok(source.includes("start_or_reuse_meeting_" + owner + "(generation, session_id, true)"));
+    assert.ok(source.includes("start_or_reuse_meeting_" + owner + "(generation, session_id, false)"));
+    const start = source.indexOf("fn start_or_reuse_meeting_" + owner + "(");
+    const spawn = source.indexOf(".spawn(move ||", start);
+    assert.ok(start >= 0 && spawn > start);
+    const admission = source.slice(start, spawn);
+    assert.equal((admission.match(/local_translated_meeting_route_admitted\(\)/g) ?? []).length, 1);
+    assert.equal((admission.match(/\.lock\(\)/g) ?? []).length, 1);
+    assert.match(admission, /active\.generation != generation \|\| active\.session_id != session_id/);
+    assert.match(admission, /active\.join_failed[\s\S]*?active\.thread\.as_ref\(\)\.is_none_or\(\|thread\| thread\.is_finished\(\)\)/);
+    assert.match(admission, /runtime_generation_is_authoritative\(generation\)/);
+    if (owner === "playback_runtime") assert.match(admission, /active\.sender\.is_none\(\)/);
+  }
+});
+
+test("microphone Stop retains failed join and verifies producer before owner release", () => {
+  const capture = read("src-tauri/src/engine/audio/live_capture.rs");
+  const stop = capture.slice(capture.indexOf("pub fn stop_live_capture_runtime("), capture.indexOf("fn ensure_scratch_capacity"));
+  const join = stop.indexOf("active.capture_thread.take()");
+  const producer = stop.indexOf("if !clear_finalized_outbound_utterance_producer()", join);
+  const release = stop.indexOf("guard.take()", producer);
+  assert.ok(join >= 0 && producer > join && release > producer);
+  assert.match(stop.slice(0, join), /if active\.join_failed/);
+  assert.match(stop.slice(join, producer), /active\.join_failed = true/);
+  assert.doesNotMatch(stop.slice(release), /clear_finalized_outbound_utterance_producer/);
+  const rollback = capture.slice(capture.indexOf("fn finish_failed_live_capture_start("), capture.indexOf("fn blocked_start("));
+  assert.match(rollback, /runtime\.join_failed \|= !joined/);
+  assert.match(rollback, /if !joined \|\| !clear_finalized_outbound_utterance_producer\(\)/);
+  assert.match(rollback, /runtime\.cleanup_pending = true;\s*\*store = Some\(runtime\)/);
+  assert.match(capture, /fn failed_capture_join_retains_owner_across_start_rollback_and_retry_stop/);
+});

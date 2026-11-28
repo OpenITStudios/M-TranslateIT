@@ -107,9 +107,10 @@ test("P11 uses one Meeting-local engine admission gate, never a Codex diagnostic
 });
 
 test("P11 protects worker, final transcript and native playback without a second TTS owner", () => {
-  const consumerGuard = consumer.indexOf("pub(super) fn start_meeting_outbound_consumer(");
+  const consumerGuard = consumer.indexOf("fn start_or_reuse_meeting_outbound_consumer(");
   const consumerSpawn = consumer.indexOf('.name("translateit-meeting-outbound"', consumerGuard);
-  assert.ok(consumerGuard >= 0 && consumer.indexOf("!super::local_translated_meeting_route_admitted()", consumerGuard) < consumerSpawn);
+  const admission = consumer.indexOf("!super::local_translated_meeting_route_admitted()", consumerGuard);
+  assert.ok(consumerGuard >= 0 && admission > consumerGuard && consumerSpawn > admission);
   assert.match(consumer, /meeting_outbound:codex_voice_not_admitted/);
 
   const pcmStart = outbound.indexOf("pub(super) fn process_outbound_pcm(");
