@@ -391,6 +391,14 @@ constexpr llama_token greedy_token(const float * logits, int32_t count) {
 constexpr float k_greedy_tie_fixture[] = {-3.0f, 2.0f, 2.0f, -1.0f};
 constexpr float k_greedy_negative_fixture[] = {-9.0f, -4.0f, -2.0f};
 static_assert(greedy_token(k_greedy_tie_fixture, 4) == 1);
+// Pinned CUDA argmax uses up to 1024 threads with strict comparisons.
+// Lane 0 can keep index 1024 over the earlier equal maximum at index 1.
+// Keep this counterexample as a host oracle, not a GPU test or proof.
+static_assert([]() constexpr {
+    float logits[1025]{};
+    logits[1] = logits[1024] = 2.0f;
+    return greedy_token(logits, 1025) == 1;
+}());
 static_assert(greedy_token(k_greedy_negative_fixture, 3) == 2);
 static_assert(greedy_token(k_greedy_negative_fixture, 1) == 0);
 static_assert(greedy_token(nullptr, 3) == LLAMA_TOKEN_NULL);
