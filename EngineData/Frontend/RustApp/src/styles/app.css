@@ -847,7 +847,6 @@
 
 @media (max-width: 1360px) {
   :root {
-    --ti-sidebar-width: 248px;
     --ti-page-padding-x: 24px;
   }
 
@@ -868,9 +867,6 @@
     min-width: 0;
   }
 
-  .ti-appbar {
-    padding-inline: 16px;
-  }
 }
 
 /* Narrow viewport rule must come after the 1120px bubble rule.

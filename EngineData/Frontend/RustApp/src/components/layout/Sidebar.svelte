@@ -69,7 +69,7 @@
 <aside class="ti-sidebar flex h-screen min-h-0 w-[var(--ti-sidebar-width)] shrink-0 flex-col bg-[var(--ti-sidebar)]" aria-label="TranslateIT navigation">
   <button
     type="button"
-    class="ti-sidebar-brand flex min-h-[66px] w-full items-center gap-3 border-b border-[var(--ti-border)] px-4 text-left hover:bg-[var(--ti-surface-hover)]"
+    class="ti-sidebar-brand flex min-h-[var(--ti-header-height)] w-full shrink-0 items-center gap-3 border-b border-[var(--ti-border)] px-4 text-left hover:bg-[var(--ti-surface-hover)]"
     title="Open Live Meeting"
     onclick={() => onMeetingSection("live")}
   >

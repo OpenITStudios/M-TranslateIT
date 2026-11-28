@@ -44,6 +44,16 @@ test("F2 mounts production Svelte components in their own real viewport", () => 
   assert.match(frame, /data-preview-synthetic="true"/);
 });
 
+test("shell headers share one minimum height without clipping workspace actions", () => {
+  const tokens = src("src/styles/tokens.css");
+  const sidebar = src("src/components/layout/Sidebar.svelte");
+  assert.equal((tokens.match(/--ti-header-height:\s*60px;/g) ?? []).length, 1);
+  assert.match(sidebar, /class="ti-sidebar-brand[^"\n]*min-h-\[var\(--ti-header-height\)\][^"\n]*shrink-0/);
+  assert.match(header, /class="ti-appbar[^"\n]*min-h-\[var\(--ti-header-height\)\][^"\n]*flex-wrap/);
+  assert.match(header, /class="ml-auto flex min-w-0 max-w-full flex-wrap[^"\n]*" role="group"/);
+  assert.doesNotMatch(sidebar + header, /class="ti-(?:sidebar-brand|appbar)[^"\n]*min-h-\[(?:66|58)px\]/);
+});
+
 test("native, updater, network and app interactions stay isolated from preview fixture", () => {
   assert.match(frame, /\sinert\s/);
   assert.match(frame, /showUpdateAction=\{false\}/);

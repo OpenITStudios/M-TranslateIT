@@ -24,6 +24,8 @@ All paths above are relative to `EngineData/Frontend/RustApp/`.
 
 ## Shared geometry and seam rules
 
+The brand and workspace header share `--ti-header-height: 60px` as their minimum height. Keep the brand from shrinking; allow workspace actions to wrap when a narrow viewport or an updater/recovery message needs additional space. Do not clip the warning or force a fixed height to preserve a seam. At ordinary single-row widths the two header bottom borders must align within 1 CSS pixel; wrapped exceptional states must keep all actions and messages reachable. The sidebar/dock rules below remain unchanged.
+
 1. Sidebar footer and Meeting action dock MUST use `--ti-bottom-dock-height: 70px`, not independently maintained 62px/70px literals.
 2. Both top borders use `1px solid var(--ti-border)` and must align in the same bottom shell track; avoid doubled borders or arbitrary offsets.
 3. Outer height includes border and padding (`box-sizing: border-box`). Children must not expand the fixed dock height.
@@ -66,7 +68,7 @@ Check widths 1920, 1600, 1440, 1280, 1024 and narrowest supported; include short
 `NATIVE_UNVERIFIED` = Windows/audio behavior not tested.
 `PACKAGE_READY` requires separate release gates.
 
-**Open QA:** shared footer/dock geometry is source-aligned but not measured; conditional routes' bottom edges need visual review; menu clipping, keyboard, browser, Svelte build and Windows acceptance remain unverified.
+**Open QA:** the shared header minimum and footer/dock geometry are source-aligned but not measured; header wrapping and visibility of updater/recovery actions need visual review; conditional routes' bottom edges need visual review; menu clipping, keyboard, browser, Svelte build and Windows acceptance remain unverified.
 
 ## Mandatory review checklist
 

@@ -137,8 +137,8 @@
 
 <svelte:window onclick={handleGlobalClick} onkeydown={handleGlobalKey} />
 
-<header class="ti-appbar flex min-h-[58px] shrink-0 items-center gap-3 border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-4 py-2" aria-label="TranslateIT workspace header">
-  <div class="flex min-w-0 items-center gap-2">
+<header class="ti-appbar flex min-h-[var(--ti-header-height)] shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-[var(--ti-border)] bg-[var(--ti-surface-soft)] px-4 py-2" aria-label="TranslateIT workspace header">
+  <div class="flex min-w-0 max-w-full items-center gap-2">
     {#if route === "meeting"}<Hash size={19} class="shrink-0 text-[var(--ti-text-soft)]" aria-hidden="true"/>{/if}
     <strong class="min-w-0 max-w-[220px] truncate text-[15px] font-semibold" title={routeTitle}>{routeTitle}</strong>
     {#if route === "meeting" && meetingSection === "live" && snapshot.meeting.live}
@@ -149,7 +149,7 @@
     {/if}
   </div>
 
-  <div class="ml-auto flex min-w-0 shrink-0 items-center gap-2" role="group" aria-label={route === "meeting" && meetingSection === "live" ? "Live Meeting controls" : "Workspace controls"}>
+  <div class="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2" role="group" aria-label={route === "meeting" && meetingSection === "live" ? "Live Meeting controls" : "Workspace controls"}>
     {#if route === "meeting" && meetingSection === "live"}
       {#if sourceEditable}
         <label class="flex min-h-10 min-w-0 items-center gap-2 rounded-[var(--ti-radius-sm)] border border-[var(--ti-border)] bg-[var(--ti-surface-raised)] px-3" title="Select what audio TranslateIT sends to your calling app">
