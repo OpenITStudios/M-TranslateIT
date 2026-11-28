@@ -584,10 +584,10 @@ pub fn apply_worker_response(runtime: &mut HelperBridgeRuntime, value: &Value) -
         // Only project_candidate_status owns capability projection.
         return false;
     } else {
-        let blocker = worker_text(value, "blocker").unwrap_or_default();
+        let blocker = value.get("blocker").and_then(Value::as_str).unwrap_or_default();
         let hard_voice_actor_failure = stage == "voice_actor_synthesize"
             && !matches!(
-                blocker.as_str(),
+                blocker,
                 "voice_actor:empty_text" | "voice_actor:text_too_large"
             );
         let required_outbound_prepare_failed = !ok
@@ -603,11 +603,7 @@ pub fn apply_worker_response(runtime: &mut HelperBridgeRuntime, value: &Value) -
             runtime.provider_ready = false;
         }
 
-        runtime.last_error = if ok {
-            None
-        } else {
-            worker_text(value, "blocker").filter(|blocker| !blocker.is_empty())
-        };
+        runtime.last_error = (!ok && !blocker.is_empty()).then(|| blocker.to_owned());
         runtime.message = worker_text(value, "note")
             .or_else(|| worker_text(value, "stage"))
             .unwrap_or_else(|| {
@@ -645,6 +641,36 @@ pub fn stop_child(runtime: &mut HelperBridgeRuntime) -> bool {
 #[cfg(test)]
 mod readiness_contract_tests {
     use super::*;
+
+    #[test]
+    fn worker_response_preserves_blocker_and_provider_failure_semantics() {
+        let mut runtime = HelperBridgeRuntime {
+            provider_ready: true,
+            ..HelperBridgeRuntime::default()
+        };
+        assert!(!apply_worker_response(&mut runtime, &json!({
+            "ok": false, "stage": "voice_actor_synthesize", "blocker": "voice_actor:empty_text",
+        })));
+        assert!(runtime.provider_ready);
+        assert_eq!(runtime.last_error.as_deref(), Some("voice_actor:empty_text"));
+        assert_eq!(runtime.message, "voice_actor_synthesize");
+        assert!(!apply_worker_response(&mut runtime, &json!({
+            "ok": false, "stage": "voice_actor_synthesize", "blocker": "native_inference:owner_or_backend_failed",
+            "note": "Native inference failed.",
+        })));
+        assert!(!runtime.provider_ready);
+        assert_eq!(runtime.last_error.as_deref(), Some("native_inference:owner_or_backend_failed"));
+        assert_eq!(runtime.message, "Native inference failed.");
+        assert!(apply_worker_response(&mut runtime, &json!({
+            "ok": true, "stage": "translate", "blocker": "",
+        })));
+        assert!(runtime.last_error.is_none());
+        assert!(!runtime.provider_ready, "a text receipt does not restore lost capability");
+        assert!(!apply_worker_response(&mut runtime, &json!({
+            "ok": false, "stage": "translate", "blocker": null,
+        })));
+        assert!(runtime.last_error.is_none());
+    }
 
     #[test]
     fn retained_unavailable_native_owner_blocks_ready_reuse() {

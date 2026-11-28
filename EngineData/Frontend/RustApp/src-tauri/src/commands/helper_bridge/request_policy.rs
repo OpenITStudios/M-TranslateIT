@@ -43,7 +43,11 @@ pub(super) fn meeting_lane(payload: &Value) -> Option<String> {
     payload
         .get("meeting_lane")
         .and_then(Value::as_str)
-        .map(|value| clean_helper_text(value, 32).to_ascii_lowercase())
+        .map(|value| {
+            let mut lane = clean_helper_text(value, 32);
+            lane.make_ascii_lowercase();
+            lane
+        })
         .filter(|value| matches!(value.as_str(), "you" | "incoming"))
 }
 

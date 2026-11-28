@@ -2,9 +2,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::sync::TryLockError;
 
-use crate::commands::diagnostic_trace::{
-    trace_command_end, trace_command_error, trace_command_start,
-};
+use crate::commands::diagnostic_trace::trace_command_error;
 use crate::engine::runtime_state::{
     admit_app_runtime_operation, latest_runtime_session_state,
     runtime_generation_is_authoritative,
@@ -58,7 +56,7 @@ where
 }
 
 fn clean_helper_text(value: &str, max_chars: usize) -> String {
-    value
+    let mut cleaned = value
         .trim()
         .chars()
         .filter(|character| {
@@ -68,9 +66,15 @@ fn clean_helper_text(value: &str, max_chars: usize) -> String {
                 && *character != '\u{007f}'
         })
         .take(max_chars)
-        .collect::<String>()
-        .trim()
-        .to_string()
+        .collect::<String>();
+    // Filtering or truncation can expose whitespace at either edge.
+    // Trim the owned buffer in place, preserving the old Unicode semantics.
+    cleaned.truncate(cleaned.trim_end().len());
+    let start = cleaned.len() - cleaned.trim_start().len();
+    if start != 0 {
+        cleaned.drain(..start);
+    }
+    cleaned
 }
 
 // Native identity is admitted only from the Rust-owned outer receipt,
@@ -275,29 +279,15 @@ fn status_lock_busy() -> HelperBridgeStatus {
 }
 
 pub fn get_helper_bridge_status() -> HelperBridgeStatus {
-    let started = trace_command_start("get_helper_bridge_status", "reading helper bridge status");
+    // Routine state observations are not lifecycle transitions. Do not
+    // discover paths or write a log file on every snapshot/reconciliation.
+    let started = std::time::Instant::now();
     match runtime().try_lock() {
-        Ok(runtime) => {
-            let result = decorate_functional_readiness_status(status_from_runtime(&runtime));
-            // Filesystem tracing must never extend this transport-mutex lease.
-            drop(runtime);
-            trace_command_end(
-                "get_helper_bridge_status",
-                started,
-                format!("state={}", result.state),
-            );
-            result
-        }
-        Err(TryLockError::WouldBlock) => {
-            let result = status_lock_busy();
-            trace_command_end(
-                "get_helper_bridge_status",
-                started,
-                "state=checking; helper status is temporarily owned",
-            );
-            result
-        }
-        Err(TryLockError::Poisoned(_)) => {
+        Ok(runtime) => decorate_functional_readiness_status(status_from_runtime(&runtime)),
+        Err(TryLockError::WouldBlock) => status_lock_busy(),
+        Err(TryLockError::Poisoned(poisoned)) => {
+            // Release the poisoned guard before reporting the genuine fault.
+            drop(poisoned);
             let result = HelperBridgeStatus {
                 state: "error".to_string(),
                 message: "Helper bridge status lock is poisoned.".to_string(),
@@ -950,6 +940,20 @@ mod c4_functional_readiness_tests {
             generation_token: 7,
             runtime_claim: "test".to_string(),
             worker_response_json: serde_json::from_str(body).expect("valid worker fixture"),
+        }
+    }
+
+    #[test]
+    fn helper_text_cleanup_preserves_filter_limit_and_unicode_trim() {
+        for (source, limit, expected) in [
+            ("  normal text  ", 500, "normal text"),
+            ("\0\u{0001}  \u{2003}abc\u{007f}", 500, "abc"),
+            ("a \u{0007}b", 2, "a"),
+            (" \n\t ", 500, ""),
+            ("aé日", 2, "aé"),
+            ("abc", 0, ""),
+        ] {
+            assert_eq!(super::clean_helper_text(source, limit), expected);
         }
     }
 

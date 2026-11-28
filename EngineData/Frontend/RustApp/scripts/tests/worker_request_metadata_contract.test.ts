@@ -85,3 +85,11 @@ test("invalid text and language direction are rejected before model preparation"
   assert.match(abi, /pub fn translation_source_admitted\(source: &str\)/);
   assert.match(abi, /if from == to \|\| !translation_source_admitted\(source\)/);
 });
+
+test("routine helper observations do not write trace logs; poisoned locks still do", () => {
+  const observation = startup.slice(startup.indexOf("pub fn get_helper_bridge_status()"), startup.indexOf("fn public_worker_start_has_idle_audio_owner()"));
+  assert.match(observation, /Ok\(runtime\) => decorate_functional_readiness_status\(status_from_runtime\(&runtime\)\)/);
+  assert.match(observation, /Err\(TryLockError::WouldBlock\) => status_lock_busy\(\)/);
+  assert.doesNotMatch(observation, /trace_command_start|trace_command_end/);
+  assert.match(observation, /Err\(TryLockError::Poisoned\(poisoned\)\)[\s\S]*?drop\(poisoned\);[\s\S]*?trace_command_error\(/);
+});

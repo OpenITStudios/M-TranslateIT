@@ -643,8 +643,8 @@ pub(super) fn dispatch(
     body["scheduler_priority"] = json!(priority.label());
     body["scheduler_wait_ms"] = json!(permit.scheduler_wait_ms());
     let ok = apply_worker_response(&mut host, &body);
+    // The receipt application already stamps the update under this lock.
     clear_active_request(&mut host, request_id);
-    host.updated_unix_ms = unix_ms();
     let message = worker_message(task, &body);
     response_with_runtime(ok, task, request_id, priority, message, body, &host, NATIVE_INFERENCE_CLAIM.into())
 }
