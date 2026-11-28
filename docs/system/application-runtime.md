@@ -50,6 +50,10 @@ Rules:
 The floating translation overlay remains frontend-owned. It manages window presentation, local preferences, caption rendering, and position state; these are UI concerns rather than shared resource ownership. Do not move overlay window implementation into ApplicationRuntime. Only promote an overlay concern into the application kernel if it becomes a real cross-feature lifecycle/resource invariant.
 
 
+### Snapshot and bootstrap reconciliation
+
+Returning startup, explicit refresh and setup recovery share the existing Local cold-start predicate. Startup still renders the shell before requesting preparation; ordinary events never bootstrap. A valid setup receipt can seed the explicit refresh without another snapshot IPC. The replacement bootstrap receipt must be available and newer, and its Settings are the only Settings mapped into that revision. The shell's new-setup path commits the canonical sequence and Settings without a discarded worker capability read; First Setup retains its independent readiness/readback checks. Existing native admission, event ordering, helper generation checks and fallback recovery remain unchanged.
+
 ### Snapshot cost rule
 
 `ApplicationSnapshot.revision` is a monotonic snapshot-build sequence, not a semantic state-change revision. Use owner/session/generation/domain fields to detect meaningful state transitions.

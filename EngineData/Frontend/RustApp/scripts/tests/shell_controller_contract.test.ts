@@ -51,12 +51,13 @@ test("returning startup renders the native shell before cold worker initializati
   assert.match(boot, /applicationController\.refreshFromApplication\(\s*initialSnapshot,\s*"initial_shell",/);
   assert.equal((boot.match(/applicationRuntimeApi\.getSnapshot\(\)/g) ?? []).length, 1);
   assert.doesNotMatch(boot, /runtimeApi\.loadSettings\(/);
-  assert.match(boot, /applicationController\.applySettings\(initialSnapshot\.settings\)/);
+  assert.doesNotMatch(boot, /applicationController\.applySettings\(initialSnapshot\.settings\)/);
   assert.doesNotMatch(boot, /await refreshSnapshot\(/);
   const shellReady = boot.indexOf("booting = false;");
   assert.ok(shellReady >= 0 && shellReady < boot.indexOf('dispatchIntent("ensure_runtime_ready")'));
-  assert.match(boot, /initialSnapshot\?\.helper\.state === "not_started"/);
-  assert.match(boot, /applicationController\.read\(\)\.snapshot\?\.helper\?\.state === "not_started"/);
+  assert.match(boot, /shouldBootstrapLocalRuntime\(initialSnapshot\)/);
+  assert.match(boot, /shouldBootstrapLocalRuntime\(applicationController\.read\(\)\.snapshot\)/);
+  assert.match(facade, /snapshot\?\.settings\.translation_engine === "local"[\s\S]*snapshot\.settings\.meeting_setup_state !== "new"[\s\S]*snapshot\.helper\?\.state === "not_started"/);
   assert.match(boot, /if \(outcome\.snapshot\.revision > 0 && outcome\.snapshot\.lifecycle !== "unavailable"\)/);
   assert.match(boot, /refreshFromApplicationEvent\(outcome\.snapshot, outcome\.intent\)/);
   assert.match(boot, /if \(!outcome\.ok\) \{\s*setKnownNotice\(outcome\.message, "attention"\)/);
@@ -102,8 +103,8 @@ test("setup actions reconcile a valid native receipt instead of refetching its s
   assert.equal((setup.match(/receipt: result/g) ?? []).length, 5);
   assert.match(setup, /runtimeApi\.verifyModels\(\)[\s\S]*receipt: null/);
   assert.match(owner, /!receipt \|\| receipt\.snapshot\.revision <= 0 \|\| receipt\.snapshot\.lifecycle === "unavailable"/);
-  assert.match(owner, /observed\.settings\.translation_engine === "local"[\s\S]*observed\.settings\.meeting_setup_state !== "new"[\s\S]*observed\.summaries\.worker\.state === "not_started"/);
-  assert.equal((owner.match(/await refreshSnapshot\(message\)/g) ?? []).length, 2);
+  assert.match(owner, /if \(shouldBootstrapLocalRuntime\(observed\)\) \{\s*await refreshSnapshot\(message, observed\)/);
+  assert.equal((owner.match(/await refreshSnapshot\(message\)/g) ?? []).length, 1);
   assert.match(owner, /refreshFromApplication\(observed, intent\)/);
   assert.match(owner, /applicationController\.read\(\)\.applicationRevision === observed\.revision/);
   assert.match(owner, /reconcileSetupResult\(await runtimeProductFacade\.runProductSetupAction\(action\)\)/);

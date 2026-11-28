@@ -1,7 +1,7 @@
 import { cloneSettings } from "../shared/state";
 import type { RuntimeSettings } from "../shared/types";
 import type { ApplicationSnapshot } from "../bridge/applicationRuntimeApi";
-import { runtimeProductFacade } from "../bridge/runtimeProductFacade";
+import { requireApplicationSnapshot, runtimeProductFacade } from "../bridge/runtimeProductFacade";
 import type { ProductRuntimeSnapshot } from "../bridge/runtimeProductTypes";
 
 export type ApplicationControllerState = {
@@ -22,11 +22,10 @@ export type ApplicationRefreshResult = {
 
 export function createApplicationController(initialSettings: RuntimeSettings): {
   read: () => ApplicationControllerState;
-  refresh: (knownSettings?: RuntimeSettings) => Promise<ApplicationRefreshResult>;
+  refresh: (initialApplication?: ApplicationSnapshot) => Promise<ApplicationRefreshResult>;
   refreshFromApplication: (
     application: ApplicationSnapshot,
     reason: string,
-    knownSettings?: RuntimeSettings,
   ) => Promise<ApplicationRefreshResult>;
   applySettings: (settings: RuntimeSettings) => void;
   applyMeetingSession: (session: ProductRuntimeSnapshot["meetingSession"]) => boolean;
@@ -42,8 +41,19 @@ export function createApplicationController(initialSettings: RuntimeSettings): {
 
   let eventRefreshTail: Promise<void> = Promise.resolve();
 
+  const unchangedRefresh = (): ApplicationRefreshResult => {
+    const sessionId = state.snapshot?.meeting.sessionId ?? null;
+    return {
+      applied: false,
+      previousSessionId: sessionId,
+      nextSessionId: sessionId,
+      setupRequired: state.setupRequired,
+      snapshot: state.snapshot,
+    };
+  };
+
   const commitSnapshot = (
-    next: ProductRuntimeSnapshot,
+    next: ProductRuntimeSnapshot | Pick<ProductRuntimeSnapshot, "applicationRevision" | "settings">,
     requestRevision: number,
   ): ApplicationRefreshResult => {
     const previousSessionId = state.snapshot?.meeting.sessionId ?? null;
@@ -53,20 +63,14 @@ export function createApplicationController(initialSettings: RuntimeSettings): {
       && next.applicationRevision <= state.applicationRevision;
 
     if (staleApplicationSnapshot || supersededRequestWithoutNewerApplicationState) {
-      return {
-        applied: false,
-        previousSessionId,
-        nextSessionId: state.snapshot?.meeting.sessionId ?? null,
-        setupRequired: state.setupRequired,
-        snapshot: state.snapshot,
-      };
+      return unchangedRefresh();
     }
 
     const nextSettings = cloneSettings(next.settings);
     const setupRequired = nextSettings.meeting_setup_state === "new";
     state = {
       ...state,
-      snapshot: setupRequired ? null : next,
+      snapshot: setupRequired || !("meeting" in next) ? null : next,
       setupSettings: nextSettings,
       setupRequired,
       applicationRevision: next.applicationRevision,
@@ -75,7 +79,7 @@ export function createApplicationController(initialSettings: RuntimeSettings): {
     return {
       applied: true,
       previousSessionId,
-      nextSessionId: next.meeting.sessionId,
+      nextSessionId: state.snapshot?.meeting.sessionId ?? null,
       setupRequired,
       snapshot: state.snapshot,
     };
@@ -84,35 +88,38 @@ export function createApplicationController(initialSettings: RuntimeSettings): {
   return {
     read: () => state,
 
-    async refresh(knownSettings?: RuntimeSettings): Promise<ApplicationRefreshResult> {
+    async refresh(initialApplication?: ApplicationSnapshot): Promise<ApplicationRefreshResult> {
+      if (initialApplication && initialApplication.revision < state.applicationRevision) {
+        return unchangedRefresh();
+      }
       const requestRevision = ++state.revision;
-      const next = await runtimeProductFacade.loadProductRuntimeSnapshot(knownSettings);
+      const next = await runtimeProductFacade.loadProductRuntimeSnapshot(initialApplication);
       return commitSnapshot(next, requestRevision);
     },
 
     async refreshFromApplication(
       application: ApplicationSnapshot,
       reason: string,
-      knownSettings?: RuntimeSettings,
     ): Promise<ApplicationRefreshResult> {
       const run = async (): Promise<ApplicationRefreshResult> => {
+        requireApplicationSnapshot(application);
         if (application.revision <= state.applicationRevision) {
-          const sessionId = state.snapshot?.meeting.sessionId ?? null;
-          return {
-            applied: false,
-            previousSessionId: sessionId,
-            nextSessionId: sessionId,
-            setupRequired: state.setupRequired,
-            snapshot: state.snapshot,
-          };
+          return unchangedRefresh();
         }
 
         const requestRevision = ++state.revision;
+        // Setup has its own explicit readiness reads; the shell needs only
+        // the authoritative settings and sequence while setup is required.
+        if (application.settings.meeting_setup_state === "new") {
+          return commitSnapshot({
+            applicationRevision: application.revision,
+            settings: application.settings,
+          }, requestRevision);
+        }
         const next = await runtimeProductFacade.loadProductRuntimeSnapshotFromApplication(
           application,
           state.snapshot,
           reason,
-          knownSettings,
         );
         return commitSnapshot(next, requestRevision);
       };

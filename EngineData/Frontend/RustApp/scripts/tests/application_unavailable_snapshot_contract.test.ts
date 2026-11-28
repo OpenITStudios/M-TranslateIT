@@ -15,12 +15,22 @@ test("unavailable ApplicationSnapshot is rejected before product settings mappin
   assert.match(api, /revision: 0/);
   assert.match(api, /lifecycle: "unavailable"/);
 
-  const start = facade.indexOf("async function mapApplicationSnapshotToProduct");
-  const body = facade.slice(start, start + 1000);
-  const guard = body.indexOf('application.revision <= 0 || application.lifecycle === "unavailable"');
-  const settings = body.indexOf("knownSettings ?? application.settings");
-  assert.ok(guard >= 0 && settings > guard);
-  assert.match(body, /throw new Error\("TranslateIT application runtime is unavailable\."\)/);
+  const start = facade.indexOf("export function requireApplicationSnapshot");
+  const guardBody = facade.slice(start, facade.indexOf("export function shouldBootstrapLocalRuntime", start));
+  assert.match(guardBody, /application\.revision <= 0 \|\| application\.lifecycle === "unavailable"/);
+  assert.match(guardBody, /throw new Error\("TranslateIT application runtime is unavailable\."\)/);
+  const mapper = facade.slice(facade.indexOf("async function mapApplicationSnapshotToProduct"));
+  assert.match(mapper, /requireApplicationSnapshot\(application\);\s*const settings = application\.settings;/);
+  assert.doesNotMatch(facade, /knownSettings/);
+});
+
+test("explicit bootstrap validates its replacement receipt before mapping", () => {
+  const start = facade.indexOf("export async function loadProductRuntimeSnapshot(");
+  const body = facade.slice(start, facade.indexOf("export async function loadProductRuntimeSnapshotFromApplication", start));
+  assert.match(body, /initialApplication \?\? await applicationRuntimeApi\.getSnapshot\(\)/);
+  assert.match(body, /requireApplicationSnapshot\(application\);\s*if \(shouldBootstrapLocalRuntime\(application\)\)/);
+  assert.match(body, /dispatchIntent\("ensure_runtime_ready"\)\)\.snapshot;\s*requireApplicationSnapshot\(application\);\s*if \(application\.revision <= initialRevision\)/);
+  assert.match(body, /return mapApplicationSnapshotToProduct\(application\)/);
 });
 
 test("failed product intent returns a fail-closed Meeting status, never an empty IPC DTO", () => {

@@ -10,7 +10,7 @@ const app = readFileSync(new URL("../../src/App.svelte", import.meta.url), "utf8
 
 test("application controller owns the product runtime snapshot", () => {
   assert.match(controller, /snapshot: ProductRuntimeSnapshot \| null/);
-  assert.match(controller, /async refresh\(knownSettings\?: RuntimeSettings\)/);
+  assert.match(controller, /async refresh\(initialApplication\?: ApplicationSnapshot\)/);
   assert.match(controller, /async refreshFromApplication/);
   assert.match(controller, /loadProductRuntimeSnapshotFromApplication/);
   assert.match(controller, /applySettings\(settings: RuntimeSettings\)/);
@@ -58,4 +58,19 @@ test("WorkerSummary is validated within its own type, not unrelated audio readin
 test("read-only worker diagnostics are not mistaken for lifecycle mutation", () => {
   assert.match(productRuntimeFacade, /runtimeApi\.helperBridgeWorkerStatus\(\)/);
   assert.doesNotMatch(architectureVerifier, /"runtimeApi\.helperBridgeWorkerStatus\("/);
+});
+
+
+test("new setup commits the native sequence without a discarded worker projection", () => {
+  const start = controller.indexOf("async refreshFromApplication(");
+  const body = controller.slice(start, controller.indexOf("applySettings(settings:", start));
+  assert.match(body, /requireApplicationSnapshot\(application\)/);
+  assert.match(body, /application\.revision <= state\.applicationRevision/);
+  const setup = body.indexOf('application.settings.meeting_setup_state === "new"');
+  const commit = body.indexOf("return commitSnapshot({", setup);
+  const map = body.indexOf("loadProductRuntimeSnapshotFromApplication(", commit);
+  assert.ok(setup >= 0 && commit > setup && map > commit);
+  assert.match(body.slice(commit, map), /applicationRevision: application\.revision,\s*settings: application\.settings/);
+  assert.match(controller, /applicationRevision: next\.applicationRevision/);
+  assert.match(controller, /initialApplication\.revision < state\.applicationRevision/);
 });

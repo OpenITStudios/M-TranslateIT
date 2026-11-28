@@ -9,6 +9,7 @@
   } from "./app/bridge/applicationRuntimeApi";
   import {
     runtimeProductFacade,
+    shouldBootstrapLocalRuntime,
     type ProductSetupAction,
     type ProductSetupResult,
   } from "./app/bridge/runtimeProductFacade";
@@ -300,10 +301,10 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     }
   }
 
-  async function refreshSnapshot(preferredNotice?: string, knownSettings?: RuntimeSettings): Promise<void> {
+  async function refreshSnapshot(preferredNotice?: string, initialApplication?: ApplicationSnapshot): Promise<void> {
     try {
       applyRefreshResult(
-        await applicationController.refresh(knownSettings),
+        await applicationController.refresh(initialApplication),
         preferredNotice,
       );
     } catch {
@@ -343,10 +344,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
       applicationController.applySettings(next);
       applicationState = applicationController.read();
       route = "meeting";
-      await refreshSnapshot(
-        "Setup saved.",
-        next,
-      );
+      await refreshSnapshot("Setup saved.");
     } finally {
       booting = false;
     }
@@ -355,7 +353,7 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
   async function openMyVoiceFromSetup(next: RuntimeSettings): Promise<void> {
     applicationController.applySettings(next);
     applicationState = applicationController.read();
-    await refreshSnapshot("Choose a Meeting voice before starting translation.", next);
+    await refreshSnapshot("Choose a Meeting voice before starting translation.");
     route = "my-voice";
   }
 
@@ -452,10 +450,8 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
     }
     const { snapshot: observed, intent } = receipt;
     // Preserve the existing explicit refresh's cold-local bootstrap behavior.
-    if (observed.settings.translation_engine === "local"
-      && observed.settings.meeting_setup_state !== "new"
-      && observed.summaries.worker.state === "not_started") {
-      await refreshSnapshot(message);
+    if (shouldBootstrapLocalRuntime(observed)) {
+      await refreshSnapshot(message, observed);
       return;
     }
     // The event and receipt share a sequence. Map once through the ordered
@@ -608,33 +604,21 @@ import { discardLegacyOverlayCaption } from "./app/runtime/translationOverlaySta
           throw new Error("Initial application state was unavailable.");
         }
         if (disposed) return;
-        // Settings already belong to this authoritative snapshot. The first
-        // setup page keeps its own explicit readiness/reconfirmation checks.
-        if (initialSnapshot.settings.meeting_setup_state === "new") {
-          if (applicationController.read().applicationRevision < initialSnapshot.revision) {
-            applicationController.applySettings(initialSnapshot.settings);
-            applicationState = applicationController.read();
-          }
-        } else {
-          applyRefreshResult(
-            await applicationController.refreshFromApplication(
-              initialSnapshot, "initial_shell",
-            ),
-          );
-        }
+        applyRefreshResult(
+          await applicationController.refreshFromApplication(
+            initialSnapshot, "initial_shell",
+          ),
+        );
       } catch {
         if (!disposed) setKnownNotice("Could not load your settings or desktop status. Select Try Again to check the runtime.", "unverified");
       } finally {
         if (disposed) return;
         booting = false;
         void refreshMeetingLibrary();
-        // The initial page is no longer gated by Python worker readiness.
-        // Only a truly not-started worker gets one automatic start attempt.
-        // A blocked or failed worker requires the existing explicit recovery.
+        // Render the shell first; only a still-eligible cold runtime starts.
         if (
-          initialSnapshot?.helper.state === "not_started"
-          && initialSnapshot.settings.translation_engine === "local"
-          && applicationController.read().snapshot?.helper?.state === "not_started"
+          shouldBootstrapLocalRuntime(initialSnapshot)
+          && shouldBootstrapLocalRuntime(applicationController.read().snapshot)
         ) {
           setKnownNotice("Preparing the local AI worker. Meeting and Settings remain accessible while it starts.", "progress");
           void (async () => {

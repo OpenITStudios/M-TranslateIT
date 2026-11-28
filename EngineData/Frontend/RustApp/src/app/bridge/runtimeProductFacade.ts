@@ -85,29 +85,29 @@ const WORKER_REUSE_SAFE_REASONS = new Set([
   "voice_build_failed",
 ]);
 
-async function mapApplicationSnapshotToProduct(
-  initialApplication: ApplicationSnapshot,
-  knownSettings?: RuntimeSettings,
-  allowRuntimeBootstrap = false,
-  previous?: ProductRuntimeSnapshot | null,
-  reason?: string,
-): Promise<ProductRuntimeSnapshot> {
-  let application = initialApplication;
+export function requireApplicationSnapshot(application: ApplicationSnapshot): void {
   if (application.revision <= 0 || application.lifecycle === "unavailable") {
     throw new Error("TranslateIT application runtime is unavailable.");
   }
+  if (!application.settings) throw new Error("TranslateIT settings are unavailable.");
+}
 
-  const settings = knownSettings ?? application.settings;
-  if (!settings) throw new Error("TranslateIT settings are unavailable.");
+export function shouldBootstrapLocalRuntime(snapshot: {
+  settings: RuntimeSettings;
+  helper: { state: string } | null;
+} | null): boolean {
+  return snapshot?.settings.translation_engine === "local"
+    && snapshot.settings.meeting_setup_state !== "new"
+    && snapshot.helper?.state === "not_started";
+}
 
-  if (
-    allowRuntimeBootstrap
-    && settings.translation_engine === "local"
-    && settings.meeting_setup_state !== "new"
-    && application.summaries.worker.state === "not_started"
-  ) {
-    application = (await applicationRuntimeApi.dispatchIntent("ensure_runtime_ready")).snapshot;
-  }
+async function mapApplicationSnapshotToProduct(
+  application: ApplicationSnapshot,
+  previous?: ProductRuntimeSnapshot | null,
+  reason?: string,
+): Promise<ProductRuntimeSnapshot> {
+  requireApplicationSnapshot(application);
+  const settings = application.settings;
 
   const helper = application.helper;
   const helperIdentityChanged = Boolean(
@@ -162,28 +162,27 @@ async function mapApplicationSnapshotToProduct(
 }
 
 export async function loadProductRuntimeSnapshot(
-  knownSettings?: RuntimeSettings,
+  initialApplication?: ApplicationSnapshot,
 ): Promise<ProductRuntimeSnapshot> {
-  return mapApplicationSnapshotToProduct(
-    await applicationRuntimeApi.getSnapshot(),
-    knownSettings,
-    true,
-  );
+  let application = initialApplication ?? await applicationRuntimeApi.getSnapshot();
+  requireApplicationSnapshot(application);
+  if (shouldBootstrapLocalRuntime(application)) {
+    const initialRevision = application.revision;
+    application = (await applicationRuntimeApi.dispatchIntent("ensure_runtime_ready")).snapshot;
+    requireApplicationSnapshot(application);
+    if (application.revision <= initialRevision) {
+      throw new Error("TranslateIT runtime preparation returned a stale snapshot.");
+    }
+  }
+  return mapApplicationSnapshotToProduct(application);
 }
 
 export async function loadProductRuntimeSnapshotFromApplication(
   application: ApplicationSnapshot,
   previous: ProductRuntimeSnapshot | null,
   reason: string,
-  knownSettings?: RuntimeSettings,
 ): Promise<ProductRuntimeSnapshot> {
-  return mapApplicationSnapshotToProduct(
-    application,
-    knownSettings,
-    false,
-    previous,
-    reason,
-  );
+  return mapApplicationSnapshotToProduct(application, previous, reason);
 }
 
 export async function runProductMeetingAction(
