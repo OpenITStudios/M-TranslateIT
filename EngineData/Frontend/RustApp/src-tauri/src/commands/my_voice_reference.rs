@@ -77,7 +77,7 @@ fn signal_rank(line_id: u32, samples: &[f32]) -> Option<SignalRank> {
         duration_delta: (n as u64 * 1000 / RATE as u64).abs_diff(5000), line_id })
 }
 
-fn read_reference(path: &std::path::Path) -> Result<(Vec<f32>, [u8; 32]), String> {
+fn read_reference(path: &std::path::Path) -> Result<(Vec<f32>, Vec<u8>), String> {
     let file = fs::OpenOptions::new().read(true).share_mode(1).custom_flags(0x00200000)
         .open(path).map_err(|_| "preview_reference_unavailable")?;
     let meta = file.metadata().map_err(|_| "preview_reference_unavailable")?;
@@ -90,13 +90,14 @@ fn read_reference(path: &std::path::Path) -> Result<(Vec<f32>, [u8; 32]), String
         .map_err(|_| "preview_reference_unavailable")?;
     if bytes.len() as u64 != meta.len() { return Err("preview_reference_invalid".into()); }
     let samples = decode_native_voice_source(&bytes)?;
-    Ok((samples, Sha256::digest(&bytes).into()))
+    Ok((samples, bytes))
 }
 
 #[derive(Debug)]
 pub(super) struct SelectedReference {
     pub(super) line_id: u32,
     pub(super) wav_sha256: [u8; 32],
+    pub(super) wav: Vec<u8>,
     pub(super) samples: Vec<f32>,
 }
 
@@ -125,10 +126,11 @@ impl Shortlist {
         }
     }
 
-    fn push(&mut self, line_id: u32, samples: Vec<f32>, wav_sha256: [u8; 32]) {
+    fn push(&mut self, line_id: u32, samples: Vec<f32>, wav: Vec<u8>) {
         let Some(rank) = signal_rank(line_id, &samples) else { return; };
         self.all_edges &= rank.edge.is_some();
-        let candidate = Rc::new(Reference { rank, selected: SelectedReference { line_id, wav_sha256, samples } });
+        let wav_sha256 = Sha256::digest(&wav).into();
+        let candidate = Rc::new(Reference { rank, selected: SelectedReference { line_id, wav_sha256, wav, samples } });
         Self::keep_best(&mut self.best, &candidate, self.limit, false);
         // Once any eligible reference lacks an edge, that ranking can never
         // win. Release it immediately, including candidates unique to it.
@@ -164,8 +166,8 @@ pub(super) fn select_references(
     let mut shortlist = Shortlist::new(limit);
     for take in accepted {
         if !active() { return Err("preview_cancelled_or_timed_out".into()); }
-        let Ok((samples, wav_sha256)) = read_reference(&take.path) else { continue; };
-        shortlist.push(take.line_id, samples, wav_sha256);
+        let Ok((samples, wav)) = read_reference(&take.path) else { continue; };
+        shortlist.push(take.line_id, samples, wav);
     }
     if !active() { return Err("preview_cancelled_or_timed_out".into()); }
     shortlist.finish()
@@ -208,13 +210,14 @@ mod tests {
         let mut one = Shortlist::new(1);
         let mut three = Shortlist::new(3);
         for (id, seconds) in [(4, 6), (3, 5), (1, 5), (2, 5), (5, 4)] {
-            one.push(id, clean(RATE, seconds), [id as u8; 32]);
-            three.push(id, clean(RATE, seconds), [id as u8; 32]);
+            one.push(id, clean(RATE, seconds), vec![id as u8; 32]);
+            three.push(id, clean(RATE, seconds), vec![id as u8; 32]);
             assert!(three.best.len() <= 3 && three.best_edge.len() <= 3);
         }
         let winner = one.finish().unwrap();
         assert_eq!(winner[0].line_id, 1);
-        assert_eq!(winner[0].wav_sha256, [1; 32]);
+        assert_eq!(winner[0].wav, vec![1; 32]);
+        assert_eq!(winner[0].wav_sha256, <[u8; 32]>::from(Sha256::digest(&winner[0].wav)));
         assert_eq!(three.finish().unwrap().into_iter().map(|reference| reference.line_id).collect::<Vec<_>>(), vec![1, 2, 3]);
     }
 
@@ -223,12 +226,12 @@ mod tests {
         let mut shortlist = Shortlist::new(3);
         let mut edge = clean(RATE, 5);
         edge[..RATE / 5].fill(0.0);
-        shortlist.push(1, edge, [1; 32]);
+        shortlist.push(1, edge, vec![1; 32]);
         assert!(shortlist.all_edges && !shortlist.best_edge.is_empty());
         // A rejected take must not affect comparability.
-        shortlist.push(9, vec![0.0; RATE * 5], [9; 32]);
+        shortlist.push(9, vec![0.0; RATE * 5], vec![9; 32]);
         assert!(shortlist.all_edges);
-        shortlist.push(2, clean(RATE, 5), [2; 32]);
+        shortlist.push(2, clean(RATE, 5), vec![2; 32]);
         assert!(!shortlist.all_edges && shortlist.best_edge.is_empty());
         assert_eq!(shortlist.finish().unwrap().into_iter().map(|reference| reference.line_id).collect::<Vec<_>>(), vec![2, 1]);
     }

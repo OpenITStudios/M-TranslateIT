@@ -42,6 +42,8 @@ mod evaluation;
 mod native_speaker;
 #[cfg(windows)]
 mod native_evaluation;
+#[cfg(windows)]
+mod native_review;
 mod phase;
 mod receipts;
 mod process_owner;

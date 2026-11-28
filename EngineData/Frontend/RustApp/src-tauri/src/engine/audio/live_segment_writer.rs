@@ -119,6 +119,25 @@ fn write_pcm16_wav_with_promotion(
     // Assemble the complete, bounded WAV payload before reserving staging.
     // A pre-existing stage is owned by another attempt or a crashed writer:
     // never truncate or delete it in response to an admission failure.
+    let wav = encode_pcm16_wav(sample_rate_hz, channels, samples);
+    // Exclusive creation prevents two writers from truncating the same
+    // deterministic .wav.tmp. Failing to reserve leaves the existing stage
+    // untouched, and must NOT remove its owner's staged bytes.
+    let mut staged = OpenOptions::new().write(true).create_new(true).open(&temp_path)?;
+    let written = staged.write_all(&wav);
+    // Close the write handle before promotion, including on write failure.
+    drop(staged);
+    let promoted = written.and_then(|()| promote(&temp_path, path));
+    if promoted.is_err() {
+        // Only this call's exclusively created stage may be removed. An
+        // unsuccessful rename must not delete an existing valid destination.
+        let _ = fs::remove_file(&temp_path);
+    }
+    promoted
+}
+
+/// The same canonical PCM16 bytes used by recording and native review.
+pub(crate) fn encode_pcm16_wav(sample_rate_hz: u32, channels: u16, samples: &[f32]) -> Vec<u8> {
     let bits_per_sample = 16u16;
     let bytes_per_sample = bits_per_sample / 8;
     let block_align = channels * bytes_per_sample;
@@ -146,20 +165,7 @@ fn write_pcm16_wav_with_promotion(
         let value = (safe_sample(*sample) * i16::MAX as f32).round() as i16;
         wav.extend_from_slice(&value.to_le_bytes());
     }
-    // Exclusive creation prevents two writers from truncating the same
-    // deterministic .wav.tmp. Failing to reserve leaves the existing stage
-    // untouched, and must NOT remove its owner's staged bytes.
-    let mut staged = OpenOptions::new().write(true).create_new(true).open(&temp_path)?;
-    let written = staged.write_all(&wav);
-    // Close the write handle before promotion, including on write failure.
-    drop(staged);
-    let promoted = written.and_then(|()| promote(&temp_path, path));
-    if promoted.is_err() {
-        // Only this call's exclusively created stage may be removed. An
-        // unsuccessful rename must not delete an existing valid destination.
-        let _ = fs::remove_file(&temp_path);
-    }
-    promoted
+    wav
 }
 
 #[cfg(test)]

@@ -16,7 +16,7 @@ pub(crate) use runtime::{
 };
 
 #[cfg(windows)]
-pub(crate) use runtime::{decode_native_voice_reference, decode_native_voice_source, prepare_native_voice_reference};
+pub(crate) use runtime::{decode_native_voice_reference, decode_native_voice_source, prepare_native_voice_reference, decode_native_review_pcm};
 
 pub use runtime::{
     cancel_meeting_output_for_generation, clear_prepared_meeting_output_device,

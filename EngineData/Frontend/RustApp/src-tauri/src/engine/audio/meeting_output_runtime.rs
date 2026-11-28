@@ -56,6 +56,17 @@ pub(crate) fn decode_functional_probe_asr_pcm(file: File) -> Result<Vec<f32>, St
     prepare_output_samples(&source, 16_000, 1)
 }
 
+/// Decode the exact WAV that will be listened to in native My Voice Review.
+#[cfg(windows)]
+pub(crate) fn decode_native_review_pcm(bytes: &[u8]) -> Result<Vec<f32>, String> {
+    let source = audio_format::decode_pcm16_wav_bytes(bytes)?;
+    if source.channels != 1 || source.sample_rate_hz != 44_100
+        || !(13_230..=1_323_000).contains(&source.samples.len()) {
+        return Err("native_voice:review_pcm_format_invalid".into());
+    }
+    Ok(source.samples)
+}
+
 /// The selected built-in reference is already SHA-256 verified by the
 /// voice selection owner. Reuse the canonical WAV decoder and existing
 /// anti-aliased FFT resampler, not a second decoder or a linear downsample.
