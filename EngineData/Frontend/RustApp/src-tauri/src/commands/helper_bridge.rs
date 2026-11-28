@@ -150,10 +150,11 @@ pub fn send_helper_worker_task(task: &str, payload: Value) -> HelperBridgeWorker
     send_worker_task(task, payload)
 }
 
-// Temporary source-build selection, not a user-facing provider setting.
-// A candidate build never falls back to legacy synthesis on failure.
+// Local development is native-first by maintainer decision. The old
+// opt-in switch cannot re-enable a retired voice creation path.
+// Keep this predicate temporarily for remaining legacy caller cleanup.
 pub(crate) fn native_voice_candidate_enabled() -> bool {
-    cfg!(windows) && option_env!("TRANSLATEIT_NATIVE_VOICE_CANDIDATE") == Some("1")
+    cfg!(windows)
 }
 
 pub(crate) fn synthesize_native_voice(payload: Value) -> (HelperBridgeWorkerResponse, Option<Vec<f32>>) {

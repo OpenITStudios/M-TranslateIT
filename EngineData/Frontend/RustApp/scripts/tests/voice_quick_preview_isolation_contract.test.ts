@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 const preview = readFileSync(new URL("../../src-tauri/src/commands/voice_lab_preview.rs", import.meta.url), "utf8");
@@ -12,7 +12,10 @@ const phase = readFileSync(new URL("../../src-tauri/src/commands/voice_lab_build
 const releaseConfig = JSON.parse(readFileSync(new URL("../../src-tauri/tauri.release.conf.json", import.meta.url), "utf8"));
 const releaseContract = readFileSync(new URL("../validate_release_package_contract.mjs", import.meta.url), "utf8");
 const releasePayload = readFileSync(new URL("../validate_release_payload.mjs", import.meta.url), "utf8");
-const previewChild = readFileSync(new URL("../../../../Backend/LocalWorker/WorkerRuntime/voice_lab_quick_preview.py", import.meta.url), "utf8");
+const nativePreview = readFileSync(new URL("../../src-tauri/src/commands/voice_lab_preview/native.rs", import.meta.url), "utf8");
+const nativeRuntime = readFileSync(new URL("../../src-tauri/src/commands/my_voice_runtime.rs", import.meta.url), "utf8");
+const nativeReference = readFileSync(new URL("../../src-tauri/src/commands/my_voice_reference.rs", import.meta.url), "utf8");
+const retiredPreview = new URL("../../../../Backend/LocalWorker/WorkerRuntime/voice_lab_quick_preview.py", import.meta.url);
 const buildChild = readFileSync(new URL("../../../../Backend/LocalWorker/WorkerRuntime/voice_lab_build.py", import.meta.url), "utf8");
 const actor = readFileSync(new URL("../../src-tauri/src/commands/voice_lab_build.rs", import.meta.url), "utf8");
 const mutations = readFileSync(new URL("../../src-tauri/src/commands/application_runtime/mutations.rs", import.meta.url), "utf8");
@@ -21,25 +24,24 @@ const guidedAudio = readFileSync(new URL("../../src-tauri/src/engine/audio/guide
 const evaluation = readFileSync(new URL("../../src-tauri/src/commands/voice_lab_build/evaluation.rs", import.meta.url), "utf8");
 const synthesis = readFileSync(new URL("../../../../Backend/LocalWorker/WorkerRuntime/voice_lab_gpt_sovits_build.py", import.meta.url), "utf8");
 
-test("quick preview is an isolated one-WAV child with existing VoiceLab authority", () => {
-  assert.match(preview, /begin_voice_lab_build\(\)/);
-  assert.match(preview, /fail_voice_lab_build\(generation\)/);
-  assert.match(preview, /ACTIVE_PREVIEW_GENERATION\.store\(generation, Ordering::Release\)/);
-  assert.match(preview, /preview_dir\(\)/);
+test("quick preview is an isolated native one-WAV task with existing VoiceLab authority", () => {
+  assert.match(preview, /native::generate\(accepted\)/);
+  assert.match(nativePreview, /begin_voice_lab_build\(\)/);
+  assert.match(nativePreview, /fail_voice_lab_build\(generation\)/);
+  assert.match(nativePreview, /ACTIVE_PREVIEW_GENERATION\.store\(generation, Ordering::Release\)/);
   assert.match(preview, /join\("QuickPreview"\)/);
   assert.match(preview, /const PREVIEW_WAV: &str = "quick_voice_preview\.wav"/);
-  assert.match(preview, /voice_lab_quick_preview\.py/);
-  assert.match(preview, /Timeout|TIMEOUT/);
-  assert.doesNotMatch(preview, /promote_voice_actor_candidate|install_builtin_voice|select_builtin_voice|dispatch_product_intent/);
+  assert.match(nativePreview, /with_runtime\(generation, deadline/);
+  assert.doesNotMatch(preview + nativePreview, /Command::new|voice_lab_quick_preview\.py|promote_voice_actor_candidate|install_builtin_voice|select_builtin_voice|dispatch_product_intent/);
 });
 
-test("preview cancel is restricted to its own generation, never trained build", () => {
+test("preview cancel is restricted to its own generation, never a full build", () => {
   assert.match(preview, /ACTIVE_PREVIEW_GENERATION\.load\(Ordering::Acquire\) == generation/);
   assert.match(preview, /current\.phase == "preparing"/);
   assert.match(preview, /request_voice_lab_build_cancel\(generation\)/);
-  assert.match(preview, /child\.kill\(\)/);
+  assert.match(nativeRuntime, /wait_output_with_cancel\(\|\| !authority\(generation, deadline\)\)/);
   assert.match(actor, /approve_voice_lab_candidate\(\s*reviewed_line_ids: Vec<u32>,\s*quality_confirmed: bool,/);
-  assert.doesNotMatch(preview, /approve_voice_lab_candidate/);
+  assert.doesNotMatch(preview + nativePreview, /approve_voice_lab_candidate/);
 });
 
 test("typed Quick Preview bridge exposes only generation, cancellation and reading", () => {
@@ -142,26 +144,19 @@ test("Quick Preview remains training-only in the visible My Voice UI", () => {
 });
 
 
-test("preview success rechecks cancellation after child exit", () => {
-  const exit = preview.indexOf("Ok(Some(status))");
-  const finalCheck = preview.lastIndexOf("let authority = current_voice_lab_build_snapshot();");
-  const output = preview.indexOf("let info = fs::metadata(&file)");
-  assert.ok(exit >= 0 && finalCheck > exit && output > finalCheck);
-  assert.match(preview.slice(finalCheck, output), /authority\.cancel_requested/);
+test("preview publication rechecks generation and cancellation after WAV write", () => {
+  const write = nativePreview.indexOf("write_pcm16_wav(&file");
+  const finalCheck = nativePreview.indexOf("if !authority(generation, deadline)", write);
+  const publish = nativePreview.indexOf("finish_native_voice_preview(generation)");
+  assert.ok(write >= 0 && finalCheck > write && publish > finalCheck);
 });
 
-
-test("reference ranking belongs to the Python training selector", () => {
+test("reference ranking belongs to shared native selector", () => {
   assert.match(preview, /accepted_guided_recordings\(\)/);
-  assert.match(preview, /--reference-candidates-stdin/);
-  assert.match(preview, /MAX_REFERENCE_PAYLOAD_BYTES/);
-  assert.match(preview, /Stdio::piped\(\)/);
-  assert.match(preview, /stdin\.write_all\(&payload\)/);
-  assert.match(preview, /let writer = thread::spawn/);
-  assert.match(preview, /writer\.join\(\)/);
-  assert.doesNotMatch(preview, /command\.arg\("--reference-candidate"\)/);
-  assert.match(preview, /"line_id": take.line_id/);
-  assert.doesNotMatch(preview, /TARGET_REFERENCE_BYTES|min_by_key/);
+  assert.match(nativePreview, /select_references\(accepted, 1,/);
+  assert.match(nativeReference, /accepted\.len\(\) > 128/);
+  assert.match(nativeReference, /if !active\(\)/);
+  assert.doesNotMatch(preview + nativePreview, /Stdio::piped|reference-candidates-stdin|Command::new/);
 });
 
 test("preview readiness is invalidated when accepted recording revision or training changes", () => {
@@ -182,27 +177,21 @@ test("preview phase cannot be reconciled from stale trained-build status", () =>
   assert.match(status, /"Stopping Quick Preview safely\."/);
 });
 
-test("preview cancellation and timeout remain effective while input is written", () => {
-  const writer = preview.indexOf("let writer = thread::spawn");
-  const deadline = preview.indexOf("let deadline = Instant::now() + TIMEOUT");
-  const monitor = preview.indexOf("let execution: Result<(), String> = loop");
-  const join = preview.indexOf("writer.join()");
-  assert.ok(deadline >= 0 && deadline < writer && writer < monitor && monitor < join);
-  assert.match(preview.slice(monitor, join), /authority\.cancel_requested/);
-  assert.match(preview.slice(monitor, join), /Instant::now\(\) >= deadline/);
-  assert.match(preview.slice(monitor, join), /child\.kill\(\)/);
-  assert.match(preview, /fail_voice_lab_build\(generation\)[\s\S]*ACTIVE_PREVIEW_GENERATION\.store\(0, Ordering::Release\)/);
+test("preview cancellation retains native owner through request cleanup", () => {
+  assert.match(nativePreview, /Instant::now\(\) \+ TIMEOUT/);
+  assert.match(nativeRuntime, /wait_output_with_cancel\(\|\| !authority\(generation, deadline\)\)/);
+  assert.match(nativeRuntime, /release_idle_native_inference\(\)/);
+  assert.match(nativePreview, /fail_voice_lab_build\(generation\)[\s\S]*ACTIVE_PREVIEW_GENERATION\.store\(0, Ordering::Release\)/);
 });
 
-test("Setup packages both My Voice children and their shared canonical training module", () => {
-  for (const name of ["voice_lab_quick_preview.py", "voice_lab_gpt_sovits_build.py"]) {
-    const from = `../../../Backend/LocalWorker/WorkerRuntime/${name}`;
-    const to = `EngineData/Backend/LocalWorker/WorkerRuntime/${name}`;
-    assert.equal(releaseConfig.bundle.resources[from], to, `missing packaged WorkerRuntime module: ${name}`);
-    assert.ok(releaseContract.includes(JSON.stringify(from)), `release contract must pin: ${name}`);
-    assert.ok(releasePayload.includes(JSON.stringify(name)), `payload validator must require: ${name}`);
-  }
-  assert.match(previewChild, /from voice_lab_gpt_sovits_build import select_reference/);
+test("retired Python Quick Preview has no packaged consumer", () => {
+  assert.equal(existsSync(retiredPreview), false);
+  const name = "voice_lab_quick_preview.py";
+  const from = `../../../Backend/LocalWorker/WorkerRuntime/${name}`;
+  assert.equal(releaseConfig.bundle.resources[from], undefined);
+  assert.ok(!releaseContract.includes(name));
+  assert.ok(!releasePayload.includes(name));
+  // Remaining legacy training assets are not yet physically retired.
   assert.match(buildChild, /from voice_lab_gpt_sovits_build import build_candidate/);
 });
 

@@ -61,9 +61,7 @@ function Resolve-SourceCommit {
 # The existing R3 payload intentionally ships the legacy Python/GPT-SoVITS
 # runtime and does not stage the native TTS/verifier closure. Do not silently
 # produce a native-enabled installer with a legacy-only payload.
-if ($env:TRANSLATEIT_NATIVE_VOICE_CANDIDATE -eq '1') {
-    throw 'Native My Voice release is held: exact TTS/verifier payload, licenses and integrated target quality acceptance are required.'
-}
+throw 'Native My Voice release is held: exact TTS/verifier payload, licenses and integrated target quality acceptance are required.'
 $SourceCommit = Resolve-SourceCommit
 if ([string]::IsNullOrWhiteSpace($env:TRANSLATEIT_NATIVE_DLL_PINS)) { throw 'Reviewed native DLL pins are required for this source revision.' }
 $QualityReadinessEvidence = (Resolve-Path -LiteralPath $QualityReadinessEvidence).Path
