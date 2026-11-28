@@ -181,3 +181,18 @@ test("deferred deadline survives dequeue and scheduler admission without changin
   assert.match(native, /owner\.owner\.begin\(input\.expect\("checked text or speech input"\), deadline\)/);
   assert.match(incoming, /record_deferred_expiration\(&translation\)[\s\S]*?finish_meeting_turn_translation\(/);
 });
+
+test("finalization checks only the required signal and clipping evidence before PCM handoff", () => {
+  const producer = source("src-tauri/src/engine/audio/finalized_utterance.rs");
+  const evidence = source("src-tauri/src/engine/audio/evidence.rs");
+  const finalize = producer.slice(producer.indexOf("fn finalize_current_utterance("), producer.indexOf("fn adaptive_end_silence_ms("));
+  const gate = finalize.indexOf("finalized_speech_rejected(&state.current_samples[..speech_end], state.profile.gate.max_clipping_ratio)");
+  const transfer = finalize.indexOf("std::mem::take(&mut state.current_samples)");
+  assert.ok(gate >= 0 && gate < transfer);
+  assert.doesNotMatch(finalize, /AudioEvidenceReport::from_samples/);
+  const check = evidence.slice(evidence.indexOf("pub(super) fn finalized_speech_rejected("), evidence.indexOf("pub(super) fn noise_suppression_threshold("));
+  assert.match(check, /safe_sample\(sample\)\.abs\(\)/);
+  assert.match(check, /level >= 0\.98/);
+  assert.match(check, /!has_signal \|\| safe_ratio\(clipping_count, samples\.len\(\)\) > max_clipping_ratio/);
+  assert.doesNotMatch(check, /frame_metrics\(|AudioEvidenceReport::from_samples/);
+});

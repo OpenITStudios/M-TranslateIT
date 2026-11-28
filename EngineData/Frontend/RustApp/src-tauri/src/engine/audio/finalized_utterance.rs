@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use super::evidence::AudioEvidenceReport;
+use super::evidence::{finalized_speech_rejected, AudioEvidenceReport};
 use super::vad::{runtime_vad_profile, RuntimeVadProfile, VadGateResult};
 #[cfg(test)]
 use super::vad::evaluate_vad_gate;
@@ -1069,8 +1069,7 @@ fn finalize_current_utterance(state: &mut FinalizedProducerState) -> bool {
         state.sample_rate_hz,
     ));
 
-    let speech_evidence = AudioEvidenceReport::from_samples(&state.current_samples[..speech_end]);
-    if speech_evidence.clipping_ratio > state.profile.gate.max_clipping_ratio || speech_evidence.peak == 0.0 {
+    if finalized_speech_rejected(&state.current_samples[..speech_end], state.profile.gate.max_clipping_ratio) {
         reset_current_utterance(state);
         return false;
     }

@@ -166,6 +166,22 @@ impl AudioEvidenceReport {
     }
 }
 
+// Finalization needs only nonzero peak and the exact clipping ratio.
+// Preserve the report's sample sanitization and ratio, but do not calculate
+// unrelated frame energy, RMS, or speech classification a second time.
+pub(super) fn finalized_speech_rejected(samples: &[f32], max_clipping_ratio: f32) -> bool {
+    let mut has_signal = false;
+    let mut clipping_count = 0usize;
+    for &sample in samples {
+        let level = safe_sample(sample).abs();
+        has_signal |= level != 0.0;
+        if level >= 0.98 {
+            clipping_count += 1;
+        }
+    }
+    !has_signal || safe_ratio(clipping_count, samples.len()) > max_clipping_ratio
+}
+
 // ASR noise suppression uses only RMS and clipping, not the full speech
 // evidence report. Keep the same f32 accumulation, sanitization and clipping
 // threshold, but calculate both metrics in a single pass.
@@ -361,6 +377,30 @@ mod tests {
         assert_close(direct.zero_crossing_rate, reference.zero_crossing_rate);
         assert_close(direct.impulse_edge_ratio, reference.impulse_edge_ratio);
         assert_close(direct.clipping_ratio, reference.clipping_ratio);
+    }
+
+    #[test]
+    fn finalization_gate_matches_full_report_at_exact_boundaries() {
+        let mut boundary = vec![0.12_f32; 640];
+        boundary[..16].fill(-0.98);
+        let mut over = boundary.clone();
+        over[16] = 0.98;
+        let mut below = boundary.clone();
+        below[15] = 0.979;
+        for samples in [
+            vec![], vec![0.0; 640], vec![-0.0, f32::NAN, f32::INFINITY],
+            vec![f32::MIN_POSITIVE], vec![0.001; 319], below, boundary, over,
+            vec![-2.0, 2.0, f32::NEG_INFINITY, 0.1], vec![0.12; 960_000],
+        ] {
+            let old = AudioEvidenceReport::from_samples(&samples);
+            for limit in [0.0, 0.025, 1.0, f32::NAN] {
+                assert_eq!(
+                    finalized_speech_rejected(&samples, limit),
+                    old.clipping_ratio > limit || old.peak == 0.0,
+                    "length={} limit={limit}", samples.len(),
+                );
+            }
+        }
     }
 
     #[test]
