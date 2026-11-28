@@ -130,3 +130,13 @@ test("deferred incoming uses producer notification and age deadline, not retry p
   assert.match(deferred, /MAX_DEFERRED_INCOMING_AGE_MS \+ 1/);
   assert.match(deferred, /if outbound_idle \{ guard\.pop_front\(\) \} else \{ None \}/);
 });
+
+test("playback capacity waits for receiver and cancellation notifications", () => {
+  assert.match(playback, /mpsc::sync_channel::<PreparedPlaybackJob>\(PLAYBACK_QUEUE_CAPACITY\)/);
+  assert.doesNotMatch(playback, /ENQUEUE_RETRY_DELAY/);
+  assert.match(playback, /while let Ok\(mut job\) = receiver\.recv\(\) \{\s*wake_playback_waiters\(\)/);
+  assert.match(playback, /wake\.1\.wait_timeout\(guard, remaining\)/);
+  assert.match(playback, /runtime_generation_matches_epoch\(generation\)/);
+  const state = source("src-tauri/src/engine/runtime_state.rs");
+  assert.match(state, /crate::commands::meeting_session::wake_playback_waiters\(\)/);
+});

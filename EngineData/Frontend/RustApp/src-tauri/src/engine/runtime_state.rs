@@ -489,6 +489,7 @@ fn invalidate_runtime_generation() -> u64 {
     // consumer teardown. The scheduler uses only the atomic epoch under its
     // mutex, never the runtime-session mutex held by revocation.
     crate::commands::helper_bridge_runtime::wake_revoked_scheduler_waiters();
+    crate::commands::meeting_session::wake_playback_waiters();
     generation
 }
 

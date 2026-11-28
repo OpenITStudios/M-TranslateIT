@@ -129,6 +129,8 @@ pub(super) fn set_muted(muted: bool) -> MeetingMuteActionResult {
     if let Err(error) = original_voice_pcm::set_output_muted(generation, muted) {
         return reply(false, Some(generation), error);
     }
+    // Wake a blocked translated producer on mute as well as source cutover.
+    if muted { super::wake_playback_waiters(); }
     // Discard any speech/pre-roll from the muted interval in the existing VAD.
     // Original mode can safely return None if its VAD producer is unavailable.
     let _ = reset_finalized_outbound_speech_boundary(&session.session_id, generation);
@@ -239,6 +241,8 @@ pub(super) fn set_source(requested: &str) -> MeetingAudioSourceActionResult {
     if original_voice_pcm::begin(generation, epoch).is_err() {
         return response(false, Some(generation), "Original microphone buffer is unavailable.");
     }
+    // The previous translated source epoch is now invalid.
+    super::wake_playback_waiters();
     if !cancel_meeting_output_for_generation(generation) {
         return require_stop(generation, "Translated output cancellation was not confirmed.");
     }

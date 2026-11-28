@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::sync::mpsc::{self, SyncSender, TrySendError};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Condvar, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -8,7 +8,7 @@ use crate::engine::audio::meeting_output::{
     deliver_meeting_output_open_wav_for_source, deliver_meeting_output_native_pcm_for_source,
     MAX_DELIVERY_DEADLINE_MS,
 };
-use crate::engine::runtime_state::runtime_generation_is_authoritative;
+use crate::engine::runtime_state::{runtime_generation_is_authoritative, runtime_generation_matches_epoch};
 use crate::engine::audio::original_voice_pcm;
 use crate::engine::audio::meeting_sound_capture::meeting_sound_capture_status;
 
@@ -30,7 +30,6 @@ use super::suppression::{
 use super::{generation_is_live, incoming_session_is_eligible};
 
 const PLAYBACK_QUEUE_CAPACITY: usize = 1;
-const ENQUEUE_RETRY_DELAY: Duration = Duration::from_millis(10);
 const PLAYBACK_STOP_WAIT_BUDGET: Duration = Duration::from_millis(500);
 const PLAYBACK_STOP_POLL: Duration = Duration::from_millis(10);
 
@@ -86,6 +85,32 @@ pub(super) struct MeetingPlaybackCleanupResult {
 }
 
 static MEETING_PLAYBACK_RUNTIME: OnceLock<Mutex<Option<MeetingPlaybackRuntime>>> = OnceLock::new();
+
+// Notification only: the existing sync_channel remains the single queue.
+type PlaybackWake = (Mutex<()>, Condvar);
+static PLAYBACK_WAKE: OnceLock<PlaybackWake> = OnceLock::new();
+
+fn playback_wake() -> &'static PlaybackWake {
+    PLAYBACK_WAKE.get_or_init(|| (Mutex::new(()), Condvar::new()))
+}
+
+fn notify_playback_waiters(wake: &PlaybackWake) {
+    let _guard = wake.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    wake.1.notify_all();
+}
+
+// Called after the atomic generation/source epoch changes. Never lock the
+// runtime store here: its Start/Stop owner can hold it while joining playback.
+pub(crate) fn wake_playback_waiters() {
+    if let Some(wake) = PLAYBACK_WAKE.get() {
+        notify_playback_waiters(wake);
+    }
+}
+
+struct WakeOnPlaybackExit;
+impl Drop for WakeOnPlaybackExit {
+    fn drop(&mut self) { wake_playback_waiters(); }
+}
 
 fn playback_runtime_store() -> &'static Mutex<Option<MeetingPlaybackRuntime>> {
     MEETING_PLAYBACK_RUNTIME.get_or_init(|| Mutex::new(None))
@@ -433,8 +458,13 @@ pub(super) fn start_meeting_playback_runtime(
     let handle = thread::Builder::new()
         .name("translateit-meeting-playback".to_string())
         .spawn(move || {
+            // Local drop order closes the receiver before the exit wake,
+            // including unwinding: a blocked sender observes disconnection.
+            let _wake_on_exit = WakeOnPlaybackExit;
+            let receiver = receiver;
             let mut last_sequence = 0u64;
             while let Ok(mut job) = receiver.recv() {
+                wake_playback_waiters();
                 if job.generation != generation || job.session_id != thread_session_id {
                     cleanup_job(&mut job);
                     mark_interrupted(&job);
@@ -464,14 +494,27 @@ pub(super) fn start_meeting_playback_runtime(
 // a stalled receiver pin the AI consumer indefinitely or evict existing audio.
 fn enqueue_with_deadline<T>(
     sender: &SyncSender<T>,
+    wake: &PlaybackWake,
     mut value: T,
     wait_budget: Duration,
     mut still_authoritative: impl FnMut() -> bool,
 ) -> Result<(), (T, &'static str)> {
     let started = Instant::now();
+    // Atomic-only predicate. Notifiers acquire this same mutex to avoid
+    // losing a slot/cancel wake between try_send and Condvar wait.
+    let mut guard = match wake.0.lock() {
+        Ok(guard) => guard,
+        Err(_) => return Err((value, "meeting_playback:runtime_state_lock_failed")),
+    };
+    let mut waited = false;
     loop {
         if !still_authoritative() {
             return Err((value, "meeting_playback:generation_not_authoritative"));
+        }
+        // Preserve immediate zero-budget admission to an empty slot, but
+        // never grant a waiting request after its deadline has elapsed.
+        if waited && started.elapsed() >= wait_budget {
+            return Err((value, "meeting_playback:enqueue_wait_deadline_exceeded"));
         }
         match sender.try_send(value) {
             Ok(()) => return Ok(()),
@@ -481,7 +524,11 @@ fn enqueue_with_deadline<T>(
                 if remaining.is_zero() {
                     return Err((value, "meeting_playback:enqueue_wait_deadline_exceeded"));
                 }
-                thread::sleep(remaining.min(ENQUEUE_RETRY_DELAY));
+                waited = true;
+                guard = match wake.1.wait_timeout(guard, remaining) {
+                    Ok((guard, _)) => guard,
+                    Err(_) => return Err((value, "meeting_playback:runtime_state_lock_failed")),
+                };
             }
             Err(TrySendError::Disconnected(returned)) => {
                 return Err((returned, "meeting_playback:runtime_disconnected"));
@@ -498,6 +545,12 @@ pub(super) fn enqueue_meeting_playback(mut job: PreparedPlaybackJob) -> Result<(
         return Err("meeting_playback:codex_voice_not_admitted".to_string());
     }
     let generation = job.generation;
+    let source_epoch = job.source_epoch;
+    if !generation_is_live(generation)
+        || !original_voice_pcm::translated_epoch_matches(generation, source_epoch) {
+        cleanup_job(&mut job);
+        return Err("meeting_playback:generation_not_authoritative".to_string());
+    }
     let sender = playback_runtime_store()
         .lock()
         .map_err(|_| "meeting_playback:runtime_state_lock_failed".to_string())
@@ -520,9 +573,11 @@ pub(super) fn enqueue_meeting_playback(mut job: PreparedPlaybackJob) -> Result<(
 
     match enqueue_with_deadline(
         &sender,
+        playback_wake(),
         job,
         Duration::from_millis(MAX_DELIVERY_DEADLINE_MS),
-        || generation_is_live(generation),
+        || runtime_generation_matches_epoch(generation)
+            && original_voice_pcm::translated_epoch_matches(generation, source_epoch),
     ) {
         Ok(()) => Ok(()),
         Err((mut job, blocker)) => {
@@ -552,6 +607,7 @@ pub(super) fn stop_meeting_playback_runtime(
     // Close producer admission first. A still-running thread and its exact
     // owner remain stored until bounded Stop can confirm its completion.
     active.sender.take();
+    wake_playback_waiters();
     if active.join_failed {
         return MeetingPlaybackCleanupResult {
             ok: false,
@@ -626,7 +682,9 @@ pub(super) fn finish_orphaned_meeting_playback_without_session() -> Result<(), S
 
 #[cfg(test)]
 mod tests {
-    use super::{enqueue_with_deadline, playback_finished_within, sequence_is_monotonic, PLAYBACK_QUEUE_CAPACITY};
+    use super::{enqueue_with_deadline, notify_playback_waiters, playback_finished_within, sequence_is_monotonic, PlaybackWake, PLAYBACK_QUEUE_CAPACITY};
+    use std::sync::{Condvar, Mutex};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
@@ -643,38 +701,64 @@ mod tests {
 
     #[test]
     fn admission_rejects_stall_cancellation_and_disconnect_without_eviction() {
+        let wake: PlaybackWake = (Mutex::new(()), Condvar::new());
         let (sender, receiver) = mpsc::sync_channel(1);
         sender.try_send(1_u8).expect("fill pending slot");
-
-        let timed_out = enqueue_with_deadline(&sender, 2_u8, Duration::ZERO, || true)
-            .expect_err("full queue must not wait forever");
-        assert_eq!(timed_out, (2, "meeting_playback:enqueue_wait_deadline_exceeded"));
+        assert_eq!(enqueue_with_deadline(&sender, &wake, 2_u8, Duration::ZERO, || true),
+            Err((2, "meeting_playback:enqueue_wait_deadline_exceeded")));
         assert_eq!(receiver.try_recv(), Ok(1));
 
         sender.try_send(3_u8).expect("refill pending slot");
-        let mut checks = 0_u8;
-        let cancelled = enqueue_with_deadline(
-            &sender,
-            4_u8,
-            Duration::from_millis(50),
-            || {
-                checks += 1;
-                checks == 1
-            },
-        )
-        .expect_err("generation revocation must interrupt a blocked producer");
-        assert_eq!(cancelled, (4, "meeting_playback:generation_not_authoritative"));
+        let authority = AtomicBool::new(true);
+        thread::scope(|scope| {
+            let (checked_tx, checked_rx) = mpsc::channel();
+            let (result_tx, result_rx) = mpsc::channel();
+            let (sender, wake, authority) = (&sender, &wake, &authority);
+            scope.spawn(move || {
+                let result = enqueue_with_deadline(sender, wake, 4_u8, Duration::from_secs(3), || {
+                    let _ = checked_tx.send(());
+                    authority.load(Ordering::Acquire)
+                });
+                let _ = result_tx.send(result);
+            });
+            checked_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            authority.store(false, Ordering::Release);
+            notify_playback_waiters(wake);
+            assert_eq!(result_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+                Err((4, "meeting_playback:generation_not_authoritative")));
+        });
         assert_eq!(receiver.try_recv(), Ok(3));
-
         drop(receiver);
-        let disconnected = enqueue_with_deadline(&sender, 5_u8, Duration::ZERO, || true)
-            .expect_err("closed receiver must reject new output");
-        assert_eq!(disconnected, (5, "meeting_playback:runtime_disconnected"));
+        assert_eq!(enqueue_with_deadline(&sender, &wake, 5_u8, Duration::ZERO, || true),
+            Err((5, "meeting_playback:runtime_disconnected")));
 
-        let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
-        enqueue_with_deadline(&ready_sender, 6_u8, Duration::ZERO, || true)
-            .expect("available slot admits output immediately");
-        assert_eq!(ready_receiver.try_recv(), Ok(6));
+        let (sender, receiver) = mpsc::sync_channel(1);
+        enqueue_with_deadline(&sender, &wake, 6_u8, Duration::ZERO, || true).unwrap();
+        assert_eq!(receiver.try_recv(), Ok(6));
+    }
+
+    #[test]
+    fn playback_slot_release_wakes_waiting_producer_without_eviction() {
+        let wake: PlaybackWake = (Mutex::new(()), Condvar::new());
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender.try_send(1_u8).unwrap();
+        thread::scope(|scope| {
+            let (checked_tx, checked_rx) = mpsc::channel();
+            let (result_tx, result_rx) = mpsc::channel();
+            let (sender, wake) = (&sender, &wake);
+            scope.spawn(move || {
+                let result = enqueue_with_deadline(sender, wake, 2_u8, Duration::from_secs(3), || {
+                    let _ = checked_tx.send(());
+                    true
+                });
+                let _ = result_tx.send(result);
+            });
+            checked_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            assert_eq!(receiver.try_recv(), Ok(1));
+            notify_playback_waiters(wake);
+            assert_eq!(result_rx.recv_timeout(Duration::from_secs(1)).unwrap(), Ok(()));
+        });
+        assert_eq!(receiver.try_recv(), Ok(2));
     }
 
     #[test]

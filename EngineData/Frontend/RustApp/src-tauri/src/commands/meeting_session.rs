@@ -21,6 +21,7 @@ mod lifecycle;
 mod meeting_catalog;
 mod outbound_pipeline;
 mod playback_runtime;
+pub(crate) use playback_runtime::wake_playback_waiters;
 mod preflight;
 mod session_state;
 // Source-only candidate: no live ASR, speculative GPU work, or Meeting cutover.
