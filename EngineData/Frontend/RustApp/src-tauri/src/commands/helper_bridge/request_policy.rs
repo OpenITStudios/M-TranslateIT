@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
+use crate::engine::audio::finalized_utterance::wake_incoming_consumer;
 
 use crate::engine::runtime_state::{
     latest_runtime_session_state, runtime_generation_is_authoritative,
@@ -54,7 +55,7 @@ pub(super) fn meeting_start_prepare(payload: &Value) -> bool {
         .unwrap_or(false)
 }
 
-pub(super) fn meeting_outbound_pipeline_active() -> bool {
+pub(crate) fn meeting_outbound_pipeline_active() -> bool {
     MEETING_OUTBOUND_PIPELINE_GENERATION.load(Ordering::Acquire) != 0
 }
 
@@ -65,16 +66,17 @@ pub(super) fn mark_meeting_outbound_pipeline(generation: u64) {
 }
 
 pub(super) fn clear_meeting_outbound_pipeline(generation: u64) {
-    let _ = MEETING_OUTBOUND_PIPELINE_GENERATION.compare_exchange(
-        generation,
-        0,
-        Ordering::AcqRel,
-        Ordering::Acquire,
-    );
+    if generation != 0 && MEETING_OUTBOUND_PIPELINE_GENERATION.compare_exchange(
+        generation, 0, Ordering::AcqRel, Ordering::Acquire,
+    ).is_ok() {
+        wake_incoming_consumer();
+    }
 }
 
 pub(super) fn clear_any_meeting_outbound_pipeline() {
-    MEETING_OUTBOUND_PIPELINE_GENERATION.store(0, Ordering::Release);
+    if MEETING_OUTBOUND_PIPELINE_GENERATION.swap(0, Ordering::AcqRel) != 0 {
+        wake_incoming_consumer();
+    }
 }
 
 // A stale Stop request must not release a newer Meeting's outbound admission

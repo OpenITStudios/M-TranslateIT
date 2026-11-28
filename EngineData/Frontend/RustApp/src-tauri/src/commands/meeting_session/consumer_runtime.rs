@@ -5,15 +5,15 @@ use std::time::{Duration, Instant};
 use crate::engine::audio::finalized_utterance::{
     clear_finalized_incoming_utterance_producer_for_session,
     clear_finalized_outbound_utterance_producer_for_generation,
-    try_take_finalized_incoming_utterance, wait_take_finalized_incoming_utterance,
-    wait_take_finalized_incoming_utterance_for, wait_take_finalized_outbound_utterance,
-    IncomingTimedWait,
+    wait_for_incoming_work, wait_take_finalized_outbound_utterance, IncomingWork,
 };
 use crate::engine::runtime_state::runtime_generation_is_authoritative;
 use crate::engine::audio::original_voice_pcm;
 use crate::engine;
 
-use super::incoming_deferred::clear_deferred_incoming_queue_for_session;
+use super::incoming_deferred::{clear_deferred_incoming_queue_for_session, deferred_incoming_wait_budget};
+use super::super::helper_bridge::meeting_outbound_pipeline_active;
+use super::super::helper_bridge_runtime::unix_ms;
 use super::incoming_pipeline::{
     drain_due_deferred_incoming, process_authoritative_finalized_incoming_pcm,
 };
@@ -25,9 +25,6 @@ use super::{
     process_authoritative_finalized_outbound_pcm,
 };
 
-// Only wait on a short interval when deferred incoming work exists. Normal
-// idle Meeting Sound retains the existing event-driven blocking wait.
-const DEFERRED_INCOMING_RETRY_WAIT: Duration = Duration::from_millis(500);
 // Stop must never block indefinitely on inference/driver work. If the old
 // thread is still running at this deadline, its JoinHandle stays in the
 // canonical store and Start remains blocked until Retry Stop proves exit.
@@ -256,28 +253,15 @@ pub(super) fn start_meeting_incoming_consumer(session_id: &str) -> Result<(), St
         .name("translateit-meeting-incoming".to_string())
         .spawn(move || {
             loop {
+                if !incoming_session_is_eligible(&thread_session_id) { break; }
                 drain_due_deferred_incoming(&thread_session_id);
-
-                let utterance = match try_take_finalized_incoming_utterance(&thread_session_id) {
-                    Some(utterance) => utterance,
-                    None if super::incoming_deferred::deferred_incoming_health_counts().0 > 0 => {
-                        match wait_take_finalized_incoming_utterance_for(
-                            &thread_session_id,
-                            DEFERRED_INCOMING_RETRY_WAIT,
-                        ) {
-                            IncomingTimedWait::Utterance(utterance) => utterance,
-                            IncomingTimedWait::TimedOut => continue,
-                            IncomingTimedWait::Stopped => break,
-                        }
-                    }
-                    None => {
-                        let Some(utterance) =
-                            wait_take_finalized_incoming_utterance(&thread_session_id)
-                        else {
-                            break;
-                        };
-                        utterance
-                    }
+                let budget = deferred_incoming_wait_budget(unix_ms() as u64);
+                let utterance = match wait_for_incoming_work(
+                    &thread_session_id, budget, || !meeting_outbound_pipeline_active(),
+                ) {
+                    IncomingWork::Utterance(utterance) => utterance,
+                    IncomingWork::DeferredReady => continue,
+                    IncomingWork::Stopped => break,
                 };
 
                 if utterance.session_id != thread_session_id

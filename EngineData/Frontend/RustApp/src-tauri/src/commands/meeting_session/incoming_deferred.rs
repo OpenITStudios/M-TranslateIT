@@ -1,12 +1,13 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 use crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance;
 
 use super::{validated_meeting_asr_transcript, worker_blocker};
 use super::committed_turns::finish_meeting_turn_translation;
-use super::super::helper_bridge::{incoming_deferred_for_required_outbound, HelperBridgeWorkerResponse};
+use super::super::helper_bridge::{incoming_deferred_for_required_outbound, meeting_outbound_pipeline_active, HelperBridgeWorkerResponse};
 
 pub(super) const MAX_DEFERRED_INCOMING: usize = 4;
 const MAX_DEFERRED_INCOMING_AGE_MS: u64 = 20_000;
@@ -151,7 +152,18 @@ pub(super) fn take_due_deferred_incoming(
         session_id,
         now_unix_ms,
         super::incoming_session_is_eligible,
+        !meeting_outbound_pipeline_active(),
     )
+}
+
+// Called outside the audio producer lock by the sole incoming consumer.
+// Expire the oldest queued job at its original age; no retry interval.
+pub(super) fn deferred_incoming_wait_budget(now_unix_ms: u64) -> Option<Duration> {
+    let guard = deferred_incoming_queue().lock().ok()?;
+    let front = guard.front()?;
+    Some(Duration::from_millis(
+        (MAX_DEFERRED_INCOMING_AGE_MS + 1).saturating_sub(now_unix_ms.saturating_sub(front.enqueued_unix_ms))
+    ))
 }
 
 // The live owner may retire old-session or expired work. A stopped consumer
@@ -161,6 +173,7 @@ fn take_due_deferred_incoming_with_admission(
     session_id: &str,
     now_unix_ms: u64,
     admitted: impl FnOnce(&str) -> bool,
+    outbound_idle: bool,
 ) -> Option<DeferredIncomingJob> {
     let mut guard = deferred_incoming_queue().lock().ok()?;
     if session_id.is_empty() || !admitted(session_id) {
@@ -180,7 +193,9 @@ fn take_due_deferred_incoming_with_admission(
             }
             continue;
         }
-        break guard.pop_front();
+        // Retire expired jobs even while busy; do not dequeue/requeue live
+        // work just to receive another outbound deferral.
+        break if outbound_idle { guard.pop_front() } else { None };
     };
     drop(guard);
     for stale in removed {
@@ -276,6 +291,7 @@ mod tests {
     fn deferred_queue_state_contracts_are_serialized() {
         deferred_admission_serializes_with_cleanup();
         deferred_retry_preserves_first_deferral_age_budget();
+        deferred_work_stays_queued_while_outbound_owns_inference();
         deferred_queue_caps_evicts_expired_and_respects_session();
         stale_consumer_cannot_evict_a_new_meeting_queue();
     }
@@ -445,12 +461,13 @@ mod tests {
                 assert!(deferred_incoming_queue().try_lock().is_err());
                 false
             },
+            true,
         ).is_none());
         assert_eq!(deferred_incoming_queue().lock().unwrap().len(), 1);
         assert_eq!(DEFERRED_DROPPED_STALE.load(Ordering::Relaxed), stale_before);
         // A valid current consumer retains its own queued job.
         assert_eq!(
-            take_due_deferred_incoming_with_admission("new-meeting", 5_000, |_| true)
+            take_due_deferred_incoming_with_admission("new-meeting", 5_000, |_| true, true)
                 .expect("current consumer owns pending job")
                 .event_sequence,
             14,
@@ -500,6 +517,7 @@ mod tests {
                 "sess",
                 first_deferred_unix_ms + MAX_DEFERRED_INCOMING_AGE_MS + 1,
                 |_| true,
+                false,
             )
             .is_none(),
             "requeued work must expire from its first deferral time"
@@ -511,13 +529,24 @@ mod tests {
         clear_deferred_incoming_queue().expect("clear deferred queue");
     }
 
+    fn deferred_work_stays_queued_while_outbound_owns_inference() {
+        clear_deferred_incoming_queue().unwrap();
+        enqueue_with_admission(job("sess", 1, "t", 1_000), false, |_| true);
+        assert!(take_due_deferred_incoming_with_admission("sess", 2_000, |_| true, false).is_none());
+        assert_eq!(deferred_incoming_health_counts().0, 1);
+        assert_eq!(deferred_incoming_wait_budget(2_000), Some(Duration::from_millis(19_001)));
+        assert_eq!(take_due_deferred_incoming_with_admission("sess", 2_000, |_| true, true).unwrap().event_sequence, 1);
+        assert_eq!(deferred_incoming_wait_budget(2_000), None);
+        clear_deferred_incoming_queue().unwrap();
+    }
+
     fn deferred_queue_caps_evicts_expired_and_respects_session() {
         clear_deferred_incoming_queue().expect("clear deferred queue");
         assert!(deferred_incoming_queue().lock().unwrap().is_empty());
 
         enqueue_with_admission(job("sess", 1, "t", 1_000), false, |_| true);
         let stale_before = DEFERRED_DROPPED_STALE.load(Ordering::Relaxed);
-        assert!(take_due_deferred_incoming_with_admission("other-sess", 2_000, |_| true).is_none());
+        assert!(take_due_deferred_incoming_with_admission("other-sess", 2_000, |_| true, true).is_none());
         assert_eq!(
             DEFERRED_DROPPED_STALE.load(Ordering::Relaxed) - stale_before,
             1,
@@ -536,7 +565,7 @@ mod tests {
 
         let stale_before = DEFERRED_DROPPED_STALE.load(Ordering::Relaxed);
         let mut delivered = 0;
-        while take_due_deferred_incoming_with_admission("sess", 40_000, |_| true).is_some() {
+        while take_due_deferred_incoming_with_admission("sess", 40_000, |_| true, true).is_some() {
             delivered += 1;
         }
         assert_eq!(delivered, 0, "expired jobs are dropped, not delivered");
@@ -547,8 +576,8 @@ mod tests {
 
         enqueue_with_admission(job("sess", 7, "a", 50_000), false, |_| true);
         enqueue_with_admission(job("sess", 8, "b", 51_000), false, |_| true);
-        let first = take_due_deferred_incoming_with_admission("sess", 52_000, |_| true).expect("fresh job due");
-        let second = take_due_deferred_incoming_with_admission("sess", 52_000, |_| true).expect("second fresh job due");
+        let first = take_due_deferred_incoming_with_admission("sess", 52_000, |_| true, true).expect("fresh job due");
+        let second = take_due_deferred_incoming_with_admission("sess", 52_000, |_| true, true).expect("second fresh job due");
         assert_eq!(first.event_sequence, 7);
         assert_eq!(second.event_sequence, 8);
 

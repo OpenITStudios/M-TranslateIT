@@ -117,3 +117,16 @@ test("finalized Meeting PCM enters the existing scheduler and only native infere
   assert.match(native, /host\.generation_token != bridge_generation/);
   assert.match(outbound, /asr_wall_ms\.saturating_sub\(timing\.metrics\.audio_prepare_ms\)/);
 });
+
+test("deferred incoming uses producer notification and age deadline, not retry polling", () => {
+  const consumer = source("src-tauri/src/commands/meeting_session/consumer_runtime.rs");
+  const producer = source("src-tauri/src/engine/audio/finalized_utterance.rs");
+  const policy = source("src-tauri/src/commands/helper_bridge/request_policy.rs");
+  const deferred = source("src-tauri/src/commands/meeting_session/incoming_deferred.rs");
+  assert.match(consumer, /wait_for_incoming_work\(/);
+  assert.doesNotMatch(consumer, /DEFERRED_INCOMING_RETRY_WAIT/);
+  assert.match(policy, /compare_exchange\([\s\S]*?wake_incoming_consumer\(\)/);
+  assert.match(producer, /fn wake_incoming_consumer\([\s\S]*?sync\.state\.lock\(\)[\s\S]*?sync\.ready\.notify_all\(\)/);
+  assert.match(deferred, /MAX_DEFERRED_INCOMING_AGE_MS \+ 1/);
+  assert.match(deferred, /if outbound_idle \{ guard\.pop_front\(\) \} else \{ None \}/);
+});

@@ -384,7 +384,7 @@ fn quiet_speech_inside_an_utterance_is_retained_until_actual_silence() {
 }
 
 #[test]
-fn incoming_bounded_wait_distinguishes_deferred_retry_from_stopped_producer() {
+fn incoming_wait_distinguishes_deferred_release_expiry_audio_and_stop() {
     let sync = FinalizedProducerSync {
         ingress: RwLock::new(None),
         transport_loss: AtomicU64::new(0),
@@ -413,17 +413,46 @@ fn incoming_bounded_wait_distinguishes_deferred_retry_from_stopped_producer() {
         callback_lock_wait_max_ns: AtomicU64::new(0),
     };
     assert!(matches!(
-        wait_take_finalized_incoming_utterance_for_sync(
-            &sync, "retry-session", Duration::from_millis(1)
+        wait_for_incoming_work_sync(
+            &sync, "retry-session", Some(Duration::from_millis(1)), || false
         ),
-        IncomingTimedWait::TimedOut
+        IncomingWork::DeferredReady
     ));
     assert!(matches!(
-        wait_take_finalized_incoming_utterance_for_sync(
-            &sync, "another-session", Duration::from_millis(1)
+        wait_for_incoming_work_sync(
+            &sync, "another-session", Some(Duration::from_millis(1)), || false
         ),
-        IncomingTimedWait::Stopped
+        IncomingWork::Stopped
     ));
+
+    // Completion before waiting must be observed without another wake.
+    assert!(matches!(
+        wait_for_incoming_work_sync(&sync, "retry-session", Some(Duration::from_secs(2)), || true),
+        IncomingWork::DeferredReady
+    ));
+    // Completion during wait wakes the existing Condvar without new audio.
+    let ready = std::sync::atomic::AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        let (checked_tx, checked_rx) = std::sync::mpsc::channel();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let producer = &sync;
+        let flag = &ready;
+        scope.spawn(move || {
+            let result = wait_for_incoming_work_sync(producer, "retry-session",
+                Some(Duration::from_secs(3)), || {
+                    let _ = checked_tx.send(());
+                    flag.load(Ordering::Acquire)
+                });
+            let _ = result_tx.send(result);
+        });
+        checked_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        {
+            let _guard = sync.state.lock().unwrap();
+            ready.store(true, Ordering::Release);
+            sync.ready.notify_all();
+        }
+        assert!(matches!(result_rx.recv_timeout(Duration::from_secs(1)).unwrap(), IncomingWork::DeferredReady));
+    });
 
     sync.state.lock().unwrap().as_mut().unwrap().pending.push_back(
         FinalizedMeetingUtterance {
@@ -447,18 +476,18 @@ fn incoming_bounded_wait_distinguishes_deferred_retry_from_stopped_producer() {
         },
     );
     assert!(matches!(
-        wait_take_finalized_incoming_utterance_for_sync(
-            &sync, "retry-session", Duration::from_millis(1)
+        wait_for_incoming_work_sync(
+            &sync, "retry-session", None, || false
         ),
-        IncomingTimedWait::Utterance(utterance) if utterance.sequence == 1
+        IncomingWork::Utterance(utterance) if utterance.sequence == 1
     ));
     *sync.state.lock().unwrap() = None;
     sync.ready.notify_all();
     assert!(matches!(
-        wait_take_finalized_incoming_utterance_for_sync(
-            &sync, "retry-session", Duration::from_millis(1)
+        wait_for_incoming_work_sync(
+            &sync, "retry-session", Some(Duration::from_millis(1)), || false
         ),
-        IncomingTimedWait::Stopped
+        IncomingWork::Stopped
     ));
 }
 

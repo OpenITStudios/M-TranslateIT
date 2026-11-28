@@ -865,68 +865,63 @@ pub fn wait_take_finalized_outbound_utterance(
     }
 }
 
-pub fn wait_take_finalized_incoming_utterance(
-    session_id: &str,
-) -> Option<FinalizedMeetingUtterance> {
-    let sync = incoming_sync();
-    let mut guard = sync.state.lock().ok()?;
-
-    loop {
-        let state = guard.as_mut()?;
-        if state.session_id != session_id || state.lane != LANE_INCOMING {
-            return None;
+// Outbound admission owns the readiness predicate. Notify under the existing
+// producer mutex so completion cannot be lost between predicate and wait.
+pub(crate) fn wake_incoming_consumer() {
+    if let Some(sync) = FINALIZED_INCOMING_PRODUCER.get() {
+        if let Ok(_guard) = sync.state.lock() {
+            sync.ready.notify_all();
         }
-        if let Some(utterance) = state.pending.pop_front() {
-            return Some(utterance);
-        }
-        guard = sync.ready.wait(guard).ok()?;
     }
 }
 
-// Incoming deferred ASR/translation may need another chance even when no
-// further Meeting Sound utterance arrives. Reuse the existing producer condition
-// variable; only the consumer with queued deferred work requests a bounded wait.
 #[derive(Debug)]
-pub enum IncomingTimedWait {
+pub enum IncomingWork {
     Utterance(FinalizedMeetingUtterance),
-    TimedOut,
+    DeferredReady,
     Stopped,
 }
 
-pub fn wait_take_finalized_incoming_utterance_for(
-    session_id: &str,
-    timeout: Duration,
-) -> IncomingTimedWait {
-    wait_take_finalized_incoming_utterance_for_sync(incoming_sync(), session_id, timeout)
+// The deferred predicate must be atomic-only; never acquire the helper,
+// deferred queue, or runtime-state lock under the audio producer mutex.
+pub fn wait_for_incoming_work(
+    session_id: &str, deferred_budget: Option<Duration>,
+    deferred_ready: impl Fn() -> bool,
+) -> IncomingWork {
+    wait_for_incoming_work_sync(incoming_sync(), session_id, deferred_budget, deferred_ready)
 }
 
-fn wait_take_finalized_incoming_utterance_for_sync(
-    sync: &FinalizedProducerSync,
-    session_id: &str,
-    timeout: Duration,
-) -> IncomingTimedWait {
-    let Ok(guard) = sync.state.lock() else {
-        return IncomingTimedWait::Stopped;
-    };
-    let Ok((mut guard, _)) = sync.ready.wait_timeout_while(guard, timeout, |producer| {
-        producer.as_ref().is_some_and(|state| {
-            state.session_id == session_id
-                && state.lane == LANE_INCOMING
-                && state.pending.is_empty()
-        })
-    }) else {
-        return IncomingTimedWait::Stopped;
-    };
-
-    let Some(state) = guard.as_mut() else {
-        return IncomingTimedWait::Stopped;
-    };
-    if state.session_id != session_id || state.lane != LANE_INCOMING {
-        return IncomingTimedWait::Stopped;
-    }
-    match state.pending.pop_front() {
-        Some(utterance) => IncomingTimedWait::Utterance(utterance),
-        None => IncomingTimedWait::TimedOut,
+fn wait_for_incoming_work_sync(
+    sync: &FinalizedProducerSync, session_id: &str,
+    deferred_budget: Option<Duration>, deferred_ready: impl Fn() -> bool,
+) -> IncomingWork {
+    let started = Instant::now();
+    let Ok(mut guard) = sync.state.lock() else { return IncomingWork::Stopped; };
+    loop {
+        let Some(state) = guard.as_mut() else { return IncomingWork::Stopped; };
+        if state.session_id != session_id || state.lane != LANE_INCOMING {
+            return IncomingWork::Stopped;
+        }
+        if let Some(budget) = deferred_budget {
+            // The existing age limit is an expiration deadline, not
+            // a periodic inference retry. Check before consuming new audio.
+            if deferred_ready() || started.elapsed() >= budget {
+                return IncomingWork::DeferredReady;
+            }
+        }
+        if let Some(utterance) = state.pending.pop_front() {
+            return IncomingWork::Utterance(utterance);
+        }
+        guard = match deferred_budget {
+            Some(budget) => match sync.ready.wait_timeout(guard, budget.saturating_sub(started.elapsed())) {
+                Ok((guard, _)) => guard,
+                Err(_) => return IncomingWork::Stopped,
+            },
+            None => match sync.ready.wait(guard) {
+                Ok(guard) => guard,
+                Err(_) => return IncomingWork::Stopped,
+            },
+        };
     }
 }
 
