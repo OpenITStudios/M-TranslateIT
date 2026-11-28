@@ -47,7 +47,9 @@ My Voice synthesis, training and evaluation algorithms are unchanged.
   outside JSON until scheduler admission, then move the owned text into the native
   request, wait outside the lifecycle mutex with the same permit, then
   fence the result against exact session/generation and request ownership.
-  Native results have a Rust-owned outer receipt identity. A selected
+  Native ASR/MT results move the owned text directly into the existing JSON
+  Value receipt; the Meeting consumer borrows that text. Native results have
+  a Rust-owned outer receipt identity. A selected
   native request never retries in Python, and a closed Meeting-native
   binding remains until verified Stop, blocking Python-only recovery.
   The host now opens the pair on explicit ASR preload or internal

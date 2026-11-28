@@ -39,6 +39,44 @@ fn language_code(value: Language) -> &'static str {
     }
 }
 
+// The owner already returned an owned String from reusable native scratch.
+// Move it into the existing receipt without serializing or cloning the text.
+fn native_text_receipt(task: &str, pci: &str, from: Language, to: Option<Language>, text: String) -> Value {
+    let mut body = json!({
+        "ok": true, "stage": task, "blocker": "", "device": "cuda",
+        "cuda_pci_id": pci, "note": "Native CUDA inference returned a complete result.",
+    });
+    if let Some(to) = to {
+        body["model_id"] = json!(NATIVE_MT_MODEL);
+        body["model_revision"] = json!(NATIVE_MT_REVISION);
+        body["precision"] = json!("q6_k");
+        body["translation_contract"] = json!("canonical_bidirectional_id_en");
+        body["translation_degraded"] = json!(false);
+        body["translation_fallback_reason"] = json!("");
+        body["source_language"] = json!(language_code(from));
+        body["target_language"] = json!(language_code(to));
+        body["direction_pair"] = json!(opposite_language_pair(from));
+        body["complete"] = json!(true);
+        body["finished_with_eos"] = json!(true);
+        body["hit_token_ceiling"] = json!(false);
+        body["translated_text"] = Value::String(text);
+    } else {
+        body["model_id"] = json!(NATIVE_ASR_MODEL);
+        body["compute_type"] = json!("q8_0");
+        body["language"] = json!(language_code(from));
+        body["transcript_text"] = Value::String(text);
+    }
+    body
+}
+
+// Both callers reject equal-language translation before constructing receipts.
+fn opposite_language_pair(from: Language) -> &'static str {
+    match from {
+        Language::Indonesian => "id->en",
+        Language::English => "en->id",
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct Scope {
     generation: Option<u64>,
@@ -347,7 +385,7 @@ pub(super) fn dispatch(
             body["model_id"] = json!(NATIVE_MT_MODEL);
             body["model_revision"] = json!(NATIVE_MT_REVISION);
             body["precision"] = json!("q6_k");
-            body["direction_pair"] = json!(format!("{}->{}", language_code(from), language_code(to)));
+            body["direction_pair"] = json!(opposite_language_pair(from));
             body["translation_degraded"] = json!(false);
             body["translation_fallback_reason"] = json!("");
         }
@@ -523,34 +561,9 @@ pub(super) fn dispatch(
                 "note": "Native synthesis returned owned complete PCM."})
         }
         Ok(InferenceOutput::Text(text)) if !is_voice && !is_bind => {
-            let mut body = json!({
-                "ok": true, "stage": task, "blocker": "", "device": "cuda",
-                "cuda_pci_id": host.native_inference.as_ref().expect("checked owner").owner.device_id(),
-                "note": "Native CUDA inference returned a complete result.",
-            });
-            if let Some(to) = to {
-                let from = language_code(from);
-                let to = language_code(to);
-                body["model_id"] = json!(NATIVE_MT_MODEL);
-                body["model_revision"] = json!(NATIVE_MT_REVISION);
-                body["precision"] = json!("q6_k");
-                body["translation_contract"] = json!("canonical_bidirectional_id_en");
-                body["translation_degraded"] = json!(false);
-                body["translation_fallback_reason"] = json!("");
-                body["source_language"] = json!(from);
-                body["target_language"] = json!(to);
-                body["direction_pair"] = json!(format!("{from}->{to}"));
-                body["complete"] = json!(true);
-                body["finished_with_eos"] = json!(true);
-                body["hit_token_ceiling"] = json!(false);
-                body["translated_text"] = json!(text);
-            } else {
-                body["model_id"] = json!(NATIVE_ASR_MODEL);
-                body["compute_type"] = json!("q8_0");
-                body["language"] = json!(language_code(from));
-                body["transcript_text"] = json!(text);
-            }
-            body
+            native_text_receipt(task,
+                host.native_inference.as_ref().expect("checked owner").owner.device_id(),
+                from, to, text)
         }
         unexpected => {
             let error = unexpected.err().unwrap_or(Error::InvalidReceipt);
@@ -589,6 +602,40 @@ mod tests {
             session_id: "meeting-1".into(), generation: 41, authority_active: true,
             phase: "live".into(), live_capture_stream_active: true, safe_to_stop: true,
             note: String::new(),
+        }
+    }
+
+    #[test]
+    fn native_text_receipt_moves_owned_text_and_preserves_stage_contract() {
+        let pci = "0000:01:00.0";
+        let transcript = String::from("Halo, 15 bukan 50.");
+        let ptr = transcript.as_ptr();
+        let asr = native_text_receipt("transcribe", pci, Language::Indonesian, None, transcript);
+        assert_eq!(asr["transcript_text"].as_str().unwrap().as_ptr(), ptr);
+        assert_eq!(asr, json!({
+            "ok":true,"stage":"transcribe","blocker":"","device":"cuda","cuda_pci_id":pci,
+            "note":"Native CUDA inference returned a complete result.",
+            "model_id":NATIVE_ASR_MODEL,"compute_type":"q8_0","language":"id",
+            "transcript_text":"Halo, 15 bukan 50."
+        }));
+        for (from, to, pair, source, target) in [
+            (Language::Indonesian, Language::English, "id->en", "id", "en"),
+            (Language::English, Language::Indonesian, "en->id", "en", "id"),
+        ] {
+            let translated = String::from("Complete text.");
+            let ptr = translated.as_ptr();
+            let mt = native_text_receipt("translate", pci, from, Some(to), translated);
+            assert_eq!(mt["translated_text"].as_str().unwrap().as_ptr(), ptr);
+            assert_eq!(mt, json!({
+                "ok":true,"stage":"translate","blocker":"","device":"cuda","cuda_pci_id":pci,
+                "note":"Native CUDA inference returned a complete result.",
+                "model_id":NATIVE_MT_MODEL,"model_revision":NATIVE_MT_REVISION,"precision":"q6_k",
+                "translation_contract":"canonical_bidirectional_id_en",
+                "translation_degraded":false,"translation_fallback_reason":"",
+                "source_language":source,"target_language":target,"direction_pair":pair,
+                "complete":true,"finished_with_eos":true,"hit_token_ceiling":false,
+                "translated_text":"Complete text."
+            }));
         }
     }
 
