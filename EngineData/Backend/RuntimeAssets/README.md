@@ -34,7 +34,7 @@ For the later authorized local integration/staging phase, reuse only the exact b
 
 ## Release and updater boundary
 
-The historical R3 v2 builder, staging, Python optimizer, license staging and installer/update helper are held. The intended native package excludes production Python/Torch/Transformers/Faster Whisper/GPT-SoVITS runtime; offline export tools and retained historical data are separate. A future native package schema must bind the exact DLL, model, verifier, reference and notice closure, and reject a historical installed payload for an incompatible app-only update. Preserve transactional replacement, rollback, user data and shared VB-CABLE driver. No release permission or local proof is implied here.
+The source builder, installer and hook now describe native R3 v3; its file closure is defined by the existing model manifest's `native_payload` section. A deterministic hash/size contract under `NativeOrt/TRANSLATEIT_PAYLOAD_CONTRACT.json` is bound to signed Setup and verified for app-only updates. Historical staging, Python optimizer, license staging and every release entrypoint remain held. The intended native package excludes production Python/Torch/Transformers/Faster Whisper/GPT-SoVITS runtime; offline export tools and retained historical data are separate. A future native package schema must bind the exact DLL, model, verifier, reference and notice closure, and reject a historical installed payload for an incompatible app-only update. Preserve transactional replacement, rollback, user data and shared VB-CABLE driver. No release permission or local proof is implied here.
 
 ## Provenance
 

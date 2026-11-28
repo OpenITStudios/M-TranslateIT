@@ -9,8 +9,8 @@ Set-StrictMode -Version Latest
 $AppRoot = Split-Path -Parent $PSScriptRoot
 $RepoRoot = (Resolve-Path (Join-Path $AppRoot '..\..\..')).Path
 $BackendRoot = (Resolve-Path (Join-Path $AppRoot '..\..\Backend')).Path
-$ReleasePython = Join-Path $BackendRoot 'LocalWorker\PythonRuntime\python.exe'
-$Optimizer = Join-Path $PSScriptRoot 'optimize_release_payload.py'
+# Build-time host Python is tooling only, never a staged product dependency.
+$ReleasePython = $null
 $PayloadBuilder = Join-Path $PSScriptRoot 'build_r3_external_payload.py'
 $HookTemplate = Join-Path $AppRoot 'src-tauri\windows\r3_payload_hooks.template.nsh'
 $InstallerHelper = Join-Path $AppRoot 'src-tauri\windows\r3_payload_installer.ps1'
@@ -65,7 +65,7 @@ throw 'Native My Voice release is held: exact TTS/verifier payload, licenses and
 $SourceCommit = Resolve-SourceCommit
 if ([string]::IsNullOrWhiteSpace($env:TRANSLATEIT_NATIVE_DLL_PINS)) { throw 'Reviewed native DLL pins are required for this source revision.' }
 $QualityReadinessEvidence = (Resolve-Path -LiteralPath $QualityReadinessEvidence).Path
-Require-File $ReleasePython 'Staged private PythonRuntime'
+$ReleasePython = (Get-Command python -ErrorAction Stop).Source
 Require-File $QualityReadinessEvidence 'Quality Readiness evidence'
 Require-File $QualityReadinessValidator 'Quality Readiness release validator'
 $QualityReadinessValidation = & $ReleasePython -s $QualityReadinessValidator --report $QualityReadinessEvidence --release-identity $SourceCommit
@@ -79,18 +79,10 @@ try {
     npm run preflight:release-payload
     if ($LASTEXITCODE -ne 0) { throw 'TranslateIT release payload preflight failed.' }
 
-    Require-File $Optimizer 'Release payload optimizer'
     Require-File $PayloadBuilder 'R3 external payload builder'
     Require-File $HookTemplate 'R3 NSIS hook template'
     Require-File $InstallerHelper 'R3 installer helper'
 
-    & $ReleasePython -s $Optimizer --backend-root $BackendRoot
-    if ($LASTEXITCODE -ne 0) { throw 'TranslateIT release payload optimization failed.' }
-
-    node scripts/generate_third_party_notices.mjs --write
-    if ($LASTEXITCODE -ne 0) { throw 'TranslateIT optimized third-party notice generation failed.' }
-    npm run preflight:release-payload
-    if ($LASTEXITCODE -ne 0) { throw 'TranslateIT optimized release payload validation failed.' }
     npm run preflight:tauri-package
     if ($LASTEXITCODE -ne 0) { throw 'TranslateIT R3 package source contract failed.' }
 
@@ -173,6 +165,7 @@ try {
         app_version = [string]$payloadBuild.app_version
         payload_schema = [string]$payloadBuild.schema
         native_dll_pins = $nativePayloadPins
+        runtime_contract_sha256 = [string]$payloadBuild.runtime_contract_sha256
         setup_file = 'TranslateIT-Setup.exe'
         setup_sha256 = Get-Sha256 $SetupPath
         payload_file = 'TranslateIT-Payload.7z'

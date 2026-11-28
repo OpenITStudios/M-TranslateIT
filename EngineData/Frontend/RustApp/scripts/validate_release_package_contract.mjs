@@ -59,27 +59,29 @@ const helper = readText(paths.helper);
 const silero = readText(paths.silero);
 const speaker = readText(paths.speaker);
 
-const canonicalPayloadRoots = [
-  "EngineData/Backend/LocalWorker/PythonRuntime",
-  "EngineData/Backend/RuntimeAssets/ASR/ModelData",
-  "EngineData/Backend/RuntimeAssets/Translation/ModelData",
-  "EngineData/Backend/RuntimeAssets/NativeCuda",
-  "EngineData/Backend/RuntimeAssets/Voice/BuiltInVoices",
-  "EngineData/Backend/RuntimeAssets/Voice/GPTSoVITS",
-  "EngineData/Backend/RuntimeAssets/AudioProvider/VBCABLE/Package",
-];
-const builderRootsMatch = builder.match(/PAYLOAD_ROOTS\s*=\s*\(([\s\S]*?)\)\s*\nREQUIRED_FILES/);
-if (!builderRootsMatch) fail("payload builder PAYLOAD_ROOTS block is missing or unparsable.");
-else {
-  const roots = [...builderRootsMatch[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
-  compareExact(roots, canonicalPayloadRoots, "payload builder root closure");
-}
+const canonicalPayloadRoots = manifest.native_payload?.roots ?? [];
+compareExact(canonicalPayloadRoots, ["EngineData/Backend/RuntimeAssets/ASR/ModelData","EngineData/Backend/RuntimeAssets/Translation/ModelData","EngineData/Backend/RuntimeAssets/NativeCuda","EngineData/Backend/RuntimeAssets/NativeOrt","EngineData/Backend/RuntimeAssets/Voice/BuiltInVoices","EngineData/Backend/RuntimeAssets/Voice/ModelData","EngineData/Backend/RuntimeAssets/AudioProvider/VBCABLE/Package"], "native payload root closure");
+compareExact(manifest.native_payload?.retired_roots, ["EngineData/Backend/LocalWorker/PythonRuntime","EngineData/Backend/RuntimeAssets/Voice/GPTSoVITS"], "retired payload roots");
+if (manifest.native_payload?.status !== "held_pending_review" ||
+    manifest.native_payload?.schema !== "translateit.r3.external_payload.v3" ||
+    manifest.native_payload?.installed_schema !== "translateit.installed_runtime.v3") fail("Native package hold/schema drifted.");
+requireMarkers(builder, "native builder inventory", ["load_native_inventory(repo_root)", 'package["roots"]', "native_runtime_contract", "runtime_contract_sha256"]);
 const helperRootsMatch = helper.match(/\$PayloadRoots=@\(([\s\S]*?)\)\s*\n/);
 if (!helperRootsMatch) fail("installer helper PayloadRoots block is missing or unparsable.");
 else {
   const roots = [...helperRootsMatch[1].matchAll(/'([^']+)'/g)].map((match) => match[1].replaceAll("\\", "/"));
   compareExact(roots, canonicalPayloadRoots, "installer helper root closure");
 }
+
+const retiredRootsMatch = helper.match(/\$RetiredRoots=@\(([\s\S]*?)\)\s*\n/);
+if (!retiredRootsMatch) fail("Installer retired root closure missing.");
+else compareExact([...retiredRootsMatch[1].matchAll(/'([^']+)'/g)].map(match => match[1].replaceAll("\\", "/")), manifest.native_payload.retired_roots, "installer retired root closure");
+if (Object.keys(manifest.native_payload?.provider_files ?? {}).length !== 31) fail("Reviewed provider file closure drifted.");
+for (const [name, bytes] of [["onnxruntime.dll", 19288928], ["silero_vad_v6.onnx", 1245151]]) {
+  const pin = manifest.native_payload?.ort_files?.[name];
+  if (pin?.bytes !== bytes || !/^[a-f0-9]{64}$/.test(pin?.sha256 ?? "") || !silero.includes(pin.sha256)) fail(`Native ORT/VAD pin drifted: ${name}`);
+}
+if (manifest.native_payload?.contract_path !== "EngineData/Backend/RuntimeAssets/NativeOrt/TRANSLATEIT_PAYLOAD_CONTRACT.json") fail("Native contract path drifted.");
 
 const expectedResources = {
   "../../../Backend/LocalWorker/WorkerRuntime/model_manifest.json": "EngineData/Backend/LocalWorker/WorkerRuntime/model_manifest.json",
@@ -145,13 +147,12 @@ forbidMarkers(stage, "release staging moving FFmpeg source", [
 ]);
 
 requireMarkers(builder, "payload builder", [
-  'PAYLOAD_SCHEMA = "translateit.r3.external_payload.v2"',
-  'INSTALLED_RUNTIME_SCHEMA = "translateit.installed_runtime.v2"',
+  'PAYLOAD_SCHEMA = "translateit.r3.external_payload.v3"',
+  'INSTALLED_RUNTIME_SCHEMA = "translateit.installed_runtime.v3"',
   "TRANSLATEIT_PAYLOAD_CONTRACT.json",
-  'TRANSFORMERS_VERSION = "4.57.6"',
-  'TOKENIZERS_VERSION = "0.22.2"',
+  "TRANSLATEIT_SPEAKER_ONNX_SHA256", "TRANSLATEIT_SPEAKER_ONNX_BYTES",
   "validate_no_filesystem_indirection",
-  "validate_native_inputs", "TRANSLATEIT_NATIVE_DLL_PINS", "@@NATIVE_DLL_PINS_SHA256@@",
+  "validate_native_inputs", "TRANSLATEIT_NATIVE_DLL_PINS", "@@RUNTIME_CONTRACT_SHA256@@",
   "is_filesystem_indirection",
   "is_junction",
   '"-t7z"', '"-m0=LZMA2"', '"-mx=9"', "find_7zip", "find_tar", "expanded_bytes", "@@APP_VERSION@@", "@@PAYLOAD_EXPANDED_BYTES@@",
@@ -160,7 +161,7 @@ forbidMarkers(builder.toLowerCase(), "payload builder network/bootstrap", ["urll
 
 requireMarkers(hook, "NSIS lifecycle hook", [
   "@@PAYLOAD_SCHEMA@@", "@@INSTALLED_RUNTIME_SCHEMA@@", "@@APP_VERSION@@", "@@PAYLOAD_SHA256@@", "@@PAYLOAD_EXPANDED_BYTES@@",
-  "@@NATIVE_DLL_PINS_SHA256@@", "-ExpectedNativeDllPinsSha256",
+  "@@RUNTIME_CONTRACT_SHA256@@", "-ExpectedRuntimeContractSha256",
   "NSIS_HOOK_PREINSTALL", "NSIS_HOOK_POSTINSTALL", "NSIS_HOOK_PREUNINSTALL", "-Mode Verify", "-Mode Install", "-Mode VerifyInstalled", "/UPDATE", "app-update mode", "$0 == 3010", "SetRebootFlag true",
   "RMDir /r \"$INSTDIR\\EngineData\\Backend\\LocalWorker\\PythonRuntime\"",
   "RMDir /r \"$INSTDIR\\EngineData\\Backend\\RuntimeAssets\\Voice\\BuiltInVoices\"",
@@ -169,15 +170,13 @@ requireMarkers(hook, "NSIS lifecycle hook", [
 forbidMarkers(hook.toLowerCase(), "NSIS network/bootstrap", ["inetc::", "nsisdl::", "http://", "https://", "execshell"]);
 
 requireMarkers(helper, "installer helper", [
-  "[ValidateSet('Verify','Install','VerifyInstalled')]", "Verify-InstalledRuntime", "Assert-InstalledRuntimeManifest", "Get-FileHash -Algorithm SHA256", "Read-PayloadContract", "Ensure-FreeSpace", ".translateit-r3-stage", ".translateit-r3-backup",
-  "Rollback-Payload", "Read-PythonMetadata", "pnputil.exe", "VBCABLE_Setup_x64.exe", "@('-i','-h')", "exit 3010",
-  "ExpectedNativeDllPinsSha256", "Assert-NativeRuntime", "Get-NativePins",
+  "[ValidateSet('Verify','Install','VerifyInstalled')]", "Verify-InstalledRuntime", "Assert-InstalledRuntimeManifest", "Get-FileHash -Algorithm SHA256", "Assert-Contract", "Ensure-FreeSpace", ".translateit-r3-stage", ".translateit-r3-backup",
+  "Rollback-Payload", "Assert-NoRetiredRuntime", "pnputil.exe", "VBCABLE_Setup_x64.exe", "@('-i','-h')", "exit 3010",
+  "ExpectedRuntimeContractSha256", "Assert-Runtime", "Assert-PlainPath", "runtime_contract_sha256",
   "ExpectedInstalledRuntimeSchema", "preserve_system_driver", "preserve_app_local_user_data",
   "TranslateITExitCode", "throw $failure", "$cleanupVerified", "Payload rollback incomplete; recovery files retained.",
   "$newManifest", "$savedManifest", "Rollback-Payload $root $backup $states",
-  "BuiltInVoices\\MaleVoice\\reference.wav",
-  "BuiltInVoices\\FemaleVoice\\reference.wav",
-  "BuiltInVoices\\SOURCES.json",
+  "$PayloadRoots+$RetiredRoots", "$contract.files.PSObject.Properties",
 ]);
 const failHelper = helper.slice(helper.indexOf("function Fail("), helper.indexOf("function NeedFile("));
 if (!failHelper.includes("throw $failure") || /\bexit\b/i.test(failHelper.replace(/#.*$/gm, ""))) fail("Installer validation must unwind through rollback.");
@@ -206,16 +205,16 @@ if (!build.includes("Native My Voice release is held") || !stage.includes("Nativ
   fail("Incomplete native packaging must remain blocked.");
 }
 for (const [body, label, sideEffect] of [
-  [builder, "legacy payload builder", "repo_root = args.repo_root.resolve()"],
+  [builder, "native payload builder", "repo_root = args.repo_root.resolve()"],
   [optimizer, "legacy payload optimizer", "backend_root = Path(args.backend_root).resolve()"],
   [licenseStager, "legacy Python license stager", "REPO_ROOT = Path(__file__)"],
 ]) {
-  const hold = body.indexOf('raise ' + (label === "legacy payload builder" ? 'RuntimeError(' : 'SystemExit(') + '"Native packaging is held:');
+  const hold = body.indexOf('raise ' + (label === "native payload builder" ? 'RuntimeError(' : 'SystemExit(') + '"Native packaging is held:');
   if (hold < 0 || body.indexOf(sideEffect) <= hold) fail(`${label} must remain held before side effects.`);
 }
 
-// The old builder/installer closure above is retained only for historical
-// source review. Native runtime paths are not a compatibility grant.
+// The v3 builder/installer closure is source-only. Native runtime paths are
+// not a compatibility grant until reviewed staging and acceptance close.
 requireMarkers(silero, "native ORT and VAD", [
   'join("EngineData/Backend/RuntimeAssets/NativeOrt")',
   'root.join("onnxruntime.dll")',
@@ -226,10 +225,15 @@ requireMarkers(silero, "native ORT and VAD", [
 ]);
 forbidMarkers(silero, "native ORT path fallback", ["python_runtime_dir", "site-packages", "faster_whisper/assets"]);
 requireMarkers(speaker, "shared native ORT verifier", ["verified_ort_environment()?", 'ModelData/SpeakerVerifier/eres2netv2-forward3-f32.onnx']);
+forbidMarkers(builder + helper, "retired package dependencies", ["PYTHON_VERSION", "TORCH_VERSION", "Read-PythonMetadata", "voice_evaluation_asr_revision"]);
+for (const root of [...canonicalPayloadRoots, ...manifest.native_payload.retired_roots]) {
+  if (!hook.includes('RMDir /r "$INSTDIR\\' + root.replaceAll("/", "\\") + '"')) fail(`Native uninstall root missing: ${root}`);
+}
+forbidMarkers(hook, "unresolved transaction cleanup", ['RMDir /r "$INSTDIR\\.translateit-r3-stage"', 'RMDir /r "$INSTDIR\\.translateit-r3-backup"']);
 const installerEntry = helper.slice(helper.lastIndexOf("\ntry{"));
 const installerHold = installerEntry.indexOf("Native packaging is held:");
 const installerVerify = installerEntry.indexOf("Verify-InstalledRuntime $InstallRoot");
-if (installerHold < 0 || installerVerify <= installerHold) fail("Legacy installer/update entry must be held before any runtime verification or mutation.");
+if (installerHold < 0 || installerVerify <= installerHold) fail("Native installer/update entry must be held before any runtime verification or mutation.");
 
 const scripts = packageJson.scripts ?? {};
 if (!String(scripts["preflight:tauri-package"] ?? "").includes("validate_release_package_contract.mjs")) fail("Tauri package preflight must include the R3 release contract.");
@@ -239,4 +243,4 @@ if (errors.length) {
   for (const error of errors) console.error(`[release-package] ${error}`);
   process.exit(1);
 }
-console.log("[release-package] Historical R3 source-contract checks passed; native package/release remains HELD. No artifact, installer or installed-runtime proof.");
+console.log("[release-package] Native R3 source contract checks only; package/release remains HELD. No artifact, installer or installed-runtime proof.");

@@ -88,9 +88,16 @@ test("external runtime payload is preserved only when installed runtime is compa
   assert.match(helper, /ValidateSet\('Verify','Install','VerifyInstalled'\)/);
   assert.match(helper, /function Verify-InstalledRuntime/);
   assert.match(helper, /Assert-InstalledRuntimeManifest/);
-  assert.match(helper, /translation_revision/);
-  assert.match(helper, /asr_revision/);
-  assert.match(helper, /voice_revision/);
+  assert.match(helper, /runtime_contract_sha256/);
+  assert.match(helper, /ExpectedRuntimeContractSha256/);
+  assert.match(helper, /Assert-NoRetiredRuntime/);
+  assert.match(helper, /Get-FileHash -LiteralPath \$contractPath -Algorithm SHA256/);
+  assert.match(helper, /\$contract\.files\.PSObject\.Properties/);
+  assert.doesNotMatch(helper, /Read-PythonMetadata/);
+  assert.match(helper, /foreach\(\$relative in \(\$PayloadRoots\+\$RetiredRoots\)\)/);
+  assert.match(helper, /Rollback-Payload \$root \$backup \$states/);
+  assert.match(hook, /@@RUNTIME_CONTRACT_SHA256@@/);
+  assert.doesNotMatch(hook, /@@NATIVE_DLL_PINS_SHA256@@/);
 });
 
 

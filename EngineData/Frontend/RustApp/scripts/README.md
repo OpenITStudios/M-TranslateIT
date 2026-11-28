@@ -28,7 +28,7 @@ Functional behavior coverage remains with the owning native runtime and its Rust
 
 ## R3 release boundary — HELD
 
-The desired offline release remains `TranslateIT-Setup.exe` plus `TranslateIT-Payload.7z`. The current staging, payload builder, optimizer and Python license stager describe the historical Python-based package, not the native runtime. Their direct entrypoints are blocked; do not bypass the holds.
+The desired offline release remains `TranslateIT-Setup.exe` plus `TranslateIT-Payload.7z`. The native R3 v3 builder, installer and hook source now use an exact runtime file contract instead of Python dependency metadata. Staging, legacy optimizer, notice generation and reviewed artifact inputs remain incomplete. All release entrypoints are blocked; do not bypass the holds.
 
 Native release requires a coherent package and installer/update contract, reviewed DLL/model/ONNX identities, the independent speaker verifier export pin, complete third-party notices, and integrated target acceptance. The existing model manifest is the inventory owner. No package build or download is implied by source checks.
 

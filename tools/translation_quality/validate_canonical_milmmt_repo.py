@@ -160,8 +160,8 @@ def validate_release(root: Path) -> None:
     ):
         require(forbidden not in config, f"release:large_payload_embedded:{forbidden}")
     for marker in (
-        "translateit.r3.external_payload.v2",
-        "translateit.installed_runtime.v2",
+        "translateit.r3.external_payload.v3",
+        "translateit.installed_runtime.v3",
         "TranslateIT-Payload.7z",
         "-m0=LZMA2",
         "TRANSLATEIT_PAYLOAD_CONTRACT.json",
@@ -169,9 +169,9 @@ def validate_release(root: Path) -> None:
         require(marker in builder, f"release:builder_marker:{marker}")
     for marker in ("NSIS_HOOK_PREINSTALL", "NSIS_HOOK_POSTINSTALL", "NSIS_HOOK_PREUNINSTALL", "$0 == 3010"):
         require(marker in hook, f"release:hook_marker:{marker}")
-    for marker in ("@('-i','-h')", "Rollback-Payload", "Read-PythonMetadata", "preserve_system_driver"):
+    for marker in ("@('-i','-h')", "Rollback-Payload", "Assert-NoRetiredRuntime", "preserve_system_driver"):
         require(marker in installer, f"release:installer_marker:{marker}")
-    require("R3 source contract PASS" in package_contract, "release:package_contract")
+    require("Native R3 source contract checks only" in package_contract, "release:package_contract")
 
     excluded_block = optimizer.split("EXCLUDED_DISTRIBUTIONS = {", 1)[1].split("}", 1)[0]
     required_block = optimizer.split("REQUIRED_DISTRIBUTIONS = {", 1)[1].split("}", 1)[0]

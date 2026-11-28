@@ -8,7 +8,7 @@
 !define TRANSLATEIT_R3_APP_VERSION "@@APP_VERSION@@"
 !define TRANSLATEIT_R3_PAYLOAD_FILENAME "@@PAYLOAD_FILENAME@@"
 !define TRANSLATEIT_R3_PAYLOAD_SHA256 "@@PAYLOAD_SHA256@@"
-!define TRANSLATEIT_NATIVE_DLL_PINS_SHA256 "@@NATIVE_DLL_PINS_SHA256@@"
+!define TRANSLATEIT_RUNTIME_CONTRACT_SHA256 "@@RUNTIME_CONTRACT_SHA256@@"
 !define TRANSLATEIT_R3_PAYLOAD_EXPANDED_BYTES "@@PAYLOAD_EXPANDED_BYTES@@"
 
 !macro NSIS_HOOK_PREINSTALL
@@ -20,7 +20,7 @@
   ${GetOptions} $R8 "/UPDATE" $R9
   ${IfNot} ${Errors}
     DetailPrint "TranslateIT: app-update mode; validating installed runtime without replacing the external payload..."
-    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\translateit-r3-payload-installer.ps1" -Mode VerifyInstalled -ExpectedPayloadSchema "${TRANSLATEIT_R3_PAYLOAD_SCHEMA}" -ExpectedInstalledRuntimeSchema "${TRANSLATEIT_R3_INSTALLED_RUNTIME_SCHEMA}" -ExpectedAppVersion "${TRANSLATEIT_R3_APP_VERSION}" -ExpectedNativeDllPinsSha256 "${TRANSLATEIT_NATIVE_DLL_PINS_SHA256}" -InstallRoot "$INSTDIR"' $0
+    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\translateit-r3-payload-installer.ps1" -Mode VerifyInstalled -ExpectedPayloadSchema "${TRANSLATEIT_R3_PAYLOAD_SCHEMA}" -ExpectedInstalledRuntimeSchema "${TRANSLATEIT_R3_INSTALLED_RUNTIME_SCHEMA}" -ExpectedAppVersion "${TRANSLATEIT_R3_APP_VERSION}" -ExpectedRuntimeContractSha256 "${TRANSLATEIT_RUNTIME_CONTRACT_SHA256}" -InstallRoot "$INSTDIR"' $0
     ${If} $0 != 0
       MessageBox MB_ICONSTOP|MB_OK "This TranslateIT update needs a newer full runtime payload. Install the matching TranslateIT-Setup.exe + TranslateIT-Payload.7z release instead."
       Abort
@@ -36,7 +36,7 @@
     Abort
 
   translateit_r3_payload_present:
-    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\translateit-r3-payload-installer.ps1" -Mode Verify -PayloadPath "$EXEDIR\${TRANSLATEIT_R3_PAYLOAD_FILENAME}" -ExpectedSha256 "${TRANSLATEIT_R3_PAYLOAD_SHA256}" -ExpectedPayloadSchema "${TRANSLATEIT_R3_PAYLOAD_SCHEMA}" -ExpectedInstalledRuntimeSchema "${TRANSLATEIT_R3_INSTALLED_RUNTIME_SCHEMA}" -ExpectedAppVersion "${TRANSLATEIT_R3_APP_VERSION}" -ExpectedNativeDllPinsSha256 "${TRANSLATEIT_NATIVE_DLL_PINS_SHA256}" -ExpectedExpandedBytes "${TRANSLATEIT_R3_PAYLOAD_EXPANDED_BYTES}"' $0
+    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\translateit-r3-payload-installer.ps1" -Mode Verify -PayloadPath "$EXEDIR\${TRANSLATEIT_R3_PAYLOAD_FILENAME}" -ExpectedSha256 "${TRANSLATEIT_R3_PAYLOAD_SHA256}" -ExpectedPayloadSchema "${TRANSLATEIT_R3_PAYLOAD_SCHEMA}" -ExpectedInstalledRuntimeSchema "${TRANSLATEIT_R3_INSTALLED_RUNTIME_SCHEMA}" -ExpectedAppVersion "${TRANSLATEIT_R3_APP_VERSION}" -ExpectedRuntimeContractSha256 "${TRANSLATEIT_RUNTIME_CONTRACT_SHA256}" -ExpectedExpandedBytes "${TRANSLATEIT_R3_PAYLOAD_EXPANDED_BYTES}"' $0
     ${If} $0 != 0
       MessageBox MB_ICONSTOP|MB_OK "TranslateIT offline payload validation failed (code $0). Setup will stop instead of installing incomplete, modified, or mismatched runtime assets."
       Abort
@@ -55,7 +55,7 @@
   ${EndIf}
 
   DetailPrint "TranslateIT: installing verified offline runtime payload..."
-  ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\translateit-r3-payload-installer.ps1" -Mode Install -PayloadPath "$EXEDIR\${TRANSLATEIT_R3_PAYLOAD_FILENAME}" -ExpectedSha256 "${TRANSLATEIT_R3_PAYLOAD_SHA256}" -ExpectedPayloadSchema "${TRANSLATEIT_R3_PAYLOAD_SCHEMA}" -ExpectedInstalledRuntimeSchema "${TRANSLATEIT_R3_INSTALLED_RUNTIME_SCHEMA}" -ExpectedAppVersion "${TRANSLATEIT_R3_APP_VERSION}" -ExpectedNativeDllPinsSha256 "${TRANSLATEIT_NATIVE_DLL_PINS_SHA256}" -ExpectedExpandedBytes "${TRANSLATEIT_R3_PAYLOAD_EXPANDED_BYTES}" -InstallRoot "$INSTDIR"' $0
+  ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\translateit-r3-payload-installer.ps1" -Mode Install -PayloadPath "$EXEDIR\${TRANSLATEIT_R3_PAYLOAD_FILENAME}" -ExpectedSha256 "${TRANSLATEIT_R3_PAYLOAD_SHA256}" -ExpectedPayloadSchema "${TRANSLATEIT_R3_PAYLOAD_SCHEMA}" -ExpectedInstalledRuntimeSchema "${TRANSLATEIT_R3_INSTALLED_RUNTIME_SCHEMA}" -ExpectedAppVersion "${TRANSLATEIT_R3_APP_VERSION}" -ExpectedRuntimeContractSha256 "${TRANSLATEIT_RUNTIME_CONTRACT_SHA256}" -ExpectedExpandedBytes "${TRANSLATEIT_R3_PAYLOAD_EXPANDED_BYTES}" -InstallRoot "$INSTDIR"' $0
   ${If} $0 == 3010
     DetailPrint "TranslateIT: VB-CABLE was newly installed; Windows restart is required."
     SetRebootFlag true
@@ -77,10 +77,11 @@
   RMDir /r "$INSTDIR\EngineData\Backend\RuntimeAssets\ASR\ModelData"
   RMDir /r "$INSTDIR\EngineData\Backend\RuntimeAssets\Translation\ModelData"
   RMDir /r "$INSTDIR\EngineData\Backend\RuntimeAssets\NativeCuda"
+  RMDir /r "$INSTDIR\EngineData\Backend\RuntimeAssets\NativeOrt"
+  RMDir /r "$INSTDIR\EngineData\Backend\RuntimeAssets\Voice\ModelData"
   RMDir /r "$INSTDIR\EngineData\Backend\RuntimeAssets\Voice\BuiltInVoices"
   RMDir /r "$INSTDIR\EngineData\Backend\RuntimeAssets\Voice\GPTSoVITS"
   RMDir /r "$INSTDIR\EngineData\Backend\RuntimeAssets\AudioProvider\VBCABLE\Package"
   Delete "$INSTDIR\EngineData\Backend\TRANSLATEIT_INSTALLED_RUNTIME.json"
-  RMDir /r "$INSTDIR\.translateit-r3-stage"
-  RMDir /r "$INSTDIR\.translateit-r3-backup"
+  ; Retain interrupted transaction directories for explicit recovery.
 !macroend

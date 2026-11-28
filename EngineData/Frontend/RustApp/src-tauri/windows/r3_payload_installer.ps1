@@ -7,7 +7,7 @@ param(
     [Parameter(Mandatory=$true)][string]$ExpectedPayloadSchema,
     [Parameter(Mandatory=$true)][string]$ExpectedInstalledRuntimeSchema,
     [Parameter(Mandatory=$true)][string]$ExpectedAppVersion,
-    [Parameter(Mandatory=$true)][string]$ExpectedNativeDllPinsSha256,
+    [Parameter(Mandatory=$true)][string]$ExpectedRuntimeContractSha256,
     [Int64]$ExpectedExpandedBytes=0,
     [string]$InstallRoot
 )
@@ -15,24 +15,22 @@ param(
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 
-$PythonVersion='3.12.10'
-$TorchVersion='2.14.1'
-$TransformersVersion='4.57.6'
-$TokenizersVersion='0.22.2'
-$NativeAsrRevision='3b2c29585c2180452ccb14d3b6b58127f352400d'
-$NativeMtRevision='a0c709d9fac510f2c807aa3af52872340dc37a4a'
-$AsrRevision='0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf'
-$GptRevision='d523079fc05d9a8028d6085bffe4a2757c32abb6'
-$PayloadContract='EngineData\Backend\LocalWorker\PythonRuntime\TRANSLATEIT_PAYLOAD_CONTRACT.json'
+$NativePayloadSchema='translateit.r3.external_payload.v3'
+$NativeInstalledSchema='translateit.installed_runtime.v3'
+$PayloadContract='EngineData\Backend\RuntimeAssets\NativeOrt\TRANSLATEIT_PAYLOAD_CONTRACT.json'
 $InstalledManifest='EngineData\Backend\TRANSLATEIT_INSTALLED_RUNTIME.json'
 $PayloadRoots=@(
-    'EngineData\Backend\LocalWorker\PythonRuntime',
     'EngineData\Backend\RuntimeAssets\ASR\ModelData',
     'EngineData\Backend\RuntimeAssets\Translation\ModelData',
     'EngineData\Backend\RuntimeAssets\NativeCuda',
+    'EngineData\Backend\RuntimeAssets\NativeOrt',
     'EngineData\Backend\RuntimeAssets\Voice\BuiltInVoices',
-    'EngineData\Backend\RuntimeAssets\Voice\GPTSoVITS',
+    'EngineData\Backend\RuntimeAssets\Voice\ModelData',
     'EngineData\Backend\RuntimeAssets\AudioProvider\VBCABLE\Package'
+)
+$RetiredRoots=@(
+    'EngineData\Backend\LocalWorker\PythonRuntime',
+    'EngineData\Backend\RuntimeAssets\Voice\GPTSoVITS'
 )
 
 # Never exit inside a validation helper: failures after promotion must
@@ -43,7 +41,6 @@ function Fail([int]$Code,[string]$Message){
     throw $failure
 }
 function NeedFile([string]$Path,[int]$Code,[string]$Label){if(-not(Test-Path -LiteralPath $Path -PathType Leaf)){Fail $Code "$Label missing: $Path"}}
-function NeedMarker([string]$Path,[string]$Expected,[int]$Code,[string]$Label){NeedFile $Path $Code $Label;if((Get-Content -LiteralPath $Path -Raw).Trim()-ne$Expected){Fail $Code "$Label mismatch"}}
 
 function Get-TarProgram {
     $systemTar=Join-Path $env:SystemRoot 'System32\tar.exe'
@@ -51,106 +48,101 @@ function Get-TarProgram {
     try{return(Get-Command tar.exe -ErrorAction Stop).Source}catch{Fail 40 'Windows tar.exe/bsdtar is required.'}
 }
 
-function Read-PayloadContract([string]$Tar,[string]$Archive){
-    $entry=$PayloadContract.Replace('\','/')
-    $raw=@(&$Tar -xOf $Archive $entry 2>&1)
-    if($LASTEXITCODE-ne 0-or$raw.Count-eq 0){Fail 43 'Payload contract missing or unreadable.'}
-    try{return([string]::Join("`n",$raw)|ConvertFrom-Json)}catch{Fail 43 'Payload contract JSON invalid.'}
+# The Setup embeds a digest of the complete runtime contract, not just the
+# CUDA pins. Never trust an installed receipt or package-supplied file list alone.
+function Assert-InstallRoot([string]$Path){
+    $full=[IO.Path]::GetFullPath($Path).TrimEnd([char]92)
+    if($full-ceq[IO.Path]::GetPathRoot($full).TrimEnd([char]92)){Fail 44 'Install root cannot be a volume root.'}
+    $directory=[IO.DirectoryInfo]::new($full)
+    while($null-ne$directory){
+        if($directory.Exists-and($directory.Attributes-band[IO.FileAttributes]::ReparsePoint)){Fail 44 'Install root is redirected.'}
+        $directory=$directory.Parent
+    }
+    return $full
 }
 
-# The signed Setup binds a short digest of the reviewed pin string; the
-# installed manifest itself is never the trust anchor.
-function Get-NativePins([string]$Pins){
-    if(-not $Pins-or$Pins.Length-gt 8192){throw 'Native DLL pins missing or oversized.'}
-    $sha=[Security.Cryptography.SHA256]::Create()
-    try{$actual=([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::ASCII.GetBytes($Pins)))).Replace('-','').ToLowerInvariant()}
-    finally{$sha.Dispose()}
-    if($actual-cne$ExpectedNativeDllPinsSha256){throw 'Native DLL pin identity differs from Setup.'}
-    $files=[Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
-    foreach($pin in $Pins.Split(';')){
-        if($pin-cmatch'^([a-z0-9][a-z0-9_.-]{0,95}\.dll)=([a-f0-9]{64})$'){
-            if($Matches[1].Contains('..')){throw 'Invalid native DLL filename.'}
-            $files.Add($Matches[1],$Matches[2])
-        }else{throw 'Invalid native DLL pin.'}
+function Assert-PlainPath([string]$Root,[string]$Relative){
+    $current=$Root
+    foreach($part in $Relative.Replace('/','\').Split('\')){
+        if($part-notmatch'^[A-Za-z0-9_.-]+$'-or$part-in@('.','..')-or$part.EndsWith('.')){Fail 44 'Unsafe native payload path.'}
+        $current=Join-Path $current $part
+        if(Test-Path -LiteralPath $current){
+            if((Get-Item -LiteralPath $current -Force).Attributes-band[IO.FileAttributes]::ReparsePoint){Fail 44 'Native payload path is redirected.'}
+        }
     }
-    if(-not $files.ContainsKey('translateit_native_cuda.dll')-or$files.Count-gt 32){throw 'Native DLL closure incomplete.'}
-    return ,$files
-}
-
-function Assert-NativeRuntime([string]$Assets,[string]$Pins){
-    $expected=Get-NativePins $Pins
-    $native=Join-Path $Assets 'NativeCuda'
-    $bin=Join-Path $native 'bin'
-    $notice=Join-Path $native 'THIRD_PARTY_NOTICES.txt'
-    foreach($path in @($native,$bin,$notice)){
-        $item=Get-Item -LiteralPath $path -Force
-        if($item.Attributes-band[IO.FileAttributes]::ReparsePoint){throw 'Native asset is redirected.'}
-    }
-    if(@(Get-ChildItem -LiteralPath $native -Force).Count-ne 2-or(Get-Item -LiteralPath $notice).Length-le 0){throw 'Native package root invalid.'}
-    $actual=@(Get-ChildItem -LiteralPath $bin -Force)
-    if($actual.Count-ne$expected.Count){throw 'Native DLL set differs from Setup.'}
-    foreach($file in $actual){
-        if($file.PSIsContainer-or($file.Attributes-band[IO.FileAttributes]::ReparsePoint)-or-not$expected.ContainsKey($file.Name)-or$file.Length-le 0-or$file.Length-gt 1GB){throw 'Unapproved native DLL entry.'}
-        if((Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()-cne$expected[$file.Name]){throw 'Native DLL hash mismatch.'}
-    }
-    # Throw (not exit) so a post-promotion validation failure reaches rollback.
-    if((Get-Content -LiteralPath (Join-Path $Assets 'ASR\ModelData\qwen3-asr-1.7b\.translateit_model_revision') -Raw).Trim()-cne'3b2c29585c2180452ccb14d3b6b58127f352400d'){throw 'Native ASR revision mismatch.'}
-    if((Get-Content -LiteralPath (Join-Path $Assets 'Translation\ModelData\hy-mt2-1.8b\.translateit_model_revision') -Raw).Trim()-cne'a0c709d9fac510f2c807aa3af52872340dc37a4a'){throw 'Native MT revision mismatch.'}
-    foreach($relative in @('ASR\ModelData\qwen3-asr-1.7b\Qwen3-ASR-1.7B-Q8_0.gguf','ASR\ModelData\qwen3-asr-1.7b\mmproj-Qwen3-ASR-1.7B-Q8_0.gguf','Translation\ModelData\hy-mt2-1.8b\Hy-MT2-1.8B-Q6_K.gguf')){
-        $file=Get-Item -LiteralPath (Join-Path $Assets $relative) -Force
-        if($file.PSIsContainer-or($file.Attributes-band[IO.FileAttributes]::ReparsePoint)-or$file.Length-le 0){throw 'Native model asset missing or redirected.'}
-    }
+    return $current
 }
 
 function Assert-Contract($Contract){
-    [void](Get-NativePins ([string]$Contract.native_dll_pins))
-    if([string]$Contract.revisions.qwen3_asr-ne'3b2c29585c2180452ccb14d3b6b58127f352400d'-or[string]$Contract.revisions.hy_mt2-ne'a0c709d9fac510f2c807aa3af52872340dc37a4a'){Fail 44 'Native model revision mismatch.'}
-    if([string]$Contract.schema-ne$ExpectedPayloadSchema-or[string]$Contract.app_version-ne$ExpectedAppVersion){Fail 44 'Payload identity does not match Setup.'}
-    if([string]$Contract.python_version-ne$PythonVersion-or[string]$Contract.torch_version-ne$TorchVersion-or[string]$Contract.transformers_version-ne$TransformersVersion-or[string]$Contract.tokenizers_version-ne$TokenizersVersion){Fail 44 'Payload dependency identity mismatch.'}
-    if([string]$Contract.revisions.faster_whisper-ne$AsrRevision-or[string]$Contract.revisions.gpt_sovits-ne$GptRevision){Fail 44 'Payload model revision identity mismatch.'}
+    if($ExpectedPayloadSchema-cne$NativePayloadSchema-or$ExpectedInstalledRuntimeSchema-cne$NativeInstalledSchema-or
+        [string]$Contract.schema-cne$NativePayloadSchema-or[string]$Contract.installed_schema-cne$NativeInstalledSchema){Fail 44 'Native payload schema mismatch.'}
+    $actual=@($Contract.roots|ForEach-Object{([string]$_).Replace('/','\')})
+    if(($actual-join'|')-cne($PayloadRoots-join'|')){Fail 44 'Native payload root closure mismatch.'}
+    if([string]$Contract.user_data_policy-cne'preserve_app_local_user_data'-or[string]$Contract.driver_policy-cne'preserve_system_driver'){Fail 44 'Native payload preservation policy mismatch.'}
 }
 
-function Assert-Runtime([string]$Root,[string]$NativePins){
-    $backend=Join-Path $Root 'EngineData\Backend'
-    Assert-NativeRuntime (Join-Path $backend 'RuntimeAssets') $NativePins
-    NeedFile (Join-Path $backend 'LocalWorker\PythonRuntime\python.exe') 50 'Python runtime'
-    NeedMarker (Join-Path $backend 'RuntimeAssets\ASR\ModelData\faster-whisper-large-v3-turbo\.translateit_model_revision') $AsrRevision 51 'Voice evaluation ASR revision'
-    NeedFile (Join-Path $backend 'RuntimeAssets\Voice\BuiltInVoices\MaleVoice\reference.wav') 53 'Built-in Male reference'
-    NeedFile (Join-Path $backend 'RuntimeAssets\Voice\BuiltInVoices\FemaleVoice\reference.wav') 53 'Built-in Female reference'
-    NeedFile (Join-Path $backend 'RuntimeAssets\Voice\BuiltInVoices\SOURCES.json') 53 'Built-in voice source manifest'
-    NeedMarker (Join-Path $backend 'RuntimeAssets\Voice\GPTSoVITS\Source\TRANSLATEIT_GPTSOVITS_REVISION.txt') $GptRevision 53 'GPT-SoVITS revision'
-    NeedFile (Join-Path $backend 'RuntimeAssets\AudioProvider\VBCABLE\Package\VBCABLE_Setup_x64.exe') 54 'VB-CABLE x64 installer'
-    NeedFile (Join-Path $backend 'RuntimeAssets\AudioProvider\VBCABLE\Package\VBCABLE_Setup.exe') 54 'VB-CABLE x86 installer'
-}
-
-function Read-PythonMetadata([string]$Root){
-    $python=Join-Path $Root 'EngineData\Backend\LocalWorker\PythonRuntime\python.exe'
-    $code='import importlib.metadata as m,json,sys;print(json.dumps({"python":".".join(map(str,sys.version_info[:3])),"torch":m.version("torch"),"transformers":m.version("transformers"),"tokenizers":m.version("tokenizers")}))'
-    $raw=(&$python -s -c $code 2>&1|Out-String).Trim()
-    if($LASTEXITCODE-ne 0){Fail 55 'Private Python dependency metadata unavailable.'}
-    try{$meta=$raw|ConvertFrom-Json}catch{Fail 55 'Private Python dependency metadata invalid.'}
-    if($meta.python-ne$PythonVersion-or$meta.torch-ne$TorchVersion-or$meta.transformers-ne$TransformersVersion-or$meta.tokenizers-ne$TokenizersVersion){Fail 56 'Installed Python dependency versions do not match the payload contract.'}
-    return $meta
+function Assert-Runtime([string]$Root){
+    $Root=Assert-InstallRoot $Root
+    $contractPath=Assert-PlainPath $Root $PayloadContract
+    NeedFile $contractPath 50 'Native runtime contract'
+    if((Get-Item -LiteralPath $contractPath).Length-gt 1MB-or
+        (Get-FileHash -LiteralPath $contractPath -Algorithm SHA256).Hash.ToLowerInvariant()-cne$ExpectedRuntimeContractSha256){Fail 50 'Native runtime contract differs from signed Setup.'}
+    $contract=Get-Content -LiteralPath $contractPath -Raw|ConvertFrom-Json
+    Assert-Contract $contract
+    $expected=[Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
+    foreach($entry in $contract.files.PSObject.Properties){
+        $relative=$entry.Name.Replace('/','\')
+        $inside=$false
+        foreach($prefix in $PayloadRoots){if($relative.StartsWith($prefix+'\',[StringComparison]::Ordinal)){$inside=$true;break}}
+        if(-not$inside-or$relative-ceq$PayloadContract-or[string]$entry.Value.sha256-cnotmatch'^[a-f0-9]{64}$'-or[Int64]$entry.Value.bytes-le 0){Fail 50 'Invalid native runtime file identity.'}
+        $path=Assert-PlainPath $Root $relative
+        NeedFile $path 50 'Native runtime file'
+        if((Get-Item -LiteralPath $path).Length-ne[Int64]$entry.Value.bytes-or
+            (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()-cne[string]$entry.Value.sha256){Fail 50 "Native runtime file identity mismatch: $relative"}
+        $expected.Add($relative,$entry.Value)
+    }
+    if($expected.Count-eq 0){Fail 50 'Empty native runtime file closure.'}
+    $seen=0
+    foreach($relative in $PayloadRoots){
+        $directory=Assert-PlainPath $Root $relative
+        $pending=[Collections.Generic.Stack[string]]::new()
+        $pending.Push($directory)
+        while($pending.Count-gt 0){
+            foreach($item in Get-ChildItem -LiteralPath ($pending.Pop()) -Force -ErrorAction Stop){
+                if($item.Attributes-band[IO.FileAttributes]::ReparsePoint){Fail 50 'Native runtime contains a redirected entry.'}
+                if($item.PSIsContainer){$pending.Push($item.FullName);continue}
+                $name=$item.FullName.Substring($Root.TrimEnd([char]92).Length+1)
+                if($name-ceq$PayloadContract){continue}
+                if(-not$expected.ContainsKey($name)){Fail 50 "Unexpected native runtime file: $name"}
+                $seen++
+            }
+        }
+    }
+    if($seen-ne$expected.Count){Fail 50 'Native runtime file count mismatch.'}
+    return $contract
 }
 
 function Assert-InstalledRuntimeManifest([string]$Root){
-    $manifestPath=Join-Path $Root $InstalledManifest
+    $manifestPath=Assert-PlainPath $Root $InstalledManifest
     NeedFile $manifestPath 57 'Installed runtime manifest'
+    if((Get-Item -LiteralPath $manifestPath).Length-gt 64KB){Fail 57 'Installed runtime manifest oversized.'}
     try{$manifest=Get-Content -LiteralPath $manifestPath -Raw|ConvertFrom-Json}catch{Fail 57 'Installed runtime manifest invalid.'}
-    if([string]$manifest.schema-ne$ExpectedInstalledRuntimeSchema-or -not [bool]$manifest.installed_complete){Fail 57 'Installed runtime manifest is incomplete or incompatible.'}
-    if([string]$manifest.payload_schema-ne$ExpectedPayloadSchema){Fail 57 'Installed runtime payload schema is incompatible with this app update.'}
-    if([string]$manifest.python-ne$PythonVersion-or[string]$manifest.torch-ne$TorchVersion-or[string]$manifest.transformers-ne$TransformersVersion-or[string]$manifest.tokenizers-ne$TokenizersVersion){Fail 57 'Installed runtime dependency identity is incompatible with this app update.'}
-    if([string]$manifest.translation_revision-ne$NativeMtRevision-or[string]$manifest.asr_revision-ne$NativeAsrRevision-or[string]$manifest.voice_evaluation_asr_revision-ne$AsrRevision-or[string]$manifest.voice_revision-ne$GptRevision){Fail 57 'Installed model/runtime revisions are incompatible with this app update.'}
-    [void](Get-NativePins ([string]$manifest.native_dll_pins))
-    return [string]$manifest.native_dll_pins
+    if([string]$manifest.schema-cne$NativeInstalledSchema-or$manifest.installed_complete-ne$true-or
+        [string]$manifest.payload_schema-cne$NativePayloadSchema-or[string]$manifest.runtime_contract_sha256-cne$ExpectedRuntimeContractSha256){Fail 57 'Installed runtime identity is incompatible with this app update.'}
+}
+
+function Assert-NoRetiredRuntime([string]$Root){
+    foreach($relative in $RetiredRoots){
+        if(Test-Path -LiteralPath (Assert-PlainPath $Root $relative)){Fail 58 'Legacy production runtime remains; full native payload required.'}
+    }
 }
 
 function Verify-InstalledRuntime([string]$Root){
     if([string]::IsNullOrWhiteSpace($Root)){Fail 58 'InstallRoot required for installed-runtime verification.'}
-    $full=[IO.Path]::GetFullPath($Root)
-    $pins=Assert-InstalledRuntimeManifest $full
-    Assert-Runtime $full $pins
-    [void](Read-PythonMetadata $full)
+    $full=Assert-InstallRoot $Root
+    Assert-InstalledRuntimeManifest $full
+    [void](Assert-Runtime $full)
+    Assert-NoRetiredRuntime $full
     if(-not(Test-VBCablePresent)){Fail 58 'Required VB-CABLE provider is not present.'}
     exit 0
 }
@@ -206,7 +198,7 @@ function Rollback-Payload([string]$Root,[string]$Backup,[System.Collections.ILis
 
 function Install-Payload([string]$Tar){
     if([string]::IsNullOrWhiteSpace($InstallRoot)){Fail 70 'InstallRoot required.'}
-    $root=[IO.Path]::GetFullPath($InstallRoot)
+    $root=Assert-InstallRoot $InstallRoot
     New-Item -ItemType Directory -Force -Path $root|Out-Null
     Ensure-FreeSpace $root
     $stage=Join-Path $root '.translateit-r3-stage'
@@ -227,42 +219,32 @@ function Install-Payload([string]$Tar){
         $backupCreated=$true
         &$Tar -xf $script:PayloadPath -C $stage
         if($LASTEXITCODE-ne 0){Fail 71 'Payload extraction failed.'}
-        $contract=Get-Content -LiteralPath (Join-Path $stage $PayloadContract) -Raw | ConvertFrom-Json
-        Assert-Contract $contract
-        $nativePins=[string]$contract.native_dll_pins
-        Assert-Runtime $stage $nativePins
+        [void](Assert-Runtime $stage)
 
         # Vendor/system flow precedes runtime replacement; consent stays with Windows.
         $restartRequired=Install-VBCableIfNeeded $stage
-        foreach($relative in $PayloadRoots){
+        foreach($relative in ($PayloadRoots+$RetiredRoots)){
             $source=Join-Path $stage $relative
-            $target=Join-Path $root $relative
+            $target=Assert-PlainPath $root $relative
             $saved=Join-Path $backup $relative
             $state=[pscustomobject]@{relative=$relative;backup_moved=$false;new_moved=$false}
             $states.Add($state)
             New-Item -ItemType Directory -Force -Path(Split-Path $target -Parent),(Split-Path $saved -Parent)|Out-Null
             if(Test-Path -LiteralPath $target){Move-Item -LiteralPath $target -Destination $saved -Force;$state.backup_moved=$true}
-            Move-Item -LiteralPath $source -Destination $target -Force
-            $state.new_moved=$true
+            if($relative-in$PayloadRoots){
+                Move-Item -LiteralPath $source -Destination $target -Force
+                $state.new_moved=$true
+            }
         }
-        Assert-Runtime $root $nativePins
-        $meta=Read-PythonMetadata $root
+        [void](Assert-Runtime $root)
+        Assert-NoRetiredRuntime $root
         $manifest=[ordered]@{
             schema=$ExpectedInstalledRuntimeSchema
             installed_complete=$true
             app_version=$ExpectedAppVersion
             payload_schema=$ExpectedPayloadSchema
             payload_sha256=$ExpectedSha256.ToLowerInvariant()
-            native_dll_pins=$nativePins
-            python=$meta.python
-            torch=$meta.torch
-            transformers=$meta.transformers
-            tokenizers=$meta.tokenizers
-            translation_model='tencent/Hy-MT2-1.8B-GGUF'
-            translation_revision=$NativeMtRevision
-            asr_revision=$NativeAsrRevision
-            voice_evaluation_asr_revision=$AsrRevision
-            voice_revision=$GptRevision
+            runtime_contract_sha256=$ExpectedRuntimeContractSha256
             vb_cable_restart_required=$restartRequired
             vb_cable_uninstall_policy='preserve_system_driver'
             user_data_policy='preserve_app_local_user_data'
@@ -270,7 +252,7 @@ function Install-Payload([string]$Tar){
         }
         # The installed receipt is part of the same transaction, not an
         # in-place write that could leave the old runtime with a new receipt.
-        $manifestPath=Join-Path $root $InstalledManifest
+        $manifestPath=Assert-PlainPath $root $InstalledManifest
         $newManifest=Join-Path $stage $InstalledManifest
         $savedManifest=Join-Path $backup $InstalledManifest
         New-Item -ItemType Directory -Force -Path(Split-Path $newManifest -Parent),(Split-Path $savedManifest -Parent),(Split-Path $manifestPath -Parent)|Out-Null
@@ -307,9 +289,9 @@ function Install-Payload([string]$Tar){
 }
 
 try{
-    # Historical R3 schema v2 describes a Python payload. It cannot establish
-    # the native ORT/TTS/verifier closure or authorize an app-only update.
-    Fail 44 'Native packaging is held: legacy installer and app-only update are disabled.'
+    # Native package source is not release-admitted before reviewed closure
+    # and integrated target acceptance. Keep all installer modes held.
+    Fail 44 'Native packaging is held: native installer and app-only update are disabled.'
     if($Mode-eq'VerifyInstalled'){Verify-InstalledRuntime $InstallRoot}
     $script:PayloadPath=[IO.Path]::GetFullPath($PayloadPath)
     NeedFile $script:PayloadPath 42 'External payload'
@@ -318,7 +300,18 @@ try{
     $tar=Get-TarProgram
     $listing=@(&$tar -tf $script:PayloadPath 2>&1)
     if($LASTEXITCODE-ne 0-or$listing.Count-eq 0){Fail 45 'External payload is not a readable 7z archive.'}
-    Assert-Contract(Read-PayloadContract $tar $script:PayloadPath)
+    $seenEntries=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach($entry in $listing){
+        $relative=([string]$entry).Replace('/','\').TrimEnd([char]92)
+        if($relative-notmatch'^[A-Za-z0-9_.-]+(\\[A-Za-z0-9_.-]+)*$'-or
+            @($relative.Split('\')|Where-Object{$_-in@('.','..')-or$_.EndsWith('.')}).Count-gt 0){Fail 45 'Unsafe archive path.'}
+        $allowed=$false
+        foreach($prefix in $PayloadRoots){if($relative-ceq$prefix-or$relative.StartsWith($prefix+'\',[StringComparison]::Ordinal)){$allowed=$true;break}}
+        if(-not$allowed-or-not$seenEntries.Add($relative)){Fail 45 'Unexpected or duplicate archive entry.'}
+    }
+    if(-not$seenEntries.Contains($PayloadContract)){Fail 45 'Native runtime contract missing from archive.'}
+    # The signed Setup already verified the exact archive digest. Full file
+    # and runtime-contract verification is repeated after extraction.
     if($Mode-eq'Verify'){exit 0}
     Install-Payload $tar
 }catch{

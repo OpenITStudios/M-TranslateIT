@@ -2,8 +2,8 @@
 """Build TranslateIT's version-bound R3 external offline payload.
 
 Build-time only: no runtime download/bootstrap behavior. The script packages the
-already staged private runtime into one 7z/LZMA2 archive, validates that Windows
-bsdtar can read it, binds the payload to the application/dependency/model identity,
+already staged native runtime into one 7z/LZMA2 archive, validates that Windows
+bsdtar can read it, binds the payload to the verified runtime file identity,
 and renders the trusted NSIS hook consumed by the Tauri build.
 """
 
@@ -19,47 +19,23 @@ import subprocess
 import sys
 from pathlib import Path
 
-PAYLOAD_SCHEMA = "translateit.r3.external_payload.v2"
-INSTALLED_RUNTIME_SCHEMA = "translateit.installed_runtime.v2"
+PAYLOAD_SCHEMA = "translateit.r3.external_payload.v3"
+INSTALLED_RUNTIME_SCHEMA = "translateit.installed_runtime.v3"
 PAYLOAD_FILENAME = "TranslateIT-Payload.7z"
-PAYLOAD_CONTRACT = (
-    "EngineData/Backend/LocalWorker/PythonRuntime/TRANSLATEIT_PAYLOAD_CONTRACT.json"
-)
-PYTHON_VERSION = "3.12.10"
-TORCH_VERSION = "2.14.1"
-TRANSFORMERS_VERSION = "4.57.6"
-TOKENIZERS_VERSION = "0.22.2"
-ASR_REVISION = "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf"
-GPT_SOVITS_REVISION = "d523079fc05d9a8028d6085bffe4a2757c32abb6"
+MODEL_MANIFEST = "EngineData/Backend/LocalWorker/WorkerRuntime/model_manifest.json"
+ASSETS = "EngineData/Backend/RuntimeAssets/"
+PAYLOAD_CONTRACT = ASSETS + "NativeOrt/TRANSLATEIT_PAYLOAD_CONTRACT.json"
 
-PAYLOAD_ROOTS = (
-    "EngineData/Backend/LocalWorker/PythonRuntime",
-    "EngineData/Backend/RuntimeAssets/ASR/ModelData",
-    "EngineData/Backend/RuntimeAssets/Translation/ModelData",
-    "EngineData/Backend/RuntimeAssets/NativeCuda",
-    "EngineData/Backend/RuntimeAssets/Voice/BuiltInVoices",
-    "EngineData/Backend/RuntimeAssets/Voice/GPTSoVITS",
-    "EngineData/Backend/RuntimeAssets/AudioProvider/VBCABLE/Package",
-)
-REQUIRED_FILES = {
-    "EngineData/Backend/RuntimeAssets/NativeCuda/bin/translateit_native_cuda.dll": None,
-    "EngineData/Backend/RuntimeAssets/NativeCuda/THIRD_PARTY_NOTICES.txt": None,
-    "EngineData/Backend/RuntimeAssets/ASR/ModelData/qwen3-asr-1.7b/.translateit_model_revision": "3b2c29585c2180452ccb14d3b6b58127f352400d",
-    "EngineData/Backend/RuntimeAssets/ASR/ModelData/qwen3-asr-1.7b/Qwen3-ASR-1.7B-Q8_0.gguf": None,
-    "EngineData/Backend/RuntimeAssets/ASR/ModelData/qwen3-asr-1.7b/mmproj-Qwen3-ASR-1.7B-Q8_0.gguf": None,
-    "EngineData/Backend/RuntimeAssets/Translation/ModelData/hy-mt2-1.8b/.translateit_model_revision": "a0c709d9fac510f2c807aa3af52872340dc37a4a",
-    "EngineData/Backend/RuntimeAssets/Translation/ModelData/hy-mt2-1.8b/Hy-MT2-1.8B-Q6_K.gguf": None,
-    "EngineData/Backend/LocalWorker/PythonRuntime/python.exe": None,
-    "EngineData/Backend/RuntimeAssets/ASR/ModelData/faster-whisper-large-v3-turbo/.translateit_model_revision": ASR_REVISION,
-    "EngineData/Backend/RuntimeAssets/Voice/BuiltInVoices/MaleVoice/reference.wav": None,
-    "EngineData/Backend/RuntimeAssets/Voice/BuiltInVoices/MaleVoice/REFERENCE_SOURCE.txt": None,
-    "EngineData/Backend/RuntimeAssets/Voice/BuiltInVoices/FemaleVoice/reference.wav": None,
-    "EngineData/Backend/RuntimeAssets/Voice/BuiltInVoices/FemaleVoice/REFERENCE_SOURCE.txt": None,
-    "EngineData/Backend/RuntimeAssets/Voice/BuiltInVoices/SOURCES.json": None,
-    "EngineData/Backend/RuntimeAssets/Voice/GPTSoVITS/Source/TRANSLATEIT_GPTSOVITS_REVISION.txt": GPT_SOVITS_REVISION,
-    "EngineData/Backend/RuntimeAssets/AudioProvider/VBCABLE/Package/VBCABLE_Setup_x64.exe": None,
-    "EngineData/Backend/RuntimeAssets/AudioProvider/VBCABLE/Package/VBCABLE_Setup.exe": None,
-}
+
+def load_native_inventory(repo_root: Path) -> dict:
+    manifest = json.loads((repo_root / MODEL_MANIFEST).read_text(encoding="utf-8"))
+    package = manifest["native_payload"]
+    if (manifest["schema"] != "translateit.local_model_inventory.v2"
+            or package["schema"] != PAYLOAD_SCHEMA
+            or package["installed_schema"] != INSTALLED_RUNTIME_SCHEMA
+            or package["contract_path"] != PAYLOAD_CONTRACT):
+        raise RuntimeError("native payload source identity mismatch")
+    return manifest
 
 
 def require_file(path: Path, label: str) -> None:
@@ -79,15 +55,6 @@ def tree_bytes(root: Path) -> int:
     return sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
 
 
-def direct_child_bytes(root: Path, limit: int = 20) -> dict[str, int]:
-    rows: list[tuple[str, int]] = []
-    for path in root.iterdir():
-        size = tree_bytes(path) if path.is_dir() else path.stat().st_size
-        rows.append((path.name, size))
-    rows.sort(key=lambda item: (-item[1], item[0].lower()))
-    return dict(rows[:limit])
-
-
 def app_version(repo_root: Path) -> str:
     app_root = repo_root / "EngineData/Frontend/RustApp"
     package = json.loads((app_root / "package.json").read_text(encoding="utf-8"))
@@ -101,17 +68,6 @@ def app_version(repo_root: Path) -> str:
     return package_version
 
 
-def validate_staged_inputs(repo_root: Path) -> None:
-    for relative in PAYLOAD_ROOTS:
-        if not (repo_root / relative).is_dir():
-            raise RuntimeError(f"missing payload root: {relative}")
-    for relative, expected in REQUIRED_FILES.items():
-        path = repo_root / relative
-        require_file(path, relative)
-        if expected is not None and path.read_text(encoding="utf-8").strip() != expected:
-            raise RuntimeError(f"payload marker mismatch: {relative}")
-
-
 def is_filesystem_indirection(path: Path) -> bool:
     if path.is_symlink():
         return True
@@ -119,9 +75,28 @@ def is_filesystem_indirection(path: Path) -> bool:
     return bool(is_junction and is_junction())
 
 
-def validate_no_filesystem_indirection(repo_root: Path) -> None:
-    for relative in PAYLOAD_ROOTS:
+def safe_relative_path(relative: str) -> bool:
+    return bool(relative) and all(
+        re.fullmatch(r"[A-Za-z0-9_.-]+", part) and part not in (".", "..")
+        and not part.endswith(".")
+        for part in relative.split("/")
+    )
+
+
+def validate_no_filesystem_indirection(repo_root: Path, roots: list[str]) -> None:
+    if len(roots) != len(set(roots)):
+        raise RuntimeError("duplicate native payload root")
+    for relative in roots:
+        if not safe_relative_path(relative) or not relative.startswith(ASSETS):
+            raise RuntimeError("invalid native payload root")
         root = repo_root / relative
+        if not root.is_dir():
+            raise RuntimeError(f"missing payload root: {relative}")
+        for parent in (root, *root.parents):
+            if parent == repo_root:
+                break
+            if is_filesystem_indirection(parent):
+                raise RuntimeError(f"payload filesystem indirection is forbidden: {parent}")
         if is_filesystem_indirection(root):
             raise RuntimeError(f"payload filesystem indirection is forbidden: {relative}")
         for path in root.rglob("*"):
@@ -149,45 +124,104 @@ def validate_native_inputs(repo_root: Path, pins: str) -> dict[str, str]:
     actual = {p.name: p for p in directory.iterdir()}
     if set(actual) != set(expected):
         raise RuntimeError("native DLL set differs from reviewed pins")
-    for name, digest in expected.items():
+    for name in expected:
         path = actual[name]
         require_file(path, name)
-        if path.stat().st_size > 1024 * 1024 * 1024 or sha256_file(path) != digest:
-            raise RuntimeError(f"native DLL identity mismatch: {name}")
+        if path.stat().st_size > 1024 * 1024 * 1024:
+            raise RuntimeError(f"native DLL exceeds reviewed bound: {name}")
+    # The file-contract recorder performs the hash check once below.
     return expected
 
 
-def write_payload_contract(repo_root: Path, version: str, native_pins: str) -> Path:
+def native_runtime_contract(repo_root: Path, manifest: dict, native_pins: str) -> dict:
+    # Read-only verification; nothing becomes a reviewed pin merely by being staged.
+    package = manifest["native_payload"]
+    roots = package["roots"]
+    verifier = next((model for model in manifest["models"]
+                     if model["model_id"] == "eres2netv2-forward3-f32"), {})
+    digest = verifier.get("artifact_sha256")
+    size = verifier.get("artifact_size_bytes")
+    if (verifier.get("pin_status") != "reviewed_export" or not isinstance(digest, str)
+            or not re.fullmatch(r"[a-f0-9]{64}", digest) or type(size) is not int
+            or not 0 < size <= 512 * 1024 * 1024
+            or digest != os.environ.get("TRANSLATEIT_SPEAKER_ONNX_SHA256")
+            or str(size) != os.environ.get("TRANSLATEIT_SPEAKER_ONNX_BYTES")):
+        raise RuntimeError("reviewed speaker verifier export and matching build pins required")
+    validate_no_filesystem_indirection(repo_root, roots)
+    files: dict[str, dict] = {}
+
+    def record(relative: str, expected: str | None = None, size: int | None = None) -> None:
+        if (not safe_relative_path(relative) or relative in files
+                or not any(relative.startswith(root + "/") for root in roots)):
+            raise RuntimeError(f"invalid native payload file: {relative}")
+        path = repo_root / relative
+        require_file(path, relative)
+        actual_size = path.stat().st_size
+        actual = sha256_file(path)
+        if (expected is not None and actual != expected) or (size is not None and actual_size != size):
+            raise RuntimeError(f"native artifact identity mismatch: {relative}")
+        files[relative] = {"sha256": actual, "bytes": actual_size}
+
+    ids = {"qwen3-asr-1.7b-q8_0", "hy-mt2-1.8b-q6_k",
+           "zonos3-mini-q8_0", "eres2netv2-forward3-f32"}
+    if len(manifest["models"]) != len(ids) or {m["model_id"] for m in manifest["models"] if m["required"]} != ids:
+        raise RuntimeError("native model inventory mismatch")
+    for model in manifest["models"]:
+        target = model["expected_path"]
+        if model["source_type"] == "huggingface":
+            if not safe_relative_path(target) or not any(target.startswith(root + "/") for root in roots):
+                raise RuntimeError("invalid native model path")
+            hashes = model["artifact_hashes"]
+            if set(hashes) != set(model["download_allow_patterns"]):
+                raise RuntimeError("native model file closure mismatch")
+            for name, digest in hashes.items():
+                if not re.fullmatch(r"[A-Za-z0-9_.-]+", name) or ".." in name or not re.fullmatch(r"[a-f0-9]{64}", digest):
+                    raise RuntimeError("invalid model artifact pin")
+                record(f"{target}/{name}", digest, model.get("artifact_bytes", {}).get(name))
+            marker = target + "/.translateit_model_revision"
+            if (repo_root / marker).read_text(encoding="utf-8").strip() != model["revision"]:
+                raise RuntimeError("native model revision mismatch")
+            record(marker)
+        elif model is verifier and model["source_type"] == "offline_export":
+            record(target, verifier["artifact_sha256"], verifier["artifact_size_bytes"])
+        else:
+            raise RuntimeError("unexpected native model acquisition type")
+    for name, digest in validate_native_inputs(repo_root, native_pins).items():
+        record(ASSETS + "NativeCuda/bin/" + name, digest)
+    for name, pin in package["ort_files"].items():
+        record(ASSETS + "NativeOrt/" + name, pin["sha256"], pin["bytes"])
+    for name, digest in package["provider_files"].items():
+        record(ASSETS + "AudioProvider/VBCABLE/Package/" + name, digest)
+    for directory in ("NativeCuda", "NativeOrt"):
+        record(ASSETS + directory + "/THIRD_PARTY_NOTICES.txt")
+    builtins = ASSETS + "Voice/BuiltInVoices/"
+    sources = json.loads((repo_root / (builtins + "SOURCES.json")).read_text(encoding="utf-8-sig"))
+    voices = sources["voices"]
+    if (sources["schema"] != "translateit.builtin_voice_sources.v1" or len(voices) != 2
+            or {voice["voice_id"] for voice in voices} != {"MaleVoice", "FemaleVoice"}):
+        raise RuntimeError("built-in voice source inventory mismatch")
+    record(builtins + "SOURCES.json")
+    for voice in voices:
+        if voice["license"] != "CC-BY-4.0":
+            raise RuntimeError("built-in voice license mismatch")
+        record(builtins + voice["voice_id"] + "/reference.wav", voice["wav_sha256"])
+        record(builtins + voice["voice_id"] + "/REFERENCE_SOURCE.txt")
+    actual = {path.relative_to(repo_root).as_posix()
+              for root in roots for path in (repo_root / root).rglob("*") if path.is_file()}
+    actual.discard(PAYLOAD_CONTRACT)
+    if actual != set(files):
+        raise RuntimeError("unexpected or missing native payload files")
+    return {"schema": PAYLOAD_SCHEMA, "installed_schema": INSTALLED_RUNTIME_SCHEMA,
+            "roots": roots, "files": files,
+            "user_data_policy": "preserve_app_local_user_data",
+            "driver_policy": "preserve_system_driver"}
+
+
+def write_payload_contract(repo_root: Path, body: dict) -> Path:
+    # Exclude app version and timestamps: identical runtime bytes remain
+    # compatible with a later app-only update. Setup signs this exact digest.
     path = repo_root / PAYLOAD_CONTRACT
-    path.parent.mkdir(parents=True, exist_ok=True)
-    body = {
-        "schema": PAYLOAD_SCHEMA,
-        "app_version": version,
-        "payload_file": PAYLOAD_FILENAME,
-        "python_version": PYTHON_VERSION,
-        "torch_version": TORCH_VERSION,
-        "transformers_version": TRANSFORMERS_VERSION,
-        "tokenizers_version": TOKENIZERS_VERSION,
-        "native_dll_pins": native_pins,
-        "revisions": {
-            "qwen3_asr": "3b2c29585c2180452ccb14d3b6b58127f352400d",
-            "hy_mt2": "a0c709d9fac510f2c807aa3af52872340dc37a4a",
-            "faster_whisper": ASR_REVISION,
-            "gpt_sovits": GPT_SOVITS_REVISION,
-        },
-        "vb_cable": {
-            "setup_owned_install": True,
-            "install_args": ["-i", "-h"],
-            "windows_driver_consent_may_appear": True,
-            "restart_required_after_new_install": True,
-            "uninstall_policy": "preserve_system_driver",
-        },
-        "user_data_policy": "preserve_app_local_user_data",
-        "network_download": False,
-        "manual_extraction": False,
-        "second_user_facing_installer": False,
-    }
-    path.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
     return path
 
 
@@ -225,7 +259,8 @@ def find_tar() -> str:
     raise RuntimeError("Windows tar/bsdtar is required to validate the generated R3 payload.")
 
 
-def create_payload(repo_root: Path, output: Path, seven_zip: str, tar_program: str) -> list[str]:
+def create_payload(repo_root: Path, output: Path, seven_zip: str, tar_program: str,
+                   roots: list[str], files: dict) -> list[str]:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.unlink(missing_ok=True)
     subprocess.run(
@@ -239,7 +274,7 @@ def create_payload(repo_root: Path, output: Path, seven_zip: str, tar_program: s
             "-mmt=on",
             "-y",
             str(output),
-            *PAYLOAD_ROOTS,
+            *roots,
         ],
         cwd=repo_root,
         check=True,
@@ -257,16 +292,18 @@ def create_payload(repo_root: Path, output: Path, seven_zip: str, tar_program: s
     if not entries:
         raise RuntimeError("payload archive listing is empty")
 
-    exact_roots = set(PAYLOAD_ROOTS)
-    prefixes = tuple(root.rstrip("/") + "/" for root in PAYLOAD_ROOTS)
+    exact_roots = set(roots)
+    prefixes = tuple(root.rstrip("/") + "/" for root in roots)
     normalized_entries = {entry.rstrip("/") for entry in entries}
+    if len(normalized_entries) != len(entries) or len({entry.lower() for entry in normalized_entries}) != len(entries):
+        raise RuntimeError("duplicate payload archive entries")
     for entry in entries:
         normalized = entry.rstrip("/")
-        if normalized.startswith("/") or "../" in f"/{normalized}/":
+        if not safe_relative_path(normalized):
             raise RuntimeError(f"unsafe payload archive entry: {entry}")
         if normalized not in exact_roots and not normalized.startswith(prefixes):
             raise RuntimeError(f"payload entry escapes approved roots: {entry}")
-    for required in (*REQUIRED_FILES, PAYLOAD_CONTRACT):
+    for required in (*files, PAYLOAD_CONTRACT):
         if required.replace("\\", "/") not in normalized_entries:
             raise RuntimeError(f"required payload entry absent from archive: {required}")
     return entries
@@ -279,7 +316,7 @@ def render_hook(
     version: str,
     digest: str,
     expanded_bytes: int,
-    native_pins: str,
+    contract_sha256: str,
 ) -> None:
     rendered = template.read_text(encoding="utf-8")
     replacements = {
@@ -288,7 +325,7 @@ def render_hook(
         "@@APP_VERSION@@": version,
         "@@PAYLOAD_FILENAME@@": PAYLOAD_FILENAME,
         "@@PAYLOAD_SHA256@@": digest,
-        "@@NATIVE_DLL_PINS_SHA256@@": hashlib.sha256(native_pins.encode("ascii")).hexdigest(),
+        "@@RUNTIME_CONTRACT_SHA256@@": contract_sha256,
         "@@PAYLOAD_EXPANDED_BYTES@@": str(expanded_bytes),
         "@@INSTALLER_HELPER_SOURCE@@": str(helper.resolve()).replace("/", "\\"),
     }
@@ -309,9 +346,8 @@ def write_evidence(
     digest: str,
     expanded_bytes: int,
     root_bytes: dict[str, int],
-    python_runtime_top_level_bytes: dict[str, int],
-    torch_top_level_bytes: dict[str, int],
-    torch_lib_largest_files: dict[str, int],
+    roots: list[str],
+    contract_sha256: str,
     entries: list[str],
     seven_zip: str,
     tar_program: str,
@@ -330,9 +366,7 @@ def write_evidence(
         if expanded_bytes
         else None,
         "payload_root_bytes": root_bytes,
-        "python_runtime_top_level_bytes": python_runtime_top_level_bytes,
-        "torch_top_level_bytes": torch_top_level_bytes,
-        "torch_lib_largest_files": torch_lib_largest_files,
+        "runtime_contract_sha256": contract_sha256,
         "archive_format": "7z",
         "compression": "LZMA2",
         "compression_level": 9,
@@ -340,7 +374,7 @@ def write_evidence(
         "target_extract_program": "Windows tar.exe / bsdtar",
         "validation_tar_program": tar_program,
         "entry_count": len(entries),
-        "payload_roots": list(PAYLOAD_ROOTS),
+        "payload_roots": roots,
         "user_facing_files": ["TranslateIT-Setup.exe", PAYLOAD_FILENAME],
         "installer_mode": "perMachine",
         "network_download": False,
@@ -365,87 +399,31 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    raise RuntimeError("Native packaging is held: legacy payload builder cannot emit a release.")
+    # The implementation below remains source-only until reviewed artifacts,
+    # provenance, and integrated target acceptance permit release.
+    raise RuntimeError("Native packaging is held: native payload builder is not release-admitted.")
     repo_root = args.repo_root.resolve()
     if not (repo_root / "AGENTS.md").is_file():
-        raise RuntimeError(f"invalid TranslateIT repository root: {repo_root}")
+        raise RuntimeError("invalid TranslateIT repository root")
     require_file(args.hook_template, "R3 NSIS hook template")
     require_file(args.installer_helper, "R3 installer helper")
-
     version = app_version(repo_root)
-    validate_staged_inputs(repo_root)
-    validate_no_filesystem_indirection(repo_root)
-    # Require an exact staged model subtree closure even when the builder
-    # is called directly rather than through the normal preflight.
-    assets = repo_root / "EngineData/Backend/RuntimeAssets"
-    if {p.name for p in (assets / "ASR/ModelData").iterdir()} != {"qwen3-asr-1.7b", "faster-whisper-large-v3-turbo"}:
-        raise RuntimeError("unexpected ASR model subtree")
-    if {p.name for p in (assets / "Translation/ModelData").iterdir()} != {"hy-mt2-1.8b"}:
-        raise RuntimeError("unexpected translation model subtree")
+    manifest = load_native_inventory(repo_root)
     native_pins = os.environ.get("TRANSLATEIT_NATIVE_DLL_PINS", "")
-    native_files = validate_native_inputs(repo_root, native_pins)
-    write_payload_contract(repo_root, version, native_pins)
-    root_bytes = {root: tree_bytes(repo_root / root) for root in PAYLOAD_ROOTS}
-    python_runtime_root = repo_root / "EngineData/Backend/LocalWorker/PythonRuntime"
-    python_runtime_top_level_bytes = direct_child_bytes(python_runtime_root)
-    torch_root = python_runtime_root / "torch"
-    torch_top_level_bytes = direct_child_bytes(torch_root) if torch_root.is_dir() else {}
-    torch_lib_root = torch_root / "lib"
-    torch_lib_largest_files = (
-        direct_child_bytes(torch_lib_root, limit=30) if torch_lib_root.is_dir() else {}
-    )
+    body = native_runtime_contract(repo_root, manifest, native_pins)
+    roots = body["roots"]
+    contract_sha256 = sha256_file(write_payload_contract(repo_root, body))
+    root_bytes = {root: tree_bytes(repo_root / root) for root in roots}
     expanded_bytes = sum(root_bytes.values())
-    seven_zip = find_7zip()
-    tar_program = find_tar()
+    seven_zip, tar_program = find_7zip(), find_tar()
     payload = args.output.resolve()
-    entries = create_payload(repo_root, payload, seven_zip, tar_program)
-    for name in native_files:
-        if f"EngineData/Backend/RuntimeAssets/NativeCuda/bin/{name}" not in entries:
-            raise RuntimeError(f"native DLL absent from archive: {name}")
+    entries = create_payload(repo_root, payload, seven_zip, tar_program, roots, body["files"])
     digest = sha256_file(payload)
-    render_hook(
-        args.hook_template.resolve(),
-        args.generated_hook.resolve(),
-        args.installer_helper.resolve(),
-        version,
-        digest,
-        expanded_bytes,
-        native_pins,
-    )
-    write_evidence(
-        args.evidence.resolve(),
-        payload,
-        version,
-        digest,
-        expanded_bytes,
-        root_bytes,
-        python_runtime_top_level_bytes,
-        torch_top_level_bytes,
-        torch_lib_largest_files,
-        entries,
-        seven_zip,
-        tar_program,
-        native_pins,
-    )
-    print(f"[r3-payload] app_version={version}")
-    print(f"[r3-payload] payload={payload}")
-    print(f"[r3-payload] sha256={digest}")
-    print(f"[r3-payload] expanded_bytes={expanded_bytes}")
-    print(
-        "[r3-payload] payload_root_bytes="
-        + json.dumps(root_bytes, sort_keys=True, separators=(",", ":"))
-    )
-    print(
-        "[r3-payload] python_runtime_top_level_bytes="
-        + json.dumps(python_runtime_top_level_bytes, sort_keys=False, separators=(",", ":"))
-    )
-    print(
-        f"[r3-payload] compression_ratio="
-        f"{(payload.stat().st_size / expanded_bytes):.6f}"
-        if expanded_bytes
-        else "[r3-payload] compression_ratio=unavailable"
-    )
-    print(f"[r3-payload] entries={len(entries)}")
+    render_hook(args.hook_template.resolve(), args.generated_hook.resolve(),
+                args.installer_helper.resolve(), version, digest, expanded_bytes, contract_sha256)
+    write_evidence(args.evidence.resolve(), payload, version, digest, expanded_bytes,
+                   root_bytes, roots, contract_sha256, entries, seven_zip, tar_program, native_pins)
+    print(f"[r3-payload] app_version={version} sha256={digest} runtime_contract_sha256={contract_sha256}")
     return 0
 
 
