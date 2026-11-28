@@ -6,6 +6,7 @@ use std::fs;
 use std::io::Read;
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::rc::Rc;
+use sha2::{Digest, Sha256};
 
 const RATE: usize = 32_000;
 pub(super) const SYNTHESIS_RATE: usize = 44_100;
@@ -76,7 +77,7 @@ fn signal_rank(line_id: u32, samples: &[f32]) -> Option<SignalRank> {
         duration_delta: (n as u64 * 1000 / RATE as u64).abs_diff(5000), line_id })
 }
 
-fn read_reference(path: &std::path::Path) -> Result<Vec<f32>, String> {
+fn read_reference(path: &std::path::Path) -> Result<(Vec<f32>, [u8; 32]), String> {
     let file = fs::OpenOptions::new().read(true).share_mode(1).custom_flags(0x00200000)
         .open(path).map_err(|_| "preview_reference_unavailable")?;
     let meta = file.metadata().map_err(|_| "preview_reference_unavailable")?;
@@ -88,10 +89,18 @@ fn read_reference(path: &std::path::Path) -> Result<Vec<f32>, String> {
     file.take(MAX_REFERENCE_BYTES+1).read_to_end(&mut bytes)
         .map_err(|_| "preview_reference_unavailable")?;
     if bytes.len() as u64 != meta.len() { return Err("preview_reference_invalid".into()); }
-    decode_native_voice_source(&bytes)
+    let samples = decode_native_voice_source(&bytes)?;
+    Ok((samples, Sha256::digest(&bytes).into()))
 }
 
-struct Reference { rank: SignalRank, samples: Vec<f32> }
+#[derive(Debug)]
+pub(super) struct SelectedReference {
+    pub(super) line_id: u32,
+    pub(super) wav_sha256: [u8; 32],
+    pub(super) samples: Vec<f32>,
+}
+
+struct Reference { rank: SignalRank, selected: SelectedReference }
 
 // Two bounded rankings are necessary: quiet-edge energy is comparable only
 // if every eligible take has a measurable edge. Retain at most 2 * limit
@@ -116,10 +125,10 @@ impl Shortlist {
         }
     }
 
-    fn push(&mut self, line_id: u32, samples: Vec<f32>) {
+    fn push(&mut self, line_id: u32, samples: Vec<f32>, wav_sha256: [u8; 32]) {
         let Some(rank) = signal_rank(line_id, &samples) else { return; };
         self.all_edges &= rank.edge.is_some();
-        let candidate = Rc::new(Reference { rank, samples });
+        let candidate = Rc::new(Reference { rank, selected: SelectedReference { line_id, wav_sha256, samples } });
         Self::keep_best(&mut self.best, &candidate, self.limit, false);
         // Once any eligible reference lacks an edge, that ranking can never
         // win. Release it immediately, including candidates unique to it.
@@ -130,33 +139,33 @@ impl Shortlist {
         }
     }
 
-    fn finish(self) -> Result<Vec<(u32, Vec<f32>)>, String> {
+    fn finish(self) -> Result<Vec<SelectedReference>, String> {
         let Self { best, best_edge, all_edges, .. } = self;
         let selected = if all_edges { drop(best); best_edge } else { drop(best_edge); best };
         if selected.is_empty() { return Err("preview_reference_unusable".into()); }
         selected.into_iter().map(|candidate| {
-            let Reference { rank, samples } = Rc::try_unwrap(candidate)
-                .map_err(|_| "preview_reference_candidate_invalid".to_string())?;
-            Ok((rank.line_id, samples))
+            Rc::try_unwrap(candidate).map(|reference| reference.selected)
+                .map_err(|_| "preview_reference_candidate_invalid".to_string())
         }).collect()
     }
 }
 
 /// Select one to three accepted takes without training or retaining the
 /// whole dataset in memory. Return the original line identity and owned
-/// canonical 32 kHz PCM; only chosen references need resampling for TTS.
+/// canonical 32 kHz PCM and SHA-256 of the exact bytes decoded; only chosen
+/// references need resampling for TTS.
 /// Signal ranking is not a speaker-similarity or approval decision.
 pub(super) fn select_references(
     accepted: Vec<AcceptedGuidedRecording>, limit: usize, active: impl Fn() -> bool,
-) -> Result<Vec<(u32, Vec<f32>)>, String> {
+) -> Result<Vec<SelectedReference>, String> {
     if accepted.is_empty() || accepted.len() > 128 || !(1..=3).contains(&limit) {
         return Err("preview_reference_candidate_invalid".into());
     }
     let mut shortlist = Shortlist::new(limit);
     for take in accepted {
         if !active() { return Err("preview_cancelled_or_timed_out".into()); }
-        let Ok(samples) = read_reference(&take.path) else { continue; };
-        shortlist.push(take.line_id, samples);
+        let Ok((samples, wav_sha256)) = read_reference(&take.path) else { continue; };
+        shortlist.push(take.line_id, samples, wav_sha256);
     }
     if !active() { return Err("preview_cancelled_or_timed_out".into()); }
     shortlist.finish()
@@ -199,12 +208,14 @@ mod tests {
         let mut one = Shortlist::new(1);
         let mut three = Shortlist::new(3);
         for (id, seconds) in [(4, 6), (3, 5), (1, 5), (2, 5), (5, 4)] {
-            one.push(id, clean(RATE, seconds));
-            three.push(id, clean(RATE, seconds));
+            one.push(id, clean(RATE, seconds), [id as u8; 32]);
+            three.push(id, clean(RATE, seconds), [id as u8; 32]);
             assert!(three.best.len() <= 3 && three.best_edge.len() <= 3);
         }
-        assert_eq!(one.finish().unwrap()[0].0, 1);
-        assert_eq!(three.finish().unwrap().into_iter().map(|(id, _)| id).collect::<Vec<_>>(), vec![1, 2, 3]);
+        let winner = one.finish().unwrap();
+        assert_eq!(winner[0].line_id, 1);
+        assert_eq!(winner[0].wav_sha256, [1; 32]);
+        assert_eq!(three.finish().unwrap().into_iter().map(|reference| reference.line_id).collect::<Vec<_>>(), vec![1, 2, 3]);
     }
 
     #[test]
@@ -212,14 +223,14 @@ mod tests {
         let mut shortlist = Shortlist::new(3);
         let mut edge = clean(RATE, 5);
         edge[..RATE / 5].fill(0.0);
-        shortlist.push(1, edge);
+        shortlist.push(1, edge, [1; 32]);
         assert!(shortlist.all_edges && !shortlist.best_edge.is_empty());
         // A rejected take must not affect comparability.
-        shortlist.push(9, vec![0.0; RATE * 5]);
+        shortlist.push(9, vec![0.0; RATE * 5], [9; 32]);
         assert!(shortlist.all_edges);
-        shortlist.push(2, clean(RATE, 5));
+        shortlist.push(2, clean(RATE, 5), [2; 32]);
         assert!(!shortlist.all_edges && shortlist.best_edge.is_empty());
-        assert_eq!(shortlist.finish().unwrap().into_iter().map(|(id, _)| id).collect::<Vec<_>>(), vec![2, 1]);
+        assert_eq!(shortlist.finish().unwrap().into_iter().map(|reference| reference.line_id).collect::<Vec<_>>(), vec![2, 1]);
     }
 
     #[test]

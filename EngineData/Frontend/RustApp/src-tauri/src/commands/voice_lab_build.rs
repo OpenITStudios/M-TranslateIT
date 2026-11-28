@@ -40,6 +40,8 @@ use super::voice_lab_recording::{
 mod evaluation;
 #[cfg(windows)]
 mod native_speaker;
+#[cfg(windows)]
+mod native_evaluation;
 mod phase;
 mod receipts;
 mod process_owner;

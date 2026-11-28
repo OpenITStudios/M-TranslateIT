@@ -32,6 +32,8 @@ pub mod voice_lab_recording;
 pub mod voice_lab_preview;
 #[cfg(windows)]
 mod my_voice_reference;
+#[cfg(windows)]
+mod my_voice_runtime;
 
 #[cfg(test)]
 mod helper_bridge_contract_tests;

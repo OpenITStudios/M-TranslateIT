@@ -21,6 +21,8 @@ This folder contains the Tauri command boundary for the current Meeting / Text /
 
 - `my_voice_reference.rs` — shared Windows-native reference eligibility/ranking (one preview or up to three evaluation candidates) and gross synthesis checks. It owns no inference, profile mutation or approval; native Quick Preview uses the existing runtime.
 
+- `my_voice_runtime.rs` — one exclusive native voice-operation scope shared by Quick Preview and the source-only `voice_lab_build/native_evaluation.rs` core; no independent model owner or approval path.
+
 Prefer names that describe the responsibility directly. New product-facing or semantic source must use **My Voice** (`MyVoice`, `myVoice`, or `my_voice` according to language convention). Do not introduce new `VoiceLab` product terminology.
 
 Existing `voice_lab` command names, state/error identifiers, and on-disk storage paths may remain only where changing them would require an explicit compatibility migration. Product-facing bridges must translate any legacy display copy to **My Voice** without rewriting those machine-facing identifiers.

@@ -109,7 +109,7 @@ pub(super) fn held_out_wavs_intact(
 pub(super) const EVALUATION_SELECTION_METHOD: &str =
     "held_out_artifacts_then_mean_wer_then_max_wer_then_similarity_tiebreak";
 
-const HELD_OUT_LINES: &[(u32, &str)] = &[
+pub(super) const HELD_OUT_LINES: &[(u32, &str)] = &[
     (1001, "Please confirm the final schedule before we send the update to the client."),
     (1002, "The system should remain clear and natural during a longer technical discussion."),
     (1003, "I can review the latest results tomorrow morning and share my decision with the team."),
