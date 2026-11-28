@@ -417,3 +417,228 @@ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
      mtmd_helper_gen_audio_inp inp{};
      inp.top_k    = 50;
      inp.top_p    = 1.0f;
+diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
+--- a/tools/mtmd/mtmd-audio.cpp
++++ b/tools/mtmd/mtmd-audio.cpp
+@@ -353,12 +353,13 @@
+ 
+     // Padding
+     std::vector<float> samples_padded;
+     if (params.no_padding) {
+-        // no padding, use samples as-is
+-        samples_padded = std::vector<float>(samples, samples + n_samples);
+-        samples = samples_padded.data();
+-        n_samples = samples_padded.size();
++        // Borrow already prepared PCM unless preemphasis needs mutable storage.
++        if (params.preemph) {
++            samples_padded.assign(samples, samples + n_samples);
++            samples = samples_padded.data();
++        }
+     } else if (params.center_padding) {
+         const auto pad_amount = frame_size / 2;
+         samples_padded = std::vector<float>(n_samples + 2 * pad_amount, 0);
+         std::copy(samples, samples + n_samples, samples_padded.data() + pad_amount);
+@@ -428,7 +429,7 @@
+     }
+     out.data.resize(total_size);
+ 
+-    if (!shape_only && !mtmd_audio_log_mel(params, samples_padded.data(), hann, out.n_len, out.data.data())) {
++    if (!shape_only && !mtmd_audio_log_mel(params, samples, hann, out.n_len, out.data.data())) {
+         return false;
+     }
+ 
+@@ -603,82 +604,97 @@
+     mel_config.cache            = &cache;
+ }
+ 
+ bool mtmd_audio_preprocessor_qwen3a::process(const float *                 samples,
+                                               size_t                        n_samples,
+                                               std::vector<mtmd_audio_mel> & output,
+                                               bool                          shape_only) const {
+     if (n_samples == 0) {
+         return false;
+     }
+ 
+     GGML_ASSERT(!cache.sin_vals.empty());
+     GGML_ASSERT(!cache.cos_vals.empty());
+     GGML_ASSERT(!cache.filters.data.empty());
+ 
+     // Reflection-pad n_fft/2 samples at each end, matching WhisperFeatureExtractor center=True
+     const int pad = hparams.audio_n_fft / 2; // = 200
+ 
+-    std::vector<float> padded(n_samples + 2 * pad, 0.0f);
+-    // Reflect start: padded[0..pad-1] = samples[pad..1] (reversed)
+-    for (int i = 0; i < pad; i++) {
+-        int src = pad - i; // samples[pad], samples[pad-1], ..., samples[1]
+-        padded[i] = (src < (int)n_samples) ? samples[src] : 0.0f;
+-    }
+-    std::copy(samples, samples + n_samples, padded.begin() + pad);
+-    // Reflect end: padded[n+pad..n+2*pad-1] = samples[n-2..n-pad-1] (reversed)
+-    for (int i = 0; i < pad; i++) {
+-        int src = (int)n_samples - 2 - i; // samples[n-2], samples[n-3], ...
+-        padded[n_samples + pad + i] = (src >= 0) ? samples[src] : 0.0f;
++    if (pad <= 0 || mel_config.hop_length <= 0 || mel_config.n_mel <= 0 ||
++        n_samples > (size_t)(INT32_MAX - 2 * pad)) {
++        return false;
+     }
+ 
+-    mtmd_audio_mel mel_full;
+-    bool ok = log_mel_spectrogram(padded.data(), (int)padded.size(), mel_config, shape_only, mel_full);
+-    if (!ok) {
+-        return false;
++    mtmd_audio_mel mel_full{};
++    if (shape_only) {
++        // Reflection padding contributes exactly one FFT frame length.
++        // The original dimension formula therefore gives floor(n/hop)+1.
++        // Only metadata reaches the deferred placeholder entries.
++        mel_full.n_mel = mel_config.n_mel;
++        mel_full.n_len = (int64_t)(n_samples / mel_config.hop_length) + 1;
++    } else {
++        std::vector<float> padded(n_samples + 2 * pad, 0.0f);
++        // Reflect start: padded[0..pad-1] = samples[pad..1] (reversed)
++        for (int i = 0; i < pad; i++) {
++            int src = pad - i; // samples[pad], samples[pad-1], ..., samples[1]
++            padded[i] = (src < (int)n_samples) ? samples[src] : 0.0f;
++        }
++        std::copy(samples, samples + n_samples, padded.begin() + pad);
++        // Reflect end: padded[n+pad..n+2*pad-1] = samples[n-2..n-pad-1] (reversed)
++        for (int i = 0; i < pad; i++) {
++            int src = (int)n_samples - 2 - i; // samples[n-2], samples[n-3], ...
++            padded[n_samples + pad + i] = (src >= 0) ? samples[src] : 0.0f;
++        }
++
++        bool ok = log_mel_spectrogram(padded.data(), (int)padded.size(), mel_config, false, mel_full);
++        if (!ok) {
++            return false;
++        }
+     }
+ 
+     // WhisperFeatureExtractor drops the last STFT frame, keeping n_samples / hop_length frames;
+     // sub-hop clips would give 0 frames, clamp to 1 so the cgraph stays non-empty
+     const int64_t n_eff = std::max<int64_t>(1, std::min(mel_full.n_len - 1, (int64_t)(n_samples / hparams.audio_hop_len)));
+ 
+     // Whisper-style normalization over the kept frames: clamp to (max - 8), scale to [-1, 1]
+     if (!shape_only) {
+         double mmax = -1e20;
+         for (int64_t m = 0; m < mel_full.n_mel; m++) {
+             for (int64_t t = 0; t < n_eff; t++) {
+                 mmax = std::max(mmax, (double)mel_full.data[m * mel_full.n_len + t]);
+             }
+         }
+         mmax -= 8.0;
+         for (float & v : mel_full.data) {
+             v = (std::max((double)v, mmax) + 4.0) / 4.0;
+         }
+     }
+ 
+     // Split into inference windows matching n_window_infer=800 from model config.
+     // The mtmd caller loops over output entries, so long audio is handled automatically.
+     const int window_size = 800; // mel frames per forward pass (n_window_infer=800)
+ 
+     for (int64_t off = 0; off < n_eff; off += window_size) {
+         const int64_t win_eff  = std::min((int64_t)window_size, n_eff - off);
+ 
+         mtmd_audio_mel out;
+         out.n_mel     = mel_full.n_mel;
+         out.n_len     = win_eff;
+         out.n_len_org = win_eff;
+-        out.data.assign((size_t)out.n_mel * (size_t)out.n_len, 0.0f);
+-        for (int64_t m = 0; m < out.n_mel; m++) {
+-            const int64_t copy_len = std::min((int64_t)win_eff, mel_full.n_len - off);
+-            if (copy_len > 0) {
+-                std::copy(mel_full.data.begin() + (size_t)m * mel_full.n_len + off,
+-                          mel_full.data.begin() + (size_t)m * mel_full.n_len + off + copy_len,
+-                          out.data.begin()      + (size_t)m * out.n_len);
++        if (!shape_only) {
++            out.data.assign((size_t)out.n_mel * (size_t)out.n_len, 0.0f);
++            for (int64_t m = 0; m < out.n_mel; m++) {
++                const int64_t copy_len = std::min((int64_t)win_eff, mel_full.n_len - off);
++                if (copy_len > 0) {
++                    std::copy(mel_full.data.begin() + (size_t)m * mel_full.n_len + off,
++                              mel_full.data.begin() + (size_t)m * mel_full.n_len + off + copy_len,
++                              out.data.begin()      + (size_t)m * out.n_len);
++                }
+             }
+         }
+         output.push_back(std::move(out));
+     }
+     return true;
+ }
+ 
+ //
+ // mtmd_audio_preprocessor_dots3note
+diff --git a/tests/test-mtmd-impl.cpp b/tests/test-mtmd-impl.cpp
+--- a/tests/test-mtmd-impl.cpp
++++ b/tests/test-mtmd-impl.cpp
+@@ -609,49 +609,70 @@
+     }
+ }
+ 
+ MAKE_TEST(test_audio_preprocessor_qwen3a_tail) {
+     mtmd_hparams hparams;
+     hparams.n_mel_bins        = 128;
+     hparams.audio_sample_rate = 16000;
+     hparams.audio_n_fft       = 400;
+     hparams.audio_window_len  = 400;
+     hparams.audio_hop_len     = 160;
+ 
+     ggml_backend_ptr backend(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
+     ggml_backend_t backends[] = { backend.get() };
+     ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends, nullptr, 1, 256, false, true));
+ 
+     mtmd_audio_preprocessor_qwen3a preproc(hparams, sched.get());
+     preproc.initialize();
+ 
+     // one 800-frame window covers 128000 samples (hop 160), so longer audio is split;
+     // the last window is emitted with its exact frame count, the graph pads the final 100-frame chunk
+     // { sample count, expected n_len of each output window }
+     const std::vector<std::pair<size_t, std::vector<int64_t>>> cases = {
+         {       0, {}          },
+         {       1, {1}         },
++        {     159, {1}         },
++        {     160, {1}         },
++        {     161, {1}         },
++        {    4799, {29}        },
++        {    4800, {30}        },
+         {   32000, {200}       },
++        {  127999, {799}       },
+         {  128000, {800}       },
++        {  128159, {800}       },
+         {  128160, {800, 1}    },
+         {  168000, {800, 250}  },
+         {  170080, {800, 263}  },
+         {  176000, {800, 300}  },
++        {  960000, {800, 800, 800, 800, 800, 800, 800, 400} },
+     };
+ 
+     for (const auto & [n_samples, expected] : cases) {
+         const std::string name = std::to_string(n_samples) + " samples";
+         std::vector<float> samples(n_samples, 0.0f);
+         if (n_samples > 0) {
+             samples.back() = 0.5f;
+         }
++        // Shape-only planning must not materialize PCM or mel values.
++        std::vector<mtmd_audio_mel> shapes;
++        t.assert_equal("shape success for " + name, !expected.empty(),
++            preproc.process(nullptr, n_samples, shapes, true));
++        t.assert_equal("shape windows for " + name, expected.size(), shapes.size());
++        for (size_t i = 0; i < std::min(expected.size(), shapes.size()); i++) {
++            t.assert_equal("shape frames for " + name, expected[i], shapes[i].n_len);
++            t.assert_equal("shape original frames for " + name, expected[i], shapes[i].n_len_org);
++            t.assert_equal("shape mel bins for " + name, (int64_t) 128, shapes[i].n_mel);
++            t.assert_true("shape has no feature buffer for " + name, shapes[i].data.empty());
++        }
+         mtmd_audio_preproc_out out = preproc.preprocess(samples.data(), samples.size());
+         t.assert_equal("windows for " + name, expected.size(), out.entries.size());
+-        for (size_t i = 0; i < out.entries.size(); i++) {
++        t.assert_true("deferred PCM is preserved for " + name, out.samples == samples);
++        for (size_t i = 0; i < std::min(expected.size(), out.entries.size()); i++) {
+             t.assert_equal("frames for " + name, expected[i], out.entries[i].nx());
+             t.assert_equal("mel bins for " + name, 128, out.entries[i].ny());
++            t.assert_true("deferred placeholder for " + name, out.entries[i].is_placeholder());
+         }
+     }
+ }
+ 
+ MAKE_TEST(test_audio_preprocessor_conformer) {
+     mtmd_hparams hparams;
