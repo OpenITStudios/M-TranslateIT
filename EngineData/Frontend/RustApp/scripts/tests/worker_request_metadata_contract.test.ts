@@ -108,7 +108,9 @@ test("native ASR and MT avoid full-vocabulary sampler materialization without ch
   const decoder = cpp.slice(cpp.indexOf("int32_t open_decoder("), cpp.indexOf("ggml_backend_dev_t initialize_cuda("));
   assert.match(decoder, /if \(!audio_generation\) \{\s*params\.samplers = nullptr;\s*params\.n_samplers = 0;/);
   const greedy = cpp.slice(cpp.indexOf("constexpr llama_token greedy_token("), cpp.indexOf("int32_t generate("));
-  assert.match(greedy, /if \(logits\[i\] > logits\[selected\]\) selected = i;/);
+  assert.match(greedy, /float best = logits\[0\];/);
+  assert.match(greedy, /const float candidate = logits\[i\];\s*if \(candidate > best\) \{\s*best = candidate;\s*selected = i;/);
+  assert.doesNotMatch(greedy, /candidate >= best/);
   assert.match(greedy, /static_assert\(greedy_token\(k_greedy_tie_fixture, 4\) == 1\)/);
   const generate = cpp.slice(cpp.indexOf("int32_t generate("), cpp.indexOf("int32_t infer("));
   assert.match(generate, /greedy_token\(llama_get_logits_ith\(context, -1\), n_vocab\)/);
