@@ -110,3 +110,15 @@ test("initial Start uses its own validated route and still rechecks after AI and
   assert.match(preflight, /if cleanup_pending \{\s*start_blockers.push/);
   assert.match(preflight, /summary: if cleanup_pending/);
 });
+
+test("idle Start observes unscoped Worker capability and reuses Live preflight", () => {
+  const preflight = readFileSync(new URL("../../src-tauri/src/commands/meeting_session/preflight.rs", import.meta.url), "utf8");
+  const start = lifecycle.slice(lifecycle.indexOf("fn start_meeting_impl("), lifecycle.indexOf("pub(super) fn stop_meeting_translation_impl("));
+  const refresh = start.indexOf('let refreshed = send_helper_worker_task("status", json!({}));');
+  const claim = start.indexOf("let starting = begin_application_meeting_session()");
+  assert.ok(refresh >= 0 && refresh < claim);
+  assert.match(start.slice(refresh, claim), /if !idle_worker_status_admitted\(&refreshed\)/);
+  assert.doesNotMatch(start.slice(0, claim), /"meeting_start_prepare": true/);
+  assert.match(start.slice(0, refresh), /status: status_for_report\(current\)/);
+  assert.match(preflight, /fn status_for_report\(report: RuntimeSessionStateReport\)[\s\S]*?preflight_for_report\(&report, build_preflight\)/);
+});

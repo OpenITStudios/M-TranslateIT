@@ -34,7 +34,7 @@ use super::super::helper_bridge::{
     cancel_helper_bridge_meeting_session, finish_orphaned_meeting_helper_without_session,
     get_helper_bridge_status, meeting_helper_orphan_cleanup_pending,
     prepare_required_outbound_ai_runtime, required_outbound_voice_actor_token,
-    send_helper_worker_task, start_helper_bridge,
+    send_helper_worker_task, start_helper_bridge, HelperBridgeWorkerResponse, NATIVE_STATUS_CLAIM,
 };
 use super::committed_turns::{
     clear_inactive_committed_turns, clear_committed_turns_for_session,
@@ -58,7 +58,7 @@ use super::playback_runtime::{
     start_meeting_playback_runtime, stop_meeting_playback_runtime,
 };
 use super::preflight::{
-    blocked_result, build_preflight, build_preflight_with_route, status_from_report,
+    blocked_result, build_preflight, build_preflight_with_route, status_from_report, status_for_report,
 };
 use super::session_state::{
     clear_all_start_preflight, clear_incoming_status, clear_outbound_status,
@@ -247,6 +247,31 @@ mod rollback_cleanup_contract_tests {
     use crate::engine::runtime_state::{RuntimeSessionSnapshot, RuntimeSessionStateReport};
 
     #[test]
+    fn idle_start_requires_a_current_host_owned_status_receipt() {
+        use super::{idle_worker_status_admitted, HelperBridgeWorkerResponse, NATIVE_STATUS_CLAIM};
+        let receipt = HelperBridgeWorkerResponse {
+            ok: true, state: "ready".into(), task: "status".into(),
+            request_id: "fixture".into(), scheduler_priority: "diagnostic".into(),
+            message: "fixture capability".into(), generation_token: 1,
+            runtime_claim: NATIVE_STATUS_CLAIM.into(),
+            worker_response_json: serde_json::json!({"provider_ready": true}),
+        };
+        assert!(idle_worker_status_admitted(&receipt));
+        let mut failed = receipt.clone();
+        failed.ok = false;
+        assert!(!idle_worker_status_admitted(&failed));
+        let mut unowned = receipt.clone();
+        unowned.runtime_claim.clear();
+        assert!(!idle_worker_status_admitted(&unowned));
+        let mut stale = receipt.clone();
+        stale.generation_token = 0;
+        assert!(!idle_worker_status_admitted(&stale));
+        let mut blocked = receipt.clone();
+        blocked.worker_response_json["provider_ready"] = serde_json::json!(false);
+        assert!(!idle_worker_status_admitted(&blocked));
+    }
+
+    #[test]
     fn failed_transcript_archive_must_not_clear_active_turns() {
         use super::clear_transcript_only_after_retention;
 
@@ -315,6 +340,14 @@ mod rollback_cleanup_contract_tests {
             ), "cleanup requirement {failure} must prevent releasing session");
         }
     }
+}
+
+// Idle capability is not generation-bound functional proof. Before Start
+// claims a session, accept only a successful host-owned native status receipt.
+fn idle_worker_status_admitted(response: &HelperBridgeWorkerResponse) -> bool {
+    response.ok && response.task == "status" && response.state == "ready"
+        && response.generation_token != 0 && response.runtime_claim == NATIVE_STATUS_CLAIM
+        && response.worker_response_json.get("provider_ready").and_then(serde_json::Value::as_bool) == Some(true)
 }
 
 fn recover_helper_after_meeting_stop_if_needed() -> Result<(), String> {
@@ -392,7 +425,7 @@ fn start_meeting_impl(original_requested: bool) -> MeetingSessionActionResult {
                     state: "active_session_conflict".to_string(),
                     message: "Meeting is already Live, but the requested microphone source does not match the registered active source. Use Switch Source instead of Start."
                         .to_string(),
-                    status: status_from_report(current, build_preflight()),
+                    status: status_for_report(current),
                 };
             }
             return MeetingSessionActionResult {
@@ -403,7 +436,7 @@ fn start_meeting_impl(original_requested: bool) -> MeetingSessionActionResult {
                 } else {
                     "Translation is already Live. Duplicate Start did not create another Meeting session."
                 }.to_string(),
-                status: status_from_report(current, build_preflight()),
+                status: status_for_report(current),
             };
         }
         return blocked_result(
@@ -437,20 +470,25 @@ fn start_meeting_impl(original_requested: bool) -> MeetingSessionActionResult {
     }
 
     if !original_requested {
-    if let Err(message) = recover_helper_after_meeting_stop_if_needed() {
-        return blocked_result(
-            "helper_recovery_failed",
-            format!(
-                "Start Translation couldn't restore the local translation runtime after the previous Meeting Stop: {message}"
-            ),
-        );
-    }
+        if let Err(message) = recover_helper_after_meeting_stop_if_needed() {
+            return blocked_result(
+                "helper_recovery_failed",
+                format!(
+                    "Start Translation couldn't restore the local translation runtime after the previous Meeting Stop: {message}"
+                ),
+            );
+        }
 
-    // Refresh cheap worker capability truth once for this explicit Start. This
-    // catches a newly approved/rebuilt My Voice without turning routine UI polling
-    // into worker I/O or model loading. Functional MyVoice proof still occurs only
-    // after the Meeting generation owns Starting authority.
-    let _ = send_helper_worker_task("status", json!({ "meeting_start_prepare": true }));
+        // No Meeting generation exists yet. This is an idle capability
+        // refresh, not a scoped preparation request. The generation-bound
+        // functional probe still refreshes capability and verifies inference.
+        let refreshed = send_helper_worker_task("status", json!({}));
+        if !idle_worker_status_admitted(&refreshed) {
+            return blocked_result(
+                "helper_status_unverified",
+                format!("Start Translation could not verify current Worker capability: {}", refreshed.message),
+            );
+        }
     }
     let (preflight, prepared_route) = build_preflight_with_route();
     let original_eligible = preflight.microphone_ready && preflight.meeting_route_ready

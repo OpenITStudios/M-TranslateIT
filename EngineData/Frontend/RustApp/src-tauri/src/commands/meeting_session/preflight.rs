@@ -249,10 +249,15 @@ fn preflight_for_report(
     build()
 }
 
-pub(super) fn current_status() -> MeetingSessionStatus {
-    let report = latest_runtime_session_state();
+// Reuse the same generation-bound preflight projection for read-only status
+// and duplicate Start; never run a fresh Start transaction for Live reporting.
+pub(super) fn status_for_report(report: RuntimeSessionStateReport) -> MeetingSessionStatus {
     let preflight = preflight_for_report(&report, build_preflight);
     status_from_report(report, preflight)
+}
+
+pub(super) fn current_status() -> MeetingSessionStatus {
+    status_for_report(latest_runtime_session_state())
 }
 
 pub(super) fn current_status_from_observations(
