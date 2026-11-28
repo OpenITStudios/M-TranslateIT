@@ -35,10 +35,9 @@ use outbound_pipeline::process_outbound_pcm;
 use preflight::current_status;
 use session_state::{incoming_lane_enabled, OutboundTimingContext};
 
-// One source of truth for admitting the existing LOCAL outbound Meeting route.
-// Codex account diagnostics, offline transcript candidates and staged WebRTC
-// envelopes do not grant ASR/MT/TTS or playback authority. Do not read
-// CodexGatewayStatus here or create a second Meeting/session owner.
+// One source of truth for admitting the Local outbound Meeting route.
+// Retired Codex preferences and unverified settings cannot grant ASR/MT/TTS
+// or playback authority; do not implicitly migrate them or add a second owner.
 fn local_translated_route_for_admission(
     admission: crate::engine::settings::MeetingEngineAdmission,
 ) -> bool {

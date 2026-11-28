@@ -11,7 +11,7 @@ fn helper_state_allows_start(state: &str) -> bool {
 
 // Meeting setup/bootstrap is LOCAL-only. Reuse the same persisted-engine
 // decision as native Meeting Start; a stale frontend snapshot cannot
-// accidentally warm Whisper/MiLMMT for a selected, unverified Codex route.
+// accidentally warm the native AI runtime for a retired or unverified engine preference.
 // Explicit My Voice worker operations retain their independent ownership.
 fn require_local_outbound_setup() -> Result<(), IntentOutcome> {
     if meeting_session::local_translated_meeting_route_admitted() {
