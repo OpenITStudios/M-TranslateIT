@@ -202,13 +202,12 @@ using owned = std::unique_ptr<T, decltype(Free)>;
 }
 
 // One decoder implementation shared by ASR and translation. Each model owns
-// its context, batch and sampler; no duplicate inference engine or router.
+// its context and batch; no duplicate inference engine or router.
 namespace {
 struct decoder {
     owned<llama_model, llama_model_free> model{nullptr, llama_model_free};
     owned<llama_context, llama_free> context{nullptr, llama_free};
     owned<llama_batch_ext, llama_batch_ext_free> batch{nullptr, llama_batch_ext_free};
-    owned<llama_sampler, llama_sampler_free> sampler{nullptr, llama_sampler_free};
     bool poisoned = false;
 };
 
@@ -239,14 +238,19 @@ int32_t open_decoder(decoder & d, const char * path, ggml_backend_dev_t device,
     params.offload_kqv = true;
     params.op_offload = true;
     params.embeddings = audio_generation;
+    // ASR/MT use raw logits and stateless host greedy selection only.
+    // Keep backend sampling disabled explicitly, as in the pinned defaults.
+    if (!audio_generation) {
+        params.samplers = nullptr;
+        params.n_samplers = 0;
+    }
     d.context.reset(llama_init_from_model(d.model.get(), params));
     if (!d.context || !llama_get_memory(d.context.get()) ||
         llama_n_ctx_seq(d.context.get()) < k_context ||
         llama_n_batch(d.context.get()) < k_batch) return TI_CONTEXT_LOAD;
     if (!audio_generation) {
         d.batch.reset(llama_batch_ext_init(d.context.get()));
-        d.sampler.reset(llama_sampler_init_greedy());
-        if (!d.batch || !d.sampler) return TI_CONTEXT_LOAD;
+        if (!d.batch) return TI_CONTEXT_LOAD;
     }
     return TI_OK;
 }
@@ -348,18 +352,40 @@ struct clear_utterance {
     }
 };
 
+// Match pinned llama_sampler_greedy_apply's strict comparison in token-ID
+// order: first maximum wins, including ties. No candidate vector or state.
+constexpr llama_token greedy_token(const float * logits, int32_t count) {
+    if (!logits || count <= 0) return LLAMA_TOKEN_NULL;
+    llama_token selected = 0;
+    for (llama_token i = 1; i < count; ++i) {
+        if (logits[i] > logits[selected]) selected = i;
+    }
+    return selected;
+}
+
+constexpr float k_greedy_tie_fixture[] = {-3.0f, 2.0f, 2.0f, -1.0f};
+constexpr float k_greedy_negative_fixture[] = {-9.0f, -4.0f, -2.0f};
+static_assert(greedy_token(k_greedy_tie_fixture, 4) == 1);
+static_assert(greedy_token(k_greedy_negative_fixture, 3) == 2);
+static_assert(greedy_token(k_greedy_negative_fixture, 1) == 0);
+static_assert(greedy_token(nullptr, 3) == LLAMA_TOKEN_NULL);
+static_assert(greedy_token(k_greedy_negative_fixture, 0) == LLAMA_TOKEN_NULL);
+
 int32_t generate(decoder & d, llama_pos next_pos, uint32_t max_tokens,
                  llama_token required_eos, std::string_view echo,
                  const request_control & control, char * output, size_t * out_len) {
     auto * context = d.context.get();
     const auto * vocab = llama_model_get_vocab(d.model.get());
     if (!vocab) return TI_INFERENCE;
+    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+    if (n_vocab <= 0) return TI_INFERENCE;
     // Only publish once EOG is observed. No retry with a second model or
     // decoding mode, no partial transcript at the token limit.
     size_t used = 0;
     for (uint32_t i = 0; i < max_tokens; ++i) {
         if (const auto stop = control.check(); stop != TI_OK) return stop;
-        const llama_token token = llama_sampler_sample(d.sampler.get(), context, -1);
+        // One synchronized raw-logits read; no backend sampler is installed.
+        const llama_token token = greedy_token(llama_get_logits_ith(context, -1), n_vocab);
         if (token == LLAMA_TOKEN_NULL) return TI_INFERENCE;
         if (const auto stop = control.check(); stop != TI_OK) return stop;
         if (llama_vocab_is_eog(vocab, token)) {
@@ -414,7 +440,6 @@ int32_t infer(ti_asr & asr, const float * pcm, size_t count, const char * langua
     auto * projector = asr.projector.get();
     llama_memory_clear(llama_get_memory(context), false);
     clear_utterance clear{context};
-    llama_sampler_reset(asr.sampler.get());
 
     // Fixed current-utterance-only Qwen3-ASR prompt. mtmd inserts its own
     // audio_start/audio_end tokens around the marker. Force the language
@@ -559,7 +584,6 @@ int32_t translate(ti_mt & mt, std::string_view source, const char * target,
 
     llama_memory_clear(llama_get_memory(context), false);
     clear_utterance clear{context};
-    llama_sampler_reset(mt.sampler.get());
     for (int i = 0; i < n;) {
         if (const auto stop = control.check(); stop != TI_OK) return stop;
         llama_batch_ext_clear(mt.batch.get());

@@ -270,11 +270,18 @@ impl Runtime {
 }
 
 fn validate_voice_pcm(samples: &[f32]) -> Result<(), Error> {
-    if samples.is_empty() || samples.len() > MAX_VOICE_SAMPLES ||
-        samples.iter().any(|s| !s.is_finite() || s.abs() > 1.0) ||
-        !samples.iter().any(|s| s.abs() >= 0.0001) {
+    if samples.is_empty() || samples.len() > MAX_VOICE_SAMPLES {
         return Err(Error::InvalidReceipt);
     }
+    let mut has_signal = false;
+    for &sample in samples {
+        let level = sample.abs();
+        if !sample.is_finite() || level > 1.0 {
+            return Err(Error::InvalidReceipt);
+        }
+        has_signal |= level >= 0.0001;
+    }
+    if !has_signal { return Err(Error::InvalidReceipt); }
     Ok(())
 }
 
@@ -478,6 +485,15 @@ mod tests {
         assert_eq!(validate_voice_pcm(&[0.1, f32::NAN]), Err(Error::InvalidReceipt));
         assert_eq!(validate_voice_pcm(&[1.1]), Err(Error::InvalidReceipt));
         assert_eq!(validate_voice_pcm(&[0.0, -0.1, 0.1]), Ok(()));
+        assert_eq!(validate_voice_pcm(&[0.000099]), Err(Error::InvalidReceipt));
+        assert_eq!(validate_voice_pcm(&[-0.0001]), Ok(()));
+        assert_eq!(validate_voice_pcm(&[0.1, f32::INFINITY]), Err(Error::InvalidReceipt));
+        assert_eq!(validate_voice_pcm(&[1.0, -1.0]), Ok(()));
+        let mut delayed_signal = vec![0.0; MAX_VOICE_SAMPLES];
+        delayed_signal[MAX_VOICE_SAMPLES - 1] = 0.1;
+        assert_eq!(validate_voice_pcm(&delayed_signal), Ok(()));
+        delayed_signal.push(0.0);
+        assert_eq!(validate_voice_pcm(&delayed_signal), Err(Error::InvalidReceipt));
     }
 
     #[test]

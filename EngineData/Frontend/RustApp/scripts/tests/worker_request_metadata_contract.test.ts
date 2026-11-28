@@ -93,3 +93,21 @@ test("routine helper observations do not write trace logs; poisoned locks still 
   assert.doesNotMatch(observation, /trace_command_start|trace_command_end/);
   assert.match(observation, /Err\(TryLockError::Poisoned\(poisoned\)\)[\s\S]*?drop\(poisoned\);[\s\S]*?trace_command_error\(/);
 });
+
+test("native ASR and MT avoid full-vocabulary sampler materialization without changing greedy order", () => {
+  const cpp = readFileSync(new URL("../../../../../tools/translation_quality/native_cuda/inference.cpp", import.meta.url), "utf8");
+  const decoder = cpp.slice(cpp.indexOf("int32_t open_decoder("), cpp.indexOf("ggml_backend_dev_t initialize_cuda("));
+  assert.match(decoder, /if \(!audio_generation\) \{\s*params\.samplers = nullptr;\s*params\.n_samplers = 0;/);
+  const greedy = cpp.slice(cpp.indexOf("constexpr llama_token greedy_token("), cpp.indexOf("int32_t generate("));
+  assert.match(greedy, /if \(logits\[i\] > logits\[selected\]\) selected = i;/);
+  assert.match(greedy, /static_assert\(greedy_token\(k_greedy_tie_fixture, 4\) == 1\)/);
+  const generate = cpp.slice(cpp.indexOf("int32_t generate("), cpp.indexOf("int32_t infer("));
+  assert.match(generate, /greedy_token\(llama_get_logits_ith\(context, -1\), n_vocab\)/);
+  assert.doesNotMatch(generate, /llama_sampler_sample\(|llama_token_data|std::vector/);
+  assert.match(generate, /llama_vocab_is_eog\(vocab, token\)/);
+  assert.match(generate, /if \(llama_vocab_is_control\(vocab, token\)\) return TI_INCOMPLETE/);
+  assert.match(generate, /return TI_INCOMPLETE;/);
+  const voice = cpp.slice(cpp.indexOf("int32_t synthesize_voice("), cpp.indexOf("struct ti_runtime {"));
+  assert.match(voice, /mtmd_helper_gen_audio_step_gen/);
+  assert.doesNotMatch(voice, /greedy_token\(/);
+});
