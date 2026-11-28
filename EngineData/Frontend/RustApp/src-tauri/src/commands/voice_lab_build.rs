@@ -660,7 +660,7 @@ fn current_status() -> VoiceLabBuildStatus {
             }
         })
     } else if native_evaluation.is_some() {
-        "Native voice samples are ready to listen to and save. Selecting this voice for Meeting is not yet available in this candidate build.".to_string()
+        "Native voice samples are ready to listen to and save. Save it, then choose its version for Meeting.".to_string()
     } else if native_candidate {
         if !terminal_message.is_empty() { terminal_message.clone() }
         else if !native_pins_ready { "Native voice evaluation requires reviewed runtime and speaker verifier assets.".to_string() }
@@ -1467,8 +1467,8 @@ pub fn select_builtin_voice(
         Ok(guard) => guard,
         Err(()) => return result(false, "voice_selection_unavailable", "Voice selection is busy. Try again."),
     };
-    if meeting_blocks_voice_change() {
-        return result(false, "meeting_active", "Stop Meeting translation before switching voices.");
+    if meeting_blocks_voice_change() || voice_lab_build_blocks_meeting() || voice_lab_recording_active() {
+        return result(false, "voice_busy", "Finish Meeting or My Voice before switching voices.");
     }
 
     let project_paths = ProjectPaths::discover();
@@ -1485,11 +1485,11 @@ pub fn select_builtin_voice(
             "Voice switching is unavailable while a previous voice may need recovery. Your saved files were kept.",
         );
     }
-    if target.exists() && !approved_voice_actor_ready(&storage) {
+    if target.exists() && !super::voice_lab::selected_actor_can_replace(&storage) {
         return result(false, "voice_unverified",
             "The current Meeting voice could not be verified. No voice was replaced.");
     }
-    if target.join("actor.json").is_file() && !authorized_voice_confirmed {
+    if target.exists() && !authorized_voice_confirmed {
         return result(
             false,
             "approval_required",
@@ -1580,9 +1580,8 @@ pub fn select_archived_personal_voice_version(
     }
     let paths = storage();
     match super::voice_lab::version_is_native(&paths, &version_id) {
-        Ok(true) => return result(false, "native_activation_pending",
-            "This native voice is saved. Meeting activation is not yet available; current voice unchanged."),
-        Ok(false) => {},
+        Ok(native) if native == super::helper_bridge::native_voice_candidate_enabled() => {},
+        Ok(_) => return result(false, "version_runtime_incompatible", "This saved voice requires its matching runtime. Your current voice is unchanged."),
         Err(_) => return result(false, "version_restore_failed", "Saved voice version could not be verified."),
     }
     if recover_selected_actor_if_missing(&paths).is_err()
@@ -1592,7 +1591,7 @@ pub fn select_archived_personal_voice_version(
             "An earlier voice change needs recovery. Your existing voice was not replaced.");
     }
     let selected = &paths.approved_actor_dir;
-    if selected.exists() && !approved_voice_actor_ready(&paths) {
+    if selected.exists() && !super::voice_lab::selected_actor_can_replace(&paths) {
         return result(false, "voice_unverified",
             "The current Meeting voice needs recovery before a version can be restored.");
     }
@@ -1690,7 +1689,7 @@ pub fn approve_voice_lab_candidate(
                 let cleanup = cleanup_approved_build_workspace(&paths);
                 clear_build_terminal_message();
                 let message = if cleanup.is_ok() {
-                    format!("My Voice saved as version {}. Meeting voice is unchanged; native activation is not yet available.", &id[..10])
+                    format!("My Voice saved as version {}. Choose the saved version to use it for Meeting; the current voice is unchanged.", &id[..10])
                 } else {
                     format!("My Voice saved as version {}. Temporary review cleanup needs attention; Meeting voice is unchanged.", &id[..10])
                 };

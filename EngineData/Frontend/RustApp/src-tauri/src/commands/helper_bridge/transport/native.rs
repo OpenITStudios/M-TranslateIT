@@ -292,7 +292,7 @@ pub(super) fn dispatch(
             return fail("native_voice:owner_busy", "Existing inference ownership could not be released.");
         }
         let paths = crate::engine::paths::ProjectPaths::discover();
-        let reference = match crate::commands::voice_lab::selected_native_builtin_reference(&paths) {
+        let reference = match crate::commands::voice_lab::selected_native_reference(&paths) {
             Ok(reference) => reference,
             Err(blocker) => return fail(blocker, "Selected native reference is not approved or verified."),
         };
@@ -477,7 +477,7 @@ pub(super) fn dispatch(
     let pending_result = {
         let owner = host.native_inference.as_mut().expect("checked owner");
         if let Some(reference) = reference {
-            owner.begin_selected_builtin_voice(request_scope.generation, request_scope.session_id.as_deref(),
+            owner.begin_selected_voice(request_scope.generation, request_scope.session_id.as_deref(),
                 reference, deadline).map(|(id, pending)| { bound_id = Some(id); pending })
         } else if is_voice {
             let Some(Value::String(text)) = payload.as_object_mut().and_then(|object| object.remove("text")) else {
@@ -534,10 +534,10 @@ pub(super) fn dispatch(
     } else { result };
     // Bind publication is itself scoped and uses the scheduler's unique
     // request identity, not a voice ID supplied by JSON.
-    let result = match (bound_id, result) {
+    let result = match (bound_id.as_deref(), result) {
         (Some(id), Ok(output @ InferenceOutput::VoiceBound(_))) => {
             host.native_inference.as_mut().expect("checked owner")
-                .finish_selected_builtin_voice(request_scope.generation, request_scope.session_id.as_deref(),
+                .finish_selected_voice(request_scope.generation, request_scope.session_id.as_deref(),
                     id, request_id, output)
                 .map(InferenceOutput::Text)
         }

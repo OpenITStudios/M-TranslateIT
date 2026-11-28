@@ -268,6 +268,31 @@ pub(crate) fn version_is_native(storage: &VoiceLabStoragePaths, id: &str) -> Res
     Ok(receipt.engine_revision == NATIVE_REVISION)
 }
 
+pub(super) fn verify_native_version(storage: &VoiceLabStoragePaths, id: &str) -> Result<(), String> {
+    if !version_is_native(storage, id)? { return Err("native_voice:selection_invalid".into()); }
+    verify_actor_version(storage, id)
+}
+
+#[cfg(windows)]
+pub(super) fn native_version_payload(storage: &VoiceLabStoragePaths, id: &str) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let dir = version_directory(storage, id)?;
+    let receipt_bytes = read_regular_bounded(&dir.join("version.json"), MAX_MANIFEST_BYTES)?;
+    let receipt: VersionReceipt = serde_json::from_slice(&receipt_bytes)
+        .map_err(|_| "voice_lab:version_receipt_invalid")?;
+    if !receipt_shape(&receipt) || receipt.engine_revision != NATIVE_REVISION
+        || hash_bytes(&receipt_bytes) != id {
+        return Err("voice_lab:version_receipt_mismatch".into());
+    }
+    let profile = read_regular_bounded(&dir.join(NATIVE_PROFILE), MAX_NATIVE_PROFILE_BYTES)?;
+    let reference = read_regular_bounded(&dir.join(REFERENCE_WAV_FILE), MAX_REFERENCE_BYTES)?;
+    for (bytes, expected) in [profile.as_slice(), reference.as_slice()].into_iter().zip(&receipt.files) {
+        if hash_bytes(bytes) != expected.sha256 || bytes.len() as u64 != expected.bytes {
+            return Err("voice_lab:version_file_integrity_failed".into());
+        }
+    }
+    Ok((profile, reference))
+}
+
 const PAGE_SIZE: usize = 12;
 const MAX_VERSION_ENTRIES: usize = 4096;
 

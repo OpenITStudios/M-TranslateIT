@@ -287,7 +287,7 @@ pub(super) fn review_audio(paths: &VoiceLabStoragePaths, review_id: &str, line_i
 /// An immutable approved package keeps the exact review manifest (including
 /// all audio hashes) and the original reference only. Historical packages can
 /// be backed up without current model pins; this is not runtime admission.
-pub(in crate::commands) fn validate_saved_profile(profile: &[u8], reference: &[u8]) -> Result<(), String> {
+fn validated_profile(profile: &[u8], reference: &[u8]) -> Result<(Manifest, Vec<f32>), String> {
     if profile.is_empty() || profile.len() as u64 > MAX_MANIFEST || reference.len() as u64 > MAX_REFERENCE {
         return Err("native_profile:size_invalid".into());
     }
@@ -299,7 +299,22 @@ pub(in crate::commands) fn validate_saved_profile(profile: &[u8], reference: &[u
     if !(32_000*3..=32_000*10).contains(&pcm.len()) {
         return Err("native_profile:reference_invalid".into());
     }
-    Ok(())
+    Ok((manifest, pcm))
+}
+
+pub(in crate::commands) fn validate_saved_profile(profile: &[u8], reference: &[u8]) -> Result<(), String> {
+    validated_profile(profile, reference).map(|_| ())
+}
+
+/// Runtime admission is stricter than historical backup integrity. Use the
+/// exact reviewed model closure and the exact reference bytes, never a
+/// different model or unapproved reference.
+pub(in crate::commands) fn prepare_saved_profile(profile: &[u8], reference: &[u8]) -> Result<Vec<f32>, String> {
+    let (manifest, pcm) = validated_profile(profile, reference)?;
+    if manifest.models != ModelIdentity::current()? {
+        return Err("native_profile:reviewed_model_changed".into());
+    }
+    crate::engine::audio::meeting_output::prepare_native_voice_reference(&pcm)
 }
 
 pub(super) fn approved_payload(paths: &VoiceLabStoragePaths, review_id: &str,

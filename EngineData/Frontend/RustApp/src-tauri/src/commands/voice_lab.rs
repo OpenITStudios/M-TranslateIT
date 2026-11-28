@@ -8,11 +8,12 @@ use crate::engine::runtime_state::{latest_runtime_session_state, APPLICATION_MEE
 mod storage;
 
 pub use storage::VoiceLabStoragePaths;
+pub(crate) use storage::selected_actor_can_replace;
 pub(crate) use storage::version_is_native;
 #[cfg(windows)]
 pub(crate) use storage::preserve_native_version;
 #[cfg(windows)]
-pub(crate) use storage::{selected_native_builtin_identity, selected_native_builtin_reference, NativeBuiltinReference};
+pub(crate) use storage::{selected_native_identity, selected_native_reference, NativeSelectedReference};
 pub(crate) use storage::{inspect_accepted_take_recovery, AcceptedTakeRecoveryInspection};
 pub(crate) use storage::{preserve_training_checkpoints, training_recovery_status, TrainingRecoveryStatus, create_voice_backup, check_voice_backup, restore_voice_backup, voice_backup_active, BackupReport, actor_version_page, activate_archived_personal_voice, selected_personal_actor_matches_version, ActorVersionPage, archive_guided_take, legacy_protection_status, migrate_legacy_recordings, saved_recordings_page, saved_recording_audio, choose_archived_takes, ArchivedSelection, archived_frozen_review_matches, LegacyMigrationResult, LegacyProtectionStatus, SavedRecordingPage, sha256_digest};
 pub(crate) use storage::{
@@ -393,7 +394,7 @@ pub fn promote_voice_actor_candidate(paths: &ProjectPaths) -> Result<(), String>
 }
 
 pub fn approved_voice_actor_ready(storage: &VoiceLabStoragePaths) -> bool {
-    validate_actor_package(&storage.approved_actor_dir).is_ok()
+    storage::selected_actor_ready(storage)
 }
 
 fn ensure_build_generation(generation: u64, phase: BuildPhase) -> Result<(), String> {

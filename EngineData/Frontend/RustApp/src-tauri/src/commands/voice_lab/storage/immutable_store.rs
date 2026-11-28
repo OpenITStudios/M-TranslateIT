@@ -23,6 +23,18 @@ pub(super) fn read_regular_bounded(path: &Path, cap: u64) -> Result<Vec<u8>, Str
     if !meta.is_file() || meta.file_type().is_symlink() || meta.len() == 0 || meta.len() > cap {
         return Err("voice_lab:history_file_invalid".into());
     }
+    #[cfg(windows)]
+    let file = {
+        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        let file = OpenOptions::new().read(true).share_mode(1).custom_flags(0x00200000)
+            .open(path).map_err(|_| "voice_lab:history_file_open_failed")?;
+        let opened = file.metadata().map_err(|_| "voice_lab:history_file_invalid")?;
+        if !opened.is_file() || opened.file_attributes() & 0x400 != 0 || opened.len() != meta.len() {
+            return Err("voice_lab:history_file_invalid".into());
+        }
+        file
+    };
+    #[cfg(not(windows))]
     let file = File::open(path).map_err(|_| "voice_lab:history_file_open_failed")?;
     let mut out = Vec::with_capacity(meta.len() as usize);
     file.take(cap.saturating_add(1)).read_to_end(&mut out).map_err(|_| "voice_lab:history_file_read_failed")?;

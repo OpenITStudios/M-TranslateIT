@@ -364,5 +364,19 @@ test("native Create and Improve use the same build lifecycle and cannot approve 
   assert.match(status, /native_review::approved_payload/);
   assert.match(status, /preserve_native_version/);
   assert.match(ui, /Approve & Save/);
-  assert.match(status, /native_activation_pending/);
+  assert.match(status, /version_runtime_incompatible/);
+});
+
+
+test("native personal Meeting selection uses the approved immutable version and exact scope", () => {
+  const store = readFileSync(new URL("../../src-tauri/src/commands/voice_lab/storage.rs", import.meta.url), "utf8");
+  const nativeTransport = readFileSync(new URL("../../src-tauri/src/commands/helper_bridge/transport/native.rs", import.meta.url), "utf8");
+  const runtime = readFileSync(new URL("../../src-tauri/src/commands/helper_bridge_runtime.rs", import.meta.url), "utf8");
+  assert.match(store, /native-version\.json/);
+  assert.match(store, /native_version_payload\(&storage, id\)/);
+  assert.match(store, /prepare_saved_profile\(&profile, &reference\)/);
+  assert.match(store, /version_runtime_incompatible/);
+  assert.match(nativeTransport, /selected_native_reference\(&paths\)/);
+  assert.match(runtime, /selected_native_identity/);
+  assert.match(runtime, /voice\.actor_token == actor_token/);
 });

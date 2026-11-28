@@ -140,7 +140,7 @@
 
   async function selectVersion(versionId: string, confirmed: boolean): Promise<void> {
     if (busy || error || selectionUnknown || voiceChangesLocked || !opened) return;
-    if (!versions?.items.some((entry) => entry.version_id === versionId && entry.engine_revision !== "zonos3-mini-reference-v1")) return;
+    if (!versions?.items.some((entry) => entry.version_id === versionId)) return;
     busy = true;
     try {
       const result = await myVoiceBuildApi.selectActorVersion(versionId, confirmed);
@@ -241,7 +241,7 @@
                 <div class="min-w-0 flex-1">
                   <p class="m-0 break-words text-[14px] font-semibold">Saved version · {voice.version_id.slice(0, 10)}</p>
                   <p class="mb-0 mt-1 text-[13px] leading-5 text-[var(--ti-text-muted)]">
-                    {voice.engine_revision === "zonos3-mini-reference-v1" ? "Native reference voice · saved; Meeting activation pending." : "Full model integrity will be verified before use."}
+                    {voice.engine_revision === "zonos3-mini-reference-v1" ? "Native reference voice · requires matching native runtime." : "Full model integrity will be verified before use."}
                   </p>
                   <details class="mt-2 text-xs text-[var(--ti-text-muted)]">
                     <summary class="min-h-9 cursor-pointer py-2 text-[13px] font-medium hover:text-[var(--ti-text)]">View version ID</summary>
@@ -250,7 +250,7 @@
                 </div>
                 <button type="button" class="ti-button ti-button-secondary w-full sm:w-auto"
                   aria-label={`Review saved voice version ${voice.version_id.slice(0, 10)} for Meeting`}
-                  disabled={busy || error || voiceChangesLocked || selectionUnknown || voice.engine_revision === "zonos3-mini-reference-v1"}
+                  disabled={busy || error || voiceChangesLocked || selectionUnknown}
                   onclick={() => void selectVersion(voice.version_id, false)}>
                   <RotateCcw size={14} /> Use version
                 </button>

@@ -115,6 +115,7 @@ enum ActorKind {
     Missing,
     Builtin(Option<String>),
     Personal,
+    Native(String),
     Unverified,
 }
 
@@ -124,8 +125,39 @@ pub(crate) struct SelectedVoiceInfo {
     pub personal_available: bool,
 }
 
+const NATIVE_SELECTION: &str = "native-version.json";
+
+fn native_selection_id(path: &Path) -> Result<Option<String>, String> {
+    let marker = path.join(NATIVE_SELECTION);
+    match fs::symlink_metadata(&marker) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("native_voice:selection_unavailable".into()),
+        Ok(_) => {}
+    }
+    let meta = fs::symlink_metadata(path).map_err(|_| "native_voice:selection_unavailable")?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if meta.file_attributes() & 0x400 != 0 { return Err("native_voice:selection_ambiguous".into()); }
+    }
+    let legacy_missing = matches!(fs::symlink_metadata(path.join(ACTOR_MANIFEST_FILE)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound);
+    if !meta.is_dir() || meta.file_type().is_symlink() || !legacy_missing {
+        return Err("native_voice:selection_ambiguous".into());
+    }
+    let bytes = immutable_store::read_regular_bounded(&marker, 256)?;
+    let id: String = serde_json::from_slice(&bytes).map_err(|_| "native_voice:selection_invalid")?;
+    if !immutable_store::valid_id(&id) { return Err("native_voice:selection_invalid".into()); }
+    Ok(Some(id))
+}
+
 fn actor_kind(path: &Path) -> ActorKind {
     if !path.exists() { return ActorKind::Missing; }
+    match native_selection_id(path) {
+        Ok(Some(id)) => return ActorKind::Native(id),
+        Ok(None) => {},
+        Err(_) => return ActorKind::Unverified,
+    }
     if validate_actor_package(path).is_err() { return ActorKind::Unverified; }
     let Ok(bytes) = fs::read(path.join(ACTOR_MANIFEST_FILE)) else {
         return ActorKind::Unverified;
@@ -150,15 +182,15 @@ fn actor_kind(path: &Path) -> ActorKind {
 // Pin the existing shipped CC-BY-4.0 references (BuiltInVoices/SOURCES.json)
 // rather than trusting an editable manifest to name an arbitrary speaker.
 #[cfg(windows)]
-pub(crate) struct NativeBuiltinReference {
-    voice_id: &'static str,
+pub(crate) struct NativeSelectedReference {
+    voice_id: String,
     pcm: Vec<f32>,
 }
 
 #[cfg(windows)]
-impl NativeBuiltinReference {
+impl NativeSelectedReference {
     // Keep construction in the selected-reference verifier.
-    pub(crate) fn into_parts(self) -> (&'static str, Vec<f32>) {
+    pub(crate) fn into_parts(self) -> (String, Vec<f32>) {
         (self.voice_id, self.pcm)
     }
 }
@@ -200,8 +232,8 @@ fn read_pinned_builtin_reference(path: &Path, expected: &str) -> Result<Vec<f32>
 }
 
 #[cfg(windows)]
-pub(crate) fn selected_native_builtin_identity(paths: &ProjectPaths)
-    -> Result<(&'static str, &'static str), &'static str>
+pub(crate) fn selected_native_identity(paths: &ProjectPaths)
+    -> Result<String, &'static str>
 {
     if !paths.packaged_context_initialized && !paths.development_root_verified {
         return Err("native_voice:runtime_root_unverified");
@@ -210,20 +242,34 @@ pub(crate) fn selected_native_builtin_identity(paths: &ProjectPaths)
     // Do not recover, migrate or activate a different profile here.
     let id = match actor_kind(&storage.approved_actor_dir) {
         ActorKind::Builtin(Some(id)) => id,
+        ActorKind::Native(id) => {
+            if !actor_history::version_is_native(&storage, &id).unwrap_or(false) {
+                return Err("native_voice:selected_reference_unverified");
+            }
+            return Ok(format!("personal:{id}"));
+        }
         ActorKind::Personal => return Err("native_voice:personal_clone_approval_required"),
         _ => return Err("native_voice:selected_reference_unverified"),
     };
     // Metadata/legacy selected actor validation is eligibility, not a hash
     // or a new clone approval. Bind rechecks the exact reference bytes.
-    builtin_reference_pin(&id).ok_or("native_voice:selected_reference_unverified")
+    builtin_reference_pin(&id).map(|(id, _)| id.to_owned()).ok_or("native_voice:selected_reference_unverified")
 }
 
 #[cfg(windows)]
-pub(crate) fn selected_native_builtin_reference(paths: &ProjectPaths) -> Result<NativeBuiltinReference, &'static str> {
-    let (voice_id, expected) = selected_native_builtin_identity(paths)?;
+pub(crate) fn selected_native_reference(paths: &ProjectPaths) -> Result<NativeSelectedReference, &'static str> {
+    let voice_id = selected_native_identity(paths)?;
     let storage = VoiceLabStoragePaths::from_project_paths(paths);
-    let pcm = read_pinned_builtin_reference(&storage.approved_actor_dir.join(REFERENCE_WAV_FILE), expected)?;
-    Ok(NativeBuiltinReference { voice_id, pcm })
+    let pcm = if let Some(id) = voice_id.strip_prefix("personal:") {
+        let (profile, reference) = actor_history::native_version_payload(&storage, id)
+            .map_err(|_| "native_voice:selected_reference_unverified")?;
+        crate::commands::voice_lab_build::native_review::prepare_saved_profile(&profile, &reference)
+            .map_err(|_| "native_voice:personal_review_or_runtime_mismatch")?
+    } else {
+        let (_, expected) = builtin_reference_pin(&voice_id).ok_or("native_voice:selected_reference_unverified")?;
+        read_pinned_builtin_reference(&storage.approved_actor_dir.join(REFERENCE_WAV_FILE), expected)?
+    };
+    Ok(NativeSelectedReference { voice_id, pcm })
 }
 
 #[cfg(all(test, windows))]
@@ -239,6 +285,23 @@ mod native_builtin_reference_tests {
         for invalid in ["", "MyVoice", "PersonalVoice", "malevoice", "../MaleVoice"] {
             assert!(builtin_reference_pin(invalid).is_none());
         }
+    }
+
+    #[test]
+    fn native_selection_rejects_malformed_and_mixed_actor_markers() {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("translateit-native-choice-{}-{stamp}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let marker = root.join(NATIVE_SELECTION);
+        let id = "a".repeat(64);
+        fs::write(&marker, serde_json::to_vec(&id).unwrap()).unwrap();
+        assert_eq!(actor_kind(&root), ActorKind::Native(id));
+        fs::write(root.join(ACTOR_MANIFEST_FILE), b"{}").unwrap();
+        assert_eq!(actor_kind(&root), ActorKind::Unverified);
+        fs::remove_file(root.join(ACTOR_MANIFEST_FILE)).unwrap();
+        fs::write(&marker, b"\"../outside\"").unwrap();
+        assert_eq!(actor_kind(&root), ActorKind::Unverified);
+        fs::remove_dir_all(root).unwrap();
     }
 }
 
@@ -304,22 +367,52 @@ pub(crate) fn recover_selected_actor_if_missing(
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err("voice_lab:actor_recovery_backup_not_directory".to_string());
     }
-    validate_actor_package(backup)?;
+    validate_selected_package(paths, backup)?;
     fs::rename(backup, &paths.approved_actor_dir)
         .map_err(|error| format!("voice_lab:actor_recovery_rename_failed:{error}"))?;
     Ok(true)
+}
+
+// Only the existing selected directory controls the active choice. History
+// owns the native reference; the pointer does not duplicate private audio.
+fn validate_selected_package(paths: &VoiceLabStoragePaths, dir: &Path) -> Result<(), String> {
+    match actor_kind(dir) {
+        ActorKind::Native(id) => actor_history::verify_native_version(paths, &id),
+        ActorKind::Builtin(_) | ActorKind::Personal => validate_actor_package(dir).map(|_| ()),
+        _ => Err("voice_lab:selected_actor_unverified".into()),
+    }
+}
+
+pub(crate) fn selected_actor_can_replace(paths: &VoiceLabStoragePaths) -> bool {
+    validate_selected_package(paths, &paths.approved_actor_dir).is_ok()
+}
+
+pub(crate) fn selected_actor_ready(paths: &VoiceLabStoragePaths) -> bool {
+    match actor_kind(&paths.approved_actor_dir) {
+        ActorKind::Native(id) => super::super::helper_bridge::native_voice_candidate_enabled()
+            && actor_history::version_is_native(paths, &id).unwrap_or(false),
+        ActorKind::Personal => !super::super::helper_bridge::native_voice_candidate_enabled(),
+        ActorKind::Builtin(_) => true,
+        _ => false,
+    }
 }
 
 pub(crate) fn selected_voice_info(paths: &VoiceLabStoragePaths) -> SelectedVoiceInfo {
     let active = actor_kind(&paths.approved_actor_dir);
     let stored = actor_kind(&paths.stored_personal_actor_dir);
     let pending = actor_kind(&personal_previous(paths));
-    let personal_available = matches!(active, ActorKind::Personal)
-        || matches!(stored, ActorKind::Personal)
-        || matches!(pending, ActorKind::Personal);
+    let native = super::super::helper_bridge::native_voice_candidate_enabled();
+    let personal_available = if native {
+        matches!(&active, ActorKind::Native(id) if actor_history::version_is_native(paths, id).unwrap_or(false))
+    }
+        else { matches!(active, ActorKind::Personal) || matches!(stored, ActorKind::Personal)
+            || matches!(pending, ActorKind::Personal) };
     let (kind, builtin_id) = match active {
         ActorKind::Builtin(id) => ("built_in".to_string(), id),
         ActorKind::Personal => ("personal".to_string(), None),
+        ActorKind::Native(id) if actor_history::version_is_native(paths, &id).unwrap_or(false) =>
+            ("personal".to_string(), None),
+        ActorKind::Native(_) => ("unknown".to_string(), None),
         ActorKind::Missing => ("none".to_string(), None),
         ActorKind::Unverified => ("unknown".to_string(), None),
     };
@@ -342,6 +435,7 @@ pub(crate) fn archive_selected_personal_voice(paths: &VoiceLabStoragePaths) -> R
     match actor_kind(&paths.approved_actor_dir) {
         ActorKind::Missing | ActorKind::Builtin(_) => return Ok(()),
         ActorKind::Unverified => return Err("voice_lab:selected_actor_unverified".to_string()),
+        ActorKind::Native(id) => return actor_history::verify_native_version(paths, &id),
         ActorKind::Personal => {}
     }
     actor_history::preserve_actor_version(paths, &paths.approved_actor_dir)?;
@@ -394,6 +488,7 @@ pub(crate) fn create_voice_backup(
     for source in [&storage.approved_actor_dir, &storage.stored_personal_actor_dir] {
         match actor_kind(source) {
             ActorKind::Personal => { actor_history::preserve_actor_version(storage, source)?; }
+            ActorKind::Native(id) => { actor_history::verify_native_version(storage, &id)?; }
             ActorKind::Builtin(_) | ActorKind::Missing => {}
             ActorKind::Unverified => return Err("voice_backup:personal_actor_unverified".into()),
         }
@@ -423,6 +518,10 @@ pub(crate) fn selected_personal_actor_matches_version(
         ActorKind::Personal => actor_history::selected_actor_matches_version(
             &paths.approved_actor_dir, version_id,
         ),
+        ActorKind::Native(id) => {
+            actor_history::verify_native_version(paths, &id)?;
+            Ok(id == version_id)
+        }
         ActorKind::Builtin(_) => Ok(false),
         ActorKind::Missing => Err("voice_lab:selected_actor_missing".into()),
         ActorKind::Unverified => Err("voice_lab:selected_actor_unverified".into()),
@@ -434,16 +533,28 @@ pub(crate) fn activate_archived_personal_voice(
 ) -> Result<(), String> {
     // Verify candidate before touching any selected actor. Full weight hashes
     // are checked again in the staged copy before atomic replacement.
-    if actor_history::version_is_native(paths, version_id)? {
-        return Err("voice_lab:native_version_activation_pending".into());
+    let native = actor_history::version_is_native(paths, version_id)?;
+    if native != super::super::helper_bridge::native_voice_candidate_enabled() {
+        return Err("voice_lab:version_runtime_incompatible".into());
     }
-    actor_history::verify_actor_version(paths, version_id)?;
+    if native {
+        #[cfg(windows)]
+        {
+            let (profile, reference) = actor_history::native_version_payload(paths, version_id)?;
+            crate::commands::voice_lab_build::native_review::prepare_saved_profile(&profile, &reference)?;
+        }
+        #[cfg(not(windows))]
+        return Err("voice_lab:native_profile_windows_only".into());
+    } else {
+        actor_history::verify_actor_version(paths, version_id)?;
+    }
     let selected = &paths.approved_actor_dir;
     if selected.exists() {
         match actor_kind(selected) {
             ActorKind::Personal => {
                 actor_history::preserve_actor_version(paths, selected)?;
             }
+            ActorKind::Native(id) => { actor_history::verify_native_version(paths, &id)?; }
             ActorKind::Builtin(_) => {}
             ActorKind::Unverified => return Err("voice_lab:selected_actor_unverified".into()),
             ActorKind::Missing => return Err("voice_lab:selected_actor_missing".into()),
@@ -458,9 +569,15 @@ pub(crate) fn activate_archived_personal_voice(
         }
     }
     super::super::builtin_voice::replace_directory_atomically(selected, |staging| {
-        actor_history::prepare_version_for_activation(paths, version_id, staging)
+        if native {
+            let bytes = serde_json::to_vec(version_id).map_err(|_| "native_voice:selection_invalid")?;
+            immutable_store::write_new_synced(&staging.join(NATIVE_SELECTION), &bytes)?;
+            validate_selected_package(paths, staging)
+        } else {
+            actor_history::prepare_version_for_activation(paths, version_id, staging)
+        }
     })?;
-    if validate_actor_package(selected).is_err() {
+    if !selected_personal_actor_matches_version(paths, version_id)? {
         // A successful file swap with an unreadable selected package is not a
         // confirmed success. The old personal version remains preserved.
         return Err("voice_lab:version_selected_integrity_unverified".into());
@@ -470,9 +587,15 @@ pub(crate) fn activate_archived_personal_voice(
 
 pub(crate) fn activate_stored_personal_voice(paths: &VoiceLabStoragePaths) -> Result<(), String> {
     match actor_kind(&paths.approved_actor_dir) {
-        ActorKind::Personal => return Ok(()),
+        ActorKind::Native(id) if super::super::helper_bridge::native_voice_candidate_enabled() => return actor_history::verify_native_version(paths, &id),
+        ActorKind::Native(_) => return Err("voice_lab:version_runtime_incompatible".into()),
+        ActorKind::Personal if !super::super::helper_bridge::native_voice_candidate_enabled() => return Ok(()),
+        ActorKind::Personal => return Err("voice_lab:personal_clone_approval_required".into()),
         ActorKind::Unverified => return Err("voice_lab:selected_actor_unverified".to_string()),
         ActorKind::Missing | ActorKind::Builtin(_) => {}
+    }
+    if super::super::helper_bridge::native_voice_candidate_enabled() {
+        return Err("voice_lab:choose_native_saved_version".into());
     }
     recover_personal_archive(paths)?;
     let source = &paths.stored_personal_actor_dir;
@@ -762,6 +885,7 @@ pub(super) fn promote_voice_actor_candidate_at(storage: &VoiceLabStoragePaths) -
             ActorKind::Personal => {
                 actor_history::preserve_actor_version(storage, &storage.approved_actor_dir)?;
             }
+            ActorKind::Native(id) => { actor_history::verify_native_version(storage, &id)?; }
             ActorKind::Unverified => {
                 return Err("voice_lab:previous_voice_unverified".into());
             }
@@ -845,7 +969,7 @@ fn recover_interrupted_promotion(storage: &VoiceLabStoragePaths) -> Result<(), S
     let previous = storage.saved_root.join(".MyVoice.previous");
 
     if storage.approved_actor_dir.exists() {
-        validate_actor_package(&storage.approved_actor_dir)?;
+        validate_selected_package(storage, &storage.approved_actor_dir)?;
         if staging.exists() {
             actor_history::preserve_actor_version(storage, &staging)?;
             fs::remove_dir_all(&staging)
@@ -854,6 +978,8 @@ fn recover_interrupted_promotion(storage: &VoiceLabStoragePaths) -> Result<(), S
         if previous.exists() {
             if matches!(actor_kind(&previous), ActorKind::Personal) {
                 actor_history::preserve_actor_version(storage, &previous)?;
+            } else if let ActorKind::Native(id) = actor_kind(&previous) {
+                actor_history::verify_native_version(storage, &id)?;
             } else if matches!(actor_kind(&previous), ActorKind::Unverified) {
                 return Err("voice_lab:previous_backup_unverified".into());
             }
@@ -864,7 +990,7 @@ fn recover_interrupted_promotion(storage: &VoiceLabStoragePaths) -> Result<(), S
     }
 
     if previous.exists() {
-        validate_actor_package(&previous)?;
+        validate_selected_package(storage, &previous)?;
         fs::rename(&previous, &storage.approved_actor_dir)
             .map_err(|error| format!("voice_lab:promotion_recovery_failed:{error}"))?;
     }

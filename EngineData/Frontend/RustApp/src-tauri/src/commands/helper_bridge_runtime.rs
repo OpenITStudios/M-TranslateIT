@@ -101,7 +101,7 @@ pub(super) struct NativeInferenceOwner {
 #[cfg(windows)]
 struct NativeVoiceSession {
     generation: Option<u64>,
-    voice_id: &'static str,
+    voice_id: String,
     actor_token: String,
     binding: translateit_native_cuda::VoiceBinding,
 }
@@ -206,10 +206,10 @@ impl NativeInferenceOwner {
 
     /// Call only under the existing helper permit and lifecycle owner.
     /// The returned request must be awaited OUTSIDE the lifecycle mutex.
-    pub(super) fn begin_selected_builtin_voice(
+    pub(super) fn begin_selected_voice(
         &mut self, generation: Option<u64>, session_id: Option<&str>,
-        reference: crate::commands::voice_lab::NativeBuiltinReference, deadline: Instant,
-    ) -> Result<(&'static str, translateit_native_cuda::PendingInference), translateit_native_cuda::Error> {
+        reference: crate::commands::voice_lab::NativeSelectedReference, deadline: Instant,
+    ) -> Result<(String, translateit_native_cuda::PendingInference), translateit_native_cuda::Error> {
         use translateit_native_cuda::{Error, InferenceInput};
         if !self.voice_scope_matches(generation, session_id, true) {
             return Err(Error::InvalidInput);
@@ -222,19 +222,20 @@ impl NativeInferenceOwner {
 
     /// Publish only the typed receipt after the transport verifies its
     /// request ID and helper generation, and the same Meeting scope again.
-    pub(super) fn finish_selected_builtin_voice(
-        &mut self, generation: Option<u64>, session_id: Option<&str>, voice_id: &'static str,
+    pub(super) fn finish_selected_voice(
+        &mut self, generation: Option<u64>, session_id: Option<&str>, voice_id: &str,
         request_id: &str, output: translateit_native_cuda::InferenceOutput,
     ) -> Result<String, translateit_native_cuda::Error> {
         use translateit_native_cuda::{Error, InferenceOutput};
         self.native_voice = None;
         if !self.voice_scope_matches(generation, session_id, true)
-            || !matches!(voice_id, "MaleVoice" | "FemaleVoice") {
+            || !crate::commands::voice_lab::selected_native_identity(&crate::engine::paths::ProjectPaths::discover())
+                .is_ok_and(|selected| selected == voice_id) {
             return Err(Error::InvalidInput);
         }
         let InferenceOutput::VoiceBound(binding) = output else { return Err(Error::InvalidReceipt); };
         let actor_token = format!("zonos3:{voice_id}:{request_id}");
-        self.native_voice = Some(NativeVoiceSession { generation, voice_id, actor_token: actor_token.clone(), binding });
+        self.native_voice = Some(NativeVoiceSession { generation, voice_id: voice_id.to_owned(), actor_token: actor_token.clone(), binding });
         Ok(actor_token)
     }
 
@@ -247,8 +248,7 @@ impl NativeInferenceOwner {
         use translateit_native_cuda::{Error, InferenceInput};
         if !self.voice_scope_matches(generation, session_id, preparing) { return Err(Error::InvalidInput); }
         let selected = self.native_voice.as_ref()
-            .filter(|voice| voice.generation == generation && voice.actor_token == actor_token
-                && matches!(voice.voice_id, "MaleVoice" | "FemaleVoice"))
+            .filter(|voice| voice.generation == generation && voice.actor_token == actor_token)
             .ok_or(Error::InvalidInput)?;
         self.owner.begin(InferenceInput::Voice { text, binding: selected.binding }, deadline)
     }
@@ -691,14 +691,15 @@ pub(super) fn project_candidate_status(runtime: &mut HelperBridgeRuntime) -> Val
     let voice = admitted && NativeInferenceOwner::voice_assets_present(&paths);
     let owner = runtime.native_inference.as_ref().filter(|native| native.owner.is_available());
     let selected = if admitted {
-        crate::commands::voice_lab::selected_native_builtin_identity(&paths).map(|(id, _)| id)
+        crate::commands::voice_lab::selected_native_identity(&paths)
     } else { Err("native_inference:lifecycle_not_ready") };
     let binding = owner.and_then(|native| native.native_voice.as_ref());
-    let selected = if binding.is_some_and(|bound| selected.is_ok_and(|id| id != bound.voice_id)) {
+    let selected = selected.as_deref();
+    let selected = if binding.is_some_and(|bound| selected.is_ok_and(|id| id != bound.voice_id.as_str())) {
         Err("native_voice:selected_reference_changed")
-    } else { selected };
+    } else { selected.map_err(|error| *error) };
     let pci = owner.map(|native| native.owner.device_id());
-    let token = binding.filter(|bound| selected.is_ok_and(|id| id == bound.voice_id))
+    let token = binding.filter(|bound| selected.is_ok_and(|id| id == bound.voice_id.as_str()))
         .map(|bound| bound.actor_token.as_str());
     let projected = candidate_status_payload(admitted, pair, voice, selected, pci, token);
     runtime.cuda_ready = worker_bool(&projected, "cuda_capability_known");

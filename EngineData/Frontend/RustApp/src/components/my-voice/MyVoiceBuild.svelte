@@ -862,7 +862,7 @@
       </div>
       <p class="mb-0 mt-3 text-[13px] leading-5 text-[var(--ti-text-muted)]" role="status" aria-live="polite">{reviewedLineIds.length} of {build.evaluation_samples.length} previews listened</p>
       {#if build.native_candidate}
-        <p class="mb-0 mt-4 text-sm" role="status">Save this approved voice to Voice versions. Meeting activation is not yet available; your current voice is unchanged.</p>
+        <p class="mb-0 mt-4 text-sm" role="status">Save this approved voice to Voice versions, then select it for Meeting. Your current voice is unchanged until you select a version.</p>
       {/if}
       <label class="mt-4 flex items-start gap-3 rounded-[var(--ti-radius-md)] border border-[var(--ti-border)] p-4">
         <input class="mt-0.5 size-5 shrink-0 accent-[var(--ti-accent)]" type="checkbox" bind:checked={qualityConfirmed} disabled={!evaluationReviewComplete || busy || statusCheckUnavailable} />
