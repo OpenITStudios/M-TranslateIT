@@ -13,21 +13,22 @@ const sources = JSON.parse(readFileSync(
   "utf8",
 ));
 
-test("built-in voice release stage verifies tracked files rather than copying into themselves", () => {
-  assert.doesNotMatch(stage, /Copy-Tree \(Join-Path \$RepoRoot 'EngineData\\Backend\\RuntimeAssets\\Voice\\BuiltInVoices'\)/);
-  assert.match(stage, /Verify repository-owned built-in voice references/);
-  assert.match(stage, /\$builtInRecord\.schema -ne 'translateit\.builtin_voice_sources\.v1'/);
-  assert.match(stage, /Compare-Object \(\$expectedVoiceIds \| Sort-Object\) \(\$actualVoiceIds \| Sort-Object\)/);
-  assert.match(stage, /Assert-Hash \$reference \(\[string\]\$voice\.wav_sha256\)/);
-  assert.match(stage, /BuiltInVoices attribution missing/);
+const builder = readFileSync(new URL("../build_r3_external_payload.py", import.meta.url), "utf8");
+const stagingOwner = readFileSync(new URL("../ReleaseStaging.psm1", import.meta.url), "utf8");
+test("staging verifies candidate built-in bytes against tracked sources and never promotes the tracked directory", () => {
+  assert.match(stage, /Built-in voice source or attribution mismatch/);
+  assert.match(stage, /Get-FileHash -LiteralPath \$source -Algorithm SHA256/);
+  assert.match(stage, /--verify-inputs --asset-root \$PayloadRoot/);
+  assert.match(stagingOwner, /Where-Object \{ \$_ -cne \$tracked \}/);
+  assert.doesNotMatch(stage, /uv sync|Copy-Tree|Invoke-WebRequest/);
 });
 
-test("release payload rejects extra or duplicate voice identities and invalid source digests", () => {
-  assert.match(validator, /builtin_voice_sources_inventory_mismatch/);
-  assert.match(validator, /new Set\(voices\.map\(\(voice\) => voice\.voice_id\)\)\.size !== 2/);
-  assert.match(validator, /builtin_voice_invalid_sha256/);
-  assert.match(validator, /builtin_voice_hash_mismatch/);
-  assert.match(validator, /requireFile\(path, \`BuiltInVoices\/\$\{voice\.voice_id\}\/reference\.wav\`\)/);
+test("native payload rejects unapproved voice identities and verifies reference hashes at its single owner", () => {
+  assert.match(builder, /built-in voice source inventory mismatch/);
+  assert.match(builder, /"MaleVoice", "FemaleVoice"/);
+  assert.match(builder, /record\(builtins \+ voice\["voice_id"\] \+ "\/reference.wav", voice\["wav_sha256"\]\)/);
+  assert.match(validator, /--verify-inputs/);
+  assert.doesNotMatch(validator, /createHash\(/);
 });
 
 test("canonical built-in voice source inventory has two approved IDs and digest shapes", () => {
@@ -56,5 +57,5 @@ test("native built-in provisioning bypasses legacy weights and release stays fai
   assert.match(install, /write_new_synced/);
   assert.doesNotMatch(install, /GPT_WEIGHT_FILE|SOVITS_WEIGHT_FILE|fs::copy|Command::new/);
   assert.match(release, /throw 'Native My Voice release is held/);
-  assert.match(wrapper, /throw 'This is the legacy release staging path\. Native My Voice packaging is held/);
+  assert.match(wrapper, /throw 'Native My Voice packaging is held/);
 });

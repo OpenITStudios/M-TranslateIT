@@ -76,9 +76,7 @@ Push-Location $AppRoot
 try {
     node scripts/generate_third_party_notices.mjs --write
     if ($LASTEXITCODE -ne 0) { throw 'TranslateIT third-party notice generation failed.' }
-    npm run preflight:release-payload
-    if ($LASTEXITCODE -ne 0) { throw 'TranslateIT release payload preflight failed.' }
-
+    # The builder verifies the exact native input closure once before archiving.
     Require-File $PayloadBuilder 'R3 external payload builder'
     Require-File $HookTemplate 'R3 NSIS hook template'
     Require-File $InstallerHelper 'R3 installer helper'

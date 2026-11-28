@@ -3,14 +3,50 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$script:ReleasePayloadRoots = @(
-    "EngineData/Backend/LocalWorker/PythonRuntime",
-    "EngineData/Backend/RuntimeAssets/ASR/ModelData",
-    "EngineData/Backend/RuntimeAssets/Translation/ModelData",
-    "EngineData/Backend/RuntimeAssets/NativeCuda",
-    "EngineData/Backend/RuntimeAssets/Voice/GPTSoVITS/Source",
-    "EngineData/Backend/RuntimeAssets/AudioProvider/VBCABLE/Package"
-)
+function Get-TranslateITReleasePayloadRoots([string]$RepositoryRoot) {
+    $manifestPath = Join-Path $RepositoryRoot 'EngineData/Backend/LocalWorker/WorkerRuntime/model_manifest.json'
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    if ($manifest.native_payload.schema -cne 'translateit.r3.external_payload.v3') { throw 'Native staging schema mismatch.' }
+    $tracked = 'EngineData/Backend/RuntimeAssets/Voice/BuiltInVoices'
+    # Explicit safety allowlist for the destructive promotion boundary.
+    $allowed = @(
+        'EngineData/Backend/RuntimeAssets/ASR/ModelData',
+        'EngineData/Backend/RuntimeAssets/Translation/ModelData',
+        'EngineData/Backend/RuntimeAssets/NativeCuda',
+        'EngineData/Backend/RuntimeAssets/NativeOrt',
+        $tracked,
+        'EngineData/Backend/RuntimeAssets/Voice/ModelData',
+        'EngineData/Backend/RuntimeAssets/AudioProvider/VBCABLE/Package'
+    )
+    $roots = @($manifest.native_payload.roots)
+    if (($roots -join '|') -cne ($allowed -join '|')) { throw 'Native staging root closure mismatch.' }
+    return @($roots | Where-Object { $_ -cne $tracked })
+}
+
+function Assert-TranslateITPrivateStage {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$RepositoryRoot,
+          [Parameter(Mandatory=$true)][string]$StageRoot)
+    $repo = (Resolve-Path -LiteralPath $RepositoryRoot).Path
+    $stage = (Resolve-Path -LiteralPath $StageRoot).Path
+    $workspace = Join-Path $repo '.workspace'
+    $private = Join-Path $workspace 'staging'
+    if (-not $stage.StartsWith($private + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Untrusted release stage: $stage"
+    }
+    $relative = $stage.Substring($private.Length + 1)
+    $first = $relative.Split([IO.Path]::DirectorySeparatorChar)[0]
+    if ($first -in @('release-active','release-rollback')) { throw 'Reserved staging directory cannot supply payload.' }
+    $dir = [IO.DirectoryInfo]::new($stage)
+    while ($null -ne $dir) {
+        if (-not $dir.Exists -or ($dir.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw "Release promotion forbids redirected staging paths: $($dir.FullName)"
+        }
+        if ($dir.FullName -ieq $repo) { break }
+        $dir = $dir.Parent
+    }
+    if ($null -eq $dir) { throw 'Stage is not under repository root.' }
+}
 
 function Assert-TranslateITReleaseStagingAvailable {
     [CmdletBinding()]
@@ -45,18 +81,9 @@ function Publish-TranslateITReleaseStage {
 
     $repo = (Resolve-Path -LiteralPath $RepositoryRoot).Path
     $stage = (Resolve-Path -LiteralPath $StageRoot).Path
-    $workspaceRoot = Join-Path $repo ".workspace"
-    $privateStaging = Join-Path $workspaceRoot "staging"
-    foreach ($p in @($workspaceRoot, $privateStaging, $stage)) {
-        $dir = Get-Item -LiteralPath $p -Force
-        if (-not $dir.PSIsContainer -or ($dir.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-            throw "Release promotion forbids redirected staging paths: $p"
-        }
-    }
-    if (-not $stage.StartsWith($privateStaging + [IO.Path]::DirectorySeparatorChar,
-            [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Untrusted release stage: $stage"
-    }
+    Assert-TranslateITPrivateStage -RepositoryRoot $repo -StageRoot $stage
+    $releasePayloadRoots = @(Get-TranslateITReleasePayloadRoots $repo)
+    $privateStaging = Join-Path $repo '.workspace/staging'
     $backup = Join-Path $privateStaging "release-rollback"
     $lock = Join-Path $privateStaging "release-active"
     if (-not (Test-Path -LiteralPath $lock -PathType Container)) {
@@ -65,7 +92,7 @@ function Publish-TranslateITReleaseStage {
     if (Test-Path -LiteralPath $backup) {
         throw "Unfinished release rollback state is present: $backup"
     }
-    foreach ($relative in $script:ReleasePayloadRoots) {
+    foreach ($relative in $releasePayloadRoots) {
         $from = Join-Path $stage $relative
         if (-not (Test-Path -LiteralPath $from -PathType Container)) {
             throw "Missing verified staging subtree: $relative"
@@ -75,6 +102,13 @@ function Publish-TranslateITReleaseStage {
             throw "Staged subtree must not be a reparse point: $relative"
         }
         $dest = Join-Path $repo $relative
+        $parent = [IO.DirectoryInfo]::new((Split-Path -Parent $dest))
+        while ($null -ne $parent -and $parent.FullName -ine $repo) {
+            if ($parent.Exists -and ($parent.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                throw "Runtime destination parent is redirected: $relative"
+            }
+            $parent = $parent.Parent
+        }
         if (Test-Path -LiteralPath $dest) {
             $existing = Get-Item -LiteralPath $dest -Force
             if (-not $existing.PSIsContainer -or
@@ -89,7 +123,7 @@ function Publish-TranslateITReleaseStage {
     New-Item -ItemType Directory -Path $backup -ErrorAction Stop | Out-Null
     $moved = New-Object System.Collections.Generic.List[object]
     try {
-        foreach ($relative in $script:ReleasePayloadRoots) {
+        foreach ($relative in $releasePayloadRoots) {
             $from = Join-Path $stage $relative
             $to = Join-Path $repo $relative
             $saved = Join-Path $backup $relative
@@ -107,7 +141,7 @@ function Publish-TranslateITReleaseStage {
             Move-Item -LiteralPath $from -Destination $to -ErrorAction Stop
             $item.newMoved = $true
         }
-        foreach ($relative in $script:ReleasePayloadRoots) {
+        foreach ($relative in $releasePayloadRoots) {
             if (-not (Test-Path -LiteralPath (Join-Path $repo $relative) -PathType Container)) {
                 throw "Promoted release subtree went missing: $relative"
             }
@@ -118,8 +152,13 @@ function Publish-TranslateITReleaseStage {
         for ($i = $moved.Count - 1; $i -ge 0; $i--) {
             $item = $moved[$i]
             try {
-                if ($item.newMoved -and (Test-Path -LiteralPath $item.to)) {
-                    Remove-Item -LiteralPath $item.to -Recurse -Force -ErrorAction Stop
+                if ($item.newMoved) {
+                    if (-not (Test-Path -LiteralPath $item.to) -or (Test-Path -LiteralPath $item.from)) {
+                        throw "Cannot restore staged candidate safely: $($item.from)"
+                    }
+                    # Preserve the verified candidate for retry rather than
+                    # discard multi-GB files on a later promotion failure.
+                    Move-Item -LiteralPath $item.to -Destination $item.from -ErrorAction Stop
                 }
                 if ($item.oldMoved) {
                     if (-not (Test-Path -LiteralPath $item.saved)) {
@@ -141,4 +180,4 @@ function Publish-TranslateITReleaseStage {
     Write-Host "[release-stage] Verified runtime subtrees committed; previous versions retired."
 }
 
-Export-ModuleMember -Function Assert-TranslateITReleaseStagingAvailable, Publish-TranslateITReleaseStage
+Export-ModuleMember -Function Assert-TranslateITReleaseStagingAvailable, Assert-TranslateITPrivateStage, Publish-TranslateITReleaseStage

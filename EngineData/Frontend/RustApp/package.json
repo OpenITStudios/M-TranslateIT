@@ -13,7 +13,7 @@
     "test:frontend-runtime": "node --experimental-strip-types --test \"scripts/tests/*.test.ts\"",
     "check:rust": "node scripts/validate_rust_manifest_preflight.mjs",
     "check:tauri-rust-local": "node scripts/run_local_tauri_compile_check.mjs",
-    "preflight:release-payload": "node scripts/validate_release_model_revisions.mjs && node scripts/validate_release_payload.mjs",
+    "preflight:release-payload": "node scripts/validate_release_payload.mjs",
     "preflight:tauri-package": "node scripts/validate_tauri_package_preflight.mjs && node scripts/validate_release_package_contract.mjs",
     "validate:bridge-contract": "node scripts/validate_bridge_contract.mjs",
     "validate:virtual-route": "node scripts/validate_virtual_route_contract.mjs",

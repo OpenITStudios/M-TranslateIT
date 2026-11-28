@@ -65,29 +65,19 @@ def validate_manifest(root: Path) -> None:
 
 def validate_worker(root: Path) -> None:
     prefix = "EngineData/Backend/LocalWorker/WorkerRuntime/"
-    entrypoint = read(root, prefix + "realtime_local_worker.py")
-    base = read(root, prefix + "realtime_local_worker_base.py")
-    common = read(root, prefix + "worker_runtime_common.py")
-    io_runtime = read(root, prefix + "worker_io_runtime.py")
     acquisition = read(root, prefix + "prepare_model_assets.py")
-    require("import realtime_local_worker_base as runtime" in entrypoint, "worker:base_missing")
-    require("exec(" not in entrypoint and "compile(" not in entrypoint, "worker:dynamic_exec_bootstrap")
     require("import prepare_model_assets_core as _core" in acquisition, "acquisition:core_import_missing")
     require("exec(" not in acquisition and "compile(" not in acquisition, "acquisition:dynamic_exec_bootstrap")
     require(".translateit_model_revision" in acquisition, "acquisition:revision_marker")
-    for name in ("milmmt_translation_provider.py", "translation_envelope.py", "realtime_local_worker_core.py"):
+    for name in ("realtime_local_worker.py", "realtime_local_worker_base.py", "worker_runtime_common.py",
+                 "worker_io_runtime.py", "voice_lab_gpt_sovits.py", "voice_lab_upstream_stage.py",
+                 "milmmt_translation_provider.py", "translation_envelope.py", "realtime_local_worker_core.py"):
         require(not (root / (prefix + name)).exists(), f"worker:legacy_source:{name}")
-    commands = re.search(r'HANDLERS\s*=\s*\{([\s\S]*?)\n\}', base)
-    require(commands is not None and set(re.findall(r'"([a-z_]+)"\s*:', commands[1])) ==
-            {"ping", "status", "voice_actor_preflight", "voice_actor_synthesize"}, "worker:voice_only")
-    for label, body in (("entrypoint", entrypoint), ("base", base), ("common", common), ("io", io_runtime)):
-        for marker in (*LEGACY_ACTIVE_MARKERS, "milmmt_translation_provider", "handle_transcribe", "handle_translate", "from faster_whisper"):
-            require(marker not in body, f"worker:{label}:legacy:{marker}")
     transport = read(root, "EngineData/Frontend/RustApp/src-tauri/src/commands/helper_bridge/transport.rs")
     native = read(root, "EngineData/Frontend/RustApp/src-tauri/src/commands/helper_bridge/transport/native.rs")
     implementation = read(root, "tools/translation_quality/native_cuda/inference.cpp")
     require("return native::dispatch(" in transport and "TemporaryAsrWav" not in transport, "native:sole_dispatch")
-    require("condition_asr_pcm(&mut samples" in native and "owner.begin(input, deadline)" in native, "native:owned_dispatch")
+    require("condition_asr_pcm(&mut samples" in native and "owner.owner.begin(input.expect(" in native, "native:owned_dispatch")
     require("TI_INCOMPLETE" in implementation and "TI_OUTPUT_LIMIT" in implementation
             and "llama_memory_clear" in implementation, "native:bounded_complete_current_source")
 
@@ -147,7 +137,7 @@ def validate_release(root: Path) -> None:
     release_workflow = read(root, ".github/workflows/release-payload-verify.yml")
     lock_workflow = read(root, ".github/workflows/workerruntime-lock.yml")
 
-    require("prepare_model_assets.py" in stage and "--destination-root $PayloadRoot" in stage and "Assert-TextEquals" in stage, "release:model_acquisition")
+    require("--verify-inputs --asset-root $PayloadRoot" in stage and "Publish-TranslateITReleaseStage" in stage, "release:native_stage")
     require('"installMode": "perMachine"' in config, "release:per_machine")
     require("translateit-r3-payload-hooks.generated.nsh" in config, "release:hook_config")
     for forbidden in (
@@ -173,24 +163,12 @@ def validate_release(root: Path) -> None:
         require(marker in installer, f"release:installer_marker:{marker}")
     require("Native R3 source contract checks only" in package_contract, "release:package_contract")
 
-    excluded_block = optimizer.split("EXCLUDED_DISTRIBUTIONS = {", 1)[1].split("}", 1)[0]
-    required_block = optimizer.split("REQUIRED_DISTRIBUTIONS = {", 1)[1].split("}", 1)[0]
-    excluded_names = set(re.findall(r'"([^"]+)"', excluded_block))
-    baseline_count = assignment_int(optimizer, "EXPECTED_BASELINE_DISTRIBUTIONS")
-    optimized_count = assignment_int(optimizer, "EXPECTED_OPTIMIZED_DISTRIBUTIONS")
-    require('"accelerate"' not in excluded_block, "release:accelerate_excluded")
-    require('"accelerate"' in required_block, "release:accelerate_required")
-    require(
-        optimized_count == baseline_count - len(excluded_names),
-        "release:optimized_distribution_count_inconsistent",
-    )
-
-    active_release = "\n".join((stage, optimizer, builder, installer, config))
+    for body in (optimizer, license_stager):
+        require("Native packaging is held" in body, "release:legacy_tool_hold")
+    require("--verify-inputs" in payload_validator, "release:single_native_verifier")
+    require("Native packaging is held" in builder and "Native packaging is held" in installer, "release:hold")
     for marker in LEGACY_ACTIVE_MARKERS:
-        require(marker not in active_release, f"release:legacy_active:{marker}")
-    require("tokenizers-0.22.2.dist-info" in license_stager, "release:tokenizers_license_version")
-    require(TOKENIZERS_SDIST_SHA256 in license_stager, "release:tokenizers_license_hash")
-    require("tokenizers-0.22.2.dist-info" in payload_validator, "release:tokenizers_payload_version")
+        require(marker not in "\n".join((stage, builder, installer, config)), f"release:legacy_active:{marker}")
 
     require_manual_workflow(release_workflow, "workflow:release")
     require_manual_workflow(lock_workflow, "workflow:lock")
@@ -234,12 +212,12 @@ def validate_quality_evaluation(root: Path) -> None:
 def validate_tests_and_runtime_docs(root: Path) -> None:
     tests = "\n".join(
         read(root, f"EngineData/Backend/LocalWorker/WorkerRuntime/tests/{name}")
-        for name in ("test_worker_contract.py", "test_prepare_model_assets.py")
+        for name in ("test_prepare_model_assets.py", "test_prepare_model_assets_entrypoint.py")
     )
-    require(MODEL_ID in tests and "test_python_worker_rejects_retired_inference_commands" in tests, "tests:native_identity_and_voice_only")
+    require(MODEL_ID in tests and "test_exact_existing_snapshot_is_reused_without_network_or_marker_write" in tests, "tests:native_acquisition_identity")
     require("from transformers import AutoModelForSeq2SeqLM" not in tests, "tests:legacy_seq2seq")
     runtime_readme = read(root, "EngineData/Backend/LocalWorker/WorkerRuntime/README.md")
-    require(TRANSFORMERS_VERSION in runtime_readme, "docs:runtime_readme:transformers")
+    require("No production Python inference" in runtime_readme, "docs:runtime_readme:native")
 
 
 def main() -> int:
@@ -259,8 +237,9 @@ def main() -> int:
                 "accelerate": ACCELERATE_VERSION,
                 "transformers": TRANSFORMERS_VERSION,
                 "tokenizers": TOKENIZERS_VERSION,
-                "worker_architecture": "rust_native_asr_mt_plus_voice_only_worker",
-                "release_packaging": "r3_external_offline_payload",
+                "worker_architecture": "rust_native_asr_mt_tts",
+                "release_packaging": "native_r3_v3_held",
+                "dependency_lock_scope": "retained_historical_developer_lock",
                 "target_pc_validation": "deferred",
             },
             indent=2,

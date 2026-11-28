@@ -127,24 +127,12 @@ if (nsis.installMode !== "perMachine") fail("R3 NSIS installMode must be perMach
 if (nsis.installerHooks !== "./target/translateit-r3-payload-hooks.generated.nsh") fail("R3 NSIS must use the generated payload hook.");
 if (existsSync(join(tauriRoot, "target", "translateit-r3-payload-hooks.generated.nsh"))) fail("Generated R3 hook must stay out of source.");
 
-requireMarkers(stage, "release staging", [
-  "$ffmpegReleaseTag = 'autobuild-2026-10-25-13-00'",
-  "$ffmpegReleaseId = '423406080'",
-  "$ffmpegReleaseName = 'Auto-Build 2026-10-25 13:00'",
-  "$ffmpegReleasePublishedAt = '2026-10-25T13:01:14Z'",
-  "$ffmpegAssetId = '675057963'",
-  "$ffmpegAssetName = 'ffmpeg-n9.0.2-36-g6882969ce9-win64-lgpl-9.0.zip'",
-  "$ffmpegArchiveSha = '47526345cc4800f4163337d5db8048a2d06c78a53bb234532f55a30dbfb49868'",
-  "releases/download/$ffmpegReleaseTag/$ffmpegAssetName",
-  "Assert-Hash $ffmpegArchive $ffmpegArchiveSha 'FFmpeg pinned archive'",
-  "integrity_source=pinned_release_asset_sha256",
-  "--enable-version3",
+requireMarkers(stage, "native release staging", [
+  "Native packaging is held", "--verify-inputs", "--asset-root $PayloadRoot",
+  "Assert-TranslateITPrivateStage", "Publish-TranslateITReleaseStage",
+  "Get-AuthenticodeSignature", "Built-in voice source or attribution mismatch",
 ]);
-forbidMarkers(stage, "release staging moving FFmpeg source", [
-  "BtbN/FFmpeg-Builds/releases/latest",
-  "ffmpeg-n9.0-latest-win64-lgpl-9.0.zip",
-  "$ffmpegRelease = Invoke-RestMethod",
-]);
+forbidMarkers(stage, "retired production staging", ["uv sync", "PythonRuntime", "Invoke-WebRequest", "robocopy", "GPTSoVITS"]);
 
 requireMarkers(builder, "payload builder", [
   'PAYLOAD_SCHEMA = "translateit.r3.external_payload.v3"',
@@ -152,7 +140,7 @@ requireMarkers(builder, "payload builder", [
   "TRANSLATEIT_PAYLOAD_CONTRACT.json",
   "TRANSLATEIT_SPEAKER_ONNX_SHA256", "TRANSLATEIT_SPEAKER_ONNX_BYTES",
   "validate_no_filesystem_indirection",
-  "validate_native_inputs", "TRANSLATEIT_NATIVE_DLL_PINS", "@@RUNTIME_CONTRACT_SHA256@@",
+  "validate_native_inputs", "TRANSLATEIT_NATIVE_DLL_PINS", "@@RUNTIME_CONTRACT_SHA256@@", "--verify-inputs", "release_admitted",
   "is_filesystem_indirection",
   "is_junction",
   '"-t7z"', '"-m0=LZMA2"', '"-mx=9"', "find_7zip", "find_tar", "expanded_bytes", "@@APP_VERSION@@", "@@PAYLOAD_EXPANDED_BYTES@@",
@@ -210,7 +198,7 @@ for (const [body, label, sideEffect] of [
   [licenseStager, "legacy Python license stager", "REPO_ROOT = Path(__file__)"],
 ]) {
   const hold = body.indexOf('raise ' + (label === "native payload builder" ? 'RuntimeError(' : 'SystemExit(') + '"Native packaging is held:');
-  if (hold < 0 || body.indexOf(sideEffect) <= hold) fail(`${label} must remain held before side effects.`);
+  if (hold < 0 || body.indexOf(sideEffect, hold) <= hold) fail(`${label} must remain held before side effects.`);
 }
 
 // The v3 builder/installer closure is source-only. Native runtime paths are
@@ -236,6 +224,10 @@ const installerVerify = installerEntry.indexOf("Verify-InstalledRuntime $Install
 if (installerHold < 0 || installerVerify <= installerHold) fail("Native installer/update entry must be held before any runtime verification or mutation.");
 
 const scripts = packageJson.scripts ?? {};
+compareExact(scripts["preflight:release-payload"], "node scripts/validate_release_payload.mjs", "single native payload preflight owner");
+const notice = readText(join(scriptDir, "generate_third_party_notices.mjs"));
+requireMarkers(notice, "native notice owner", ["NativeCuda", "NativeOrt", "builtInVoiceAttribution", "speaker_verifier_export_pin_pending"]);
+forbidMarkers(notice, "retired notice generation", ["spawnSync", "PythonRuntime", "collectPythonDistributions", "GPTSoVITS"]);
 if (!String(scripts["preflight:tauri-package"] ?? "").includes("validate_release_package_contract.mjs")) fail("Tauri package preflight must include the R3 release contract.");
 if (!String(scripts["validate:source-contracts"] ?? "").includes("preflight:tauri-package")) fail("Source validation must include R3 package preflight.");
 

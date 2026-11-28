@@ -389,22 +389,48 @@ def write_evidence(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", required=True, type=Path)
-    parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--hook-template", required=True, type=Path)
-    parser.add_argument("--installer-helper", required=True, type=Path)
-    parser.add_argument("--generated-hook", required=True, type=Path)
-    parser.add_argument("--evidence", required=True, type=Path)
+    parser.add_argument("--verify-inputs", action="store_true",
+                        help="Read-only native input verification; not release authorization.")
+    parser.add_argument("--asset-root", type=Path, help="Private staged input root for read-only verification.")
+    for option in ("--output", "--hook-template", "--installer-helper", "--generated-hook", "--evidence"):
+        parser.add_argument(option, type=Path)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    if args.verify_inputs:
+        repo_root = args.repo_root.resolve()
+        manifest = load_native_inventory(repo_root)
+        asset_root = repo_root
+        if args.asset_root:
+            requested = args.asset_root.absolute()
+            private = repo_root / ".workspace/staging"
+            if not requested.is_relative_to(private) or requested == private:
+                raise RuntimeError("read-only staged input verification requires a private stage")
+            relative = requested.relative_to(private)
+            if relative.parts[0] in {"release-active", "release-rollback"} or ".." in relative.parts:
+                raise RuntimeError("reserved or unsafe native candidate path")
+            for parent in (requested, *requested.parents):
+                if parent == repo_root:
+                    break
+                if is_filesystem_indirection(parent):
+                    raise RuntimeError("redirected staged input path")
+            asset_root = requested.resolve()
+            if asset_root != requested or not asset_root.is_relative_to(private):
+                raise RuntimeError("staged input path identity changed")
+        body = native_runtime_contract(asset_root, manifest, os.environ.get("TRANSLATEIT_NATIVE_DLL_PINS", ""))
+        print(json.dumps({"verified_files": len(body["files"]), "scope": "native_input_bytes_only",
+                          "release_admitted": False}, sort_keys=True))
+        return 0
     # The implementation below remains source-only until reviewed artifacts,
     # provenance, and integrated target acceptance permit release.
     raise RuntimeError("Native packaging is held: native payload builder is not release-admitted.")
     repo_root = args.repo_root.resolve()
     if not (repo_root / "AGENTS.md").is_file():
         raise RuntimeError("invalid TranslateIT repository root")
+    if args.asset_root or not all((args.output, args.hook_template, args.installer_helper, args.generated_hook, args.evidence)):
+        raise RuntimeError("complete native package build arguments required")
     require_file(args.hook_template, "R3 NSIS hook template")
     require_file(args.installer_helper, "R3 installer helper")
     version = app_version(repo_root)

@@ -4,20 +4,24 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'ReleaseStaging.psm1') -Force
 
-$relativeRoots = @(
-    "EngineData/Backend/LocalWorker/PythonRuntime",
-    "EngineData/Backend/RuntimeAssets/ASR/ModelData",
-    "EngineData/Backend/RuntimeAssets/Translation/ModelData",
-    "EngineData/Backend/RuntimeAssets/Voice/GPTSoVITS/Source",
-    "EngineData/Backend/RuntimeAssets/AudioProvider/VBCABLE/Package"
-)
-$base = Join-Path $env:RUNNER_TEMP ("translateit-release-staging-test-" + [guid]::NewGuid().ToString("N"))
+$sourceRepo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..\..')).Path
+$manifestRelative = 'EngineData/Backend/LocalWorker/WorkerRuntime/model_manifest.json'
+$manifest = Get-Content -LiteralPath (Join-Path $sourceRepo $manifestRelative) -Raw | ConvertFrom-Json
+$tracked = 'EngineData/Backend/RuntimeAssets/Voice/BuiltInVoices'
+$relativeRoots = @($manifest.native_payload.roots | Where-Object { $_ -cne $tracked })
+$base = Join-Path ([IO.Path]::GetTempPath()) ("translateit-release-staging-test-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $base | Out-Null
 function New-Fixture([string]$name) {
     $root = Join-Path $base $name
     $stage = Join-Path $root ".workspace/staging/release-test/payload-tree"
     $lock = Join-Path $root ".workspace/staging/release-active"
     New-Item -ItemType Directory -Path $lock -Force | Out-Null
+    $manifestTarget = Join-Path $root $manifestRelative
+    New-Item -ItemType Directory -Path (Split-Path -Parent $manifestTarget) -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $sourceRepo $manifestRelative) -Destination $manifestTarget
+    $trackedDir = Join-Path $root $tracked
+    New-Item -ItemType Directory -Path $trackedDir -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $trackedDir 'tracked.txt') -Value 'preserve' -Encoding ascii
     $userSaved = Join-Path $root "UserData/SavedProject/VoiceLab"
     New-Item -ItemType Directory -Path $userSaved -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $userSaved "private.txt") -Value "preserve" -Encoding ascii
@@ -41,18 +45,19 @@ try {
     Publish-TranslateITReleaseStage -RepositoryRoot $success.root -StageRoot $success.stage
     if (-not (Test-Path -LiteralPath (Join-Path $previous "new.txt")) -or
         (Test-Path -LiteralPath (Join-Path $previous "old.txt"))) {
-        throw "Release promotion did not replace the old Python runtime."
+        throw "Release promotion did not replace the old native model subtree."
     }
     if (Test-Path -LiteralPath (Join-Path $success.root ".workspace/staging/release-rollback")) {
         throw "Successful staging left an unnecessary recovery backup."
     }
+    if ((Get-Content -LiteralPath (Join-Path (Join-Path $success.root $tracked) 'tracked.txt') -Raw).Trim() -ne 'preserve') { throw 'Tracked built-ins changed.' }
     Assert-PrivateData $success
 
     $blocked = New-Fixture "blocked"
     $old = Join-Path $blocked.root $relativeRoots[0]
     New-Item -ItemType Directory -Path $old -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $old "old.txt") -Value "old" -Encoding ascii
-    $blockingParent = Join-Path $blocked.root "EngineData/Backend/RuntimeAssets/ASR"
+    $blockingParent = Join-Path $blocked.root "EngineData/Backend/RuntimeAssets/Translation"
     New-Item -ItemType Directory -Path (Split-Path -Parent $blockingParent) -Force | Out-Null
     Set-Content -LiteralPath $blockingParent -Value "conflicting file" -Encoding ascii
 
@@ -62,8 +67,9 @@ try {
     if (-not $threw) { throw "Expected promotion to fail at a conflicting target parent." }
     if (-not (Test-Path -LiteralPath (Join-Path $old "old.txt")) -or
         (Test-Path -LiteralPath (Join-Path $old "new.txt"))) {
-        throw "Failed promotion did not restore existing Python runtime."
+        throw "Failed promotion did not restore existing native model subtree."
     }
+    if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $blocked.stage $relativeRoots[0]) 'new.txt'))) { throw 'Failed promotion discarded staged native candidate.' }
     Assert-PrivateData $blocked
 
     $unfinished = New-Fixture "unfinished"
