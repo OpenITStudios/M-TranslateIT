@@ -14,11 +14,22 @@ use std::time::Duration;
 use translateit_native_cuda::{Error, InferenceInput, InferenceOutput, Language};
 
 fn language(value: &Value, key: &str) -> Option<Language> {
-    match value.get(key).and_then(Value::as_str) {
-        Some("id") => Some(Language::Indonesian),
-        Some("en") => Some(Language::English),
+    parse_language(value.get(key).and_then(Value::as_str)?)
+}
+
+fn parse_language(code: &str) -> Option<Language> {
+    match code {
+        "id" => Some(Language::Indonesian),
+        "en" => Some(Language::English),
         _ => None,
     }
+}
+
+// A typed Meeting translation has exactly one source of model content.
+fn meeting_translation_metadata_only(payload: &Value) -> bool {
+    payload.is_object()
+        && ["text", "source_language", "target_language"].iter().all(|key| payload.get(*key).is_none())
+        && matches!(payload.get("meeting_lane").and_then(Value::as_str), Some("you" | "incoming"))
 }
 
 fn language_code(value: Language) -> &'static str {
@@ -178,7 +189,7 @@ pub(super) fn control(task: &str, payload: &Value, permit: &HelperTaskPermit, pr
 
 /// ASR/MT has one production route. Missing resources are terminal.
 pub(super) fn dispatch(
-    task: &str, payload: &mut Value, pcm: Option<MeetingPcmInput<'_>>,
+    task: &str, payload: &mut Value, input: Option<MeetingInput<'_>>,
     mut voice: Option<NativeVoiceIo<'_>>,
     priority: HelperTaskPriority, permit: &HelperTaskPermit, deadline_ms: u128,
 ) -> HelperBridgeWorkerResponse {
@@ -187,6 +198,16 @@ pub(super) fn dispatch(
     let fail = |blocker, message| standalone_blocked_response(
         task, request_id, priority, "error", blocker, message,
     );
+    let pcm = input.and_then(MeetingInput::pcm);
+    let translation = input.and_then(MeetingInput::translation);
+    if input.is_some() && (voice.is_some()
+        || !matches!((task, input), ("transcribe", Some(MeetingInput::Pcm(_)))
+            | ("translate", Some(MeetingInput::Translation(_))))) {
+        return fail("native_inference:typed_request_invalid", "Native Meeting input does not match its task.");
+    }
+    if translation.is_some() && !meeting_translation_metadata_only(payload) {
+        return fail("translation:typed_request_invalid", "Native Meeting translation content must not enter JSON.");
+    }
     let is_bind = matches!(voice.as_ref(), Some(NativeVoiceIo::Bind));
     let is_voice = matches!(voice.as_ref(), Some(NativeVoiceIo::Synthesize(_)));
     let is_probe_speech = matches!(voice.as_ref(), Some(NativeVoiceIo::ProbeSpeech(_)));
@@ -347,7 +368,11 @@ pub(super) fn dispatch(
         }
         (None, Language::English, None)
     } else if task == "transcribe" {
-        let Some(from) = language(payload, "language") else {
+        let from = match pcm {
+            Some(input) => parse_language(input.language),
+            None => language(payload, "language"),
+        };
+        let Some(from) = from else {
             return fail("asr:language_invalid", "Native ASR requires Indonesian or English.");
         };
         let samples = if is_probe_speech {
@@ -382,14 +407,24 @@ pub(super) fn dispatch(
         };
         (Some(InferenceInput::Speech { pcm: samples, language: from }), from, None)
     } else {
-        let (Some(from), Some(to)) = (language(payload, "source_language"), language(payload, "target_language")) else {
+        let (from, to) = match translation {
+            Some(input) => (parse_language(input.source_language), parse_language(input.target_language)),
+            None => (language(payload, "source_language"), language(payload, "target_language")),
+        };
+        let (Some(from), Some(to)) = (from, to) else {
             return fail("translation:direction_not_supported", "Only Indonesian and English translation is supported.");
         };
         if from == to {
             return fail("translation:direction_not_supported", "Translation must change language.");
         }
-        let Some(Value::String(source)) = payload.as_object_mut().and_then(|object| object.remove("text")) else {
-            return fail("translation:empty_text", "Translation source text is required.");
+        let source = match translation {
+            Some(input) => input.source.to_owned(),
+            None => {
+                let Some(Value::String(source)) = payload.as_object_mut().and_then(|object| object.remove("text")) else {
+                    return fail("translation:empty_text", "Translation source text is required.");
+                };
+                source
+            }
         };
         (Some(InferenceInput::Translation { source, from, to }), from, Some(to))
     };
@@ -555,6 +590,21 @@ mod tests {
             phase: "live".into(), live_capture_stream_active: true, safe_to_stop: true,
             note: String::new(),
         }
+    }
+
+    #[test]
+    fn typed_meeting_translation_rejects_duplicate_content_and_missing_lane() {
+        let metadata = json!({"meeting_lane":"you","meeting_session_id":"meeting-1","meeting_generation":41});
+        assert!(meeting_translation_metadata_only(&metadata));
+        for key in ["text", "source_language", "target_language"] {
+            let mut mixed = metadata.clone();
+            mixed[key] = Value::Null;
+            assert!(!meeting_translation_metadata_only(&mixed));
+        }
+        assert!(!meeting_translation_metadata_only(&json!({})));
+        assert_eq!(parse_language("id"), Some(Language::Indonesian));
+        assert_eq!(parse_language("en"), Some(Language::English));
+        assert_eq!(parse_language("ID"), None);
     }
 
     #[test]

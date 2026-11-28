@@ -185,6 +185,7 @@ fn stale_meeting_request(
 #[derive(Clone, Copy)]
 struct MeetingPcmInput<'a> {
     utterance: &'a RefCell<Option<FinalizedMeetingUtterance>>,
+    language: &'a str,
     noise_suppression_enabled: bool,
     prepare_ms: &'a Cell<u64>,
 }
@@ -195,6 +196,7 @@ impl MeetingPcmInput<'_> {
         let Some(u) = slot.as_ref() else { return false; };
         task == "transcribe"
             && payload.get("audio_path").is_none()
+            && payload.get("language").is_none()
             && payload.get("meeting_session_id").and_then(Value::as_str) == Some(u.session_id.as_str())
             && payload.get("meeting_lane").and_then(Value::as_str) == Some(u.lane.as_str())
             && payload.get("meeting_sequence").and_then(Value::as_u64) == Some(u.sequence)
@@ -205,6 +207,30 @@ impl MeetingPcmInput<'_> {
     }
 }
 
+// Model content is separate from the existing request metadata. Borrow
+// text through scheduler admission; only an admitted native request owns it.
+#[derive(Clone, Copy)]
+struct MeetingTranslationInput<'a> {
+    source: &'a str,
+    source_language: &'a str,
+    target_language: &'a str,
+}
+
+#[derive(Clone, Copy)]
+enum MeetingInput<'a> {
+    Pcm(MeetingPcmInput<'a>),
+    Translation(MeetingTranslationInput<'a>),
+}
+
+impl<'a> MeetingInput<'a> {
+    fn pcm(self) -> Option<MeetingPcmInput<'a>> {
+        match self { Self::Pcm(input) => Some(input), _ => None }
+    }
+    fn translation(self) -> Option<MeetingTranslationInput<'a>> {
+        match self { Self::Translation(input) => Some(input), _ => None }
+    }
+}
+
 // PCM stays in Rust ownership, never in the public worker JSON.
 enum NativeVoiceIo<'a> {
     Bind,
@@ -212,7 +238,7 @@ enum NativeVoiceIo<'a> {
     ProbeSpeech(Vec<f32>),
 }
 
-fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcmInput<'_>>,
+fn send_worker_task_inner(task: &str, mut payload: Value, input: Option<MeetingInput<'_>>,
                           voice: Option<NativeVoiceIo<'_>>) -> HelperBridgeWorkerResponse {
     let priority = task_priority(task, &payload);
     let meeting_generation = meeting_generation(&payload);
@@ -259,7 +285,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcm
     // ASR and MT never cross Python IPC, including on preparation errors.
     if voice.is_some() || matches!(task, "asr_preload" | "translation_preload" | "transcribe" | "translate") {
         #[cfg(windows)]
-        return native::dispatch(task, &mut payload, pcm, voice, priority, &permit, response_deadline_ms);
+        return native::dispatch(task, &mut payload, input, voice, priority, &permit, response_deadline_ms);
         #[cfg(not(windows))]
         return standalone_blocked_response(
             task, &request_id, priority, "error", "native_inference:platform_unsupported",
@@ -273,7 +299,7 @@ fn send_worker_task_inner(task: &str, mut payload: Value, pcm: Option<MeetingPcm
         return native::control(task, &payload, &permit, priority);
     }
     // Legacy build only: control/status and existing voice operations.
-    if pcm.is_some() || !matches!(task, "ping" | "status" | "voice_actor_preflight" | "voice_actor_synthesize") {
+    if input.is_some() || !matches!(task, "ping" | "status" | "voice_actor_preflight" | "voice_actor_synthesize") {
         return standalone_blocked_response(
             task, &request_id, priority, "error", "helper_bridge:unsupported_task",
             "Only voice and control tasks may enter the Python worker.",
@@ -632,15 +658,23 @@ pub(super) fn transcribe_native_voice_probe(payload: Value, samples: Vec<f32>) -
     send_worker_task_with_input("transcribe", payload, None, Some(NativeVoiceIo::ProbeSpeech(samples)))
 }
 
+pub(super) fn send_meeting_translation(
+    payload: Value, source: &str, source_language: &str, target_language: &str,
+) -> HelperBridgeWorkerResponse {
+    let input = MeetingTranslationInput { source, source_language, target_language };
+    send_worker_task_with_input("translate", payload, Some(MeetingInput::Translation(input)), None)
+}
+
 pub(super) fn send_worker_pcm_task(
     payload: Value,
+    language: &str,
     utterance: FinalizedMeetingUtterance,
     noise_suppression_enabled: bool,
 ) -> (HelperBridgeWorkerResponse, Option<FinalizedMeetingUtterance>) {
     let rejection = finalized_asr_frame_rejection(&utterance);
     let utterance = RefCell::new(Some(utterance));
     let prepare_ms = Cell::new(0);
-    let input = MeetingPcmInput { utterance: &utterance, noise_suppression_enabled, prepare_ms: &prepare_ms };
+    let input = MeetingPcmInput { utterance: &utterance, language, noise_suppression_enabled, prepare_ms: &prepare_ms };
     let mut response = if !input.matches("transcribe", &payload) {
         standalone_blocked_response(
             "transcribe", "invalid-meeting-pcm", task_priority("transcribe", &payload),
@@ -653,7 +687,7 @@ pub(super) fn send_worker_pcm_task(
             "error", rejection, "Finalized PCM is outside the admitted native ASR contract.",
         )
     } else {
-        send_worker_task_with_input("transcribe", payload, Some(input), None)
+        send_worker_task_with_input("transcribe", payload, Some(MeetingInput::Pcm(input)), None)
     };
     if let Some(object) = response.worker_response_json.as_object_mut() {
         object.insert("audio_prepare_ms".into(), json!(prepare_ms.get()));
@@ -672,7 +706,7 @@ fn retain_deferred_pcm(
         .then_some(utterance)
 }
 
-fn send_worker_task_with_input(task: &str, payload: Value, pcm: Option<MeetingPcmInput<'_>>,
+fn send_worker_task_with_input(task: &str, payload: Value, input: Option<MeetingInput<'_>>,
                                voice: Option<NativeVoiceIo<'_>>) -> HelperBridgeWorkerResponse {
     let priority = task_priority(task, &payload);
     let outbound_generation = if priority == HelperTaskPriority::MeetingOutbound
@@ -694,9 +728,9 @@ fn send_worker_task_with_input(task: &str, payload: Value, pcm: Option<MeetingPc
     }
 
     let first_started = Instant::now();
-    let mut response = send_worker_task_inner(task, payload, pcm, voice);
+    let mut response = send_worker_task_inner(task, payload, input, voice);
     let initial_attempt_ms = observed_elapsed_ms(first_started)
-        .saturating_sub(pcm.map_or(0, |input| input.prepare_ms.get()));
+        .saturating_sub(input.and_then(MeetingInput::pcm).map_or(0, |pcm| pcm.prepare_ms.get()));
 
     if let Some(generation) = outbound_generation {
         // Transport failure closes the exact native/voice owner. Stop must
@@ -850,7 +884,7 @@ mod finalized_pcm_handoff_tests {
         });
         assert!(finalized_asr_frame_rejection(&utterance).is_none());
         let utterance = RefCell::new(Some(utterance));
-        let input = MeetingPcmInput { utterance: &utterance, noise_suppression_enabled: false, prepare_ms: &prepare_ms };
+        let input = MeetingPcmInput { utterance: &utterance, language: "id", noise_suppression_enabled: false, prepare_ms: &prepare_ms };
         assert!(input.matches("transcribe", &payload));
         for (key, value) in [
             ("meeting_session_id", json!("another")),
@@ -859,6 +893,7 @@ mod finalized_pcm_handoff_tests {
             ("meeting_sequence", json!(10)),
             ("utterance_id", json!(9)),
             ("audio_path", json!("unowned.wav")),
+            ("language", json!("en")),
         ] {
             let mut invalid = payload.clone();
             invalid[key] = value;

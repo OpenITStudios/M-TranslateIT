@@ -43,7 +43,8 @@ My Voice synthesis, training and evaluation algorithms are unchanged.
   shutdown share bounded cleanup and preserve Meeting ownership between
   requests. The existing scheduler now has an admitted native dispatch
   branch for a bound owner: transfer the actual owned PCM allocation, apply
-  existing gain in place, move current translation text into the native
+  existing gain in place, borrow current Meeting translation text and language
+  outside JSON until scheduler admission, then move the owned text into the native
   request, wait outside the lifecycle mutex with the same permit, then
   fence the result against exact session/generation and request ownership.
   Native results have a Rust-owned outer receipt identity. A selected

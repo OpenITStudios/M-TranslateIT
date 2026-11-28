@@ -175,14 +175,22 @@ pub(crate) fn native_voice_pcm_receipt_matches(response: &HelperBridgeWorkerResp
             && body.get("sample_count").and_then(Value::as_u64) == Some(samples.len() as u64))
 }
 
+// Internal Meeting translation content stays borrowed until native admission.
+pub(crate) fn send_helper_meeting_translation(
+    payload: Value, source: &str, source_language: &str, target_language: &str,
+) -> HelperBridgeWorkerResponse {
+    transport::send_meeting_translation(payload, source, source_language, target_language)
+}
+
 // Internal Meeting-only owned PCM handoff; PCM never enters JSON. Only
 // a pre-execution incoming deferral returns its original owned frame.
 pub(crate) fn send_helper_worker_pcm_task(
     payload: Value,
+    language: &str,
     utterance: crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance,
     noise_suppression_enabled: bool,
 ) -> (HelperBridgeWorkerResponse, Option<crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance>) {
-    transport::send_worker_pcm_task(payload, utterance, noise_suppression_enabled)
+    transport::send_worker_pcm_task(payload, language, utterance, noise_suppression_enabled)
 }
 
 pub(crate) fn incoming_deferred_for_required_outbound(response: &HelperBridgeWorkerResponse) -> bool {

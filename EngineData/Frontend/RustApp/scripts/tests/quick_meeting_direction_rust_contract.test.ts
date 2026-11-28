@@ -15,7 +15,7 @@ test("incoming direction is snapshotted per utterance and survives deferral", ()
 });
 
 test("outbound voice remains explicitly Indonesian to English", () => {
-  assert.match(outbound, /"source_language": "id"/);
-  assert.match(outbound, /"target_language": "en"/);
-  assert.match(outbound, /"id",\s*"en",\s*&transcript/);
+  assert.match(outbound, /send_helper_meeting_translation\([\s\S]*?transcript,\s*"id",\s*"en",/);
+  assert.doesNotMatch(outbound, /"text": transcript/);
+  assert.match(incoming, /send_helper_meeting_translation\([\s\S]*?transcript,\s*source_language,\s*target_language,/);
 });

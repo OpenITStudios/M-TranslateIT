@@ -14,6 +14,7 @@ use super::committed_turns::{
 };
 use super::super::helper_bridge::{
     required_outbound_voice_actor_token, send_helper_worker_pcm_task, send_helper_worker_task,
+    send_helper_meeting_translation,
     native_voice_candidate_enabled, synthesize_native_voice, native_voice_pcm_receipt_matches,
 };
 use crate::engine::audio::finalized_utterance::FinalizedMeetingUtterance;
@@ -384,7 +385,6 @@ pub(super) fn process_outbound_pcm(
     let session_id = owned_session_id.as_str();
     let (asr, _) = send_helper_worker_pcm_task(
         json!({
-            "language": "id",
             "meeting_session_id": session_id,
             "meeting_lane": "you",
             "meeting_generation": generation,
@@ -392,6 +392,7 @@ pub(super) fn process_outbound_pcm(
             "utterance_id": utterance_id,
             "source_speech_duration_ms": speech_duration_ms,
         }),
+        "id",
         utterance,
         noise_suppression_enabled,
     );
@@ -528,18 +529,15 @@ fn process_outbound_transcript(
         );
     }
     let translation_started_at = Instant::now();
-    let translation = send_helper_worker_task(
-        "translate",
+    let translation = send_helper_meeting_translation(
         json!({
-            "text": transcript,
-            "source_language": "id",
-            "target_language": "en",
             "meeting_session_id": session_id,
             "meeting_lane": "you",
             "meeting_generation": generation,
             "meeting_sequence": event_sequence,
             "utterance_id": utterance_id,
         }),
+        transcript, "id", "en",
     );
     timing.metrics.translation_ms = Some(elapsed_millis(translation_started_at, Instant::now()));
     timing.metrics.translation_scheduler_wait_ms = super::worker_scheduler_wait_ms(&translation);

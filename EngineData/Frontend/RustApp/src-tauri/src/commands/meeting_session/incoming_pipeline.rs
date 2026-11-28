@@ -15,7 +15,7 @@ use super::incoming_deferred::{
 use super::{incoming_session_is_eligible, validated_meeting_translation, worker_blocker};
 use super::session_state::update_incoming_status;
 use super::super::helper_bridge::{
-    incoming_deferred_for_required_outbound, send_helper_worker_pcm_task, send_helper_worker_task,
+    incoming_deferred_for_required_outbound, send_helper_worker_pcm_task, send_helper_meeting_translation,
 };
 use super::super::helper_bridge_runtime::unix_ms;
 
@@ -70,12 +70,12 @@ fn process_incoming_pcm_with_direction(
     let session_id = owned_session_id.as_str();
     let (asr, deferred_utterance) = send_helper_worker_pcm_task(
         json!({
-            "language": source_language,
             "meeting_session_id": session_id,
             "meeting_lane": "incoming",
             "meeting_sequence": event_sequence,
             "utterance_id": utterance_id,
         }),
+        &source_language,
         utterance,
         noise_suppression_enabled,
     );
@@ -246,17 +246,14 @@ fn translate_and_commit_incoming_transcript(
         "",
         "Final Meeting Sound transcript is being translated.",
     );
-    let translation = send_helper_worker_task(
-        "translate",
+    let translation = send_helper_meeting_translation(
         json!({
-            "text": transcript,
-            "source_language": source_language,
-            "target_language": target_language,
             "meeting_session_id": session_id,
             "meeting_lane": "incoming",
             "meeting_sequence": event_sequence,
             "utterance_id": utterance_id,
         }),
+        transcript, source_language, target_language,
     );
     if !incoming_session_is_eligible(session_id) {
         return false;
