@@ -7,6 +7,9 @@ import {
   meetingSessionTitle,
   meetingTime,
   meetingTranslationDisplay,
+  formatMeetingTurn,
+  formatMeetingTranscript,
+  filterMeetingTurns,
 } from "../../src/app/runtime/meetingTranscriptPresentation.ts";
 import type { MeetingCommittedTurn } from "../../src/app/bridge/runtimeApi.ts";
 
@@ -34,4 +37,22 @@ test("source-first transcript never manufactures a translated string", () => {
   assert.equal(meetingTranslationDisplay({ translation_state: "failed", translated_text: "" }), "Translation unavailable");
   assert.equal(meetingTranslationDisplay({ translation_state: "translated", translated_text: "Try again" }), "Try again");
   assert.equal(meetingTranslationDisplay({ translation_state: "translated", translated_text: "" }), "Translation unavailable");
+});
+
+
+test("copy and search preserve original speech and explicitly unavailable translations", () => {
+  const make = (sequence: number, source_text: string, translated_text: string, translation_state: string) => ({
+    sequence, lane: "you", created_unix_ms: 0, source_language: "id", target_language: "en",
+    source_text, translated_text, translation_state,
+  }) as MeetingCommittedTurn;
+  const first = make(1, "Selamat pagi", "Good morning", "translated");
+  const failed = make(2, "Coba lagi", "", "failed");
+  const turns = [first, failed];
+  assert.equal(formatMeetingTurn(failed), "You · Time unavailable\nIndonesian: Coba lagi\nEnglish: Translation unavailable");
+  assert.equal(formatMeetingTranscript(turns), [formatMeetingTurn(first), formatMeetingTurn(failed)].join("\n\n"));
+  assert.deepEqual(filterMeetingTurns(turns, " GOOD MORNING "), [first]);
+  assert.deepEqual(filterMeetingTurns(turns, "coba"), [failed]);
+  assert.deepEqual(filterMeetingTurns(turns, ""), turns);
+  assert.deepEqual(filterMeetingTurns(turns, "missing"), []);
+  assert.equal(turns.length, 2);
 });

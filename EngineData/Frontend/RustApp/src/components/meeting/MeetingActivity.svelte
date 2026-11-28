@@ -3,8 +3,7 @@
 
   import type { MeetingCommittedTurn, MeetingCommittedTurnsSnapshot, MeetingSessionStatus } from "../../app/bridge/runtimeApi";
   import { mapProductMeetingState } from "../../app/bridge/productMeetingState";
-  import { languageName } from "../../app/shared/state";
-  import { meetingSpeakerLabel, meetingTime, meetingTranslationDisplay } from "../../app/runtime/meetingTranscriptPresentation";
+  import { formatMeetingTurn } from "../../app/runtime/meetingTranscriptPresentation";
   import MeetingTurnBubble from "./MeetingTurnBubble.svelte";
   import {
     DEFAULT_TRANSCRIPT_PREFERENCES, readTranscriptPreferences, subscribeTranscriptPreferences,
@@ -123,7 +122,8 @@
   }
 
   async function copyTurn(turn: MeetingCommittedTurn): Promise<void> {
-    const value = `${meetingSpeakerLabel(turn.lane)} · ${meetingTime(turn.created_unix_ms)}\n${languageName(turn.source_language)}: ${turn.source_text}\n${languageName(turn.target_language)}: ${meetingTranslationDisplay(turn)}`;
+    if (previewReadOnly) return;
+    const value = formatMeetingTurn(turn);
     copyFailedSequence = null;
     try {
       if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");

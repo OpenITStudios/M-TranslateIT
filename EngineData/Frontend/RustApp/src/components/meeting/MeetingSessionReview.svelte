@@ -1,14 +1,13 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { Check, Copy, Search } from "@lucide/svelte";
-  import { runtimeApi, type MeetingCommittedTurn, type MeetingCommittedTurnsSnapshot } from "../../app/bridge/runtimeApi";
-  import { languageName } from "../../app/shared/state";
+  import { runtimeApi, type MeetingCommittedTurnsSnapshot } from "../../app/bridge/runtimeApi";
   import MeetingTurnBubble from "./MeetingTurnBubble.svelte";
   import {
     DEFAULT_TRANSCRIPT_PREFERENCES, readTranscriptPreferences, subscribeTranscriptPreferences,
     type TranscriptPreferences,
   } from "./transcriptPreferences";
-  import { meetingFirstRecordedTime, meetingSessionTitle, meetingSpeakerLabel, meetingTime, meetingTranslationDisplay } from "../../app/runtime/meetingTranscriptPresentation";
+  import { meetingFirstRecordedTime, meetingSessionTitle, filterMeetingTurns, formatMeetingTranscript } from "../../app/runtime/meetingTranscriptPresentation";
 
   let {
     sessionActive,
@@ -32,11 +31,8 @@
   let readRevision = 0;
 
   const sessionLabel = $derived(meetingSessionTitle(meetingFirstRecordedTime(snapshot?.turns ?? [])));
-  const visibleTurns = $derived.by(() => {
-    const needle = query.trim().toLowerCase();
-    const turns = snapshot?.turns ?? [];
-    return needle ? turns.filter((turn) => `${turn.source_text} ${turn.translated_text}`.toLowerCase().includes(needle)) : turns;
-  });
+  const visibleTurns = $derived(filterMeetingTurns(snapshot?.turns ?? [], query));
+  onDestroy(() => { readRevision++; });
 
   async function loadReview(): Promise<void> {
     const revision = ++readRevision;
@@ -51,16 +47,16 @@
 
   async function copyAll(): Promise<void> {
     if (!snapshot?.turns.length) return;
-    const value = snapshot.turns.map((turn: MeetingCommittedTurn) =>
-      `${meetingSpeakerLabel(turn.lane)} · ${meetingTime(turn.created_unix_ms)}\n${languageName(turn.source_language)}: ${turn.source_text}\n${languageName(turn.target_language)}: ${meetingTranslationDisplay(turn)}`
-    ).join("\n\n");
+    const revision = readRevision;
+    const value = formatMeetingTranscript(snapshot.turns);
     try {
       await navigator.clipboard.writeText(value);
+      if (revision !== readRevision || sessionActive) return;
       copied = true;
       onNotice("Session review copied.");
-      window.setTimeout(() => { copied = false; }, 1400);
+      window.setTimeout(() => { if (revision === readRevision) copied = false; }, 1400);
     } catch {
-      onNotice("Couldn't copy the session review.");
+      if (revision === readRevision && !sessionActive) onNotice("Couldn't copy the session review.");
     }
   }
 

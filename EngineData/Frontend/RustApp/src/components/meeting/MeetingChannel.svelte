@@ -1,9 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { Check, Copy, Download, Eye, MoreHorizontal, RefreshCw, AlertTriangle, Hash, Search } from "@lucide/svelte";
+  import { Check, Copy, Download, Eye, MoreHorizontal, RefreshCw, AlertTriangle, Hash, Search, ExternalLink, FolderOpen } from "@lucide/svelte";
   import { runtimeApi, type MeetingCommittedTurnsSnapshot, type MeetingLibrarySession } from "../../app/bridge/runtimeApi";
-  import { languageName } from "../../app/shared/state";
-  import { meetingSpeakerLabel, meetingTime, meetingTranslationDisplay } from "../../app/runtime/meetingTranscriptPresentation";
+  import { filterMeetingTurns, formatMeetingTranscript } from "../../app/runtime/meetingTranscriptPresentation";
   import {
     readTranscriptPreferences, subscribeTranscriptPreferences,
     DEFAULT_TRANSCRIPT_PREFERENCES, type TranscriptPreferences,
@@ -31,10 +30,7 @@
   let htmlPreview = $state<{ html: string; count: number } | null>(null);
   let exportResult = $state<{ path: string; count: number; incomplete: boolean } | null>(null);
   let query = $state("");
-  const visibleTurns = $derived((snapshot?.turns ?? []).filter(turn => {
-    const needle = query.trim().toLowerCase();
-    return !needle || `${turn.source_text} ${turn.translated_text}`.toLowerCase().includes(needle);
-  }));
+  const visibleTurns = $derived(filterMeetingTurns(snapshot?.turns ?? [], query));
   let appearance = $state<TranscriptPreferences>({ ...DEFAULT_TRANSCRIPT_PREFERENCES });
   let readRevision = 0;
 
@@ -94,7 +90,7 @@
     if (previewReadOnly) return;
     appearance = readTranscriptPreferences();
     const unsubscribe = subscribeTranscriptPreferences((next) => { appearance = next; });
-    return () => { readRevision++; unsubscribe(); };
+    return unsubscribe;
   });
   $effect(() => {
     const id = session.session_id;
@@ -110,8 +106,14 @@
     actionsPosition = "visibility:hidden";
     exporting = false;
     if (!previewReadOnly) void load(id);
+    return () => {
+      readRevision++;
+      exportRevision++;
+      htmlPreviewRevision++;
+    };
   });
   async function load(id: string): Promise<void> {
+    if (previewReadOnly) return;
     const revision = ++readRevision;
     loading = true;
     failed = "";
@@ -131,7 +133,7 @@
     }
   }
   async function toggleHtmlPreview(): Promise<void> {
-    if (previewBusy || previewReadOnly) return;
+    if (previewBusy || previewReadOnly || session.entry_count === 0) return;
     if (htmlPreview) { htmlPreview = null; htmlPreviewRevision++; return; }
     previewBusy = true;
     const id = session.session_id;
@@ -153,7 +155,7 @@
     }
   }
   async function exportHtml(): Promise<void> {
-    if (exporting || previewReadOnly) return;
+    if (exporting || previewReadOnly || session.entry_count === 0) return;
     exporting = true;
     exportResult = null;
     const revision = ++exportRevision;
@@ -176,18 +178,43 @@
     }
   }
   async function copyAll(): Promise<void> {
+    if (previewReadOnly || !visibleTurns.length) return;
     const id = session.session_id;
-    const turns = snapshot?.turns;
-    if (!turns?.length) return;
+    const revision = readRevision;
     try {
-      await navigator.clipboard.writeText(turns.map(t =>
-        `${meetingSpeakerLabel(t.lane)} · ${meetingTime(t.created_unix_ms)}\n${languageName(t.source_language)}: ${t.source_text}\n${languageName(t.target_language)}: ${meetingTranslationDisplay(t)}`
-      ).join("\n\n"));
-      if (session.session_id !== id) return;
+      await navigator.clipboard.writeText(formatMeetingTranscript(visibleTurns));
+      if (revision !== readRevision || session.session_id !== id) return;
       copied = true;
       onNotice("Displayed transcript entries copied (up to 240).");
     } catch {
-      if (session.session_id === id) onNotice("Could not copy saved Meeting entries.");
+      if (revision === readRevision && session.session_id === id) onNotice("Could not copy saved Meeting entries.");
+    }
+  }
+
+  async function openExport(folder: boolean): Promise<void> {
+    if (!exportResult || previewReadOnly) return;
+    const id = session.session_id;
+    const revision = exportRevision;
+    const fileName = exportResult.path.split("/").pop();
+    if (!fileName) return;
+    try {
+      const result = await runtimeApi.openSavedMeetingHtml(id, fileName, folder);
+      if (revision !== exportRevision || session.session_id !== id) return;
+      if (!result.ok) onNotice(result.message);
+    } catch {
+      if (revision === exportRevision && session.session_id === id) onNotice("Could not open the exported HTML location.");
+    }
+  }
+
+  async function copyExportPath(): Promise<void> {
+    if (!exportResult || previewReadOnly) return;
+    const id = session.session_id;
+    const revision = exportRevision;
+    try {
+      await navigator.clipboard.writeText(exportResult.path);
+      if (revision === exportRevision && session.session_id === id) onNotice("Transcript file location copied.");
+    } catch {
+      if (revision === exportRevision && session.session_id === id) onNotice("Could not copy the file location.");
     }
   }
 </script>
@@ -203,7 +230,7 @@
     <div class="mb-6 border-b border-[var(--ti-border)] pb-5">
       <Hash size={27} class="mb-3 text-[var(--ti-text-soft)]" aria-hidden="true"/>
       <h2 class="m-0 truncate text-[22px] font-semibold" title={session.display_name}>{session.display_name}</h2>
-      <p class="mb-0 mt-2 text-[13px] leading-5 text-[var(--ti-text-muted)]">Saved conversation · You on the right, Meeting Sound on the left. Read-only transcript.</p>
+      <p class="mb-0 mt-2 text-[13px] leading-5 text-[var(--ti-text-muted)]">Saved conversation · Stored on this device until you delete it. Exporting HTML does not delete the archive.</p>
     </div>
     <div class="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--ti-border)] pb-4" role="group" aria-label="Saved conversation tools">
       <span class="text-[12px] text-[var(--ti-text-muted)]">
@@ -229,16 +256,16 @@
               <RefreshCw size={14} aria-hidden="true"/> Refresh
             </button>
             <button type="button" class="ti-button ti-button-secondary min-h-9 w-full justify-start px-3 text-[12px]"
-              disabled={!snapshot?.turns.length} onclick={() => { actionsOpen = false; void copyAll(); }}>
+              disabled={previewReadOnly || !visibleTurns.length} onclick={() => { actionsOpen = false; void copyAll(); }}>
               {#if copied}<Check size={14}/>{:else}<Copy size={14}/>{/if} Copy displayed
             </button>
             <button type="button" class="ti-button ti-button-secondary min-h-9 w-full justify-start px-3 text-[12px]"
-              disabled={previewBusy || previewReadOnly} onclick={() => { actionsOpen = false; void toggleHtmlPreview(); }}
+              disabled={previewBusy || previewReadOnly || session.entry_count === 0} onclick={() => { actionsOpen = false; void toggleHtmlPreview(); }}
               aria-label="Preview exported HTML document">
               <Eye size={14} aria-hidden="true"/> {previewBusy ? "Loading..." : htmlPreview ? "Hide preview" : "Preview HTML"}
             </button>
             <button type="button" class="ti-button ti-button-secondary min-h-9 w-full justify-start px-3 text-[12px]"
-              disabled={exporting || previewReadOnly} onclick={() => { actionsOpen = false; void exportHtml(); }}
+              disabled={exporting || previewReadOnly || session.entry_count === 0} onclick={() => { actionsOpen = false; void exportHtml(); }}
               aria-label="Export complete saved Meeting as HTML">
               <Download size={14} aria-hidden="true"/> {exporting ? "Exporting..." : "Export HTML"}
             </button>
@@ -255,9 +282,16 @@
       </section>
     {/if}
     {#if exportResult}
-      <p class="mb-4 break-words text-[12px] text-[var(--ti-text-muted)]" role="status">
-        Exported {exportResult.count} entries to {exportResult.path}{exportResult.incomplete ? " · Archive completeness unverified" : ""}
-      </p>
+      <div class="mb-4 grid gap-2">
+        <p class="m-0 break-words text-[12px] text-[var(--ti-text-muted)]" role="status">
+          Exported {exportResult.count} entries to {exportResult.path}{exportResult.incomplete ? " · Archive completeness unverified" : ""}
+        </p>
+        <div class="flex flex-wrap gap-2" role="group" aria-label="Exported transcript file actions">
+          <button type="button" class="ti-button ti-button-secondary min-h-9 text-[12px]" onclick={() => void openExport(false)}><ExternalLink size={14}/>Open File</button>
+          <button type="button" class="ti-button ti-button-secondary min-h-9 text-[12px]" onclick={() => void openExport(true)}><FolderOpen size={14}/>Open Folder</button>
+          <button type="button" class="ti-button ti-button-secondary min-h-9 text-[12px]" onclick={() => void copyExportPath()}><Copy size={14}/>Copy Location</button>
+        </div>
+      </div>
     {/if}
     {#if loading}
       <p class="text-[13px] text-[var(--ti-text-muted)]" role="status">Loading Meeting...</p>

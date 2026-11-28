@@ -1,4 +1,5 @@
 import type { MeetingCommittedTurn } from "../bridge/runtimeApi";
+import { languageName } from "../shared/state.ts";
 
 export function meetingSpeakerLabel(lane: string): string {
   return lane === "you" ? "You" : "Meeting audio";
@@ -36,4 +37,18 @@ export function meetingTranslationDisplay(
   if (turn.translation_state === "failed") return "Translation unavailable";
   if (turn.translation_state === "pending") return "Translating...";
   return turn.translated_text.trim() || "Translation unavailable";
+}
+
+/** One plain-text representation for Live, Last and Saved Meeting copies. */
+export function formatMeetingTurn(turn: MeetingCommittedTurn): string {
+  return `${meetingSpeakerLabel(turn.lane)} · ${meetingTime(turn.created_unix_ms)}\n${languageName(turn.source_language)}: ${turn.source_text}\n${languageName(turn.target_language)}: ${meetingTranslationDisplay(turn)}`;
+}
+
+export function formatMeetingTranscript(turns: readonly MeetingCommittedTurn[]): string {
+  return turns.map(formatMeetingTurn).join("\n\n");
+}
+
+export function filterMeetingTurns(turns: MeetingCommittedTurn[], query: string): MeetingCommittedTurn[] {
+  const needle = query.trim().toLowerCase();
+  return needle ? turns.filter(turn => `${turn.source_text} ${turn.translated_text}`.toLowerCase().includes(needle)) : turns;
 }

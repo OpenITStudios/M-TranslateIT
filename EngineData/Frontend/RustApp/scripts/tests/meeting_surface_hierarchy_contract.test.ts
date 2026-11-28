@@ -103,12 +103,12 @@ test("global notices expose full text without noninteractive keyboard tabindex",
 });
 
 test("Last-session transcript is private-by-default and export remains explicit", () => {
-  assert.match(review, /<details bind:open=\{reviewOpen\}/);
-  assert.match(review, /reviewOpen = false/);
+  assert.match(meeting, /section === "last"/);
+  assert.match(review, /if \(revision !== readRevision \|\| sessionActive\) return/);
   assert.match(review, /getRecentMeetingTranscript\(\)/);
   assert.match(review, /Earlier sessions may be in Saved Meeting/);
   assert.doesNotMatch(review, /<MeetingTranscriptExport/);
-  assert.match(meeting, /<MeetingTranscriptExport hasSession=\{meeting\.hasSession\}/);
+  assert.match(meeting, /<MeetingChannel session=\{selectedSession\}/);
   assert.doesNotMatch(review, /\$effect\([\s\S]{0,250}exportMeetingTranscript\(/);
 });
 
@@ -148,14 +148,14 @@ test("Discord-inspired shell uses exactly one sidebar, channel navigation, and b
   const settings = readFileSync(new URL("../../src/pages/Settings.svelte", import.meta.url), "utf8");
   const css = readFileSync(new URL("../../src/styles/tokens.css", import.meta.url), "utf8");
   assert.equal((app.match(/<Sidebar\b/g) ?? []).length, 1);
-  assert.match(app, /meetingSection = \$state<"live" \| "last" \| "saved" \| "session">/);
+  assert.match(app, /meetingSection = \$state<"live" \| "last" \| "session">/);
   assert.match(sidebar, /onMeetingSection\("live"\)/);
   assert.match(sidebar, /<p class="ti-channel-heading">HOME<\/p>/);
   assert.match(sidebar, /aria-label="Start Meeting"/);
   assert.match(sidebar, /<span>My Voice<\/span>/);
   assert.doesNotMatch(sidebar, /<p class="ti-channel-heading">VOICE<\/p>/);
   assert.doesNotMatch(sidebar, /label: "Last Meeting"|label: "Saved Meeting"/);
-  assert.match(sidebar, /onViewAll=\{\(\) => onMeetingSection\("saved"\)\}/);
+  assert.match(readFileSync(new URL("../../src/components/layout/MeetingLibraryNavigation.svelte", import.meta.url), "utf8"), /showAllRecent = !showAllRecent/);
   assert.match(sidebar, /<SidebarUserControls/);
   const userControls = readFileSync(new URL("../../src/components/layout/SidebarUserControls.svelte", import.meta.url), "utf8");
   assert.match(userControls, /aria-label="Open Settings"/);
@@ -175,7 +175,7 @@ test("Native Meeting mute and source owner are reused by two-column call dock", 
   assert.doesNotMatch(meeting, /onToggleMute/, "Mute must only be in the sidebar footer");
   assert.match(native, /Mute is an output gate, never a third microphone source/);
   assert.match(meeting, /<MeetingSessionReview sessionActive=\{meeting\.hasSession\} openByDefault=\{true\}/);
-  assert.match(meeting, /<MeetingTranscriptExport hasSession=\{meeting\.hasSession\}/);
+  assert.match(meeting, /<MeetingChannel session=\{selectedSession\}/);
 });
 
 test("Discord-like footer groups Voice Actor, Mute, device dropdown and Settings only on the left", () => {
@@ -346,7 +346,7 @@ test("HOME only shows Start Meeting and My Voice, with Recent and Projects below
   assert.match(navigation, /View All/);
   assert.match(navigation, /recentMeetings\(library\?\.sessions \?\? \[\]\)/);
   assert.match(navigation, /pinnedFirst\(projectSessions\)/);
-  assert.match(sidebar, /onViewAll=\{\(\) => onMeetingSection\("saved"\)\}/);
+  assert.match(navigation, /showAllRecent = !showAllRecent/);
   assert.match(app, /liveSessionId=\{snapshot\.meeting\.live \? meetingStatus\?\.session_id \?\? null : null\}/);
 });
 

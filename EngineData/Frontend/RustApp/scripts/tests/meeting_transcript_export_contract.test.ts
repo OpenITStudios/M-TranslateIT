@@ -9,7 +9,9 @@ const memory = file("src-tauri/src/commands/meeting_session/committed_turns.rs")
 const lifecycle = file("src-tauri/src/commands/meeting_session/lifecycle.rs");
 const archive = file("src-tauri/src/commands/meeting_session/transcript_archive.rs");
 const html = file("src-tauri/src/commands/meeting_session/transcript_export.rs");
-const ui = file("src/components/meeting/MeetingTranscriptExport.svelte");
+const ui = file("src/components/meeting/MeetingChannel.svelte");
+const app = file("src/App.svelte");
+const navigation = file("src/components/layout/MeetingLibraryNavigation.svelte");
 const page = file("src/pages/Meeting.svelte");
 const review = file("src/components/meeting/MeetingSessionReview.svelte");
 
@@ -60,21 +62,22 @@ test("HTML is offline, escaped, same-session and written as a complete file", ()
   assert.match(html, /Translation unavailable/);
 });
 
-test("saved transcript controls expose one honest history and explicit deletion", () => {
-  assert.match(page, /<MeetingTranscriptExport hasSession=\{meeting\.hasSession\}/);
-  assert.doesNotMatch(review, /<MeetingTranscriptExport/);
-  assert.match(ui, /Saved Transcripts/);
+test("saved transcript controls expose one channel, explicit export and confirmed deletion", () => {
+  assert.match(page, /<MeetingChannel session=\{selectedSession\}/);
+  assert.doesNotMatch(page, /MeetingTranscriptExport/);
+  assert.doesNotMatch(review, /exportSavedMeetingTranscriptHtml/);
   assert.match(ui, /Export HTML/);
-  assert.match(ui, /Delete saved transcript/);
-  assert.match(ui, /Bilingual/);
-  assert.match(ui, /Bahasa Indonesia/);
-  assert.match(ui, /English/);
-  assert.match(ui, /Storage finalization unverified/);
+  assert.match(ui, /Archive completeness unverified/);
   assert.match(ui, /Open File/);
   assert.match(ui, /Open Folder/);
   assert.match(ui, /Copy Location/);
-  assert.match(ui, /navigator\.clipboard\.writeText\(receipt\.path\)/);
-  assert.doesNotMatch(ui, /onNotice\(receipt\.path/);
+  assert.match(ui, /runtimeApi\.openSavedMeetingHtml\(id, fileName, folder\)/);
+  assert.match(ui, /navigator\.clipboard\.writeText\(exportResult\.path\)/);
+  assert.doesNotMatch(ui, /onNotice\(exportResult\.path/);
+  assert.match(navigation, /confirmingDelete !== id/);
+  assert.match(navigation, /await onDeleteSession\(id\)/);
+  assert.match(app, /runtimeApi\.deleteSavedMeetingTranscript\(id\)/);
+  assert.doesNotMatch(ui, /deleteSavedMeetingTranscript/);
 });
 
 test("legacy live preview remains capped while export reads the disk-backed session", () => {
@@ -91,9 +94,8 @@ test("explicit Delete removes matching in-memory last-session review as well as 
   assert.match(archive, /forget_ended_saved_session\(&session_id\)/);
   assert.match(memory, /pub\(super\) fn forget_ended_saved_session\(session_id: &str\)/);
   assert.match(memory, /snapshot\.session_id\.as_deref\(\)\) == Some\(session_id\)/);
-  assert.match(page, /\{#key savedDeletionRevision\}/);
-  assert.match(ui, /onDeleted\?\.\(\)/);
-  assert.match(ui, /Existing exported HTML files will remain/);
+  assert.match(app, /if \(selectedSessionId === id\) \{\s*selectedSessionId = null;/);
+  assert.match(navigation, /Exported HTML files remain/);
 });
 
 test("HTML preview uses the real offline export renderer, not a second layout", () => {
@@ -102,13 +104,13 @@ test("HTML preview uses the real offline export renderer, not a second layout", 
   assert.match(html, /write_header\(&mut buffer, &session_id, turns\.len\(\), true, incomplete\)/);
   assert.match(html, /write_turn\(&mut buffer, turn\)/);
   assert.match(html, /write_footer\(&mut buffer\)/);
-  assert.match(ui, /runtimeApi\.previewSavedMeetingTranscriptHtml\(sessionId\)/);
+  assert.match(ui, /runtimeApi\.previewSavedMeetingTranscriptHtml\(id\)/);
   assert.match(ui, /Preview HTML/);
-  assert.match(ui, /srcdoc=\{htmlSample\.html\}/);
+  assert.match(ui, /srcdoc=\{htmlPreview\.html\}/);
   assert.match(ui, /sandbox=""/);
   assert.match(ui, /const revision = \+\+htmlPreviewRevision/);
-  assert.match(ui, /if \(revision !== htmlPreviewRevision\) return/);
-  assert.match(ui, /htmlPreviewRevision \+= 1/);
+  assert.match(ui, /if \(revision !== htmlPreviewRevision \|\| session\.session_id !== id\) return/);
+  assert.match(ui, /return \(\) => \{\s*readRevision\+\+;\s*exportRevision\+\+;\s*htmlPreviewRevision\+\+;/);
   assert.match(meeting, /preview_saved_meeting_transcript_html/);
   assert.match(registry, /preview_saved_meeting_transcript_html/);
 });
@@ -208,9 +210,10 @@ test("zero-entry saved sessions remain visible for deliberate deletion without e
   assert.match(archive, /match scan_stored_turns\(&dir, false\) \{\s*\/\//);
   assert.match(archive, /Ok\(scan\) => \{/);
   assert.doesNotMatch(archive, /Ok\(turns\) if !turns\.is_empty\(\)/);
-  assert.match(ui, /No recognized entries/);
+  assert.match(ui, /No recognized phrases in this Meeting/);
   assert.match(ui, /session\.entry_count === 0/);
-  assert.match(ui, /onclick=\{\(\) => \{ confirming = session\.session_id/);
+  assert.match(navigation, /confirmingDelete !== id/);
+  assert.match(navigation, /await onDeleteSession\(id\)/);
 });
 
 test("accepted turn survives immediate bounded-memory eviction before disk queue", () => {
@@ -485,4 +488,18 @@ test("committed turn mutations pass their exact archive receipt without searchin
   assert.equal((store.match(/binary_search_by_key\(&sequence, \|turn\| turn\.sequence\)/g) ?? []).length, 3);
   assert.match(store, /turn\.lane == lane && turn\.generation == generation && turn\.utterance_id == utterance_id/);
   assert.match(store, /return \(turn\.delivery_state\.as_deref\(\) == Some\(delivery_state\)\)\.then\(\|\| turn\.clone\(\)\)/);
+});
+
+
+test("copy and search use the same transcript presentation owner", () => {
+  const presentation = file("src/app/runtime/meetingTranscriptPresentation.ts");
+  const live = file("src/components/meeting/MeetingActivity.svelte");
+  assert.match(presentation, /turns\.map\(formatMeetingTurn\)\.join/);
+  assert.match(presentation, /meetingTranslationDisplay\(turn\)/);
+  assert.match(live, /formatMeetingTurn\(turn\)/);
+  assert.match(review, /formatMeetingTranscript\(snapshot\.turns\)/);
+  assert.match(ui, /formatMeetingTranscript\(visibleTurns\)/);
+  for (const source of [review, ui]) {
+    assert.match(source, /filterMeetingTurns\(snapshot\?\.turns \?\? \[\], query\)/);
+  }
 });
