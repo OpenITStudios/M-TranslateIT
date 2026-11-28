@@ -78,9 +78,16 @@ fn opposite_language_pair(from: Language) -> &'static str {
 struct Scope {
     generation: Option<u64>,
     session_id: Option<String>,
+    prepare: bool,
 }
 
-fn scope_from_snapshot<'a>(payload: &Value, snapshot: Option<&'a RuntimeSessionSnapshot>) -> Option<(Option<u64>, Option<&'a str>)> {
+fn meeting_snapshot_admitted(snapshot: &RuntimeSessionSnapshot, prepare: bool) -> bool {
+    snapshot.owner_id == APPLICATION_MEETING_OWNER_ID && snapshot.authority_active
+        && snapshot.generation != 0 && !snapshot.session_id.is_empty()
+        && (snapshot.phase == "live" || (prepare && snapshot.phase == "starting"))
+}
+
+fn scope_from_snapshot<'a>(payload: &Value, snapshot: Option<&'a RuntimeSessionSnapshot>) -> Option<(Option<u64>, Option<&'a str>, bool)> {
     // Native admission must compare exact metadata, not the legacy
     // presentation sanitizer's normalized/truncated string values.
     let generation = match payload.get("meeting_generation") {
@@ -104,42 +111,43 @@ fn scope_from_snapshot<'a>(payload: &Value, snapshot: Option<&'a RuntimeSessionS
         Some(value) => value.as_bool()?,
     };
     if generation.is_none() && session.is_none() && lane.is_none() && !prepare {
-        return snapshot.is_none().then_some((None, None));
+        return snapshot.is_none().then_some((None, None, false));
     }
-    let snapshot = snapshot.filter(|value| {
-        value.owner_id == APPLICATION_MEETING_OWNER_ID && value.authority_active
-            && value.generation != 0 && !value.session_id.is_empty()
-    })?;
+    let snapshot = snapshot.filter(|value| meeting_snapshot_admitted(value, prepare))?;
     let matches = if lane == Some("incoming") {
-        generation.is_none() && session == Some(snapshot.session_id.as_str())
-            && snapshot.phase == "live" && !prepare
+        generation.is_none() && session == Some(snapshot.session_id.as_str()) && !prepare
     } else {
         generation == Some(snapshot.generation)
             && session.is_none_or(|id| id == snapshot.session_id.as_str())
-            && (if prepare {
-                lane.is_none() && matches!(snapshot.phase.as_str(), "starting" | "live")
-            } else {
-                lane == Some("you") && session.is_some() && snapshot.phase == "live"
-            })
+            && (if prepare { lane.is_none() } else { lane == Some("you") && session.is_some() })
     };
-    matches.then_some((Some(snapshot.generation), Some(snapshot.session_id.as_str())))
+    matches.then_some((Some(snapshot.generation), Some(snapshot.session_id.as_str()), prepare))
 }
 
 fn scope(payload: &Value) -> Option<Scope> {
     observe_runtime_session(|snapshot| {
-        scope_from_snapshot(payload, snapshot).map(|(generation, session_id)| Scope {
-            generation, session_id: session_id.map(str::to_owned),
+        scope_from_snapshot(payload, snapshot).map(|(generation, session_id, prepare)| Scope {
+            generation, session_id: session_id.map(str::to_owned), prepare,
         })
     }).flatten()
 }
 
-// Recheck current owner, phase and exact identity at every existing fence;
-// do not clone a diagnostic report or allocate a new session ID.
-fn scope_is_current(payload: &Value, expected: &Scope) -> bool {
-    observe_runtime_session(|snapshot| {
-        scope_from_snapshot(payload, snapshot)
-            == Some((expected.generation, expected.session_id.as_deref()))
-    }).unwrap_or(false)
+fn scope_matches_snapshot(expected: &Scope, snapshot: Option<&RuntimeSessionSnapshot>) -> bool {
+    match (expected.generation, expected.session_id.as_deref(), snapshot) {
+        (None, None, None) => !expected.prepare,
+        (Some(generation), Some(session_id), Some(snapshot)) => {
+            meeting_snapshot_admitted(snapshot, expected.prepare)
+                && snapshot.generation == generation
+                && snapshot.session_id == session_id
+        }
+        _ => false,
+    }
+}
+
+// The immutable request metadata was validated once when Scope was created.
+// Recheck fresh runtime authority at every existing fence, not the JSON.
+fn scope_is_current(expected: &Scope) -> bool {
+    observe_runtime_session(|snapshot| scope_matches_snapshot(expected, snapshot)).unwrap_or(false)
 }
 
 fn error_blocker(error: Error, task: &str) -> (&'static str, bool) {
@@ -202,9 +210,9 @@ pub(super) fn control(task: &str, payload: &Value, permit: &HelperTaskPermit, pr
     body["scheduler_wait_ms"] = json!(permit.scheduler_wait_ms());
     let ok = body.get("ok").and_then(Value::as_bool) == Some(true);
     let message = worker_message(task, &body);
-    let mut response = response_with_runtime(ok, task, request_id, priority, message, body, &host);
-    if task == "status" { response.runtime_claim = super::super::NATIVE_STATUS_CLAIM.into(); }
-    response
+    let claim = if task == "status" { super::super::NATIVE_STATUS_CLAIM.into() }
+        else { runtime_claim(&host) };
+    response_with_runtime(ok, task, request_id, priority, message, body, &host, claim)
 }
 
 /// ASR/MT has one production route. Missing resources are terminal.
@@ -262,8 +270,7 @@ pub(super) fn dispatch(
     if Instant::now() >= deadline {
         return fail("native_inference:deadline_exceeded", "Native request expired before model admission.");
     }
-    let preparing = request_scope.generation.is_none()
-        || payload.get("meeting_start_prepare").and_then(Value::as_bool) == Some(true);
+    let preparing = request_scope.generation.is_none() || request_scope.prepare;
     if (is_bind || is_probe_speech) && !preparing {
         return fail("native_voice:preparation_required", "Voice preparation and probe PCM require preparation authority.");
     }
@@ -279,7 +286,7 @@ pub(super) fn dispatch(
             Ok(reference) => reference,
             Err(blocker) => return fail(blocker, "Selected native reference is not approved or verified."),
         };
-        if !scope_is_current(payload, &request_scope) || Instant::now() >= deadline {
+        if !scope_is_current(&request_scope) || Instant::now() >= deadline {
             return fail("native_voice:scope_revoked", "Voice preparation authority expired.");
         }
         match unsafe { crate::commands::helper_bridge_runtime::NativeInferenceOwner::open_voice_candidate(request_scope.session_id.clone()) } {
@@ -330,7 +337,7 @@ pub(super) fn dispatch(
         host.native_inference.as_mut().expect("checked owner").session_id = request_scope.session_id.clone();
     }
     if host.native_meeting_session_id() != request_scope.session_id.as_deref()
-        || !scope_is_current(payload, &request_scope)
+        || !scope_is_current(&request_scope)
     {
         return fail("native_inference:scope_revoked", "Native owner no longer matches the current session.");
     }
@@ -372,10 +379,8 @@ pub(super) fn dispatch(
             body["translation_degraded"] = json!(false);
             body["translation_fallback_reason"] = json!("");
         }
-        let mut response = response_with_runtime(true, task, request_id, priority,
-            worker_message(task, &body), body, &host);
-        response.runtime_claim = NATIVE_INFERENCE_CLAIM.into();
-        return response;
+        return response_with_runtime(true, task, request_id, priority,
+            worker_message(task, &body), body, &host, NATIVE_INFERENCE_CLAIM.into());
     }
     let mut bound_id = None;
     let mut actor_token = None;
@@ -447,7 +452,7 @@ pub(super) fn dispatch(
     // After taking PCM, the request is committed to execution or terminal
     // failure; never requeue an already-conditioned buffer. Stop may still
     // revoke authority during conditioning, so check before beginning.
-    if !scope_is_current(payload, &request_scope) {
+    if !scope_is_current(&request_scope) {
         return fail("native_inference:scope_revoked", "Inference authority was revoked before execution.");
     }
     let bridge_generation = host.generation_token;
@@ -496,7 +501,7 @@ pub(super) fn dispatch(
         || host.active_request_id.as_deref() != Some(request_id)
         || host.native_inference.is_none()
         || host.native_meeting_session_id() != request_scope.session_id.as_deref()
-        || !scope_is_current(payload, &request_scope)
+        || !scope_is_current(&request_scope)
     {
         clear_active_request(&mut host, request_id);
         let mut response = fail("native_inference:scope_revoked", "Native inference result was discarded because its owner changed.");
@@ -565,9 +570,7 @@ pub(super) fn dispatch(
     clear_active_request(&mut host, request_id);
     host.updated_unix_ms = unix_ms();
     let message = worker_message(task, &body);
-    let mut response = response_with_runtime(ok, task, request_id, priority, message, body, &host);
-    response.runtime_claim = NATIVE_INFERENCE_CLAIM.into();
-    response
+    response_with_runtime(ok, task, request_id, priority, message, body, &host, NATIVE_INFERENCE_CLAIM.into())
 }
 
 #[cfg(test)]
@@ -638,7 +641,7 @@ mod tests {
         let session_ptr = current.session_id.as_ptr();
         let scope = scope_from_snapshot(&outbound, Some(&current)).unwrap();
         assert_eq!(scope.1.unwrap().as_ptr(), session_ptr);
-        assert_eq!(scope, (Some(41), Some("meeting-1")));
+        assert_eq!(scope, (Some(41), Some("meeting-1"), false));
         for (key, bad) in [
             ("meeting_generation", json!(42)),
             ("meeting_generation", json!("41")),
@@ -663,8 +666,51 @@ mod tests {
         assert!(scope_from_snapshot(&incoming, Some(&revoked)).is_none());
         revoked.phase = "starting".into();
         let prepare = json!({"meeting_generation":41,"meeting_start_prepare":true});
-        assert_eq!(scope_from_snapshot(&prepare, Some(&revoked)), Some(scope));
+        assert_eq!(scope_from_snapshot(&prepare, Some(&revoked)), Some((Some(41), Some("meeting-1"), true)));
         assert!(scope_from_snapshot(&outbound, Some(&revoked)).is_none());
+    }
+
+    #[test]
+    fn resolved_scope_rechecks_match_exact_request_without_reparsing() {
+        let current = snapshot();
+        let mut starting = current.clone();
+        starting.phase = "starting".into();
+        let mut stopped = current.clone();
+        stopped.authority_active = false;
+        let mut stopping = current.clone();
+        stopping.phase = "stopping".into();
+        let mut foreign = current.clone();
+        foreign.owner_id = "foreign".into();
+        let mut replacement = current.clone();
+        replacement.generation += 1;
+        let mut other_id = current.clone();
+        other_id.session_id = "meeting-other".into();
+        let observations = [
+            None, Some(&current), Some(&starting), Some(&stopped),
+            Some(&stopping), Some(&foreign), Some(&replacement), Some(&other_id),
+        ];
+        for (payload, initial) in [
+            (json!({}), None),
+            (json!({"meeting_generation":41,"meeting_session_id":"meeting-1","meeting_lane":"you"}), Some(&current)),
+            (json!({"meeting_session_id":"meeting-1","meeting_lane":"incoming"}), Some(&current)),
+            (json!({"meeting_generation":41,"meeting_start_prepare":true}), Some(&starting)),
+            (json!({"meeting_generation":41,"meeting_session_id":"meeting-1","meeting_start_prepare":true}), Some(&starting)),
+        ] {
+            let (generation, session_id, prepare) = scope_from_snapshot(&payload, initial).unwrap();
+            let expected = Scope { generation, session_id: session_id.map(str::to_owned), prepare };
+            for observed in observations {
+                assert_eq!(scope_matches_snapshot(&expected, observed),
+                    scope_from_snapshot(&payload, observed) == Some((generation, session_id, prepare)));
+            }
+        }
+        for bad in [
+            json!({"meeting_generation":"41","meeting_start_prepare":true}),
+            json!({"meeting_generation":41,"meeting_start_prepare":"true"}),
+            json!({"meeting_generation":41,"meeting_start_prepare":true,"meeting_lane":"incoming"}),
+            json!({"meeting_generation":41,"meeting_lane":"you"}),
+        ] {
+            assert!(scope_from_snapshot(&bad, Some(&current)).is_none());
+        }
     }
 
     #[test]

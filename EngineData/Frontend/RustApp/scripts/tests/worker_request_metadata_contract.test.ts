@@ -40,8 +40,18 @@ test("native scope fences observe borrowed session identity without building dia
   const state = readFileSync(new URL("../../src-tauri/src/engine/runtime_state.rs", import.meta.url), "utf8");
   assert.match(state, /Some\(observe\(guard\.as_ref\(\)\)\)/);
   assert.doesNotMatch(native + policy, /latest_runtime_session_state\(\)/);
-  assert.equal((native.match(/!scope_is_current\(payload, &request_scope\)/g) ?? []).length, 4);
-  assert.match(native, /== Some\(\(expected\.generation, expected\.session_id\.as_deref\(\)\)\)/);
-  assert.match(native, /\}\)\.unwrap_or\(false\)/);
+  assert.equal((native.match(/!scope_is_current\(&request_scope\)/g) ?? []).length, 4);
+  assert.match(native, /snapshot\.generation == generation\s*&& snapshot\.session_id == session_id/);
+  const recheck = native.slice(native.indexOf("fn scope_matches_snapshot("), native.indexOf("fn error_blocker("));
+  assert.doesNotMatch(recheck, /payload|scope_from_snapshot\(/);
+  assert.match(native, /fn resolved_scope_rechecks_match_exact_request_without_reparsing/);
+  assert.match(native, /observe_runtime_session\(\|snapshot\| scope_matches_snapshot\(expected, snapshot\)\)\.unwrap_or\(false\)/);
   assert.match(transport, /let request_id = permit\.request_id\(\);/);
+});
+
+test("native receipts construct the final runtime claim directly", () => {
+  assert.match(transport, /runtime_claim: claim,/);
+  assert.doesNotMatch(native, /response\.runtime_claim = NATIVE_INFERENCE_CLAIM|response\.runtime_claim = super::super::NATIVE_STATUS_CLAIM/);
+  assert.match(native, /&host, NATIVE_INFERENCE_CLAIM\.into\(\)\)/);
+  assert.match(native, /if task == "status" \{ super::super::NATIVE_STATUS_CLAIM\.into\(\) \}/);
 });

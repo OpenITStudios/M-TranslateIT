@@ -36,6 +36,7 @@ fn response_with_runtime(
     message: String,
     worker_response: Value,
     runtime: &HelperBridgeRuntime,
+    claim: String,
 ) -> HelperBridgeWorkerResponse {
     HelperBridgeWorkerResponse {
         ok,
@@ -45,7 +46,7 @@ fn response_with_runtime(
         scheduler_priority: priority.label().to_string(),
         message,
         generation_token: runtime.generation_token,
-        runtime_claim: runtime_claim(runtime),
+        runtime_claim: claim,
         worker_response_json: worker_response,
     }
 }
