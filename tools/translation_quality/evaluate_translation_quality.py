@@ -130,6 +130,15 @@ def load_corpus(path: Path) -> dict:
 
 
 def select_suite(corpus: dict, name: str) -> dict:
+    # The frozen held-out corpus is a separate review set, never a full
+    # development regression or a tuning target.
+    heldout = "fast_suite" not in corpus and all(
+        case["id"].startswith("held-") for case in corpus["cases"]
+    )
+    if name == "heldout" or heldout:
+        if not heldout or name == "fast":
+            raise ValueError("held-out suite requires the separate held-out corpus")
+        return {**corpus, "selection": {"name": "heldout"}}
     if name == "full":
         return corpus
     if name != "fast":
@@ -328,7 +337,9 @@ def declared_worker_receipt_suite(raw: dict | list) -> str | None:
     native = raw["schema"] == "translateit.translation_quality.native_run.v1"
     profile = raw.get("execution_profile")
     name = profile.get("name") if isinstance(profile, dict) else None
-    if name not in ("translation-fast", "translation-full"):
+    if name not in ("translation-fast", "translation-full") and not (
+        native and name == "translation-heldout"
+    ):
         return None
     identity = raw.get("source_identity")
     match = re.fullmatch(r"([0-9a-f]{40}):([A-Za-z0-9._-]+)@([0-9a-f]{40})", identity) if isinstance(identity, str) else None
@@ -540,7 +551,7 @@ def evaluate(
 
 def declared_worker_report_consistent(corpus: dict, bundle: dict) -> bool:
     """Verify a reported worker-run grade against canonical grading, not execution."""
-    suite = "fast" if corpus.get("selection") else "full"
+    suite = (corpus.get("selection") or {}).get("name", "full")
     if (bundle.get("worker_run_declared_suite") != suite
             or bundle.get("worker_run_declared_selection") != corpus.get("selection")
             or bundle.get("worker_run_declared_rejected") != {}):
@@ -599,7 +610,7 @@ def triage_case(corpus: dict, bundle: dict, case_id: str) -> dict:
     return {
         "schema": "translateit.translation_quality.case_triage.v1",
         "case_id": case_id,
-        "suite": "fast" if corpus.get("selection") else "full",
+        "suite": (corpus.get("selection") or {}).get("name", "full"),
         "full_regression_evaluated": not bool(corpus.get("selection")),
         "corpus_fingerprint": report["corpus_fingerprint"],
         "result_corpus_fingerprint": bundle.get("corpus_fingerprint") or None,
@@ -819,7 +830,7 @@ def compare_case(corpus: dict, baseline_bundle: dict, candidate_bundle: dict, ca
     elif not target_recovered:
         review_status = "NO_DECLARED_RECOVERY"
     elif not comparison["full_regression_evaluated"]:
-        review_status = "FAST_DIAGNOSTIC_ONLY"
+        review_status = "HELDOUT_REVIEW_ONLY" if before["suite"] == "heldout" else "FAST_DIAGNOSTIC_ONLY"
     elif not comparison["promotion_safe_on_declared_critical_invariants"]:
         review_status = "UNRESOLVED_DECLARED_FAILURES"
     elif not worker_receipts_declared:
@@ -989,8 +1000,8 @@ def main() -> int:
     )
     parser.add_argument("--corpus", type=Path, required=True)
     parser.add_argument("--original-corpus", type=Path)
-    parser.add_argument("--suite", choices=("full", "fast"), default="full",
-                        help="fast is diagnostic only; full is required for promotion comparison")
+    parser.add_argument("--suite", choices=("full", "fast", "heldout"), default="full",
+                        help="fast is diagnostic; full regression is required for promotion; heldout is review only")
     parser.add_argument("--results", type=Path)
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--candidate", type=Path)

@@ -18,6 +18,7 @@ spec = importlib.util.spec_from_file_location("translation_worker_test_grader", 
 quality = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(quality)
 CORPUS = quality.load_corpus(ROOT / "tools/translation_quality/corpus/translation_quality_v1.json")
+HELDOUT = quality.load_corpus(ROOT / "tools/translation_quality/heldout/translation_quality_heldout_v1.json")
 SHA = "a" * 40
 
 
@@ -43,7 +44,7 @@ class TranslationWorkerTests(unittest.TestCase):
                 self.assertIsNotNone(worker.child.poll())
 
     def replay(self, suite="fast", change=None, outer=None):
-        corpus = quality.select_suite(CORPUS, suite)
+        corpus = quality.select_suite(HELDOUT if suite == "heldout" else CORPUS, suite)
         def execute(requests):
             self.assertEqual(requests, worker_runner.native_translation_requests(corpus, SHA, 120, quality))
             rows = []
@@ -81,6 +82,32 @@ class TranslationWorkerTests(unittest.TestCase):
                 self.assertEqual(report["verdict"], "PASS")
                 self.assertEqual(len(report["results"]), len(quality.select_suite(CORPUS, suite)["cases"]))
                 self.assertEqual(quality.declared_worker_receipt_suite(report), suite)
+
+    def test_heldout_replay_is_distinct_from_full_regression(self):
+        corpus = quality.select_suite(HELDOUT, "heldout")
+        self.assertEqual(corpus, quality.select_suite(HELDOUT, "full"))
+        with self.assertRaises(ValueError):
+            quality.select_suite(CORPUS, "heldout")
+        report = self.run_fixture(self.replay("heldout"), "heldout")
+        self.assertTrue(report["execution_complete"])
+        self.assertEqual(report["execution_profile"]["name"], "translation-heldout")
+        self.assertEqual(len(report["results"]), len(HELDOUT["cases"]))
+        self.assertEqual(report["selection"], {"name": "heldout"})
+        self.assertEqual(quality.declared_worker_receipt_suite(report), "heldout")
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "heldout.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            bundle = quality.load_result_bundle(path)
+            self.assertTrue(quality.declared_worker_report_consistent(corpus, bundle))
+            self.assertFalse(quality.declared_worker_report_consistent(CORPUS, bundle))
+        values = {row["case_id"]: row["translated_text"] for row in report["results"]}
+        comparison = quality.compare_reports(corpus, values, values,
+            baseline_corpus_fingerprint=report["corpus_fingerprint"],
+            candidate_corpus_fingerprint=report["corpus_fingerprint"],
+            baseline_source_identity=report["source_identity"],
+            candidate_source_identity=report["source_identity"])
+        self.assertFalse(comparison["full_regression_evaluated"])
+        self.assertFalse(comparison["promotion_safe_on_declared_critical_invariants"])
 
     def test_incomplete_or_unbound_output_cannot_pass(self):
         for change in ({"ok": False}, {"complete": False}, {"finished_with_eos": False},

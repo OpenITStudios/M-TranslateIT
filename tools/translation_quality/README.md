@@ -279,7 +279,13 @@ the offline replay and grades its report; it never starts WorkerRuntime.
 python -X utf8 tools/audio_validation/worker_runner.py --translation-suite fast --source-sha <clean-Local-SHA> --output <new-fast-native-report.json>
 ```
 
-Use `--translation-suite full` for complete development regression. The ignored
+Use `--translation-suite full` for complete development regression.
+Use `--translation-suite heldout` only for independent post-candidate review
+of the existing frozen held-out corpus. It uses the same native replay,
+with a distinct `translation-heldout` receipt profile and selection fingerprint.
+It cannot satisfy the full regression promotion gate. The existing grader
+accepts the held-out file with `--suite heldout`; even its default full selection
+retains the held-out review identity. Do not tune on these results. The ignored
 Rust fixture opens one native pair once, admits each current-text case through
 the existing scheduler and waits for real complete output. It performs no ASR,
 voice inference, VAD or Meeting session creation. The existing pair must be

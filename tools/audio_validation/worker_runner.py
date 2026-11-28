@@ -806,7 +806,9 @@ def run_translation_quality(expected_sha: str, suite: str, timeout: float) -> di
     spec = importlib.util.spec_from_file_location("worker_translation_quality", quality_root / "evaluate_translation_quality.py")
     grader = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(grader)
-    corpus = grader.select_suite(grader.load_corpus(quality_root / "corpus/translation_quality_v1.json"), suite)
+    corpus_path = ("heldout/translation_quality_heldout_v1.json" if suite == "heldout"
+                   else "corpus/translation_quality_v1.json")
+    corpus = grader.select_suite(grader.load_corpus(quality_root / corpus_path), suite)
     requests = native_translation_requests(corpus, expected_sha, timeout, grader)
     records, rejected, receipt = [], {}, {}
     error = None
@@ -954,7 +956,7 @@ def main() -> int:
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--ids", nargs="+")
     selection.add_argument("--profile", choices=("source", "core", "endurance"))
-    selection.add_argument("--translation-suite", choices=("fast", "full"))
+    selection.add_argument("--translation-suite", choices=("fast", "full", "heldout"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument("--vad-timeout", type=int, default=600)

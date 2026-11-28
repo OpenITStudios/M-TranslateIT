@@ -99,9 +99,15 @@ Do not promote a candidate solely because its mean score is higher. Promotion re
 
 ## Meeting-specific review
 
-For Meeting cases, judge **only the current finalized source utterance**. Do not supply previous conversation turns, generated translations, user glossary entries, or historical `context_pairs` to reviewers: the current product sends none of them to MiLMMT. The benchmark still contains historical labels for continuity, not working context memory.
+For Meeting cases, judge **only the current finalized source utterance**. Do not supply previous conversation turns, generated translations, user glossary entries, or historical `context_pairs` to reviewers: the current product sends none of them to Hy-MT2. The benchmark still contains historical labels for continuity, not working context memory.
 
-Incoming EN→ID and standalone Text likewise use only their current source text.
+Incoming EN→ID and internal standalone Text likewise use only their current source text.
+
+For the separately approved native validation phase, the existing worker runner's
+`--translation-suite heldout` collects the frozen benchmark through the same
+native owner. Its distinct selection/profile is review evidence only, not a
+full regression or independent bilingual verdict. Freeze the candidate before
+collecting held-out outputs.
 
 ## Recording evidence
 
