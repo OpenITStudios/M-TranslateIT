@@ -15,6 +15,7 @@ pub fn build_subsystem_summaries(
     input: &InputPreparationStatus,
     voice_build: &VoiceLabBuildSnapshot,
     voice_recording_active: bool,
+    approved_voice_ready: Option<bool>,
 ) -> ApplicationSubsystemSummaries {
     ApplicationSubsystemSummaries {
         meeting: MeetingSummary {
@@ -43,6 +44,7 @@ pub fn build_subsystem_summaries(
             recording_active: voice_recording_active,
             build_active: voice_build.active,
             build_phase: voice_build.phase.clone(),
+            approved_voice_ready,
         },
     }
 }

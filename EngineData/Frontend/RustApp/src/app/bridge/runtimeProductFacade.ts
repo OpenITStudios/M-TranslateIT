@@ -2,7 +2,6 @@ import {
   applicationRuntimeApi,
   type ApplicationSnapshot,
 } from "./applicationRuntimeApi";
-import { myVoiceBuildApi } from "./myVoiceBuildApi";
 import { runtimeApi, type MeetingSessionActionResult } from "./runtimeApi";
 import { compact } from "../shared/state";
 import type { RuntimeSettings } from "../shared/types";
@@ -70,16 +69,6 @@ export type ProductMeetingActionResult = {
   reason: string;
 };
 
-async function loadApprovedVoiceReady(): Promise<boolean | null> {
-  try {
-    const build = await myVoiceBuildApi.getStatus();
-    if (build.phase === "unavailable") return null;
-    return build.approved_voice_ready;
-  } catch {
-    return null;
-  }
-}
-
 const WORKER_REUSE_SAFE_REASONS = new Set([
   "stop_meeting",
   "start_mic_test",
@@ -93,21 +82,6 @@ const WORKER_REUSE_SAFE_REASONS = new Set([
   "voice_build_completed",
   "voice_build_cancelled",
   "voice_build_failed",
-]);
-
-const VOICE_REUSE_SAFE_REASONS = new Set([
-  "start_meeting",
-  "start_original_meeting",
-  "stop_meeting",
-  "start_mic_test",
-  "stop_mic_test",
-  "fix_setup",
-  "check_readiness",
-  "ensure_runtime_ready",
-  "select_audio_device",
-  "save_settings",
-  "start_voice_recording",
-  "stop_voice_recording",
 ]);
 
 async function mapApplicationSnapshotToProduct(
@@ -145,18 +119,13 @@ async function mapApplicationSnapshotToProduct(
   const refreshWorker = !previous
     || helperIdentityChanged
     || !WORKER_REUSE_SAFE_REASONS.has(reason ?? "");
-  const refreshVoice = !previous
-    || previous.voiceBuildActive !== application.summaries.voice.build_active
-    || !VOICE_REUSE_SAFE_REASONS.has(reason ?? "");
-
-  const [approvedVoiceReady, observedWorkerStatus] = await Promise.all([
-    refreshVoice
-      ? loadApprovedVoiceReady()
-      : Promise.resolve(previous.readiness.approvedVoiceReady),
-    refreshWorker
-      ? (helper.state === "ready" ? runtimeApi.helperBridgeWorkerStatus() : Promise.resolve(null))
-      : Promise.resolve(previous.workerStatus),
-  ]);
+  // Voice eligibility is observed by the native snapshot owner. Missing
+  // or unknown fields never inherit a previous approved voice.
+  const observedVoiceReady = application.summaries.voice.approved_voice_ready;
+  const approvedVoiceReady = typeof observedVoiceReady === "boolean" ? observedVoiceReady : null;
+  const observedWorkerStatus = refreshWorker
+    ? (helper.state === "ready" ? await runtimeApi.helperBridgeWorkerStatus() : null)
+    : previous.workerStatus;
   // The native application snapshot and the worker response are separate reads.
   // A helper restart between them must not combine an old/new worker capability
   // or GPU memory observation with the other generation's application state.

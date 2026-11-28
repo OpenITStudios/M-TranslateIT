@@ -33,12 +33,26 @@ pub fn current_application_snapshot() -> ApplicationSnapshot {
     };
     let voice_build = voice_lab::current_voice_lab_build_snapshot();
     let voice_recording_active = voice_lab_recording::voice_lab_recording_active();
+    // Read only the existing selected-actor predicate, not the full build
+    // status (recordings, evaluation samples, and recovery suggestions).
+    let approved_voice_ready = if voice_build.phase == "state_unavailable" {
+        None
+    } else {
+        let paths = crate::engine::paths::ProjectPaths::discover();
+        if paths.packaged_context_initialized || paths.development_root_verified {
+            let storage = voice_lab::VoiceLabStoragePaths::from_project_paths(&paths);
+            Some(voice_lab::approved_voice_actor_ready(&storage))
+        } else {
+            None
+        }
+    };
     let summaries = build_subsystem_summaries(
         &meeting,
         &helper,
         &native_input,
         &voice_build,
         voice_recording_active,
+        approved_voice_ready,
     );
     let resources = resolve_resources(&summaries);
     let lifecycle = derive_lifecycle(&summaries);

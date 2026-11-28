@@ -99,6 +99,7 @@ mod tests {
                 recording_active: owner_id == Some(VOICE_RECORDING_OWNER_ID),
                 build_active: voice_build_active,
                 build_phase: if voice_build_active { "training" } else { "idle" }.to_string(),
+                approved_voice_ready: None,
             },
         }
     }

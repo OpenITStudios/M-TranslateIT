@@ -74,6 +74,7 @@ export type VoiceSummary = {
   recording_active: boolean;
   build_active: boolean;
   build_phase: string;
+  approved_voice_ready: boolean | null;
 };
 
 export type ApplicationSubsystemSummaries = {
@@ -186,6 +187,7 @@ function unavailableSnapshot(): ApplicationSnapshot {
         recording_active: false,
         build_active: false,
         build_phase: "unavailable",
+        approved_voice_ready: null,
       },
     },
     resources: {

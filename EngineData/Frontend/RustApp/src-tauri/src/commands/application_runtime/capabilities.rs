@@ -65,6 +65,7 @@ mod tests {
                 recording_active: false,
                 build_active: false,
                 build_phase: "idle".to_string(),
+                approved_voice_ready: None,
             },
         }
     }

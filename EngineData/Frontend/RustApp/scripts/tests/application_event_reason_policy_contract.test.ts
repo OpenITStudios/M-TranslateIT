@@ -67,35 +67,14 @@ test("worker deep-refresh policy covers every emitted ApplicationRuntime reason"
   );
 });
 
-test("voice deep-refresh policy covers every emitted ApplicationRuntime reason", () => {
-  const emitted = emittedReasons();
-  const safe = stringSetFromConst("VOICE_REUSE_SAFE_REASONS");
-  const expectedDeep = new Set([
-    "start_voice_build",
-    "cancel_voice_build",
-    "retry_blocked_worker",
-    "confirm_translation_engine",
-    "select_translation_engine",
-    "approve_voice_candidate",
-    "select_builtin_voice",
-    "select_saved_personal_voice",
-    "select_voice_version",
-    "start_voice_improvement",
-    // Emitted terminal build events must refresh voice readiness, not reuse stale proof.
-    "voice_build_completed",
-    "voice_build_cancelled",
-    "voice_build_failed",
-  ]);
-
-  assert.deepEqual(
-    [...emitted].filter((reason) => !safe.has(reason)).sort(),
-    [...expectedDeep].sort(),
-  );
+test("voice readiness is supplied by every canonical snapshot, without a reason-based reuse allowlist", () => {
+  assert.match(facade, /application\.summaries\.voice\.approved_voice_ready/);
+  assert.doesNotMatch(facade, /VOICE_REUSE_SAFE_REASONS|refreshVoice|loadApprovedVoiceReady/);
 });
 
 test("safe reuse allowlists never contain a non-emitted reason", () => {
   const emitted = emittedReasons();
-  for (const name of ["WORKER_REUSE_SAFE_REASONS", "VOICE_REUSE_SAFE_REASONS"]) {
+  for (const name of ["WORKER_REUSE_SAFE_REASONS"]) {
     for (const reason of stringSetFromConst(name)) {
       assert.equal(emitted.has(reason), true, `${name} contains unknown reason ${reason}`);
     }

@@ -66,6 +66,9 @@ pub struct VoiceSummary {
     pub recording_active: bool,
     pub build_active: bool,
     pub build_phase: String,
+    // Selection eligibility only; native bind still verifies exact reference
+    // bytes, inference owner and current authority at Start.
+    pub approved_voice_ready: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
