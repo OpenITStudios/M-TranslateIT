@@ -49,5 +49,5 @@ Source commits are `SOURCE_AUTHORED`, not `VISUAL_VERIFIED`. HTML previews are s
 
 - Sidebar source now uses Recent shortcuts and Projects/Uncategorized with a shared Meeting row and context menu. View All expands Recent in place; there is no separate Saved Meetings primary navigation destination. Storage warnings and action eligibility apply across all appearances.
 - Context menus are fixed overlays and close on outside scroll/resize rather than leaving stale placement. Move, rename and deletion confirmation are inline editors; keyboard, clipping, and viewport behavior still require rendered QA.
-- Channel toolbar action ownership and archive actions are not yet fully consolidated.
+- The Saved Meeting reader uses one pinned transcript toolbar: Search covers loaded phrases, Export HTML includes all available archived entries, and More owns Refresh, Copy displayed and Preview HTML. Rename, pin, move and confirmed deletion remain in the sidebar. The workspace header owns the meeting name; the reader uses the shared bubble presentation. Rendered toolbar and menu behavior remain unverified.
 - Native/browser rendered alignment, build and end-to-end interactions remain unverified.

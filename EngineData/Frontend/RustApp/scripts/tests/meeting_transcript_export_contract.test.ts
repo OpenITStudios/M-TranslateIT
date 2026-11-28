@@ -80,6 +80,22 @@ test("saved transcript controls expose one channel, explicit export and confirme
   assert.doesNotMatch(ui, /deleteSavedMeetingTranscript/);
 });
 
+test("saved reader keeps one toolbar outside the transcript scroll region", () => {
+  const toolbar = ui.indexOf('aria-label="Saved conversation tools"');
+  const scroll = ui.indexOf('aria-label="Saved Meeting transcript"');
+  const preview = ui.indexOf('{#if htmlPreview}', scroll);
+  assert.ok(toolbar > 0 && scroll > toolbar && preview > scroll);
+  assert.equal((ui.match(/onclick=\{\(\) => void exportHtml\(\)\}/g) ?? []).length, 1);
+  assert.match(ui, /Search and copy use the loaded preview \(up to 240 phrases\)/);
+  assert.match(ui, /session\.entry_count > snapshot\.turns\.length/);
+  assert.match(ui, /!session\.complete \|\| session\.storage_warning/);
+  assert.match(ui, /archiveNeedsReview \? "Archive needs review" : "Finalized"/);
+  assert.match(ui, /class="ti-library-menu"/);
+  assert.match(ui, /actionsPanel\?\.contains\(event\.target\)/);
+  assert.match(ui, /closeActions\(true\); void toggleHtmlPreview\(\)/);
+  assert.doesNotMatch(ui, /<h2[^>]*>\{session\.display_name\}<\/h2>/);
+});
+
 test("legacy live preview remains capped while export reads the disk-backed session", () => {
   assert.match(memory, /const MAX_LIVE_COMMITTED_TURNS: usize = 240/);
   assert.match(memory, /const MAX_SESSION_COMMITTED_TURNS: usize = 4_096/);
